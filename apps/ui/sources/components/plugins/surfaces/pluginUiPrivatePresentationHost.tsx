@@ -62,6 +62,7 @@ import { reanimatedCollectionMotion } from '@/components/ui/motion/reanimatedCol
 import { Popover } from '@/components/ui/popover/Popover';
 import { renderThemeMaterialSurface } from '@/components/ui/glass/GlassSurface';
 import { MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS } from '@/components/ui/popover/modalAwareFloatingPopoverPortalOptions';
+import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
 import { Text } from '@/components/ui/text/Text';
 import {
     resolvePluginUiIconName,
@@ -115,7 +116,8 @@ function resolvePluginUiPopoverPresentation(input: Readonly<{
     // choice opens: its width is the popover's minimum, not its width (a 60 px Views button must not make
     // a 60 px menu that wraps one letter per line).
     if (input.width === 'content' && (input.presentation === 'dropdown' || input.presentation === 'popover' || input.presentation === undefined)) {
-        return { portal: CONTENT_SIZED_PLUGIN_POPOVER_PORTAL_OPTIONS, maxWidthCap: 1024 } as const;
+        return { portal: CONTENT_SIZED_PLUGIN_POPOVER_PORTAL_OPTIONS, maxWidthCap: 1024,
+            ...(input.presentation === 'dropdown' ? { placementMinSpace: POPOVER_PREFERRED_ROOM_PX } : {}) } as const;
     }
     switch (input.presentation) {
         case 'menu':
@@ -125,12 +127,15 @@ function resolvePluginUiPopoverPresentation(input: Readonly<{
             return {
                 portal: MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS,
                 maxWidthCap: 320,
+                placementMinSpace: POPOVER_PREFERRED_ROOM_PX,
             } as const;
         case 'dropdown':
-            // Preserve the existing DropdownMenu matching-width contract and cap.
+            // Preserve the existing DropdownMenu matching-width contract, cap and the room at which it
+            // still opens below its trigger (a field in a short dialog keeps its label in view).
             return {
                 portal: MATCHING_PLUGIN_POPOVER_PORTAL_OPTIONS,
                 maxWidthCap: 1024,
+                placementMinSpace: POPOVER_PREFERRED_ROOM_PX,
             } as const;
         case 'popover':
         default:
@@ -446,6 +451,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
                 // owner, including its modal-aware web target and native host.
                 portal={presentation.portal}
                 maxWidthCap={presentation.maxWidthCap}
+                {...('placementMinSpace' in presentation ? { placementMinSpace: presentation.placementMinSpace } : {})}
                 onRequestClose={input.onRequestClose}
                 // A requested sheet is the shared phone bottom sheet (its title, close and pinned footer).
                 {...(input.sheet === undefined ? {} : {

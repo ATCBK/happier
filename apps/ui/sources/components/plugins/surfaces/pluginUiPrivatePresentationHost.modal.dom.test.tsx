@@ -23,6 +23,7 @@ import type {
 import { describe, expect, it, vi } from 'vitest';
 
 import { createPluginUiPrivatePresentationHost } from './pluginUiPrivatePresentationHost';
+import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
 import { INSPECTOR_SELF_CHECK_ACTION_ID } from '../../../../../../packages/plugins/inspector/src/manifest';
 import { renderSurface as renderInspectorSurface } from '../../../../../../packages/plugins/inspector/src/ui/renderSurface';
 
@@ -386,6 +387,13 @@ describe('plugin private presentation carrier in BaseModal', () => {
             anchorAlign: 'start',
         });
         expect(renderPresentation('dropdown').maxWidthCap).toBe(1024);
+        // Menus and field choices open below their trigger whenever a menu's room is there (the shared
+        // DropdownMenu's rule), not only when a whole panel's would be: a field in a dialog keeps its label visible.
+        for (const presentation of ['menu', 'context', 'dropdown'] as const) {
+            expect(renderPresentation(presentation).placementMinSpace).toBe(POPOVER_PREFERRED_ROOM_PX);
+            expect(renderPresentation(presentation, 'content').placementMinSpace).toBe(POPOVER_PREFERRED_ROOM_PX);
+        }
+        expect(renderPresentation('popover').placementMinSpace).toBeUndefined();
         // A trigger that is not a field box sizes its dropdown or popover by content; its width is a minimum.
         for (const presentation of ['dropdown', 'popover'] as const) {
             expect(renderPresentation(presentation, 'content').portal).toMatchObject({
