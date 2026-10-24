@@ -123,12 +123,13 @@ const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry
     {
         kind: 'participant_message.v1',
         schema: ParticipantMessageV1Schema,
+        usesSessionMessages: true,
         render: (payload, params) => renderUserTextStructuredCard(params, (messageText) => (
             <ParticipantMessageCard payload={payload} messageText={messageText} />
         )),
         projectFindText: (payload, params) => {
             const text = readStructuredUserMessageText(params.message);
-            return text ? projectParticipantMessageFindText(payload, text) : null;
+            return text ? projectParticipantMessageFindText(payload, text, params.sessionMessages) : null;
         },
     },
     {

@@ -1,6 +1,7 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { createTestSessionTranscriptSource, renderScreen, wrapWithSessionTranscriptSource } from '@/dev/testkit';
+import { createSessionFixture, createSessionMessagesFixture, createTestSessionTranscriptSource, createToolCallMessageFixture, renderScreen, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
 import { ReviewCommentsV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -31,6 +32,64 @@ const { findBuiltInStructuredMessageEntry } = await import('./descriptorRegistry
 const { renderExecutionRunStructuredMeta } = await import('@/components/sessions/runs/renderExecutionRunStructuredMeta');
 
 describe('Structured transcript Find', () => {
+    it.each(['readOnly', 'app', 'implicitApp'] as const)('names an unlabeled walkthrough recipient in the %s card and Find through the canonical Run title', async sourceKind => {
+        const base = createToolCallMessageFixture();
+        const run = createToolCallMessageFixture({ id: 'generator-tool', tool: { ...base.tool,
+            name: 'SubAgentRun', input: { runId: 'walkthrough-run', intent: 'scm_diff_summary' },
+            result: { runId: 'walkthrough-run', status: 'running' },
+        } });
+        const message: Message = { kind: 'user-text', id: 'question', localId: null, createdAt: 2, text: 'Why this change?',
+            meta: { happier: { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'walkthrough-run' } } } } };
+        const messages = [run, message];
+        const blocks = projectStructuredMessageFindText(message, { sessionMessages: messages });
+        expect(blocks?.[0]?.text).toBe('session.participants.cardTo(label=walkthrough.eyebrow)');
+        const element = renderStructuredMessage({ message, sessionId: 's1', interaction: { canSendMessages: false, canApprovePermissions: false }, onJumpToAnchor: undefined });
+        if (sourceKind === 'readOnly') {
+            const source = createTestSessionTranscriptSource({ sessionId: 's1', messages });
+            const screen = await renderScreen(wrapWithSessionTranscriptSource(element!, source));
+            expect(screen.getTextContent()).toContain('session.participants.cardTo(label=walkthrough.eyebrow)');
+            expect(screen.getTextContent()).not.toContain('walkthrough-run');
+        } else {
+            const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
+            const { getStorage } = await import('@/sync/domains/state/storage');
+            const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+            const storage = getStorage();
+            const initial = storage.getState();
+            const serverId = getActiveServerSnapshot().serverId;
+            const unrelated: Message[] = Array.from({ length: 1000 }, (_, index) => ({ kind: 'user-text', id: `other-${index}`, localId: null, createdAt: index + 3, text: 'Unrelated question' }));
+            const all = [...messages, ...unrelated];
+            const transcript = createSessionMessagesFixture({ messagesById: Object.fromEntries(all.map(row => [row.id, row])),
+                messageIdsOldestFirst: all.map(row => row.id), messagesVersion: 1, subagentSourceVersion: 1, isLoaded: true });
+            storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId }) }, sessionMessages: { s1: transcript } });
+            let commits = 0;
+            const screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId="s1" serverId={sourceKind === 'implicitApp' ? undefined : serverId}>
+                <React.Profiler id="participant" onRender={() => { commits++; }}>{element}</React.Profiler>
+            </AppSessionTranscriptSourceProvider>);
+            try {
+                expect(screen.getTextContent()).toContain('session.participants.cardTo(label=walkthrough.eyebrow)');
+                const before = commits;
+                await act(async () => storage.setState({ sessionMessages: { s1: { ...transcript, messagesVersion: 2,
+                    messagesById: { ...transcript.messagesById, extra: { ...message, id: 'extra', meta: undefined } } } } }));
+                expect(commits).toBe(before);
+            } finally {
+                await screen.unmount();
+                storage.setState(initial, true);
+            }
+        }
+    });
+
+    it('keeps an explicit recipient label and the unknown-Run fallback without inventing a walkthrough intent', () => {
+        const recipient = { kind: 'execution_run' as const, runId: 'unknown-run' };
+        const message: Message = { kind: 'user-text', id: 'question', localId: null, createdAt: 1, text: 'Question',
+            meta: { happier: { kind: 'participant_message.v1', payload: { recipient } } } };
+        expect(projectStructuredMessageFindText(message, { sessionMessages: [] })?.[0]?.text)
+            .toBe('session.participants.cardTo(label=session.participants.executionRun(runId=unknown-run))');
+        const labeled: Message = { ...message, meta: { happier: { kind: 'participant_message.v1', payload: {
+            recipient: { ...recipient, label: 'Saved recipient' },
+        } } } };
+        expect(projectStructuredMessageFindText(labeled, { sessionMessages: [] })?.[0]?.text)
+            .toBe('session.participants.cardTo(label=Saved recipient)');
+    });
     it('decorates actual typed-card display text rather than the envelope or hidden recipient identity', async () => {
         const message: Message = {
             kind: 'user-text', id: 'participant', localId: null, createdAt: 1,
