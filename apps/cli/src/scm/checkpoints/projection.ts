@@ -1,4 +1,6 @@
-import type { TurnChangeSet } from '@happier-dev/protocol';
+import { normalizeRepositoryFilePath, type TurnChangeSet } from '@happier-dev/protocol';
+
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 import type {
     RepositoryCheckpointDiffResult,
@@ -22,6 +24,7 @@ function toProtocolReceipts(receipts: readonly RepositoryCheckpointReceipt[]): T
 export function projectRepositoryCheckpointTurnChangeSet(params: Readonly<{
     providerTurnChangeSet: TurnChangeSet;
     checkpointDiff: RepositoryCheckpointDiffResult;
+    repoRootPath: string;
     scopeId: string;
     startRef?: string;
     finalRef?: string;
@@ -40,11 +43,22 @@ export function projectRepositoryCheckpointTurnChangeSet(params: Readonly<{
         ...(!params.checkpointDiff.success ? { unavailableReason: params.checkpointDiff.reason } : {}),
     };
 
+    const repoRootPath = expandHomeDirPath(params.repoRootPath.trim());
+    const normalizePath = (path: string) => normalizeRepositoryFilePath(expandHomeDirPath(path.trim()), repoRootPath);
+    const files = params.checkpointDiff.success
+        ? [...params.providerTurnChangeSet.files, ...params.checkpointDiff.files]
+        : params.providerTurnChangeSet.files;
+
     return {
         ...params.providerTurnChangeSet,
-        files: params.checkpointDiff.success
-            ? [...params.providerTurnChangeSet.files, ...params.checkpointDiff.files]
-            : [...params.providerTurnChangeSet.files],
+        // Keep selectable evidence from both sources. Their shared repository identity,
+        // not the provider's absolute spelling, keys the existing content/stat merger.
+        files: files.map((file) => {
+            const filePath = normalizePath(file.filePath);
+            const previousFilePath = typeof file.previousFilePath === 'string' ? normalizePath(file.previousFilePath) : file.previousFilePath;
+            if (filePath === file.filePath && previousFilePath === file.previousFilePath) return file;
+            return { ...file, filePath, ...(typeof previousFilePath === 'string' ? { previousFilePath } : {}) };
+        }),
         repositoryCheckpoint,
     };
 }

@@ -200,6 +200,7 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
                 derivedAt: Date.now(),
             },
             checkpointDiff: input.checkpointDiff,
+            repoRootPath: input.binding.repoRoot ?? params.runtimeDirectory,
             scopeId: input.binding.scopeId,
             startRef: input.startRef,
             finalRef: input.finalRef,
