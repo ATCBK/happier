@@ -22,6 +22,62 @@ afterEach(() => {
     resetLocalServiceInventoryStoreForTests();
 });
 
+it('refreshes a retained Session projection after a managed-only Stop while sharing the Machine watch', async () => {
+    const registry = createLocalServiceInventoryRegistry();
+    registry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 1_000,
+        refreshState: 'idle', entries: [], diagnostics: [] });
+    const routes = createLocalServiceInventoryRoutes({ registry });
+    const cancellation = new AbortController();
+    let running = true;
+    let reads = 0;
+    const unrelated = { id: 'unrelated', machineId: 'machine-a', source: 'inventory_entry',
+        sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'unrelated' },
+        title: 'Unrelated listener', confidence: 'high', state: 'available', actions: [] } as const;
+    rpc.machine.mockImplementation(async (request: { method: string; payload: { sinceGeneratedAt?: number; sessionId?: string } }) => {
+        if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+            return { protocolVersion: 1, ...await routes.watchSnapshot({ ...request.payload, signal: cancellation.signal }) };
+        }
+        if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) {
+            return { protocolVersion: 1, snapshot: registry.getSnapshot() };
+        }
+        reads++;
+        return { protocolVersion: 1, snapshot: LocalServiceLauncherSnapshotV1Schema.parse({
+            v: 1, machineId: 'machine-a', sessionId: request.payload.sessionId, updatedAt: registry.getSnapshot().generatedAt,
+            targets: [...(running ? [{ id: 'managed', machineId: 'machine-a', source: 'managed_service',
+                sourceClass: { kind: 'managed_service', managedServiceId: 'managed' },
+                title: 'Managed', confidence: 'high', state: 'available', actions: ['manage'] }] : []), unrelated],
+        }) };
+    });
+    const machine = { machineId: 'machine-a', serverId: 'server-a' };
+    const session = { ...machine, sessionId: 'session-a', scope: 'workspace' as const };
+    const sessionListener = vi.fn();
+    let releaseSession = subscribeLocalServiceLauncherStore(session, sessionListener);
+    const releaseMachine = subscribeLocalServiceLauncherStore(machine, () => {});
+    try {
+        await vi.waitFor(() => expect(getLocalServiceLauncherState(session).targetIds).toEqual(['managed', 'unrelated']));
+        await vi.waitFor(() => expect(routes.watcherCount()).toBe(1));
+        await flushHookEffects();
+        const retainedUnrelated = getLocalServiceLauncherState(session).targetsById.get('unrelated');
+        releaseSession();
+        running = false;
+        registry.replaceSnapshot({ ...registry.getSnapshot(), generatedAt: 2_000 }, { invalidate: true });
+        await vi.waitFor(() => expect(getLocalServiceLauncherState(machine).targetIds).toEqual(['unrelated']));
+        releaseSession = subscribeLocalServiceLauncherStore(session, sessionListener);
+        await vi.waitFor(() => expect(getLocalServiceLauncherState(session).targetIds).toEqual(['unrelated']));
+        expect(getLocalServiceLauncherState(session).targetsById.get('unrelated')).toBe(retainedUnrelated);
+        await flushHookEffects();
+        const settledReads = reads;
+        sessionListener.mockClear();
+        for (let scan = 0; scan < 75; scan++) {
+            registry.replaceSnapshot({ ...registry.getSnapshot(), generatedAt: 3_000 + scan });
+            await flushHookEffects();
+        }
+        expect(reads).toBe(settledReads);
+        expect(sessionListener).not.toHaveBeenCalled();
+        expect(routes.watcherCount()).toBe(1);
+    } finally { releaseSession(); releaseMachine(); cancellation.abort(); }
+});
+
 it('keeps scoped Service rows uncommitted for 75 unrelated listener changes and no-change launcher replies', async () => {
     const registry = createLocalServiceInventoryRegistry();
     registry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 1_000,

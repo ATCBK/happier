@@ -146,7 +146,7 @@ const store = createSharedSubscriptionStore<
         if (getLocalServiceInventoryState(input).refreshState === 'error') {
             // A retired inventory watch cannot prove that an old absence or lifetime is
             // current. Keep the same rows and daemon timestamp, with existing stale UI.
-            return failLocalServiceLauncherRefresh(state, { machineId: normalized.machineId,
+            return (current: LocalServiceLauncherState) => failLocalServiceLauncherRefresh(current, { machineId: normalized.machineId,
                 sessionId: normalized.sessionId ?? undefined, reasonCode: 'request_failed', stale: true });
         }
         const receivedAt = readLocalServiceLauncherSnapshotTime(state);
@@ -160,10 +160,9 @@ const store = createSharedSubscriptionStore<
             ...(normalized.accountId ? { accountId: normalized.accountId } : {}),
             signal,
         });
-        // An Action can publish while this network read is pending. Reconcile
-        // against the current owner state so its native timestamp orders both paths.
-        const current = getLocalServiceLauncherState(input);
-        return result.ok
+        // An Action can publish during the read or after this callback returns.
+        // Reconcile once, atomically at the shared owner's commit boundary.
+        return (current: LocalServiceLauncherState) => result.ok
             ? applyLocalServiceLauncherSnapshot(current, result.snapshot)
             : readLocalServiceLauncherSnapshotTime(current) !== receivedAt ? current : failRefresh(current, normalized, result.reason);
     },

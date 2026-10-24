@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectNoWallClockPolling } from '../noPollingTestHelpers';
 import { LocalServicePublicPreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { flushHookEffects } from '@/dev/testkit';
+import { createDeferred, flushHookEffects } from '@/dev/testkit';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 // Daemon RPC is the boundary; subscription lifecycle, request codec and response validation stay real.
@@ -73,7 +73,27 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('shared local-service public-preview store', () => {
-    beforeEach(() => rpc.machine.mockReset());
+    it.each(['snapshot', 'failure', 'rejection'] as const)('preserves a newer publication when an older read settles with %s', async (outcome) => {
+        const pending = createDeferred<unknown>();
+        rpc.machine.mockImplementation(async () => {
+            const response = await pending.promise;
+            if (outcome === 'rejection') throw new Error('transport failed');
+            return response;
+        });
+        const key = { machineId: 'machine_1' };
+        const release = subscribeLocalServicePublicPreviewStore(key, () => {});
+        await flushMicrotasks();
+        expect(rpc.machine).toHaveBeenCalledTimes(1);
+        publishLocalServicePublicPreviewSnapshot(key, snapshot({ generatedAt: 3_000, exposures: [] }));
+        const published = getLocalServicePublicPreviewState(key);
+        if (outcome === 'snapshot') pending.resolve({ protocolVersion: 1, snapshot: snapshot() });
+        else if (outcome === 'failure') pending.resolve({ ok: false, error: 'request_failed' });
+        else pending.resolve(undefined);
+        await flushMicrotasks();
+        expect(getLocalServicePublicPreviewState(key)).toBe(published);
+        release();
+    });
+    beforeEach(() => { rpc.machine.mockReset(); });
     afterEach(() => {
         resetLocalServicePublicPreviewStoreForTests();
     });

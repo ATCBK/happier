@@ -54,6 +54,45 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('shared local-service inventory store', () => {
+    it.each(['snapshot', 'failure', 'rejection'] as const)('preserves a newer publication when an older read settles with %s', async (outcome) => {
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockReturnValue(pending.promise);
+        const key = { machineId: 'machine-a' };
+        const release = subscribeLocalServiceInventoryStore(key, () => {});
+        await flushMicrotasks();
+        publishLocalServiceInventorySnapshot(key, { ...snapshot, generatedAt: 2_000, entries: [] });
+        const published = getLocalServiceInventoryState(key);
+        if (outcome === 'snapshot') pending.resolve({ protocolVersion: 1, snapshot });
+        else if (outcome === 'failure') pending.resolve({ ok: false, error: 'request_failed' });
+        else pending.reject(new Error('transport failed'));
+        await flushMicrotasks();
+        expect(getLocalServiceInventoryState(key)).toBe(published);
+        release();
+    });
+    it.each(['idle', 'error'] as const)('publishes changed summary facts without notifying for equal Machine receipt metadata (%s passive detail)', refreshState => {
+        const key = { machineId: 'machine-a', serverId: 'server-a' };
+        const notified = vi.fn();
+        const release = observeLocalServiceInventorySummary(key, notified);
+        try {
+            if (refreshState === 'error') {
+                publishLocalServiceInventorySnapshot(key, { ...snapshot, refreshState });
+                notified.mockClear();
+            }
+            publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'ready', runningCount: 3 });
+            expect(notified).toHaveBeenCalledTimes(1);
+            notified.mockClear();
+            for (let arrival = 0; arrival < 139; arrival += 1) {
+                publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'ready', runningCount: 3 });
+            }
+            expect(notified).not.toHaveBeenCalled();
+            publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'ready', runningCount: 5 });
+            expect(getLocalServiceInventoryRunningCount(key)).toBe(5);
+            expect(notified).toHaveBeenCalledTimes(1);
+            publishLocalServiceInventorySummary(key, { v: 1, state: 'ready', runningCount: 5 });
+            expect(notified).toHaveBeenCalledTimes(1);
+            expect(rpc.machine).not.toHaveBeenCalled();
+        } finally { release(); }
+    });
     it('does not overwrite a newer inventory observation when another consumer presents the same Machine summary receipt', () => {
         const key = { machineId: 'machine-a', serverId: 'server-a' };
         const received = { v: 1, state: 'ready', runningCount: 4 };

@@ -43,8 +43,6 @@ export type LocalServiceInventorySnapshot = Readonly<{
 
 export type LocalServiceInventoryState = Readonly<{
     summary: LocalServiceMachineSummaryV1 | null;
-    /** Last received Machine-summary object; inventory observations do not replay that receipt. */
-    machineSummarySource: object | null;
     machineId: string | null;
     generatedAt: number | null;
     refreshState: 'idle' | 'refreshing' | 'error';
@@ -53,11 +51,28 @@ export type LocalServiceInventoryState = Readonly<{
     diagnostics: readonly unknown[];
 }>;
 
+// Receipt identity orders passive Machine observations, but is not a changed display fact.
+const machineSummarySources = new WeakMap<LocalServiceInventoryState, object | null>();
+export function readLocalServiceInventoryMachineSummarySource(state: LocalServiceInventoryState): object | null {
+    return machineSummarySources.get(state) ?? null;
+}
+function carryMachineSummarySource(previous: LocalServiceInventoryState, next: LocalServiceInventoryState): LocalServiceInventoryState {
+    machineSummarySources.set(next, readLocalServiceInventoryMachineSummarySource(previous));
+    return next;
+}
+export function applyLocalServiceInventoryMachineSummary(
+    state: LocalServiceInventoryState, summary: LocalServiceMachineSummaryV1, source: object | null,
+): LocalServiceInventoryState {
+    const next = applyLocalServiceInventorySummary(state, summary);
+    machineSummarySources.set(next, source);
+    return next;
+}
+
 export function applyLocalServiceInventorySummary(state: LocalServiceInventoryState, summary: LocalServiceMachineSummaryV1): LocalServiceInventoryState {
     const previous = state.summary;
     if (previous?.state === summary.state && (summary.state !== 'ready'
         || (previous.state === 'ready' && previous.runningCount === summary.runningCount))) return state;
-    return { ...state, summary };
+    return carryMachineSummarySource(state, { ...state, summary });
 }
 
 function rowKey(row: LocalServiceInventoryRow): string {
@@ -85,7 +100,6 @@ function presentationRow(row: LocalServiceInventoryRow): LocalServiceInventoryPr
 export function createLocalServiceInventoryState(): LocalServiceInventoryState {
     return {
         summary: null,
-        machineSummarySource: null,
         machineId: null,
         generatedAt: null,
         refreshState: 'idle',
@@ -111,7 +125,6 @@ export function applyLocalServiceInventoryRefreshStarted(
     if (state.machineId !== null && state.machineId !== machineId) {
         return {
             summary: null,
-            machineSummarySource: null,
             machineId,
             generatedAt: null,
             refreshState: 'refreshing',
@@ -122,11 +135,11 @@ export function applyLocalServiceInventoryRefreshStarted(
     }
 
     if (state.machineId === machineId && state.refreshState === 'refreshing') return state;
-    return {
+    return carryMachineSummarySource(state, {
         ...state,
         machineId,
         refreshState: 'refreshing',
-    };
+    });
 }
 
 /**
@@ -145,7 +158,6 @@ export function applyLocalServiceInventoryRefreshFailed(
     if (state.machineId !== null && state.machineId !== machineId) {
         return {
             summary: null,
-            machineSummarySource: null,
             machineId,
             generatedAt: null,
             refreshState: 'error',
@@ -156,17 +168,19 @@ export function applyLocalServiceInventoryRefreshFailed(
     }
 
     if (state.machineId === machineId && state.refreshState === 'error' && state.summary?.state === 'error') return state;
-    return applyLocalServiceInventorySummary({
+    return applyLocalServiceInventorySummary(carryMachineSummarySource(state, {
         ...state,
         machineId,
         refreshState: 'error',
-    }, { v: 1, state: 'error' });
+    }), { v: 1, state: 'error' });
 }
 
 export function applyLocalServiceInventorySnapshot(
     state: LocalServiceInventoryState,
     snapshot: LocalServiceInventorySnapshot,
 ): LocalServiceInventoryState {
+    if (state.machineId === snapshot.machineId && state.generatedAt !== null
+        && snapshot.generatedAt < state.generatedAt) return state;
     const summaryState = applyLocalServiceInventorySummary(state, projectLocalServiceMachineSummaryV1(snapshot));
     const rowsById = new Map<string, LocalServiceInventoryRow>();
     const rowIds: string[] = [];
@@ -192,16 +206,15 @@ export function applyLocalServiceInventorySnapshot(
         presentationRows.set(nextMap, sameIds && nextPresentation.every((row, index) => row === previousPresentation[index])
             ? previousPresentation : nextPresentation);
     }
-    return {
+    return carryMachineSummarySource(state, {
         summary: summaryState.summary,
-        machineSummarySource: state.machineSummarySource,
         machineId: snapshot.machineId,
         generatedAt: snapshot.generatedAt,
         refreshState: snapshot.refreshState,
         rowIds: sameIds ? state.rowIds : rowIds,
         rowsById: nextMap,
         diagnostics,
-    };
+    });
 }
 
 /**

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalServicePreviewResourceV1Schema, DaemonLocalServicePreviewSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { flushHookEffects } from '@/dev/testkit';
+import { createDeferred, flushHookEffects } from '@/dev/testkit';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 // Daemon transport is the boundary; subscription lifecycle and snapshot normalization stay real.
@@ -68,7 +68,28 @@ function snapshotResponse(snapshot: LocalServicePreviewSnapshot) {
 }
 
 describe('shared local-service preview store (PRV-4)', () => {
-    beforeEach(() => rpc.machine.mockReset());
+    it.each(['snapshot', 'failure', 'rejection'] as const)('preserves a newer publication when an older read settles with %s', async (outcome) => {
+        const pending = createDeferred<unknown>();
+        rpc.machine.mockImplementation(async () => {
+            const response = await pending.promise;
+            if (outcome === 'rejection') throw new Error('transport failed');
+            return response;
+        });
+        const key = { machineId: 'machine_1' };
+        const release = subscribeLocalServicePreviewStore(key, () => {});
+        await flushMicrotasks();
+        expect(rpc.machine).toHaveBeenCalledTimes(1);
+        const newer = { ...snapshotWith('preview_new'), generatedAt: 2_000 };
+        publishLocalServicePreviewSnapshot(key, newer);
+        const published = getLocalServicePreviewState(key);
+        if (outcome === 'snapshot') pending.resolve(snapshotResponse(snapshotWith('preview_old')));
+        else if (outcome === 'failure') pending.resolve({ ok: false, error: 'request_failed' });
+        else pending.resolve(undefined);
+        await flushMicrotasks();
+        expect(getLocalServicePreviewState(key)).toBe(published);
+        release();
+    });
+    beforeEach(() => { rpc.machine.mockReset(); });
     afterEach(() => {
         resetLocalServicePreviewStoreForTests();
     });

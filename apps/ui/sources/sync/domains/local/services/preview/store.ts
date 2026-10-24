@@ -92,6 +92,8 @@ export function applyLocalServicePreviewSnapshot(
     state: LocalServicePreviewState,
     snapshot: LocalServicePreviewSnapshot,
 ): LocalServicePreviewState {
+    // Action publications and in-flight reads commit through the same reducer.
+    if (state.generatedAt !== null && snapshot.generatedAt < state.generatedAt) return state;
     const previewsById = new Map<string, LocalServicePreviewRow>();
     const previewIds: string[] = [];
     for (const preview of snapshot.previews) {

@@ -74,15 +74,16 @@ const store = createSharedSubscriptionStore<
     storeKey,
     defaultSnapshotClient,
     beginRefresh: (state) => applyLocalServicePreviewRefreshStarted(state),
-    refresh: async ({ input, state, snapshotClient, nowMs, signal }) => {
+    refresh: async ({ input, state, snapshotClient, signal }) => {
+        const receivedAt = state.generatedAt;
         const result = await snapshotClient({
             machineId: input.machineId,
             serverId: input.serverId ?? null,
             signal,
         });
-        return result.ok
-            ? applyLocalServicePreviewSnapshot(state, result.snapshot)
-            : applyLocalServicePreviewRefreshFailed(state);
+        return (current: LocalServicePreviewState) => result.ok
+            ? applyLocalServicePreviewSnapshot(current, result.snapshot)
+            : current.generatedAt !== receivedAt ? current : applyLocalServicePreviewRefreshFailed(current);
     },
     failRefresh: (state) => applyLocalServicePreviewRefreshFailed(state),
     applySnapshot: applyLocalServicePreviewSnapshot,

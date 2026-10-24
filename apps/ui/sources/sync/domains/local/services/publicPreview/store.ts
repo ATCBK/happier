@@ -82,6 +82,8 @@ export function applyLocalServicePublicPreviewSnapshot(
     state: LocalServicePublicPreviewState,
     snapshot: LocalServicePublicPreviewSnapshotV1,
 ): LocalServicePublicPreviewState {
+    if (state.machineId === snapshot.machineId && state.generatedAt !== null
+        && snapshot.generatedAt < state.generatedAt) return state;
     const exposuresById = new Map<string, LocalServicePublicExposureV1>();
     const exposureIds: string[] = [];
     for (const exposure of snapshot.exposures) {
