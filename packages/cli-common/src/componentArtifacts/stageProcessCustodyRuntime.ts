@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { ensureFileExists, type RunCommand } from './commands.js';
@@ -36,7 +36,17 @@ export async function stageProcessCustodyRuntime({
   await mkdir(toolsDir, { recursive: true });
   if (prebuiltExecutablePath) {
     await ensureFileExists(prebuiltExecutablePath);
-    await cp(prebuiltExecutablePath, executablePath);
+    // A previous test can still be executing the published helper. Copying
+    // over that inode fails with ETXTBSY on Linux; publish a complete sibling.
+    const stagingDir = await mkdtemp(join(toolsDir, '.process-custody-'));
+    const stagedExecutable = join(stagingDir, resolveProcessCustodyRuntimeExecutableName(target));
+    try {
+      await cp(prebuiltExecutablePath, stagedExecutable);
+      if (target.os !== 'windows') await chmod(stagedExecutable, 0o755);
+      await rename(stagedExecutable, executablePath);
+    } finally {
+      await rm(stagingDir, { recursive: true, force: true });
+    }
   } else {
     const goArch = target.arch === 'x64' ? 'amd64' : target.arch;
     await runCommand('go', [
@@ -56,7 +66,7 @@ export async function stageProcessCustodyRuntime({
       },
     });
   }
-  if (target.os !== 'windows') {
+  if (target.os !== 'windows' && !prebuiltExecutablePath) {
     await chmod(executablePath, 0o755);
   }
   await ensureFileExists(executablePath);
