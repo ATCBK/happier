@@ -45,7 +45,7 @@ export const summaryTextBinding: SessionStateBinding<'display.title'> = {
       updatedAt: update.updatedAt ?? structuredValue?.updatedAt ?? Date.now(),
     };
     const staleBehavior: TimestampedFieldStaleBehavior =
-      update.staleBehavior ?? structuredValue?.staleBehavior ?? 'drop';
+      update.staleBehavior ?? structuredValue?.staleBehavior ?? 'bump-if-value-changed';
 
     const resolved = resolveTimestampedFieldUpdate({
       current: current.value === null

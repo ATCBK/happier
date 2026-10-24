@@ -90,6 +90,21 @@ describe('summaryTextBinding', () => {
     });
   });
 
+  it.each(['plain', 'timestamped'] as const)('bumps a stale manual title through the %s field binding', shape => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10);
+    try {
+      const updater = createSessionStateFieldMetadataUpdater('display.title', shape === 'plain'
+        ? 'Manual rename' : { title: 'Manual rename', updatedAt: 10 });
+      const current = { summary: { text: 'Current', updatedAt: 20 } };
+      const renamed = updater(current);
+      expect(renamed).toEqual({ summary: { text: 'Manual rename', updatedAt: 21 } });
+      expect(updater(renamed)).toBe(renamed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('bumps explicit local title writes when the candidate timestamp is stale', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(10));
