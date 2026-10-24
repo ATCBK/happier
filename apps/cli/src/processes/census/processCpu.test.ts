@@ -9,6 +9,19 @@ function snapshot(at: number, cpuTimeUs: number | null, startTimeMs = 1000): Ext
 }
 
 describe('census CPU rates', () => {
+  it('uses fractional effective capacity, clamps it to the host and resets across capacity changes', () => {
+    const sampler = createProcessCpuSampler();
+    sampler.sample(snapshot(0, 0), 2_000, 0.5);
+    expect(sampler.sample(snapshot(1000, 500_000), 2_000, 0.5).get(42)).toBe(100);
+    expect(sampler.sample(snapshot(2000, 1_000_000), 2_000, 2).has(42)).toBe(false);
+    expect(sampler.sample(snapshot(3000, 2_000_000), 2_000, 2).get(42)).toBe(50);
+    expect(sampler.sample(snapshot(4000, 3_000_000), 2_000, 8).has(42)).toBe(false);
+    expect(sampler.sample(snapshot(5000, 4_000_000), 2_000, 8).get(42)).toBe(25);
+    // A quota above the host is the same capacity as the census fallback.
+    expect(sampler.sample(snapshot(6000, 5_000_000), 2_000).get(42)).toBe(25);
+    expect(sampler.sample(snapshot(7000, 6_000_000), 2_000, 0).get(42)).toBe(25);
+  });
+
   it('uses the canonical counter horizon and cadence instead of presenting stale or too-close averages', () => {
     const sampler = createProcessCpuSampler();
     sampler.sample(snapshot(0, 0), 2_000);

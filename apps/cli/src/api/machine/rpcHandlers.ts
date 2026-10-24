@@ -24,6 +24,7 @@ import { resolveDaemonExecutionRunBrokerAuthority } from '@/daemon/executionRunB
 import { isPidPresent } from '@happier-dev/cli-common/process';
 import { readProcessCensus } from '@/processes/census/processCensus';
 import { createProcessCpuSampler } from '@/processes/census/processCpu';
+import { MACHINE_VITALS_LIVE_INTERVAL_MS } from '@/daemon/vitals/createMachineVitalsSampler';
 import {
   StopSessionResultSchema,
   type StopSessionResult,
@@ -300,6 +301,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   mcpServers?: Parameters<typeof registerMachineMcpServersRpcHandlers>[0]['deps'];
   readSpawnFailureLimits?: MachineTerminalRpcHandlerDeps['readSpawnFailureLimits'];
   ownerRemainder?: MachineTerminalRpcHandlerDeps['ownerRemainder'];
+  readMachineEffectiveCores?: () => number | undefined;
   requesterSessionRuntime?: NonNullable<Parameters<typeof import('@/rpc/handlers/sessionLifecycle').registerSessionLifecycleRpcHandlers>[0]['requesterSessionRuntime']>;
   requesterBootstrapBoundary?: NonNullable<Parameters<typeof registerMachineSessionHandoffRpcHandlers>[0]['requesterBootstrapBoundary']>;
   accountReadRuntime?: MachineTerminalRpcHandlerDeps['accountReadRuntime'];
@@ -1085,8 +1087,8 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       const snapshot = await readProcessCensus({ freshness: 'shared', pids: markers.map(marker => marker.pid),
         fields: ['memory', 'cpuTimeUs'] });
       if (snapshot.status === 'ok') {
-        // Runs are requested on demand, without a periodic sampling cadence.
-        const cpu = executionRunCpu.sample(snapshot, 0);
+        // On-demand reads share the live-view minimum span, even when viewers read close together.
+        const cpu = executionRunCpu.sample(snapshot, MACHINE_VITALS_LIVE_INTERVAL_MS, params.deps?.readMachineEffectiveCores?.());
         processIndex = new Map(snapshot.rows.map(row => [row.pid, {
           pid: row.pid,
           name: row.name,

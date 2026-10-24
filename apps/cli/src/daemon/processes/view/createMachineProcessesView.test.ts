@@ -32,6 +32,52 @@ vi.mock('@/processes/census/processCensus', async importOriginal => ({
     ...await importOriginal<typeof import('@/processes/census/processCensus')>(), readProcessCensus: boundary.read,
 }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+it('does not let an older metrics read erase newly discovered ownership', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const row = (pid: number) => ({ pid, ppid: pid === 100 ? 1 : 100, start: { startTimeMs: pid === 100 ? 100 : 1000 + pid },
+        principal: { kind: 'uid' as const, value: '1000' }, name: 'fixture', memory: { bytes: 20, kind: 'rss' as const }, cpuTimeUs: null });
+    let discovered = false;
+    let releaseMetrics: (() => void) | undefined;
+    boundary.read.mockImplementation(async input => {
+        if (input.pids) {
+            await new Promise<void>(resolve => { releaseMetrics = resolve; });
+            // The older observation positively retires the original child.
+            return { status: 'ok', capturedAtMs: 3000, logicalCpus: 2, rows: [row(100)] };
+        }
+        return { status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [row(100), row(discovered ? 21 : 20)] };
+    });
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
+        { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
+    ] });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async input => ({ state: 'reporting',
+        host: { logicalCores: 2, memoryTotalBytes: 2000, bootedAt: 0 },
+        sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu: { reported: false, reason: 'unavailable' },
+            memory: { reported: false, reason: 'unavailable' }, disk: { reported: false, reason: 'unavailable' }, network: { reported: false, reason: 'unavailable' } },
+        minuteCounters: { monotonicMs: input.monotonicMs, cpu: null, network: null },
+    }) }, historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+        appendAlert: async () => undefined, minutes: () => [], alerts: () => [] }, monotonicMs: () => Date.now() });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'a' }) });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
+    const cancellation = new AbortController();
+    await sampler.start();
+    const initial = await view.watch(request, requester);
+    const parked = view.watch({ ...request, since: initial.changed ? initial.answer.capturedAtMs : 0 }, requester, cancellation.signal);
+    try {
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(releaseMetrics).toBeTypeOf('function');
+        discovered = true;
+        const newer = await view.watch(request, requester);
+        expect(newer.changed && newer.answer.owners.flatMap(owner => owner.members).map(item => item.pid)).toContain(21);
+        releaseMetrics?.();
+        const answer = await parked;
+        expect(answer.changed && answer.answer.owners.flatMap(owner => owner.members).map(item => item.pid)).toContain(21);
+    } finally {
+        releaseMetrics?.(); cancellation.abort(); await parked; view.dispose(); pass.dispose(); await sampler.stop();
+    }
+});
 it('shares one demanded Overview process stream across viewers without enumerating on metric-only samples', async () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let nativeEnumerations = 0;
@@ -72,6 +118,7 @@ it('shares one demanded Overview process stream across viewers without enumerati
             await vi.advanceTimersByTimeAsync(period === 0 ? 4000 : 2000);
             answers = await Promise.all(pending);
             expect(answers.every(answer => answer.changed && answer.answer.totals.happier.processCount === 1001)).toBe(true);
+            expect(answers.every(answer => answer.changed && answer.answer.history === undefined)).toBe(true);
         }
         // One discovery on open, then the approved 25 s ownership backstop.
         // Eight viewers and twenty real sample periods do not multiply discovery.
@@ -426,7 +473,7 @@ it.each([6000, MACHINE_WATCH_WINDOW_MS + 1000, 31_000])('samples only while watc
     const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
     const directory = await mkdtemp(join(tmpdir(), 'processes-watch-'));
     const sampler = createMachineVitalsSampler({ readers: { read: async input => ({ state: 'reporting',
-        host: { logicalCores: 2, memoryTotalBytes: 1000, bootedAt: 0 },
+        host: { logicalCores: 2, effectiveCores: 0.5, memoryTotalBytes: 1000, bootedAt: 0 },
         sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu: { reported: true, busyPct: null },
             memory: { reported: true, totalBytes: 1000, availableBytes: 900, usedBytes: 100, pressure: { level: 'calm', source: 'events' } },
             disk: { reported: false, reason: 'unavailable' }, network: { reported: false, reason: 'unavailable' } },
@@ -460,14 +507,14 @@ it.each([6000, MACHINE_WATCH_WINDOW_MS + 1000, 31_000])('samples only while watc
     await vi.advanceTimersByTimeAsync(4000);
     const answer = await watched;
     expect(answer.changed).toBe(true);
-    expect(answer.changed && answer.answer.owners[0].members[0].cpuPercent).toBe(5);
-    expect(answer.changed && answer.answer.owners[0].totals.cpuPercent).toBe(5);
+    expect(answer.changed && answer.answer.owners[0].members[0].cpuPercent).toBe(20);
+    expect(answer.changed && answer.answer.owners[0].totals.cpuPercent).toBe(20);
     expect(localServiceRoutes.watcherCount()).toBe(0);
     const ref = initial.owners[0].members[0].ref;
     const rearmed = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: Date.now(), detailToken: ref }, requester);
     await vi.advanceTimersByTimeAsync(2000);
     const second = await rearmed;
-    expect(second.changed && second.answer.owners[0].members[0].cpuPercent).toBe(5);
+    expect(second.changed && second.answer.owners[0].members[0].cpuPercent).toBe(20);
     expect(second.changed && second.answer.owners[0].members[0].memoryBytes).toBe(30);
     expect(second.changed && second.answer.history?.[ref]).toHaveLength(3);
     // TA-20-6 permits the retained observation to yield an honest average on
@@ -478,12 +525,17 @@ it.each([6000, MACHINE_WATCH_WINDOW_MS + 1000, 31_000])('samples only while watc
     await vi.advanceTimersByTimeAsync(rearmGapMs);
     expect(boundary.read.mock.calls.length).toBe(readsBeforeGap);
     const rearmedAt = Date.now();
-    const thirdWatch = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: second.changed ? second.answer.capturedAtMs : 0 }, requester);
+    // The client holds the second answer's series: the third carries only what is newer than it.
+    const heldHistory = second.changed ? Object.values(second.answer.history ?? {}).flat() : [];
+    const historySince = Math.max(...heldHistory.map(sample => sample.capturedAtMs));
+    const thirdWatch = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', historySince,
+        since: second.changed ? second.answer.capturedAtMs : 0 }, requester);
     await vi.advanceTimersByTimeAsync(4000);
     const third = await thirdWatch;
     expect(third.changed).toBe(true);
-    expect(third.changed && third.answer.owners[0].members[0].cpuPercent).toBe(5);
-    expect(third.changed && third.answer.owners[0].totals.cpuPercent).toBe(5);
+    expect(MachineProcessesWatchResultV1Schema.safeParse(third).success).toBe(true);
+    expect(third.changed && third.answer.owners[0].members[0].cpuPercent).toBe(20);
+    expect(third.changed && third.answer.owners[0].totals.cpuPercent).toBe(20);
     expect(third.changed && third.answer.capturedAtMs).toBe(rearmedAt + (expired ? 2000 : 0));
     expect(fullCensusCount()).toBe(fullCensusesBeforeIdleIntervals + (expired ? 1 : 0));
     expect(boundary.read.mock.calls.some(([input]) => input.pids !== undefined
@@ -494,15 +546,19 @@ it.each([6000, MACHINE_WATCH_WINDOW_MS + 1000, 31_000])('samples only while watc
     const history = (await view.get({ machineId: 'm', ref }, requester)).history;
     expect(history).toEqual(expired ? [
         { capturedAtMs: rearmedAt, memoryBytes: 30 },
-        { capturedAtMs: rearmedAt + 2000, memoryBytes: 30, cpuPercent: 5 },
+        { capturedAtMs: rearmedAt + 2000, memoryBytes: 30, cpuPercent: 20 },
     ] : [
         { capturedAtMs: 3000, memoryBytes: 30 },
-        { capturedAtMs: 5000, memoryBytes: 30, cpuPercent: 5 },
-        { capturedAtMs: 7000, memoryBytes: 30, cpuPercent: 5 },
+        { capturedAtMs: 5000, memoryBytes: 30, cpuPercent: 20 },
+        { capturedAtMs: 7000, memoryBytes: 30, cpuPercent: 20 },
         { capturedAtMs: 9000, memoryBytes: null, cpuPercent: null },
-        { capturedAtMs: rearmedAt, memoryBytes: 30, cpuPercent: 5 },
+        { capturedAtMs: rearmedAt, memoryBytes: 30, cpuPercent: 20 },
     ]);
-    expect(third.changed && third.answer.history?.[third.answer.owners[0].rowId]).toEqual(history);
+    const newerThanHeld = history!.filter(sample => sample.capturedAtMs > historySince);
+    // Per-arrival cost follows what is new, not the retained window.
+    expect(newerThanHeld).toHaveLength(2);
+    expect(third.changed && third.answer.history?.[third.answer.owners[0].rowId]).toEqual(expired
+        ? [{ capturedAtMs: historySince + 2000, memoryBytes: null, cpuPercent: null }, ...newerThanHeld] : newerThanHeld);
     await vi.advanceTimersByTimeAsync(MACHINE_WATCH_WINDOW_MS);
     expect((await view.get({ machineId: 'm', ref }, requester)).history).toBeUndefined();
     cpuReported = false;

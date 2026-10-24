@@ -39,8 +39,6 @@ export type ProcessCensusJobObservation =
     | Readonly<{ name: string; state: 'unavailable' }>;
 export type ProcessCensusInput = Readonly<{
     freshness: ProcessCensusFreshness; pids?: readonly number[]; scope?: 'own_principal' | 'all';
-    /** Caller-held decoding baseline only; every requested OS fact is read anew. */
-    previousRows?: readonly ProcessCensusRow[];
     /** Existing custody authority supplies names; observation alone never grants ownership. */
     verifiedJobNames?: readonly string[];
     /** Observations needed by this consumer. Empty selects identity-only reads; omitted preserves the full census. */
@@ -100,7 +98,6 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
                     selfPid, pids: requested, capturedAtMs, logicalCpus: dependencies.logicalCpus ?? cpus().length,
                     fields: input.fields, commandRoots: input.commandRoots, includeAncestors: input.includeAncestors,
                     includeDescendants: input.includeDescendants,
-                    previousRows: input.previousRows,
                 });
                 snapshot = requested ? await read() : await observeNativeCensus(capturedAtMs, read);
             } else if (platform === 'darwin' || platform === 'win32') {

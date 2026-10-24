@@ -31,7 +31,7 @@ export type ProcessesProjectionOptions = Readonly<{
     requesterIdentities?: ReadonlyMap<string, Readonly<{ accountId: string; displayName: string }>>;
     onRequesterEvidenceUnavailable?(failure: ProcessRequesterEvidenceFailure): void;
     confirmed: readonly LeftBehindItem[]; metrics?: ReadonlyMap<number, ProcessMetrics>;
-    history?: Readonly<Record<string, readonly ProcessMetricSample[]>>;
+    history?(ref: string): readonly ProcessMetricSample[] | undefined;
     capturedAtMs?: number;
     ports?: NormalizedLocalServiceInventorySnapshot; roleCatalog?: ProcessRoleCatalog;
     principalName?(row: ProcessCensusRow): string;
@@ -178,7 +178,10 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             owner.members.push(processRow);
             owners.set(ownerKey, owner);
         }
-        if (request.detailToken === ref && options.history?.[ref]) history[ref] = [...options.history[ref]];
+        if (request.detailToken === ref) {
+            const samples = options.history?.(ref);
+            if (samples) history[ref] = [...samples];
+        }
     }
     const ownerRows = [...owners.values()].map(owner => {
         const members = new Map(owner.members.map(row => [row.pid, row]));
@@ -205,8 +208,8 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
     // Owner observations were aggregated at capture time, before membership can change.
     // No process detail or recipient-hidden owner history enters the wire answer.
     if (options.history) for (const owner of ownerRows) {
-        const samples = options.history[owner.rowId];
-        if (samples?.length) history[owner.rowId] = [...samples];
+        const samples = options.history(owner.rowId);
+        if (samples) history[owner.rowId] = [...samples];
     }
     return { ...base, state: 'live', owners: ownerRows.map(owner => request.view === 'owners' ? { ...owner, members: [] } : owner), leftBehind,
         ...(custodian && request.scope === 'all' ? { notHappier: [...notHappier.values()] } : {}),

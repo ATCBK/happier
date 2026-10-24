@@ -48,7 +48,7 @@ function fixture() {
 }
 
 describe('process census', () => {
-    it('uses the supplied previous rows as a decoding baseline without reusing the OS observation', async () => {
+    it('reads process identity, ownership and counters freshly on every observation', async () => {
         const { files, boundary } = fixture();
         const reads: string[] = [];
         const reader = createProcessCensusReader({ platform: 'linux', selfPid: 42, linuxBoundary: {
@@ -58,16 +58,15 @@ describe('process census', () => {
         const first = await reader(input);
         if (first.status !== 'ok') throw new Error('Initial census unavailable');
         reads.length = 0;
-        const unchanged = await reader({ ...input, previousRows: first.rows });
+        const unchanged = await reader(input);
         if (unchanged.status !== 'ok') throw new Error('Unchanged census unavailable');
-        expect(unchanged.rows.filter((row, index) => row !== first.rows[index])).toHaveLength(0);
+        expect(unchanged.rows).toEqual(first.rows);
         expect(reads).toContain('/proc/43/stat');
         expect(reads).toContain('/proc/43/status');
         expect(reads).toContain('/proc/43/environ');
         files.set('/proc/43/stat', stat(43, 430, 'Z').replace(' 12 8 ', ' 13 8 '));
-        const changed = await reader({ ...input, previousRows: unchanged.rows });
+        const changed = await reader(input);
         if (changed.status !== 'ok') throw new Error('Changed census unavailable');
-        expect(changed.rows.filter((row, index) => row !== unchanged.rows[index])).toHaveLength(1);
         expect(changed.rows.find(row => row.pid === 43)?.cpuTimeUs).toBe(210000);
     });
 

@@ -240,7 +240,7 @@ describe('process wire projection privacy', () => {
         ]));
         const hidden = projectMachineProcesses(setup(), { ...request, detailToken: processRef(31, { startTimeMs: 31, native: 'linux-proc:31' }) },
             { accountId: 'owner', custodianAccountId: 'owner' }, { ...withoutNames,
-                history: { [processRef(31, { startTimeMs: 31, native: 'linux-proc:31' })]: [{ capturedAtMs: 1000, memoryBytes: 31 }] } });
+                history: ref => ref === processRef(31, { startTimeMs: 31, native: 'linux-proc:31' }) ? [{ capturedAtMs: 1000, memoryBytes: 31 }] : undefined });
         expect(JSON.stringify(hidden)).not.toMatch(/guest-secret|\/private\/guest|linux-proc:31/);
         failures.length = 0;
         expect(projectMachineProcesses(setup(), request, { accountId: 'owner', custodianAccountId: 'owner' },
@@ -255,13 +255,13 @@ describe('process wire projection privacy', () => {
         metrics.observe({ ...read.snapshot, capturedAtMs: read.snapshot.capturedAtMs + 2000 }, 2000, metricOwners(read));
         const detail = processRef(21, read.snapshot.rows.find(row => row.pid === 21)!.start);
         const answer = projectMachineProcesses(read, { ...request, detailToken: detail }, { accountId: 'owner', custodianAccountId: 'owner' },
-            { ...options, history: metrics.history() });
+            { ...options, history: ref => metrics.history(undefined, [ref])[ref] });
         expect(answer.history?.['session:owner-session']).toEqual([
             { capturedAtMs: 100000, memoryBytes: 41 }, { capturedAtMs: 102000, memoryBytes: 41, cpuPercent: 0 },
         ]);
         expect(answer.history?.[detail]).toHaveLength(2);
         expect(answer.history?.[processRef(20, read.roots[1].start)]).toBeUndefined();
-        const recipient = projectMachineProcesses(read, request, { accountId: 'guest', custodianAccountId: 'owner' }, { ...options, history: metrics.history() });
+        const recipient = projectMachineProcesses(read, request, { accountId: 'guest', custodianAccountId: 'owner' }, { ...options, history: ref => metrics.history(undefined, [ref])[ref] });
         expect(Object.keys(recipient.history ?? {})).toEqual(['session:guest-session']);
     });
     it('keeps previously observed owner totals when a member exits instead of rewriting past memory', () => {
@@ -271,7 +271,7 @@ describe('process wire projection privacy', () => {
         const snapshot = { ...read.snapshot, capturedAtMs: 102000, rows: read.snapshot.rows.filter(row => row.pid !== 21) };
         const current = { ...read, snapshot, rows: read.rows.filter(row => row.pid !== 21) };
         metrics.observe(snapshot, 2000, metricOwners(current));
-        const answer = projectMachineProcesses(current, request, { accountId: 'owner', custodianAccountId: 'owner' }, { ...options, history: metrics.history() });
+        const answer = projectMachineProcesses(current, request, { accountId: 'owner', custodianAccountId: 'owner' }, { ...options, history: ref => metrics.history(undefined, [ref])[ref] });
         expect(answer.history?.['session:owner-session']).toEqual([
             { capturedAtMs: 100000, memoryBytes: 41 }, { capturedAtMs: 102000, memoryBytes: 20, cpuPercent: 0 },
         ]);

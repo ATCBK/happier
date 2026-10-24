@@ -1,12 +1,11 @@
-import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies, type ProcessCensusField, type ProcessCensusFreshness, type ProcessCensusRow, type ProcessCensusSnapshot } from '@/processes/census/processCensus';
+import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies, type ProcessCensusField, type ProcessCensusFreshness, type ProcessCensusSnapshot } from '@/processes/census/processCensus';
 import { resolveProcessOwnership } from './resolveProcessOwnership';
 import type { HappierProcessRoot, ListenerFact } from './types';
 import { logger } from '@/ui/logger';
 
 /** Physical custody needs retained lifecycle facts, never Account recovery. */
 type ProcessOwnershipReadOptions = Readonly<{ requesterAttribution?: 'retained' }>;
-type ProcessOwnershipReadRequest = Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[];
-    previousRows?: readonly ProcessCensusRow[] }> & ProcessOwnershipReadOptions;
+type ProcessOwnershipReadRequest = Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[] }> & ProcessOwnershipReadOptions;
 
 /** Consumer-owned demand calls the one census/ownership path; no successful table is retained. */
 export function createProcessOwnershipRuntime(input: Readonly<{
@@ -38,8 +37,7 @@ export function createProcessOwnershipRuntime(input: Readonly<{
     };
     const inFlight = new Map<string, Promise<Awaited<ReturnType<typeof readOwners>>>>();
     async function readOwners(request: ProcessOwnershipReadRequest) {
-        const snapshot = await observe('census_request', () => census({ freshness: request.freshness, scope: 'all', fields: request.fields,
-            previousRows: request.previousRows }));
+        const snapshot = await observe('census_request', () => census({ freshness: request.freshness, scope: 'all', fields: request.fields }));
         if (snapshot.status !== 'ok') return snapshot;
         return resolveSnapshot(snapshot, undefined, request);
     }
@@ -55,8 +53,8 @@ export function createProcessOwnershipRuntime(input: Readonly<{
             inFlight.set(key, pending);
             return pending;
         },
-        async readProcessMetrics(pids: readonly number[], previousRows?: readonly ProcessCensusRow[]) {
-            return census({ freshness: 'shared', scope: 'all', pids, fields: ['memory', 'cpuTimeUs'], previousRows });
+        async readProcessMetrics(pids: readonly number[]) {
+            return census({ freshness: 'shared', scope: 'all', pids, fields: ['memory', 'cpuTimeUs'] });
         },
     };
 }

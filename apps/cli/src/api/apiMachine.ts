@@ -467,6 +467,7 @@ export type ApiMachineClientLifecycleDependencies = Readonly<{
     }>;
     readSpawnFailureLimits?: MachineRpcHandlerDeps['readSpawnFailureLimits'];
     ownerRemainder?: MachineRpcHandlerDeps['ownerRemainder'];
+    readMachineEffectiveCores?: MachineRpcHandlerDeps['readMachineEffectiveCores'];
     requesterSessionRuntime?: MachineRpcHandlerDeps['requesterSessionRuntime'];
     requesterBootstrapBoundary?: MachineRpcHandlerDeps['requesterBootstrapBoundary'];
     managedActivity?: Pick<ManagedActivityRpcOwner, 'activity' | 'admissionDrain'>;
@@ -1753,6 +1754,7 @@ export class ApiMachineClient {
                 accountReadRuntime: (ingress) => this.resolveOwnSessionRuntime(ingress),
                 readSpawnFailureLimits: this.lifecycleDependencies.readSpawnFailureLimits,
                 ownerRemainder: this.lifecycleDependencies.ownerRemainder,
+                readMachineEffectiveCores: this.lifecycleDependencies.readMachineEffectiveCores,
                 executionBudgetRegistry: this.executionBudgetRegistry,
                 ...(this.lifecycleDependencies.managedActivity && workSummaryInstallation && executionRunRuntimeAccountId ? {
                     machineWorkSummary: {

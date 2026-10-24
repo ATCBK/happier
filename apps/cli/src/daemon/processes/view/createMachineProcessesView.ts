@@ -7,7 +7,7 @@ import type { MachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSa
 import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
-import type { ProcessCensusField, ProcessCensusRow, ProcessStartIdentity } from '@/processes/census/processCensus';
+import type { ProcessCensusField, ProcessStartIdentity } from '@/processes/census/processCensus';
 import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
@@ -20,7 +20,7 @@ import { projectMachineProcesses, resolveMachineProcessesUnavailableReason, type
 export type MachineProcessesViewOptions = Readonly<{
     processOwnershipRuntime: ReturnType<typeof createProcessOwnershipRuntime>;
     leftBehind: Pick<ReturnType<typeof createLeftBehindPass>, 'observe' | 'confirmed'>;
-    machineVitals: Pick<MachineVitalsSampler, 'demand' | 'subscribe' | 'latest'>;
+    machineVitals: Pick<MachineVitalsSampler, 'demand' | 'subscribe' | 'latest' | 'host'>;
     platform: 'linux' | 'darwin' | 'win32'; selfPid?: number; bootTimeMs?: number;
     allProcessesVisible(): boolean;
     requesterForOwner(owner: ProcessOwnerRef, roots: readonly HappierProcessRoot[]): ProcessRequesterIdentity | null;
@@ -38,7 +38,6 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
     let bootTimeMs = options.bootTimeMs;
     let latestRead: ProcessOwnershipRead | undefined;
     let latestMetricAtMs: number | undefined;
-    let previousMetricRows: readonly ProcessCensusRow[] | undefined;
     const listeners = new Set<() => void>();
     const allProcessListeners = new Set<() => void>();
     let releaseLive: (() => void) | undefined;
@@ -51,7 +50,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
     const watches = new Set<AbortController>();
     // Native daemon handles support unref; shared UI ambient types also expose numeric handles.
     let metricExpiry: (ReturnType<typeof setTimeout> & Readonly<{ unref?: () => void }>) | undefined;
-    const clearMetrics = () => { metrics.reset(); currentMetrics = new Map(); previousMetricRows = undefined; };
+    const clearMetrics = () => { metrics.reset(); currentMetrics = new Map(); };
     const prepare = async () => {
         if (options.platform === 'linux' && bootTimeMs === undefined) bootTimeMs = await readProcessOwnershipBootTimeMs(options.platform);
     };
@@ -61,8 +60,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         // CPU samples have their own visible-demand metrics owner below.
         const fields: readonly ProcessCensusField[] = ['argv', 'cwd', 'ownershipEnvironment', 'cgroup', 'memory',
             ...(options.platform === 'darwin' ? ['executablePath' as const] : [])];
-        const read = await options.processOwnershipRuntime.readOwners({ freshness, fields,
-            ...(freshness === 'shared' && latestRead?.status === 'ok' ? { previousRows: latestRead.snapshot.rows } : {}) });
+        const read = await options.processOwnershipRuntime.readOwners({ freshness, fields });
         const identities = await options.readRequesterIdentities?.().catch(() => undefined);
         options.leftBehind.observe(read);
         return { read, identities };
@@ -87,13 +85,13 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             return await ownershipCapture;
         } finally { captureDemands.delete(demanded); }
     };
-    const project = (read: ProcessOwnershipRead, request: ProcessesProjectionInput, requester: ProcessRequester, watched = false,
+    const project = (read: ProcessOwnershipRead, request: ProcessesProjectionInput & Readonly<{ historySince?: number }>, requester: ProcessRequester, watched = false,
         facts: Readonly<{ ports?: NormalizedLocalServiceInventorySnapshot; identities?: typeof requesterIdentities }> = {}) =>
         projectMachineProcesses(read, request, requester, { ...options, allProcessesVisible: options.allProcessesVisible(),
             confirmed: options.leftBehind.confirmed(), ports: facts.ports ?? ports, bootTimeMs, requesterIdentities: facts.identities ?? requesterIdentities,
             ...(watched ? { metrics: read === latestRead ? currentMetrics
                 : new Map([...currentMetrics].filter(([, metric]) => !metric.identityUnavailable)),
-                history: metrics.history(), capturedAtMs: latestMetricAtMs } : {}) });
+                ...(request.view === 'tree' ? { history: (ref: string) => metrics.history(request.historySince, [ref])[ref] } : {}), capturedAtMs: latestMetricAtMs } : {}) });
     let currentMetrics: ReadonlyMap<number, import('./processMetrics').ProcessMetrics> = new Map();
     const notify = () => { for (const listener of listeners) listener(); };
     const discover = () => {
@@ -141,10 +139,9 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 if (ticking || ownership?.status !== 'ok') return;
                 ticking = (async () => {
                     const metricPids = ownership.rows.flatMap(row => row.owner || allProcessListeners.size > 0 ? [row.pid] : []);
-                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids, previousMetricRows ?? ownership.snapshot.rows);
+                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids);
                     if (disposed || controller.signal.aborted || !listeners.size) return;
                     if (snapshot.status === 'ok') {
-                        previousMetricRows = snapshot.rows;
                         const sampled = new Set(metricPids);
                         const observed = new Map(snapshot.rows.map(row => [row.pid, row]));
                         const partial = new Set(snapshot.partial?.filter(item => !observed.has(item.pid) || item.missing.includes('start')).map(item => item.pid));
@@ -154,7 +151,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                             !sampled.has(row.pid) || partial.has(row.pid)
                             || !!observed.get(row.pid) && equalProcessStart(row.start, observed.get(row.pid)!.start);
                         const rows = ownership.rows.filter(retained);
-                        if (rows.length !== ownership.rows.length) latestRead = { ...ownership, rows,
+                        if (latestRead === ownership && rows.length !== ownership.rows.length) latestRead = { ...ownership, rows,
                             snapshot: { ...ownership.snapshot, rows: ownership.snapshot.rows.filter(retained) } };
                         const owners = new Map<string, Map<number, string>>();
                         for (const row of rows) if (row.owner && row.level !== 'left_behind' && row.level !== 'not_happier') {
@@ -175,7 +172,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                             if (!partial.has(row.pid) && !principalUncertain) continue;
                             identityUnavailable.set(row.pid, processRef(row.pid, row.start));
                         }
-                        currentMetrics = metrics.observe(snapshot, sample.intervalMs, owners, identityUnavailable);
+                        currentMetrics = metrics.observe(snapshot, sample.intervalMs, owners, identityUnavailable, options.machineVitals.host()?.effectiveCores);
                         latestMetricAtMs = snapshot.capturedAtMs;
                         // A cold or expired CPU baseline needs two observations in
                         // this active watch. Returning after the first would let
@@ -200,8 +197,6 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             listeners.delete(listener);
             allProcessListeners.delete(listener);
             if (!listeners.size) {
-                // Raw decode reuse follows demand, not the retained CPU/history window.
-                previousMetricRows = undefined;
                 unsubscribeVitals?.(); unsubscribeVitals = undefined;
                 releaseLive?.(); releaseLive = undefined;
                 portsController?.abort(); portsController = undefined;

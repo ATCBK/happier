@@ -1581,6 +1581,7 @@ describe('registerMachineRpcHandlers', () => {
   });
 
   it('registers daemon execution run listing handler', async () => {
+    let effectiveCores = 0.5;
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {
       registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
@@ -1590,6 +1591,7 @@ describe('registerMachineRpcHandlers', () => {
 
     registerMachineRpcHandlers({
       rpcHandlerManager,
+      deps: { readMachineEffectiveCores: () => effectiveCores },
       handlers: {
         spawnSession: async () => ({ type: 'success', sessionId: 's1' } as const),
         stopSession: async () => true,
@@ -1618,6 +1620,7 @@ describe('registerMachineRpcHandlers', () => {
       const handler = registered.get((RPC_METHODS as any).DAEMON_EXECUTION_RUNS_LIST);
       expect(handler).toBeDefined();
 
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
       const res = await handler!({});
       expect(res).toEqual(expect.objectContaining({
         runs: expect.any(Array),
@@ -1630,6 +1633,19 @@ describe('registerMachineRpcHandlers', () => {
       if (process.platform === 'linux' || process.platform === 'darwin') {
         expect(entry?.process?.pid).toBe(process.pid);
         expect(entry?.process?.memory).toBeGreaterThan(0);
+        clock.mockReturnValue(1_000_010);
+        const tooClose = await handler!({});
+        expect(tooClose.runs.find((run: { runId: string }) => run.runId === runId)?.process?.cpu).toBeUndefined();
+        clock.mockReturnValue(1_001_000);
+        const eligible = await handler!({});
+        expect(eligible.runs.find((run: { runId: string }) => run.runId === runId)?.process?.cpu).toBeTypeOf('number');
+        effectiveCores = 0.25;
+        clock.mockReturnValue(1_002_000);
+        const capacityChanged = await handler!({});
+        expect(capacityChanged.runs.find((run: { runId: string }) => run.runId === runId)?.process?.cpu).toBeUndefined();
+        clock.mockReturnValue(1_003_000);
+        const recovered = await handler!({});
+        expect(recovered.runs.find((run: { runId: string }) => run.runId === runId)?.process?.cpu).toBeTypeOf('number');
       }
     } finally {
       await removeExecutionRunMarker(runId);

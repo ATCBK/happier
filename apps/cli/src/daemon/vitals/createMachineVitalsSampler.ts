@@ -12,7 +12,7 @@ import type { MachineVitalsMinuteCountersV1, MachineVitalsReader, MachineVitalsR
 
 const MINUTE_MS = 60_000;
 const SUMMARY_MS = 15_000;
-const LIVE_MS = 2_000;
+export const MACHINE_VITALS_LIVE_INTERVAL_MS = 2_000;
 const HOUR_MS = 60 * MINUTE_MS;
 
 type TimerHandle = Readonly<{ unref?: () => void }>;
@@ -78,7 +78,7 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     let bucket: MachineVitalsSampleV1[] = [];
 
     const cadence = () => currentState.state === 'unavailable' && currentState.reason === 'helper_failing'
-        ? MINUTE_MS : lives > 0 || overviews > 0 ? LIVE_MS : summaries > 0 ? SUMMARY_MS : MINUTE_MS;
+        ? MINUTE_MS : lives > 0 || overviews > 0 ? MACHINE_VITALS_LIVE_INTERVAL_MS : summaries > 0 ? SUMMARY_MS : MINUTE_MS;
 
     const changeState = (state: MachineVitalsSamplerState) => {
         if (state.state === currentState.state && (state.state === 'reporting'
@@ -200,7 +200,7 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
             if (latest && sampledAt < latest.sampledAt) return;
             latest = point;
             host = result.host;
-            if (ring.length && sampledAt - ring[ring.length - 1].sampledAt < LIVE_MS) ring[ring.length - 1] = point;
+            if (ring.length && sampledAt - ring[ring.length - 1].sampledAt < MACHINE_VITALS_LIVE_INTERVAL_MS) ring[ring.length - 1] = point;
             else ring.push(point);
             while (ring.length && ring[0].sampledAt <= sampledAt - HOUR_MS) ring.shift();
             const currentMinute = Math.floor((observedBoundary ?? sampledAt) / MINUTE_MS);

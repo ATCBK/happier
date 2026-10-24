@@ -9,6 +9,68 @@ function census(at: number, cpuTimeUs: number | null, native = 'linux-proc:12'):
         memory: { bytes: 200, kind: 'rss' }, cpuTimeUs }] };
 }
 describe('watched process metrics', () => {
+    it('uses the shared effective-capacity CPU rates and resets when capacity changes', () => {
+        const metrics = createProcessMetrics();
+        metrics.observe(census(1000, 0), 2000, undefined, undefined, 0.5);
+        expect(metrics.observe(census(3000, 1_000_000), 2000, undefined, undefined, 0.5).get(20)?.cpuPercent).toBe(100);
+        expect(metrics.observe(census(5000, 2_000_000), 2000, undefined, undefined, 2).get(20)?.cpuPercent).toBeUndefined();
+        expect(metrics.observe(census(7000, 3_000_000), 2000, undefined, undefined, 2).get(20)?.cpuPercent).toBe(25);
+    });
+
+    it('gaps an unreadable counter and requires a new CPU baseline before recovery', () => {
+        const metrics = createProcessMetrics();
+        metrics.observe(census(1000, 0), 2000);
+        expect(metrics.observe(census(3000, 2_000_000), 2000).get(20)?.cpuPercent).toBe(25);
+        expect(metrics.observe(census(5000, null), 2000).get(20)?.cpuPercent).toBeUndefined();
+        expect(metrics.observe(census(7000, 4_000_000), 2000).get(20)?.cpuPercent).toBeUndefined();
+        expect(metrics.observe(census(9000, 6_000_000), 2000).get(20)?.cpuPercent).toBe(25);
+    });
+
+    it('keeps append storage stable for an hour-long baseline', () => {
+        const metrics = createProcessMetrics();
+        metrics.observe(census(1000, 0), 2000);
+        const ref = processRef(20, census(1000, 0).rows[0].start);
+        const baseline = metrics.history()[ref];
+        for (let tick = 1; tick <= 1800; tick++) metrics.observe(census(1000 + tick * 2000, tick * 1000), 2000);
+        expect(metrics.history()[ref] === baseline).toBe(true);
+        expect(metrics.history()[ref]).toHaveLength(1801);
+    });
+    it('reads only the samples newer than a held cursor from the tail of a full hour', () => {
+        const metrics = createProcessMetrics();
+        const ref = processRef(20, census(1000, 0).rows[0].start);
+        for (let tick = 0; tick <= 1800; tick++) metrics.observe(census(1000 + tick * 2000, tick * 1000), 2000);
+        const newest = 1000 + 1800 * 2000;
+        expect(metrics.history(newest - 4000)[ref].map(sample => sample.capturedAtMs)).toEqual([newest - 2000, newest]);
+        expect(metrics.history(newest)[ref]).toEqual([]);
+    });
+    it('materializes only demanded owner/detail histories and keeps steady-state delta bytes independent of the retained hour', () => {
+        const metrics = createProcessMetrics();
+        const ref = processRef(20, census(1000, 0).rows[0].start);
+        const owners = new Map([['session:s', new Map([[20, ref]])]]);
+        for (let tick = 0; tick <= 1800; tick++) metrics.observe(census(1000 + tick * 2000, tick * 1000), 2000, owners);
+        const newest = 1000 + 1800 * 2000;
+        const full = metrics.history(undefined, ['session:s']);
+        const delta = metrics.history(newest - 2000, ['session:s']);
+        expect(Object.keys(full)).toEqual(['session:s']);
+        expect(full['session:s']).toHaveLength(1801);
+        expect(delta['session:s']).toHaveLength(1);
+        expect(JSON.stringify(delta).length).toBeLessThan(JSON.stringify(full).length / 1000);
+        expect(metrics.history(newest - 2000, [ref])[ref]).toHaveLength(1);
+    });
+    it('marks the unwatched gap when a client cursor outlives the daemon baseline', () => {
+        const metrics = createProcessMetrics();
+        const ref = processRef(20, census(1000, 0).rows[0].start);
+        metrics.observe(census(1000, 0), 2000);
+        metrics.reset();
+        metrics.observe(census(31000, 0), 2000);
+        metrics.observe(census(33000, 2_000_000), 2000);
+        expect(metrics.history(1000, [ref])[ref]).toEqual([
+            { capturedAtMs: 3000, memoryBytes: null, cpuPercent: null },
+            { capturedAtMs: 31000, memoryBytes: 200 },
+            { capturedAtMs: 33000, memoryBytes: 200, cpuPercent: 25 },
+        ]);
+        expect(metrics.history()[ref]).toHaveLength(2);
+    });
     it('gaps uncertain ownership resources and resets only that generation CPU baseline before recovery', () => {
         const metrics = createProcessMetrics();
         const sample = (at: number, cpu: number) => {
