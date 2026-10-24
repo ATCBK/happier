@@ -2,6 +2,8 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { Tx } from '@/storage/inTx';
 import type { AutonomousExchangeRootV1 } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
+import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { DiscussionMessageAddressingV1Schema } from '@happier-dev/protocol/discussions/references';
 
 type SourceInput = Readonly<{
     localId: string | null;
@@ -63,13 +65,14 @@ export async function readReceiverAutonomousExchangeRootInTx(tx: Tx, input: Read
 }
 
 /** The sole root decision for exact source input(s), including Follow batches. */
-export function readAutonomousExchangeSourceRoot(input: Readonly<{
+export async function readAutonomousExchangeSourceRoot(input: Readonly<{
+    tx: Tx;
     sourceSessionId: string;
     actorAccountId: string;
     expectedTurnId?: string;
     sourceInputs: readonly SourceInput[];
-}>): Readonly<{ status: 'found'; root: AutonomousExchangeRoot }>
-    | Readonly<{ status: 'unavailable' | 'invalid' }> {
+}>): Promise<Readonly<{ status: 'found'; root: AutonomousExchangeRoot }>
+    | Readonly<{ status: 'unavailable' | 'invalid' }>> {
     let root: AutonomousExchangeRoot | null = null;
     if (input.sourceInputs.length === 0) return { status: 'unavailable' };
     for (const sourceInput of input.sourceInputs) {
@@ -81,12 +84,30 @@ export function readAutonomousExchangeSourceRoot(input: Readonly<{
         if ((inheritedSessionId === null) !== (inheritedLocalId === null)) return { status: 'invalid' };
         const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
             .safeParse(sourceInput.inputAdmissionReceipt);
-        const candidate = inheritedSessionId && inheritedLocalId
+        let candidate = inheritedSessionId && inheritedLocalId
             ? { sessionId: inheritedSessionId, localId: inheritedLocalId }
             : receipt.success && receipt.data.issuer === 'authenticatedAccount'
                 && receipt.data.actorAccountId === input.actorAccountId && sourceInput.localId
                 ? { sessionId: input.sourceSessionId, localId: sourceInput.localId }
                 : null;
+        // A person's Discussion request enters through Machine admission. Its
+        // committed question, not that carrier or user-role text, proves a new
+        // human cause. Agent/workflow questions must retain their existing root.
+        const addressing = receipt.success && receipt.data.issuer === 'authenticatedMachine'
+            ? receipt.data.discussionAddressing : undefined;
+        if (!candidate && addressing && addressing.participantSessionId === input.sourceSessionId
+            && sourceInput.localId === deriveDiscussionFollowInputLocalIdV1(addressing)
+            && isAutonomousExchangeRootReceiptForAccount(receipt.data, input.actorAccountId, input.sourceSessionId)) {
+            const question = await input.tx.discussionMessage.findUnique({ where: { id: addressing.messageId },
+                select: { discussionId: true, seq: true, producerV1: true, addressingV1: true } });
+            const addressed = createStoredReadSchema(DiscussionMessageAddressingV1Schema).safeParse(question?.addressingV1);
+            if (question && question.discussionId === addressing.discussionId && question.seq === addressing.throughSeq
+                && question.producerV1 === null && addressed.success && addressed.data.throughSeq === addressing.throughSeq
+                && addressed.data.participantSessionIds.includes(input.sourceSessionId)
+                && !addressed.data.watcherSessionIds?.includes(input.sourceSessionId)) {
+                candidate = { sessionId: input.sourceSessionId, localId: sourceInput.localId };
+            }
+        }
         if (!candidate) return { status: 'unavailable' };
         if (root && (root.sessionId !== candidate.sessionId || root.localId !== candidate.localId)) {
             return { status: 'unavailable' };

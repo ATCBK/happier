@@ -1184,7 +1184,7 @@ async function readFollowWakeAdmissionInTx(tx: Tx, input: Readonly<{
             ? await tx.sessionMessage.findMany({ where: { sessionId: observation.sourceSessionId,
                 acceptedTurnId: source.latestTurnId }, select: selected, orderBy: { seq: 'asc' } })
             : [];
-        const resolved = readAutonomousExchangeSourceRoot({ sourceSessionId: observation.sourceSessionId,
+        const resolved = await readAutonomousExchangeSourceRoot({ tx, sourceSessionId: observation.sourceSessionId,
             actorAccountId: input.destinationAccountId, sourceInputs });
         if (resolved.status !== 'found') return unavailableWake;
         if (commonRoot && (commonRoot.sessionId !== resolved.root.sessionId

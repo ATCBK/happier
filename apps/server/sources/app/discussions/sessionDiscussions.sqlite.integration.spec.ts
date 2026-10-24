@@ -33,7 +33,7 @@ import { SessionPendingAdmissionSettlementResponseV1Schema, SESSION_PENDING_ADMI
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema,
     settleSessionInputRequestV1, withSessionInputAuthorityV1, withSessionInputRequestV1,
     settleSessionMessageProvenanceV1, SESSION_MESSAGE_PROVENANCE_META_KEY, deriveWorkflowSessionInputLocalIdV2,
-    SessionInputRequestV2Schema, withSessionInputRequest } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+    SessionInputRequestV2Schema, withSessionInputRequest, readSessionInputRequest, readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { changeDeliveryMute } from '@/app/session/follow/sessionDeliveryMuteService';
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
@@ -1960,7 +1960,7 @@ describe('First-class Discussions service (SQLite)', () => {
         const sourceInputId = deriveDiscussionFollowInputLocalIdV1(originalAddressing);
         const sourceTurnId = 'discussion-origin-native-turn';
         const { socket, machine } = await publisherSocket(owner.id, source.id);
-        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: target.id, data: 'encrypted' } });
+        const targetPublisher = await publisherSocket(owner.id, target.id);
         const serverId = await getOrCreateServerIdentityId();
         const host = buildTrustedHostSessionInputAdmissionV1('agent');
         const request = SessionInputRequestV1Schema.parse({ ...host.request, discussionAddressing: originalAddressing, replyIntent: { mode: 'return' },
@@ -2015,7 +2015,7 @@ describe('First-class Discussions service (SQLite)', () => {
         try {
             // Current placement is supplied by the real Session read owner.
             await db.session.update({ where: { id: target.id }, data: { active: true,
-                metadata: JSON.stringify({ machineId: machine.id, path: '/repo', claudeSessionId: 'target-native' }) } });
+                metadata: JSON.stringify({ machineId: targetPublisher.machine.id, path: '/repo', claudeSessionId: 'target-native' }) } });
             const intake = createDiscussionFollowInputIntake({ session, credentials });
             expect(await intake({ observation, signal: new AbortController().signal }), JSON.stringify(admissions)).toBe(true);
             const localId = deriveDiscussionFollowInputLocalIdV1(observation.addressing);
@@ -2023,6 +2023,38 @@ describe('First-class Discussions service (SQLite)', () => {
                 .toMatchObject({ replyProgress: { sourceSession, discussion: observation.addressing }, inputAdmissionReceipt: { discussionAddressing: observation.addressing } });
             expect((await db.sessionFollowEdge.findFirstOrThrow({ where: { destinationSessionId: target.id, sourceDiscussionId: discussionId } })).deliveredTranscriptSeq)
                 .toBe(posted.value.message.seq);
+            const current = await db.session.findUniqueOrThrow({ where: { id: target.id } });
+            const publisherAuthority = { accountId: owner.id, sessionId: target.id,
+                machineId: targetPublisher.machine.id, committedFence: current.lastActiveAt };
+            expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: target.id, publisherAuthority,
+                deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }))
+                .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+            const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } });
+            if (pending.content.t !== 'plain') throw new Error('Expected plain test input');
+            const body = pending.content.v as Record<string, unknown>;
+            const targetRequest = SessionInputRequestV1Schema.parse(readSessionInputRequest(body.meta, 'stored'));
+            const targetReceipt = SessionInputAdmissionReceiptV1Schema.parse(pending.inputAdmissionReceipt);
+            const finalContent = { t: 'plain' as const, v: { ...body, meta: {
+                ...withSessionInputAuthorityV1(body.meta, settleSessionInputRequestV1({ request: targetRequest,
+                    currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: targetReceipt })),
+                [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request: targetRequest,
+                    requestedProvenance: readSessionMessageProvenance(body.meta, 'stored'), inputAdmissionReceipt: targetReceipt }),
+            } } };
+            let settlement: unknown;
+            await getSocketHandler(targetPublisher.socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1,
+                sessionId: target.id, localId, decision: { kind: 'admit', finalContent,
+                    validation: { sourceSession, reply: { mode: 'return', sourceSession, discussion: observation.addressing,
+                        ...(targetRequest.actionRequestAttributionV1 ? { actionRequestAttributionV1: targetRequest.actionRequestAttributionV1 } : {}) },
+                    autonomousCheckIn: { afterTurns: 2 } } } }, (value: unknown) => { settlement = value; });
+            const settled = SessionPendingAdmissionSettlementResponseV1Schema.parse(settlement);
+            expect(settled, settled.result.status === 'rejected' || settled.result.status === 'held' ? settled.result.code : settled.result.status)
+                .toMatchObject({ v: 1, result: { status: 'accepted', localId } });
+            expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                .toMatchObject({ autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: sourceInputId,
+                    autonomousExchangeCause: 'agent_session' });
+            // The person's initial Discussion wake is not an autonomous start.
+            expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: sourceInputId } } }))
+                .toMatchObject({ autonomousExchangeCause: null, autonomousExchangeState: { afterTurns: 2, observedStarts: 0 } });
         } finally { restoreHttp(); await app.close(); }
     });
     it('commits one immutable addressed set and cutoff, with reply addressing and silent negative controls', async () => {

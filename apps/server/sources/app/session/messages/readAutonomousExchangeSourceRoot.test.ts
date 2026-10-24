@@ -1,11 +1,52 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Tx } from '@/storage/inTx';
+import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx } from './readAutonomousExchangeSourceRoot';
 
 describe('autonomous exchange source root', () => {
-    it('never treats an Execution Run input as a Session Turn cause when their turn IDs collide', () => {
-        expect(readAutonomousExchangeSourceRoot({
+    it.each([
+        { name: 'person', producerV1: null, throughSeq: 2, accountId: 'actor', direct: true, found: true, reads: 1 },
+        { name: 'ambient watcher', producerV1: null, throughSeq: 2, accountId: 'actor', direct: false, found: false, reads: 1 },
+        { name: 'agent without inherited root', producerV1: { v: 1, kind: 'agent', sessionId: 'other' }, throughSeq: 2, accountId: 'actor', direct: true, found: false, reads: 1 },
+        { name: 'workflow without inherited root', producerV1: { v: 1, kind: 'workflow' }, throughSeq: 2, accountId: 'actor', direct: true, found: false, reads: 1 },
+        { name: 'different question cutoff', producerV1: null, throughSeq: 3, accountId: 'actor', direct: true, found: false, reads: 1 },
+        { name: 'foreign receipt target', producerV1: null, throughSeq: 2, accountId: 'foreign', direct: true, found: false, reads: 0 },
+    ])('resolves only a committed person Discussion original as a new root: $name', async ({ producerV1, throughSeq, accountId, direct, found, reads }) => {
+        const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq,
+            participantSessionId: 'source' };
+        const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+        // Database boundary: only the exact committed question supplies authorship.
+        const findUnique = vi.fn().mockResolvedValue({ discussionId: 'discussion', seq: 2, producerV1,
+            addressingV1: { throughSeq: 2, participantSessionIds: ['source'],
+                ...(direct ? {} : { watcherSessionIds: ['source'] }) } });
+        const tx = { discussionMessage: { findUnique } } as unknown as Tx;
+        const result = await readAutonomousExchangeSourceRoot({ tx, sourceSessionId: 'source', actorAccountId: 'actor', expectedTurnId: 'turn',
+            sourceInputs: [{ localId, acceptedTurnId: 'turn', targetExecutionRunId: null,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing,
+                    admittedTarget: { homeId: 'home', accountId, sessionId: 'source', machineId: 'machine', installationId: 'installation' } },
+                autonomousExchangeRootSessionId: null, autonomousExchangeRootLocalId: null }] });
+        expect(result).toEqual(found ? { status: 'found', root: { sessionId: 'source', localId } } : { status: 'unavailable' });
+        expect(findUnique.mock.calls.length).toBeLessThanOrEqual(reads);
+        if (found) expect(findUnique).toHaveBeenCalledOnce();
+    });
+
+    it('carries an inherited Discussion root without rereading its original question', async () => {
+        const findUnique = vi.fn();
+        const tx = { discussionMessage: { findUnique } } as unknown as Tx;
+        const addressing = { discussionId: 'discussion', messageId: 'agent-question', throughSeq: 3,
+            participantSessionId: 'source' };
+        expect(await readAutonomousExchangeSourceRoot({ tx, sourceSessionId: 'source', actorAccountId: 'actor', expectedTurnId: 'turn',
+            sourceInputs: [{ localId: deriveDiscussionFollowInputLocalIdV1(addressing), acceptedTurnId: 'turn', targetExecutionRunId: null,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing },
+                autonomousExchangeRootSessionId: 'original-session', autonomousExchangeRootLocalId: 'original-input' }] }))
+            .toEqual({ status: 'found', root: { sessionId: 'original-session', localId: 'original-input' } });
+        expect(findUnique).not.toHaveBeenCalled();
+    });
+
+    it('never treats an Execution Run input as a Session Turn cause when their turn IDs collide', async () => {
+        const tx = { discussionMessage: { findUnique: vi.fn() } } as unknown as Tx;
+        expect(await readAutonomousExchangeSourceRoot({ tx,
             sourceSessionId: 'source', actorAccountId: 'actor', expectedTurnId: 'shared-turn-id',
             sourceInputs: [{ localId: 'run-input', acceptedTurnId: 'shared-turn-id',
                 targetExecutionRunId: 'run-id', inputAdmissionReceipt: { v: 1,

@@ -1963,7 +1963,8 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
                         autonomousExchangeRootLocalId: true,
                     },
                 });
-            const resolved = readAutonomousExchangeSourceRoot({
+            const resolved = await readAutonomousExchangeSourceRoot({
+                tx: params.tx,
                 sourceSessionId: sourceSession.sourceSessionId,
                 actorAccountId: params.accountId,
                 expectedTurnId: sourceSession.sourceTurnId,
@@ -2012,7 +2013,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
             if (originalMessage && progress.data.acceptedTurnId) {
                 // Pending keeps reply custody; the materialized input witnesses
                 // acceptance and the shared owner derives inherited or human roots.
-                const resolved = readAutonomousExchangeSourceRoot({ sourceSessionId: returnedAnswer.requestSessionId,
+                const resolved = await readAutonomousExchangeSourceRoot({ tx: params.tx, sourceSessionId: returnedAnswer.requestSessionId,
                     actorAccountId: params.accountId, expectedTurnId: progress.data.acceptedTurnId,
                     sourceInputs: [{ ...originalMessage,
                         autonomousExchangeRootSessionId: original.autonomousExchangeRootSessionId,
