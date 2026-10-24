@@ -6,12 +6,18 @@ import {
   isRpcError,
   isRpcMethodNotAvailableError,
   isRpcMethodNotFoundError,
+  isRpcMethodNotFoundResult,
   isRpcSessionMachineControlUnavailableError,
   RpcError,
   readRpcErrorCode,
 } from './errors.js';
 
 describe('rpcErrors', () => {
+  it('uses the typed missing-method result before the legacy message', () => {
+    expect(isRpcMethodNotFoundResult({ errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND })).toBe(false);
+    expect(isRpcMethodNotFoundResult({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Unavailable' })).toBe(true);
+    expect(isRpcMethodNotFoundResult({ error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND })).toBe(true);
+  });
   it('creates an Error with rpcErrorCode when provided', () => {
     const err = createRpcCallError({
       error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,

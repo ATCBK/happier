@@ -6,7 +6,7 @@ import {
     type DaemonAgentInstallStartRequest, type DaemonAgentInstallReadRequest,
     type DaemonAgentInstallCancelRequest,
 } from '@happier-dev/protocol/daemon/agent-install-jobs';
-import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isRpcMethodNotFoundResult, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError, isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -39,11 +39,14 @@ async function invoke<Request, Response>(
         raw = await machineRpcWithServerScope<unknown, Request>({ ...target, method, payload });
     } catch (error) {
         if (target.signal?.aborted) throw error;
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) throw new AgentInstallJobRpcError('unavailable');
+        if (isRpcMethodNotFoundError(error)) throw new AgentInstallJobRpcError('unavailable');
         throw new AgentInstallJobRpcError('request_failed');
     }
-    if (isRpcMethodNotFoundResult(raw) || (raw && typeof raw === 'object' && 'errorCode' in raw && raw.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE)) {
+    if (isRpcMethodNotFoundResult(raw)) {
         throw new AgentInstallJobRpcError('unavailable');
+    }
+    if (raw && typeof raw === 'object' && 'errorCode' in raw && isRpcMethodNotAvailableError({ rpcErrorCode: raw.errorCode })) {
+        throw new AgentInstallJobRpcError('request_failed');
     }
     const parsed = responseSchema.safeParse(raw);
     if (!parsed.success) throw new AgentInstallJobRpcError('invalid_response');

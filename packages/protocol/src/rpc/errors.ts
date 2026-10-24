@@ -56,7 +56,7 @@ export const RPC_ERROR_MESSAGES = {
 export function isRpcMethodNotFoundResult(value: unknown): value is { error: string; errorCode?: string } {
   if (!value || typeof value !== 'object') return false;
   const maybe = value as { error?: unknown; errorCode?: unknown };
-  if (maybe.errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND) return true;
+  if (typeof maybe.errorCode === 'string') return maybe.errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND;
   return maybe.error === RPC_ERROR_MESSAGES.METHOD_NOT_FOUND;
 }
 
