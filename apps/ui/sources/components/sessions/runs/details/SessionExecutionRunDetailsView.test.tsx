@@ -71,6 +71,13 @@ vi.mock('@expo/vector-icons', async () => {
     const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
     return createExpoVectorIconsMock();
 });
+// The native recycler needs measured cells; retain the real transcript and render its rows at this platform boundary.
+const recyclerBoundary = vi.hoisted(() => ({ measured: false }));
+vi.mock('@legendapp/list/react-native', async importOriginal => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return createCapturingLegendListMock({ original: await importOriginal<Record<string, unknown>>(),
+        get renderItems() { return recyclerBoundary.measured; } }).module;
+});
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key, values) => values
@@ -220,6 +227,7 @@ let restorePopoverWebGlobals: (() => void) | undefined;
 const animationFrames = new Set<ReturnType<typeof setTimeout>>();
 beforeEach(async ({ task }) => {
     const commandSuite = task.suite?.name === 'Teammate command Action admission';
+    const walkthroughConversation = task.name.startsWith('sends a walkthrough conversation through');
     const stopFallbackPolicySuite = task.suite?.name === 'Session Stop fallback Action policy';
     const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission' || task.suite?.name === 'Session Stop fallback custody'
         || task.suite?.name === 'Session Stop fallback Action policy'
@@ -239,6 +247,7 @@ beforeEach(async ({ task }) => {
     } });
     resetSessionDraftRepositoryForTests();
     browserRuntime = null;
+    recyclerBoundary.measured = false;
     latestToolResult = undefined;
     structuredMeta = undefined;
     httpSessionAvailable = true;
@@ -316,7 +325,7 @@ beforeEach(async ({ task }) => {
                     }),
                     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                         capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
-                    ...(commandSuite ? { pendingVersion: 1, pendingCount: 0 } : {}),
+                    ...(commandSuite || walkthroughConversation ? { pendingVersion: 1, pendingCount: 0 } : {}),
                 });
                 return sessionMetadata.handle(request.url, { method: request.method,
                     ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) }) ?? undefined;
@@ -605,6 +614,10 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
             executionRunRequestedAction: { v: 1, kind: 'enqueue' },
             extraActionChips: expect.arrayContaining([expect.objectContaining({ key: 'execution-run-requested-action', controlId: 'delivery' })]),
         });
+        // "To:" names the Run by what it is for, never by its id.
+        const recipientChip = composer()[0]!.props.extraActionChips.find((chip: { controlId?: string }) => chip.controlId === 'recipient');
+        expect(recipientChip?.collapsedOptionsPopover?.label).toEqual(expect.any(String));
+        expect(recipientChip.collapsedOptionsPopover.label).not.toContain('run_1');
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toEqual([]);
         await vi.waitFor(() => expect(httpReads.some(request => request.path === '/v2/sessions/s1/execution-runs/run_1/pending')).toBe(true));
     });
@@ -627,11 +640,12 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(composer()).toHaveLength(0);
     });
     it.each([false, true])('shows the person’s committed question in the Run transcript with a tool marker=%s', async (withMarker) => {
+        recyclerBoundary.measured = true;
         runState = liveRun();
         if (withMarker) publishMarker();
         getStorage().getState().applyMessages('s1', [{ id: 'run-question', localId: 'question-input', createdAt: 2, seq: 23,
-            role: 'user', isSidechain: false, content: { type: 'text', text: 'Why keep the selection?' },
-            meta: { happier: { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'run_1' } } } },
+            role: 'user', isSidechain: false, content: { type: 'text', text: 'Captured evidence for the Run. Why keep the selection?' },
+            meta: { displayText: 'Why keep the selection?', happier: { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'run_1' } } } },
         }, { id: 'run-answer', localId: null, createdAt: 3, seq: 25, role: 'agent', isSidechain: true, sidechainId: 'toolu_1',
             content: [{ type: 'text', text: 'It survives refresh.', uuid: 'answer-text', parentUUID: null }],
         }]);
@@ -640,10 +654,106 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         await vi.waitFor(() => {
             const list = screen.findByType(ChainTranscriptList);
             expect(list.props.messages.map((message: Message) => message.kind)).toEqual(['user-text', 'agent-text']);
-            expect(list.props.messages[0]).toMatchObject({ kind: 'user-text', localId: 'question-input', text: 'Why keep the selection?' });
+            expect(list.props.messages[0]).toMatchObject({ kind: 'user-text', localId: 'question-input', displayText: 'Why keep the selection?' });
             // On the Run's own page the question reads as the person's message, not a "To: <Run>" card.
             expect(list.props.messages[0].meta?.happier).toBeUndefined();
         });
+        expect(screen.getTextContent()).toContain('Why keep the selection?');
+        expect(screen.getTextContent()).not.toContain('Captured evidence for the Run.');
+    });
+
+    it('keeps a saved walkthrough receipt navigable inside the tool-marker Run transcript', async () => {
+        recyclerBoundary.measured = true;
+        runState = liveRun();
+        publishMarker();
+        const { ScmDiffSummaryGenerateSuccessSchema } = await import('@happier-dev/protocol/scm');
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'receipt-comparison', resultId: 'receipt-result', revision: 1,
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'receipt-comparison' },
+            comparison: { id: 'receipt-comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
+                inventory: { state: 'complete', reasons: [], files: [] } }, requestedOutputs: ['walkthrough'],
+            outputs: { walkthrough: { state: 'complete', value: { title: 'Saved reading', intro: '', stops: [], otherChangeRefs: [] } } },
+            analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        getStorage().getState().applyMessages('s1', [{ id: 'receipt-message', localId: null, createdAt: 3, seq: 3,
+            role: 'agent', isSidechain: true, sidechainId: 'toolu_1',
+            content: [{ type: 'text', text: 'Walkthrough written.', uuid: 'receipt-text', parentUUID: null }],
+            meta: { happier: { kind: 'scm_diff_summary.v1', payload },
+                scmResultUpdate: { status: 'published', canUndo: false, outputs: [{ kind: 'walkthrough', change: 'created' }] } },
+        }]);
+        await mount(); await loaded();
+        await vi.waitFor(() => expect(screen.findByType(ChainTranscriptList).props.messages).toEqual([
+            expect.objectContaining({ kind: 'agent-text', meta: expect.objectContaining({ scmResultUpdate: expect.anything() }) }),
+        ]));
+        expect(screen.findByTestId('scm-result-receipt')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('scm-result-receipt-open')).not.toBeNull());
+        await screen.pressByTestIdAsync('scm-result-receipt-open');
+        const { router } = await import('expo-router');
+        expect(vi.mocked(router.push)).toHaveBeenCalledWith(expect.stringContaining('details=scmReview'));
+        expect(vi.mocked(router.push)).toHaveBeenCalledWith(expect.stringContaining('receipt-comparison'));
+    });
+
+    it.each([false, true])('names a walkthrough conversation recipient before and after its tool marker=%s', async withMarker => {
+        runState = liveRun({ intent: 'scm_diff_summary' });
+        if (withMarker) publishMarker();
+        const title = vi.fn();
+        await mount({ openingTitle: 'Change summary', onTitleResolved: title }); await loaded();
+        await vi.waitFor(() => expect(composer()).toHaveLength(1));
+        expect(composer()[0]!.props.recipient).toMatchObject({ label: 'walkthrough.eyebrow' });
+        expect(title).toHaveBeenCalledWith('walkthrough.conversationTitle');
+    });
+
+    it.each(['direct', 'tool-marker', 'detached'] as const)('sends a walkthrough conversation through the current saved result Action from %s', async entrance => {
+        const detached = entrance === 'detached';
+        const { ScmDiffSummaryResultSchema } = await import('@happier-dev/protocol/scm/diffSummaryResult');
+        const current = ScmDiffSummaryResultSchema.parse({ resultId: 'conversation-result', revision: 7, canUndo: true,
+            output: { success: true, resultId: 'conversation-result', revision: 7, runId: 'run_1', sourceKey: 'comparison',
+                metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison' },
+                comparison: { id: 'comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/worktree' }, endpoints: {},
+                    inventory: { state: 'complete', reasons: [], files: [] } }, requestedOutputs: ['walkthrough'],
+                outputs: { walkthrough: { state: 'complete', value: { title: 'My current title', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        runState = liveRun({ intent: 'scm_diff_summary' });
+        structuredMeta = { kind: 'scm_diff_summary.v1', payload: { ...current.output, revision: 1 } };
+        if (entrance === 'tool-marker') publishMarker();
+        const original = boundary.call.getMockImplementation()!;
+        boundary.call.mockImplementation(async (method, input) => {
+            if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ) return { success: true, result: current };
+            if (method === RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS) return { success: true, result: current, runId: 'run_1', inputId: 'refine-input' };
+            return original(method, input);
+        });
+        await mount(detached ? { sessionId: null, workspace: { machineId: 'm1', cwd: '/worktree' } } : {}); await loaded();
+        const inputId = detached ? 'new-session-composer-input' : 'session-composer-input';
+        const sendId = detached ? 'new-session-composer-send' : 'session-composer-send';
+        await vi.waitFor(() => expect(screen.findAllByTestId(inputId).some(node => typeof node.props.onChangeText === 'function')).toBe(true));
+        const input = screen.findAllByTestId(inputId).find(node => typeof node.props.onChangeText === 'function')!;
+        await act(async () => input.props.onChangeText('Merge stops two and three'));
+        await screen.pressByTestIdAsync(sendId);
+        await vi.waitFor(() => expect(calls(RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS)).toHaveLength(1));
+        expect(calls(RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)).toHaveLength(1);
+        expect(calls(RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS)[0]![1]).toMatchObject({ resultId: current.resultId,
+            expectedRevision: current.revision, message: 'Merge stops two and three' });
+        expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toHaveLength(0);
+        expect(boundary.messages).toHaveLength(0);
+        await vi.waitFor(() => expect(input.props.value).toBe(''));
+        if (!detached) {
+            const props = composer()[0]!.props as React.ComponentProps<typeof SessionParticipantComposer>;
+            const picker = props.extraActionChips?.find(chip => chip.controlId === 'recipient')?.collapsedOptionsPopover;
+            const lead = picker?.presentation === 'list' ? picker.rootStep?.sections.flatMap(section =>
+                section.kind === 'static' ? section.options : []).find(option => option.id === 'lead') : undefined;
+            if (!lead?.onSelect) throw new Error('Expected the shared Session recipient option');
+            await act(async () => lead.onSelect!());
+            expect(composer()[0]!.props.recipient).toBeNull();
+            expect(composer()[0]!.props.submitPreparedMessage).toBeUndefined();
+            const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
+            observeMachinePresenceForTest({ serverId, accountId: 'account-1' }, ['m1']);
+            getStorage().getState().applySessions([{ ...getStorage().getState().sessions.s1!, pendingVersion: 1, pendingCount: 0 }]);
+            getStorage().setState(state => ({ settings: { ...state.settings, sessionMessageSendMode: 'server_pending' } }));
+            const before = home.requests.filter(request => request.method === 'POST' && request.path === '/v2/sessions/s1/pending').length;
+            await act(async () => input.props.onChangeText('Ask the Session agent instead'));
+            await screen.pressByTestIdAsync(sendId);
+            await vi.waitFor(() => expect(home.requests.filter(request => request.method === 'POST'
+                && request.path === '/v2/sessions/s1/pending'), JSON.stringify(vi.mocked(Modal.alert).mock.calls)).toHaveLength(before + 1));
+            expect(calls(RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS)).toHaveLength(1);
+        }
     });
 
     it('renders committed direct-start sidechain rows and the exact Run pending queue with one mounted composer', async () => {
@@ -796,7 +906,7 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         }));
         await mount(); await loaded();
         await screen.pressByTestIdAsync('session-run-details-resume');
-        await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('action_disabled'));
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE)).toHaveLength(0);
     });
     it.each([
@@ -815,7 +925,7 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
             await vi.waitFor(() => expect(info().stopAction?.stopping).toBe(false));
             expect(calls(method)).toHaveLength(0);
         }
-        await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('action_disabled'));
         expect(calls(method)).toHaveLength(0);
         expect(screen.findByTestId('session-run-details-stop-failed')).toBeNull();
     });
@@ -949,7 +1059,14 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(screen.getTextContent()).toContain('Retry charges twice');
         expect(screen.getTextContent()).toContain('Pending state is unclear');
         expect(screen.findByTestId('session-run-details-pre-marker-state')).toBeNull();
+        expect(screen.findByTestId('session-run-details-steps')).not.toBeNull();
         expect(composer()).toHaveLength(0);
+    });
+    it('keeps a walkthrough conversation as the page: no result-first steps disclosure for a kind without a result page', async () => {
+        runState = createRun({ status: 'succeeded', intent: 'scm_diff_summary' });
+        structuredMeta = { kind: 'scm_diff_summary.v1', payload: { success: true, summaryMarkdown: 'Saved.' } };
+        await mount(); await loaded();
+        expect(screen.findByTestId('session-run-details-steps')).toBeNull();
     });
     it('states the other live agents affected before an unconfirmed Run stop falls back to Session stop', async () => {
         runState = liveRun();

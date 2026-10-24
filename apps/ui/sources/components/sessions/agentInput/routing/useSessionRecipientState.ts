@@ -43,6 +43,8 @@ export function useSessionRecipientState(params: Readonly<{
     setSessionMessage: (next: SessionDraftSessionMessagingValueV1 | null) => void;
     clearPersistedSessionMessage: () => void;
     scmDiffSummaryDiscussion: Extract<NonNullable<SessionDraftRecipientValueV1>, { mode: 'scm_diff_summary' }>['target'] | null;
+    /** Removes the stop a walkthrough question is about; the question still goes to the walkthrough. */
+    clearScmDiffSummaryStops: () => void;
 }> {
     const scope = params.accountLifetime?.isCurrent() === true
         ? params.accountLifetime.scope
@@ -192,6 +194,17 @@ export function useSessionRecipientState(params: Readonly<{
         }
     }, [persistedSessionId, persistenceEnabled, scope, scopeIsCurrent]);
 
+    const clearScmDiffSummaryStops = React.useCallback(() => {
+        if (persistedRouting?.mode !== 'scm_diff_summary' || !persistedRouting.target.stopIds) return;
+        if (!persistenceEnabled || !persistedSessionId || !scope || !scopeIsCurrent()) return;
+        const { stopIds: _stopIds, ...target } = persistedRouting.target;
+        writeExistingSessionDraft({
+            scope,
+            sessionId: persistedSessionId,
+            patch: { routing: { recipient: StrictJsonValueSchema.parse({ ...persistedRouting, target }) } },
+        });
+    }, [persistedRouting, persistedSessionId, persistenceEnabled, scope, scopeIsCurrent]);
+
     const setPersistedExecutionRunRequestedAction = React.useCallback((next: PendingRequestedActionV1) => {
         setExecutionRunRequestedAction(next);
         if (persistenceEnabled && persistedSessionId && scope && scopeIsCurrent()) {
@@ -219,6 +232,7 @@ export function useSessionRecipientState(params: Readonly<{
         recipient: effectiveRecipient,
         didManualOverride: scmDiffSummaryDiscussion !== null || didManualOverride,
         scmDiffSummaryDiscussion,
+        clearScmDiffSummaryStops,
         setManualRecipient,
         clearPersistedManualRecipient,
         executionRunRequestedAction,

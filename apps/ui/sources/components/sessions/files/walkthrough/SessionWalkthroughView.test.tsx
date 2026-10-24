@@ -426,6 +426,8 @@ describe('SessionWalkthroughView retained offline reading through real Account m
                 expectedRevision: 1, stopIds: ['retained'] });
             expect(composer.controls?.extraActionChips?.find(chip => chip.controlId === 'recipient')?.collapsedOptionsPopover?.label)
                 .toBe('To: Walkthrough');
+            // The stop is the question's context above the text, never a suffix on the recipient (lab WT3-D1).
+            expect(composer.controls?.attachmentRowItems).toEqual([expect.objectContaining({ kind: 'badge', label: 'Stop 1', detail: 'a.ts L1' })]);
         });
         expect(new URL(destinationHref, 'https://happier.test').searchParams.get('serverId')).toBe(home.id);
         const draft = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId });
@@ -436,6 +438,12 @@ describe('SessionWalkthroughView retained offline reading through real Account m
             target: { cwd: '/repo/exact', resultId: `result:${sessionId}`, expectedRevision: 1, stopIds: ['retained'] },
         });
         expect(generationCalls()).toEqual([]);
+        await act(async () => composer.controls?.attachmentRowItems[0]?.onRemove?.());
+        await vi.waitFor(() => {
+            expect(composer.recipient?.scmDiffSummaryDiscussion).toEqual({ cwd: '/repo/exact', resultId: `result:${sessionId}`, expectedRevision: 1 });
+            expect(composer.recipient?.recipient).toEqual({ kind: 'execution_run', runId: 'question-generator' });
+            expect(composer.controls?.attachmentRowItems).toEqual([]);
+        });
     });
     it('shows admitted review progress from a captured comparison destination before any saved narration exists', async () => {
         boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {

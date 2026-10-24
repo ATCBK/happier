@@ -8,7 +8,7 @@ import type { TextStyle, ViewStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { useSessionAgentInputRoutingControls } from '@/components/sessions/agentInput/routing/useSessionAgentInputRoutingControls';
-import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
+import { SessionParticipantComposer, type ParticipantComposerPreparedSubmission } from '@/components/sessions/participants/composer/SessionParticipantComposer';
 import { Deferred } from '@/components/ui/forms/Deferred';
 import { Text } from '@/components/ui/text/Text';
 import { useSessionExternalSessionRuntime } from '@/components/sessions/model/useSessionExternalSessionRuntime';
@@ -102,7 +102,8 @@ function ensureAutoRecipientTarget(
     if (alreadyPresent) return targets;
 
     if (autoRecipient.kind === 'execution_run') {
-        const displayLabel = t('session.participants.executionRun', { runId: autoRecipient.runId });
+        // A host that knows the Run's name supplies it on the recipient; the id is only the last resort.
+        const displayLabel = autoRecipient.label?.trim() || t('session.participants.executionRun', { runId: autoRecipient.runId });
         const injectedTarget = {
             key: `execution_run:${autoRecipient.runId}`,
             displayLabel,
@@ -147,6 +148,8 @@ function ToolCallDetailsView(props: Readonly<{
     browserContextState?: BrowserContextState | null;
     header?: React.ReactNode;
     declinedApproval?: DeclinedApprovalDisposition | null;
+    composerPlaceholder?: string;
+    submitPreparedMessage?: (submission: ParticipantComposerPreparedSubmission) => Promise<void>;
 }>) {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -291,6 +294,9 @@ function ToolCallDetailsView(props: Readonly<{
                     initialLocalId={props.composerInitialLocalId}
                     browserContextState={props.browserContextState}
                     extraActionChips={extraActionChips}
+                    submitPreparedMessage={autoRecipient && recipientState.recipient
+                        && participantRecipientsMatch(autoRecipient, recipientState.recipient) ? props.submitPreparedMessage : undefined}
+                    {...(props.composerPlaceholder ? { placeholder: props.composerPlaceholder } : {})}
                 />
             ) : null}
         </View>
@@ -311,6 +317,9 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
     /** The tool-details page's own header; hosts that draw their own (a Run's page) omit it. */
     header?: React.ReactNode;
     declinedApproval?: DeclinedApprovalDisposition | null;
+    /** What the composer invites, when the host knows who it talks to ("Reply to Walkthrough…"). */
+    composerPlaceholder?: string;
+    submitPreparedMessage?: (submission: ParticipantComposerPreparedSubmission) => Promise<void>;
 }>) => {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -333,9 +342,11 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
                         showComposer={props.showComposer ?? true}
                         recipientOverride={props.recipientOverride}
                         composerInitialLocalId={props.composerInitialLocalId}
+                        submitPreparedMessage={props.submitPreparedMessage}
                         browserContextState={props.browserContextState}
                         header={props.header}
                         declinedApproval={props.declinedApproval}
+                        composerPlaceholder={props.composerPlaceholder}
                     />
                 ) : props.message.kind === 'agent-text' || props.message.kind === 'user-text' ? (
                     <TextFullView text={prepareTranscriptMessageBody(props.message).text ?? ''} />

@@ -3,6 +3,7 @@ import type { ExecutionRunPublicState } from '@happier-dev/protocol/execution/ru
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
+import type { ScmDiffSummaryState } from './state';
 
 export type ScmDiffSummaryDiscussionTarget =
     | Readonly<{ kind: 'unknown' }>
@@ -29,6 +30,23 @@ export function selectScmDiffSummaryStopDiscussionContext(
     const stops = result.output.outputs?.walkthrough?.value?.stops;
     if (!stops || stopIds.some((id) => !stops.some((stop) => stop.id === id))) return null;
     return { resultId: result.resultId, revision: result.revision, stopIds: [...stopIds] };
+}
+
+/**
+ * The saved revision an unsent question about one stop addresses, when it is loaded here and still holds that
+ * stop. The composer reads the stop's number, file and lines from it; when it is not loaded the recipient alone
+ * still says where the question goes, and the stop ids stay the authority for what is sent.
+ */
+export function selectScmDiffSummaryDiscussionSavedResult(state: ScmDiffSummaryState,
+    target: Readonly<{ resultId: string; expectedRevision: number; stopIds?: readonly string[] }> | null): ScmDiffSummaryResult | null {
+    const stopId = target?.stopIds?.[0];
+    if (!target || !stopId) return null;
+    for (const entry of Object.values(state.entriesByKey)) {
+        const saved = entry.savedResult;
+        if (saved?.resultId !== target.resultId || saved.revision !== target.expectedRevision || !saved.output.success) continue;
+        return saved.output.outputs?.walkthrough?.value?.stops.some((stop) => stop.id === stopId) ? saved : null;
+    }
+    return null;
 }
 
 /** Open the generating Run itself; transcript reconstructions never grant interaction. */

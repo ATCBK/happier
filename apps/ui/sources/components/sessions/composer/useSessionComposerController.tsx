@@ -5130,20 +5130,6 @@ export function useSessionComposerController({
             isComposerMutationEditable,
             removeComposerAttachment,
         ]);
-        const sessionAttachmentRowItems = React.useMemo(() => (
-            projectAgentInputAttachmentRowItems({
-                items: [
-                    ...(pendingComposerDocument ? [] : sessionExtraActionPresentation.attachmentRowItems),
-                    ...composerAttachmentRowItems,
-                ],
-                transferAttachments: !pendingComposerDocument ? agentInputAttachments : undefined,
-            })
-        ), [
-            agentInputAttachments,
-            composerAttachmentRowItems,
-            pendingComposerDocument,
-            sessionExtraActionPresentation.attachmentRowItems,
-        ]);
         const openComposerPluginAction = React.useCallback((action: PluginContributedActionDescriptor) => {
             return openSessionComposerContributedAction({
                 controller: composerPluginActionController,
@@ -5162,6 +5148,22 @@ export function useSessionComposerController({
             recipientState,
             sessionTalk,
         });
+        const sessionAttachmentRowItems = React.useMemo(() => (
+            projectAgentInputAttachmentRowItems({
+                items: [
+                    ...(pendingComposerDocument ? [] : routingControls.attachmentRowItems),
+                    ...(pendingComposerDocument ? [] : sessionExtraActionPresentation.attachmentRowItems),
+                    ...composerAttachmentRowItems,
+                ],
+                transferAttachments: !pendingComposerDocument ? agentInputAttachments : undefined,
+            })
+        ), [
+            agentInputAttachments,
+            composerAttachmentRowItems,
+            pendingComposerDocument,
+            routingControls.attachmentRowItems,
+            sessionExtraActionPresentation.attachmentRowItems,
+        ]);
         const isRuntimeFreshActiveTurn =
             sessionStatus.state === 'thinking'
             || sessionStatus.state === 'permission_required'

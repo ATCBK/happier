@@ -35,4 +35,14 @@ describe('saved result transcript receipt', () => {
             ...publication, outputs: [{ kind: 'commitPlan', change: 'created' }],
         } })).toBeNull();
     });
+
+    it('keeps owner update facts and refuses facts from another revision', () => {
+        const publication = { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }],
+            updateNotice: { kind: 'generation', revision: 2, affectedStopIds: ['second', 'third'], mergedStopIds: ['second', 'third'] },
+            titleEditKept: true };
+        const meta = { happier: { kind: 'scm_diff_summary.v1', payload: output }, scmResultUpdate: publication };
+        expect(readScmDiffSummaryPublicationReceipt(meta)?.publication).toEqual(publication);
+        expect(readScmDiffSummaryPublicationReceipt({ ...meta, scmResultUpdate: { ...publication,
+            updateNotice: { ...publication.updateNotice, revision: 3 } } })).toBeNull();
+    });
 });

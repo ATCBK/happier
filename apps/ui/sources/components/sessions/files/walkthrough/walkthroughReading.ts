@@ -460,3 +460,18 @@ export const EMPTY_WALKTHROUGH_READING: WalkthroughReading = {
     explainNotesByHunk: new Map(),
     codeMap: [],
 };
+
+/** One stop as a question's context names it (lab WT3-D1 "Stop 3 · SettingsSheet.tsx L9–14"), from its saved revision. */
+export type WalkthroughStopContext = Readonly<{ number: number; fileName: string | null; rangeLabel: string | null }>;
+
+export function readWalkthroughStopContext(saved: ScmDiffSummaryResult, stopId: string): WalkthroughStopContext | null {
+    const output = saved.output.success ? saved.output : null;
+    const walkthrough = output?.outputs?.walkthrough;
+    const index = walkthrough?.value?.stops.findIndex((stop) => stop.id === stopId) ?? -1;
+    if (!output || !walkthrough || index < 0) return null;
+    const file = output.comparison
+        ? buildWalkthroughReading({ comparison: output.comparison, walkthrough, analysis: null, reviewed: null })
+            .stops.find((stop) => stop.id === stopId)?.files[0] ?? null
+        : null;
+    return { number: index + 1, fileName: file ? fileName(file.path) : null, rangeLabel: file?.rangeLabel ?? null };
+}

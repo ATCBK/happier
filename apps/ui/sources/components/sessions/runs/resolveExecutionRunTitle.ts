@@ -7,7 +7,14 @@ import { t } from '@/text';
  * else its kind of work. Never its id — a tab, a header or a menu row that reads "run 7f3a…" names
  * plumbing, not the work (agents lab RP1, audit §3.2).
  */
-export function resolveExecutionRunTitle(run: Readonly<{ display?: Pick<NonNullable<ExecutionRunPublicState['display']>, 'title'> | null; intent?: string | null }>): string {
+export function resolveExecutionRunTitle(
+    run: Readonly<{ display?: Pick<NonNullable<ExecutionRunPublicState['display']>, 'title'> | null; intent?: string | null }>,
+    surface: 'summary' | 'conversation' | 'recipient' = 'summary',
+): string {
+    if (run.intent === 'scm_diff_summary') {
+        if (surface === 'conversation') return t('walkthrough.conversationTitle');
+        if (surface === 'recipient') return t('walkthrough.eyebrow');
+    }
     const displayTitle = run.display?.title?.trim();
     if (displayTitle) return displayTitle;
     switch (run.intent) {

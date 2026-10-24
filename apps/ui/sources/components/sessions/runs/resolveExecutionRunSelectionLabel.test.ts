@@ -6,8 +6,15 @@ import { t } from '@/text';
 import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel } from './resolveExecutionRunSelectionLabel';
 import { buildScmDiffSummaryModelProfiles } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { resolveExecutionRunTitle } from './resolveExecutionRunTitle';
 
 describe('resolveExecutionRunSelectionLabel', () => {
+  it('names the walkthrough conversation and recipient while retaining the parent tool title', () => {
+    const run = { intent: 'scm_diff_summary', display: { title: 'Change summary' } };
+    expect(resolveExecutionRunTitle(run, 'conversation')).toBe(t('walkthrough.conversationTitle'));
+    expect(resolveExecutionRunTitle(run, 'recipient')).toBe(t('walkthrough.eyebrow'));
+    expect(resolveExecutionRunTitle(run)).toBe('Change summary');
+  });
   const label = (connectionId: string) =>
     connectionId === 'pc_gateway' ? 'Main gateway' : null;
 

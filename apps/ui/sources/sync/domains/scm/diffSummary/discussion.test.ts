@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutionRunPublicState, ScmDiffSummaryResult } from '@happier-dev/protocol';
-import { resolveScmDiffSummaryDiscussionTarget, selectScmDiffSummaryStopDiscussionContext } from './discussion';
+import { resolveScmDiffSummaryDiscussionTarget, selectScmDiffSummaryDiscussionSavedResult, selectScmDiffSummaryStopDiscussionContext } from './discussion';
+import { createInitialScmDiffSummaryState, type ScmDiffSummaryEntry } from './state';
 
 const run = {
     runId: 'writer', callId: 'call', sidechainId: 'sidechain', intent: 'scm_diff_summary',
@@ -29,6 +30,21 @@ describe('SCM discussion target', () => {
         expect(selectScmDiffSummaryStopDiscussionContext(result, ['unrelated'])).toBeNull();
         expect(selectScmDiffSummaryStopDiscussionContext(result, ['stop-1', 'stop-1'])).toBeNull();
         expect(selectScmDiffSummaryStopDiscussionContext(result, [])).toBeNull();
+    });
+    it('reads the asked-about stop only from the exact saved revision the question addresses', () => {
+        const stop = (id: string) => ({ id, title: id, explanationMarkdown: 'Why.', changeRefs: ['change-1'] });
+        const savedResult = { resultId: 'result-1', revision: 4, canUndo: false, output: {
+            success: true, sourceKey: 'comparison-1', metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison-1' },
+            resultId: 'result-1', revision: 4, outputs: { walkthrough: { state: 'complete', value: {
+                title: 'Changes', intro: '', stops: [stop('stop-a'), stop('stop-b'), stop('stop-c')], otherChangeRefs: [],
+            } } },
+        } } satisfies ScmDiffSummaryResult;
+        const state = { ...createInitialScmDiffSummaryState(), entriesByKey: { k: { key: 'k', savedResult } as unknown as ScmDiffSummaryEntry } };
+        const ask = { cwd: '/repo', resultId: 'result-1', expectedRevision: 4, stopIds: ['stop-b'] };
+        expect(selectScmDiffSummaryDiscussionSavedResult(state, ask)).toBe(savedResult);
+        expect(selectScmDiffSummaryDiscussionSavedResult(state, { ...ask, expectedRevision: 5 })).toBeNull();
+        expect(selectScmDiffSummaryDiscussionSavedResult(state, { ...ask, stopIds: ['gone'] })).toBeNull();
+        expect(selectScmDiffSummaryDiscussionSavedResult(state, { ...ask, stopIds: undefined })).toBeNull();
     });
     it('opens the actual retained writer through the existing scoped Run details route', () => {
         expect(target()).toMatchObject({ kind: 'continue', recipient: { kind: 'execution_run', runId: 'writer' }, needsResume: false });

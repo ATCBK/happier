@@ -95,6 +95,9 @@ import { useSessionMachineTarget } from '@/components/sessions/model/useSessionM
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { createScmDiffSummaryResultOperations } from '@/sync/ops/scmDiffSummary/results';
+import { hasBrowserContextComposerAttachments } from '@/sync/domains/session/input/browserContext';
 
 type LoadState =
     | { status: 'loading' }
@@ -427,17 +430,19 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // The direct Run composer mounts before any transcript tool marker exists, so it composes the
     // same recipient/routing controls the tool-marker branch reaches through
     // `SessionMessageDetailsView`: one canonical send-mode control, no silent default.
+    // "To:" names the Run by what it is for (the canonical Run title owner), never by its id.
+    const recipientTitle = state.status === 'loaded' ? resolveExecutionRunTitle(state.run, 'recipient') : null;
     const executionRunParticipantTargets = React.useMemo<readonly SessionParticipantTarget[]>(() => {
-        const displayLabel = t('session.participants.executionRun', { runId: executionRunRecipient.runId });
+        const displayLabel = recipientTitle ?? t('session.participants.executionRun', { runId: executionRunRecipient.runId });
         return [{
             key: `execution_run:${executionRunRecipient.runId}`,
             displayLabel,
             recipient: { ...executionRunRecipient, label: displayLabel },
         }];
-    }, [executionRunRecipient]);
+    }, [executionRunRecipient, recipientTitle]);
     const executionRunRecipientState = useSessionRecipientState({
         targets: executionRunParticipantTargets,
-        autoRecipient: executionRunRecipient,
+        autoRecipient: executionRunParticipantTargets[0]!.recipient,
     });
     const executionRunRoutingControls = useSessionAgentInputRoutingControls({
         isReadOnly: !interaction.canSendMessages,
@@ -538,7 +543,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (!kind) return null;
         return { kind, payload: (meta as { payload?: unknown }).payload };
     }, [state]);
-    const structuredCard = props.sessionId !== null && structuredMeta && !showSteps
+    // Only a kind with a result page leads with it; any other structured meta (a walkthrough's saved
+    // publication) leaves the conversation as the page, with no steps disclosure that hides nothing.
+    const resultPage = props.sessionId !== null && structuredMeta
         ? renderExecutionRunStructuredMeta({
             meta: structuredMeta,
             sessionId: props.sessionId,
@@ -549,7 +556,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             groupId: state.status === 'loaded' ? state.run.display?.groupId ?? null : null,
         })
         : null;
-    const hasStructuredResult = props.sessionId !== null && structuredMeta !== null;
+    const structuredCard = showSteps ? null : resultPage;
+    const hasStructuredResult = resultPage !== null;
     /** The result as text for ⋯ → Copy result: the structured summary, else the raw result. */
     const copyResultText = React.useMemo(() => {
         const summary = (structuredMeta?.payload as { summary?: unknown } | undefined)?.summary;
@@ -688,9 +696,10 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         ? (transcriptMessage as { seq: number }).seq
         : null;
     const runTitle = state.status === 'loaded' && loadedRunAddressRef.current === runAddressKey
-        ? resolveExecutionRunTitle(state.run) : null;
+        ? resolveExecutionRunTitle(state.run, 'conversation') : null;
     useDestinationPageTitle(props.presentation === 'screen' ? runTitle : undefined);
-    const givenRunTitle = state.status === 'loaded' ? state.run.display?.title?.trim() || null : null;
+    const givenRunTitle = state.status === 'loaded'
+        ? state.run.intent === 'scm_diff_summary' ? runTitle : state.run.display?.title?.trim() || null : null;
     const onTitleResolved = props.onTitleResolved;
     React.useEffect(() => {
         if (!onTitleResolved || !runTitle) return;
@@ -756,7 +765,12 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         },
     } : null), [actionScopeIsCurrent, executeAction, leadServerId, leadTitle, presentation, leadSessionId, router, runTitle, sendTemplate]);
     // The one composer here answers this agent, and says so (lab `convo-C1`).
-    const replyAgentLabel = state.status === 'loaded' ? resolveExecutionRunBackendLabel(state.run.backendTarget, acpCatalogSnapshot) : null;
+    // The composer invites a reply to who it talks to: a walkthrough conversation's recipient ("Walkthrough"),
+    // else the Run's agent. Both entrances (pre-marker and tool-marker) use the same words.
+    const replyAgentLabel = state.status === 'loaded'
+        ? state.run.intent === 'scm_diff_summary' ? recipientTitle : resolveExecutionRunBackendLabel(state.run.backendTarget, acpCatalogSnapshot)
+        : null;
+    const replyPlaceholder = replyAgentLabel ? t('agentStart.pane.replyTo', { agent: replyAgentLabel }) : undefined;
     const invokeInteraction = React.useCallback((kind: 'cancel_turn' | 'resume') => {
         if (pendingInteraction !== null) return;
         fireAndForget((async () => {
@@ -796,6 +810,34 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         submission.onOutboundHandoff();
         void load();
     }, [actionScopeIsCurrent, executeAction, runOperation, load, props.runId, props.sessionId, props.workspace?.machineId]);
+    const submitScmConversationMessage = React.useCallback(async (submission: ParticipantComposerPreparedSubmission) => {
+        if (state.status !== 'loaded' || state.run.intent !== 'scm_diff_summary' || !pendingOutboxScope) throw new Error(t('common.unavailable'));
+        const output = ScmDiffSummaryGenerateOutputSchema.safeParse(structuredMeta?.payload ?? state.latestToolResult);
+        if (!output.success || !output.data.resultId || !output.data.comparison) throw new Error(t('common.unavailable'));
+        if (submission.draft.attachments.length > 0 || submission.draft.mentions.length > 0
+            || hasBrowserContextComposerAttachments(browserContextRuntime?.composerContext.state)) {
+            throw new Error(t('session.participants.unsupportedAttachmentsOrReviewComments'));
+        }
+        const operations = createScmDiffSummaryResultOperations({
+            ...(props.sessionId !== null ? { sessionId: props.sessionId } : { machineId: props.workspace!.machineId }),
+            serverId: pendingOutboxScope.serverId, accountId: pendingOutboxScope.accountId,
+            shouldContinue: actionScopeIsCurrent, actionExecutor: { execute: executeAction },
+        });
+        const address = { cwd: output.data.comparison.repository.rootPath, resultId: output.data.resultId };
+        // The transcript receipt may predate manual edits. Read the saved owner at send time;
+        // its revision check still refuses any later edit that races this admission.
+        const current = await operations.read(address);
+        if (!current.success) throw new Error(current.error);
+        if (current.result.output.runId !== props.runId) throw new Error(t('common.unavailable'));
+        const admitted = await operations.discuss({ ...address, expectedRevision: current.result.revision,
+            message: submission.displayText ?? submission.text });
+        if (!admitted.success) throw new Error(admitted.error);
+        if (!actionScopeIsCurrent()) throw new Error(t('common.unavailable'));
+        submission.onOutboundHandoff();
+        void load();
+    }, [actionScopeIsCurrent, browserContextRuntime?.composerContext.state, executeAction, load, pendingOutboxScope, props.runId, props.sessionId, props.workspace?.machineId, state, structuredMeta]);
+    const submitRunMessage = state.status === 'loaded' && state.run.intent === 'scm_diff_summary'
+        ? submitScmConversationMessage : props.sessionId === null ? submitDetachedMessage : undefined;
 
     const content = state.status === 'loading' || state.status === 'loaded' && loadedRunAddressRef.current !== runAddressKey ? (
         // A named wait (agents lab ST "opening"): what is opening and where it is read from. The
@@ -844,6 +886,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         hostSessionId={props.sessionId}
                         daemonProcessLine={daemonProcessLine}
                         originTitle={discussionOriginTitle}
+                        machineName={machine.name}
                         attention={runAttention}
                         stopAction={canMutateRunViaSessionRpc && state.run.status === 'running'
                             ? { stopping: isStopping, onStop: stopRun }
@@ -1036,9 +1079,11 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     session={session}
                     message={transcriptMessage}
                     showComposer={canShowSendComposer}
-                    recipientOverride={executionRunRecipient}
+                    recipientOverride={executionRunParticipantTargets[0]!.recipient}
                     composerInitialLocalId={props.retryInputLocalId}
                     browserContextState={browserContextRuntime?.composerContext.state ?? null}
+                    composerPlaceholder={replyPlaceholder}
+                    submitPreparedMessage={submitRunMessage}
                 />
             ) : null}
             {(session || props.sessionId === null) && !structuredCard && transcriptMessage?.kind !== 'tool-call' ? (
@@ -1088,14 +1133,15 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                             workspace={props.workspace}
                             serverId={props.serverId ?? session?.serverId}
                             canSendMessages={props.sessionId === null ? actionScopeIsCurrent() : interaction.canSendMessages}
-                            recipient={props.sessionId === null ? null : executionRunRecipient}
-                            submitPreparedMessage={props.sessionId === null ? submitDetachedMessage : undefined}
+                            recipient={props.sessionId === null ? null : executionRunRecipientState.recipient}
+                            submitPreparedMessage={props.sessionId === null || executionRunRecipientState.recipient?.kind === 'execution_run'
+                                && executionRunRecipientState.recipient.runId === props.runId ? submitRunMessage : undefined}
                             initialText={props.initialText}
                             executionRunRequestedAction={executionRunRecipientState.executionRunRequestedAction}
                             extraActionChips={props.sessionId === null ? [] : executionRunRoutingControls.extraActionChips}
                             initialLocalId={props.retryInputLocalId}
                             browserContextState={browserContextRuntime?.composerContext.state ?? null}
-                            {...(replyAgentLabel ? { placeholder: t('agentStart.pane.replyTo', { agent: replyAgentLabel }) } : {})}
+                            {...(replyPlaceholder ? { placeholder: replyPlaceholder } : {})}
                         />
                     ) : null}
                     {canShowSendComposer && leadTitle ? (

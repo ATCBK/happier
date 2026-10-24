@@ -18,6 +18,7 @@ export function readScmDiffSummaryPublicationReceipt(meta: unknown): ScmDiffSumm
     if (!envelope.success || envelope.data.kind !== 'scm_diff_summary.v1') return null;
     const output = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).safeParse(envelope.data.payload);
     if (!output.success || !output.data.success || !output.data.resultId || output.data.revision === undefined || !output.data.comparison
+        || (publication.data.updateNotice && publication.data.updateNotice.revision !== output.data.revision)
         || publication.data.outputs.some(({ kind }) => output.data.outputs?.[kind]?.value === undefined)) return null;
     return { output: { ...output.data, resultId: output.data.resultId, revision: output.data.revision, comparison: output.data.comparison },
         publication: publication.data };
