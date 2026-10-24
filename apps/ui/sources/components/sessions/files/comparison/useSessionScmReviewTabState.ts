@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { createSessionScmReviewDetailsTab, SESSION_DETAILS_SCM_REVIEW_TAB_KEY, type SessionScmReviewTarget } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { requestActiveReviewFileForComparison, useActiveReviewFilePath } from '@/components/workspaces/scm/review/activeReviewFile';
 import { scmComparisonKey } from './filesComparison';
@@ -8,15 +8,20 @@ import type { SessionScmReviewComparison, SessionScmReviewView } from '@/compone
 const SCROLL_PERSIST_DEBOUNCE_MS = 250;
 const SCROLL_PERSIST_EPSILON_PX = 1;
 
+type ReviewPaneState = Readonly<{
+    scopeState?: Readonly<{ details?: Readonly<{ tabState?: Readonly<Record<string, unknown>> }> }> | null;
+}>;
+
 /** Hidden Review retains selection in its incumbent pane, not in the public on-screen projection. */
 export function useScmReviewActiveFileSelection(params: Readonly<{
-    pane: ReturnType<typeof useAppPaneScope>; hostKey: string; activeFileKey: string;
+    pane: ReviewPaneState & Pick<AppPaneScopeApi, 'setDetailsTabState'>; hostKey: string; activeFileKey: string;
+    persistedSelection?: unknown;
     comparison: SessionScmReviewComparison | null; view: SessionScmReviewView; presented: boolean;
     isCurrent?: () => boolean;
 }>) {
     const tabKey = `${SESSION_DETAILS_SCM_REVIEW_TAB_KEY}:activeFile`;
     const selectionKey = JSON.stringify([params.hostKey, params.comparison ? scmComparisonKey(params.comparison) : null]);
-    const raw = params.pane.scopeState?.details.tabState[tabKey];
+    const raw = params.persistedSelection ?? params.pane.scopeState?.details?.tabState?.[tabKey];
     const saved = raw && typeof raw === 'object' ? raw as { selectionKey?: unknown; path?: unknown } : null;
     const initial = React.useRef<Readonly<{ key: string; path: string | null; restored: boolean }> | null>(null);
     if (!initial.current || initial.current.key !== selectionKey) initial.current = { key: selectionKey,
@@ -49,8 +54,9 @@ function scrollPositionsEqual(previous: unknown, next: unknown): boolean {
 }
 
 /** Both live and captured Files preserve the existing review tab's scroll and collapse state. */
-export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof useAppPaneScope>, tabKey = SESSION_DETAILS_SCM_REVIEW_TAB_KEY) {
-    const raw = pane.scopeState?.details?.tabState?.[tabKey];
+export function useScmReviewTabState(hostKey: string, pane: ReviewPaneState & Pick<AppPaneScopeApi, 'patchDetailsTabState'>,
+    tabKey = SESSION_DETAILS_SCM_REVIEW_TAB_KEY, rawTabState = pane.scopeState?.details?.tabState?.[tabKey]) {
+    const raw = rawTabState;
     const persistedReviewTabState = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
     const rawReviewRunIds = persistedReviewTabState?.reviewRunIds;
     const startedReviewRunIds = React.useMemo(() => Array.isArray(rawReviewRunIds)
@@ -96,7 +102,7 @@ export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof us
 }
 
 /** Session destination authoring stays at the Session adapter; persistence is shared. */
-export function useSessionScmReviewTabState(sessionId: string, pane: ReturnType<typeof useAppPaneScope>, target: SessionScmReviewTarget = {},
+export function useSessionScmReviewTabState(sessionId: string, pane: AppPaneScopeApi, target: SessionScmReviewTarget = {},
     openDetailsTab = pane.openDetailsTab) {
     // Explain is presentation on the semantic destination, shared by UI and session.open.
     const explain = target.explain === true;
