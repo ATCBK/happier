@@ -1,6 +1,7 @@
 import type { WindowBounds } from '../treeDragDropTypes';
 import type { TreeDropMeasurableRef } from './treeDropRegistryTypes';
-import { isFiniteRect } from '../geometry/treeDropCoordinateSpace';
+import { isFiniteRect, windowBoundsToContentBounds } from '../geometry/treeDropCoordinateSpace';
+import type { TreeContentBounds, TreeViewportMetrics } from '../geometry/treeContentGeometryTypes';
 
 /** Narrow RN, DOM and ScrollView hosts at the single platform measurement boundary. */
 export function toTreeDropMeasurableRef(node: unknown): TreeDropMeasurableRef | null {
@@ -33,23 +34,35 @@ export function toTreeDropMeasurableRef(node: unknown): TreeDropMeasurableRef | 
  * Window bounds are a boundary type only — callers immediately convert them to
  * content coordinates via `treeDropCoordinateSpace` and never store them.
  */
-export function measureWindowBounds(node: unknown): Promise<WindowBounds | null> {
+function measureBounds<T>(node: unknown, project: (bounds: WindowBounds) => T | null): Promise<T | null> {
     const ref = toTreeDropMeasurableRef(node);
     if (!ref) return Promise.resolve(null);
 
     if (typeof ref.getBoundingClientRectFn === 'function') {
         const rect = ref.getBoundingClientRectFn();
         const bounds: WindowBounds = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-        return Promise.resolve(isFiniteRect(bounds) ? bounds : null);
+        return Promise.resolve(isFiniteRect(bounds) ? project(bounds) : null);
     }
 
     if (typeof ref.measureInWindow !== 'function') return Promise.resolve(null);
     return new Promise((resolve) => {
         ref.measureInWindow?.((x, y, width, height) => {
             const bounds: WindowBounds = { x, y, width, height };
-            resolve(isFiniteRect(bounds) ? bounds : null);
+            resolve(isFiniteRect(bounds) ? project(bounds) : null);
         });
     });
+}
+
+export function measureWindowBounds(node: unknown, onMeasured?: (bounds: WindowBounds) => void): Promise<WindowBounds | null> {
+    return measureBounds(node, bounds => {
+        onMeasured?.(bounds);
+        return bounds;
+    });
+}
+
+/** Pair the measured rectangle and scroll metrics before publishing across a Promise boundary. */
+export function measureTreeContentBounds(node: unknown, readViewport: () => TreeViewportMetrics): Promise<TreeContentBounds | null> {
+    return measureBounds(node, bounds => windowBoundsToContentBounds(bounds, readViewport()));
 }
 
 /** Runtime hit-testing shares the DOM clock with scrolling; native callers use the async boundary. */

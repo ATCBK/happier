@@ -33,13 +33,16 @@ export function resolveTreeDropAutoscrollTarget(params: ResolveTreeDropAutoscrol
     'worklet';
     const pointerY = params.pointerY;
     if (pointerY == null || !Number.isFinite(pointerY)) return params.scrollOffsetY;
-    const viewportHeight = Math.max(0, params.viewportHeight);
+    const viewportHeight = params.viewportHeight;
+    if (!Number.isFinite(params.viewportTopY) || !Number.isFinite(viewportHeight)
+        || !Number.isFinite(params.contentHeight) || viewportHeight <= 0) return params.scrollOffsetY;
+    const localY = pointerY - params.viewportTopY;
+    if (localY < 0 || localY > viewportHeight) return params.scrollOffsetY;
     const maxScroll = Math.max(0, params.contentHeight - viewportHeight);
-    if (viewportHeight <= 0 || maxScroll <= 0) return clamp(params.scrollOffsetY, 0, maxScroll);
+    if (maxScroll <= 0) return params.scrollOffsetY;
 
     const edgeBandPx = Math.max(1, params.edgeBandPx ?? TREE_DROP_AUTOSCROLL_EDGE_BAND_PX);
     const maxScrollPerFrame = Math.max(1, params.maxScrollPerFrame ?? TREE_DROP_AUTOSCROLL_MAX_SCROLL_PER_FRAME);
-    const localY = pointerY - params.viewportTopY;
 
     if (localY < edgeBandPx) {
         return clamp(
@@ -55,7 +58,9 @@ export function resolveTreeDropAutoscrollTarget(params: ResolveTreeDropAutoscrol
             maxScroll,
         );
     }
-    return clamp(params.scrollOffsetY, 0, maxScroll);
+    // Autoscroll is an edge gesture, not scroll-position reconciliation when
+    // content metrics are stale or the list is being measured.
+    return params.scrollOffsetY;
 }
 
 export type UseTreeDropAutoscrollParams = Readonly<{

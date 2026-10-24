@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { measureWindowBounds, readWindowBounds, toTreeDropMeasurableRef } from '../../registry/measureWindowBounds';
+import { measureWindowBounds, measureTreeContentBounds, readWindowBounds, toTreeDropMeasurableRef } from '../../registry/measureWindowBounds';
+import type { TreeDropMeasurableRef } from '../../registry/treeDropRegistryTypes';
 
 describe('toTreeDropMeasurableRef', () => {
     it('measures the RN Web scroll node even when its native scroll ref returns itself', async () => {
@@ -62,6 +63,36 @@ describe('toTreeDropMeasurableRef', () => {
 });
 
 describe('measureWindowBounds', () => {
+    it('publishes viewport metrics on the measurement clock before same-turn row conversion', async () => {
+        let viewportTopY = 0;
+        const viewport = measureWindowBounds({ measureInWindow: callback => callback(10, 100, 320, 600) } satisfies TreeDropMeasurableRef,
+            bounds => { viewportTopY = bounds.y; });
+        const row = measureTreeContentBounds({ measureInWindow: callback => callback(10, 300, 320, 40) } satisfies TreeDropMeasurableRef, () => ({
+            viewportWindowX: 10, viewportWindowY: viewportTopY, viewportHeight: 600, scrollOffsetY: 200,
+        }));
+        await expect(viewport).resolves.toMatchObject({ y: 100 });
+        await expect(row).resolves.toEqual({ x: 0, y: 400, width: 320, height: 40 });
+    });
+
+    it.each(['web', 'native'] as const)('pairs content conversion with the %s measurement clock, not Promise publication', async platform => {
+        let offset = 200;
+        let measurements = 0;
+        let answer: ((x: number, y: number, width: number, height: number) => void) | undefined;
+        const node = platform === 'web'
+            ? { getBoundingClientRectFn: () => { measurements++; return { x: 10, y: 300, width: 320, height: 40 }; } }
+            : { measureInWindow: (callback: NonNullable<typeof answer>) => { measurements++; answer = callback; } };
+        const pending = measureTreeContentBounds(node, () => ({ viewportWindowX: 10, viewportWindowY: 100,
+            viewportHeight: 600, scrollOffsetY: offset }));
+        if (platform === 'native') {
+            // Native layout arrives later: pair it with that callback's metrics, not request time.
+            offset = 250;
+            answer?.(10, 250, 320, 40);
+        }
+        offset = 0;
+        await expect(pending).resolves.toEqual({ x: 0, y: 400, width: 320, height: 40 });
+        expect(measurements).toBe(1);
+    });
+
     it('reads window bounds synchronously from getBoundingClientRect when the ref exposes a DOM element', async () => {
         expect(measureWindowBounds).toEqual(expect.any(Function));
 
