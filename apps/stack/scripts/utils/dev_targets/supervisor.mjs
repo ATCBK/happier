@@ -737,7 +737,7 @@ export async function startStackDevTargets(
         }
       });
       const prepareRemoteServices = async () => {
-        await beginCredentialSeed();
+        if (!deferCompanionPreparation) await beginCredentialSeed();
         beginPhase('bootstrap');
         if (retainedRuntime) {
           beginPhase('sync');
@@ -805,6 +805,10 @@ export async function startStackDevTargets(
           }),
           `${target.name} dependency bootstrap`,
         );
+        // Credentials are the deferred daemon's start gate. Do not open it
+        // until current workspace bytes and their dependency bootstrap are
+        // ready, otherwise the server-first worker can load a stale daemon.
+        if (deferCompanionPreparation) await beginCredentialSeed();
         provisionedTargets.add(target.name);
       };
       try {
@@ -873,9 +877,6 @@ export async function startStackDevTargets(
             `${target.name} directory bootstrap`,
           );
           beginPhase('sync');
-          if (deferCompanionPreparation && services.daemon) {
-            beginCredentialSeed();
-          }
           if (deferCompanionPreparation && remoteWorkspacePreparation) {
             beginPhase('bootstrap');
             try {
@@ -885,11 +886,9 @@ export async function startStackDevTargets(
               await flushSync({ target, env: mutagenEnv }, { runProcess });
               workspacePreparationCurrent = true;
             } catch (error) {
-              logger.warn?.(
-                `[dev-targets] ${target.name} current workspace publication did not complete before worker launch; `
-                  + `starting from last-green bytes while companion preparation retries: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
+              throw Object.assign(
+                new Error(`[dev-targets] ${target.name} remote companion preparation failed`, { cause: error }),
+                { code: 'source_companion_preparation_failed' },
               );
             }
           }
@@ -1227,10 +1226,13 @@ export async function startStackDevTargets(
                 const failureMessage = `${target.name} remote companion preparation failed: ${
                   error instanceof Error ? error.message : String(error)
                 }`;
+                const preparationError = Object.assign(new Error(failureMessage, { cause: error }), {
+                  code: 'source_companion_preparation_failed',
+                });
                 targetFailuresByTarget.set(target.name, {
                   name: target.name,
                   phase,
-                  error: new Error(failureMessage),
+                  error: preparationError,
                 });
                 const ownershipRefusal = error.code === 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED';
                 publishTargetState(plan, ownershipRefusal ? 'failed' : 'degraded', {

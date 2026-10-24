@@ -4012,29 +4012,61 @@ test('server and Expo targets bypass shared daemon workspace preparation', async
   }
 });
 
-test('a co-located server stays available when deferred daemon or Expo preparation fails', async () => {
+test('failed deferred workspace preparation is typed and never launches a last-green worker', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-companion-refusal-'));
+  let releaseRetry;
+  const retryGate = new Promise(resolve => { releaseRetry = resolve; });
+  let controller = null;
+  try {
+    const credentialPath = join(root, 'access.key');
+    await writeFile(credentialPath, '{"token":"secret"}\n', { mode: 0o600 });
+    const target = { name: 'mac-refusal', platform: 'posix', ssh: 'mac-refusal-ssh',
+      repoDir: '/Users/test/happier', cliHomeDir: '/Users/test/.happier/mac-refusal' };
+    const states = [];
+    controller = await startStackDevTargets({
+      stackName: 'repo-test-refusal', stackBaseDir: join(root, 'stack'), sourceDir: repoDir,
+      localServerPort: 3005, localExpoPort: 8081, publicServerUrl: 'http://127.0.0.1:3005',
+      activeServerId: 'stack_repo-test-refusal__id_default', credentialPath,
+      remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
+      remoteWorkspacePreparation: async () => { throw new Error('current companion build failed'); },
+      targetPlans: [{ target, commands: false, services: { server: true, expo: false, daemon: true } }],
+      onTargetStateChange: state => states.push(state), env: {},
+    }, {
+      runProcess: async () => ({ code: 0 }),
+      spawnProcess: ({ label, command, args, env }) => ({ label, command, args, env, exitCode: null }),
+      stopProcess: async child => { child.exitCode = 0; },
+      waitForRetry: async () => await retryGate,
+      logger: { error() {} },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(controller.workers.length, 0, 'failed companion preparation must not launch a last-green Stack worker');
+    assert.equal(controller.targetFailures.at(-1)?.error?.code, 'source_companion_preparation_failed');
+    assert.ok(states.some(state => state.status === 'retrying' && state.phase === 'bootstrap'));
+    assert.equal(states.some(state => state.status === 'running'), false);
+  } finally {
+    const close = controller?.close();
+    releaseRetry?.();
+    await close;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a co-located server stays available without opening the daemon gate when later companion preparation fails', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-server-first-preparation-'));
   try {
     for (const [index, scenario] of [
-      {
-        name: 'workspace rebuild',
-        createWorkspacePreparation: () => Promise.reject(new Error('remote workspace rebuild failed')),
-        bootstrapResult: { code: 0 },
-        expectedBootstrapCalls: 0,
-        expectedCredentialTransfers: 1,
-      },
       {
         name: 'dependency bootstrap',
         createWorkspacePreparation: () => Promise.resolve(),
         bootstrapResult: { code: 1 },
         expectedBootstrapCalls: 1,
-        expectedCredentialTransfers: 1,
+        expectedCredentialTransfers: 0,
       },
       {
         name: 'credential transfer',
         createWorkspacePreparation: () => Promise.resolve(),
         bootstrapResult: { code: 0 },
-        expectedBootstrapCalls: 0,
+        expectedBootstrapCalls: 1,
         expectedCredentialTransfers: 1,
         processResult: ({ command }) => (command === 'scp' ? { code: 1 } : { code: 0 }),
       },
@@ -4127,8 +4159,8 @@ test('a co-located server stays available when deferred daemon or Expo preparati
         if (credentialTransferIndex >= 0 && dependencyBootstrapCalls > 0) {
           const dependencyBootstrapIndex = processCalls.findIndex(({ command }) => command === 'dependency-bootstrap');
           assert.ok(
-            credentialTransferIndex < dependencyBootstrapIndex,
-            `${scenario.name}: daemon authentication must not wait for dependency refresh`,
+            dependencyBootstrapIndex < credentialTransferIndex,
+            `${scenario.name}: daemon credentials must remain unavailable until companion preparation succeeds`,
           );
         }
         assert.ok(
@@ -4139,6 +4171,16 @@ test('a co-located server stays available when deferred daemon or Expo preparati
             && state.serviceStatus?.daemon === 'degraded'
           )),
           `${scenario.name}: preparation failure must degrade only companion services after the server is available`,
+        );
+        assert.equal(
+          controller.targetFailures.at(-1)?.error?.code,
+          'source_companion_preparation_failed',
+          `${scenario.name}: companion preparation failure must remain typed`,
+        );
+        assert.equal(
+          targetStates.some((state) => state.status === 'running' || state.serviceStatus?.daemon === 'running'),
+          false,
+          `${scenario.name}: a failed companion preparation must not declare the stale daemon running`,
         );
       } finally {
         const close = controller?.close();
@@ -4305,7 +4347,7 @@ test('deferred companion preparation recreates failed workspace work on retry', 
   }
 });
 
-test('a co-located target seeds credentials while publication is pending but does not launch stale workspace bytes', async () => {
+test('a co-located target keeps credentials unavailable while companion publication is pending', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-credential-first-'));
   const spawned = [];
   const processCalls = [];
@@ -4367,13 +4409,7 @@ test('a co-located target seeds credentials while publication is pending but doe
       },
     );
 
-    const credentialDeadline = Date.now() + 1_000;
-    while (
-      processCalls.filter(({ command }) => command === 'scp').length === 0
-      && Date.now() < credentialDeadline
-    ) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
       spawned.filter((child) => child.label === 'remote:mac' && !child.args.includes('-N')).length,
       0,
@@ -4381,8 +4417,8 @@ test('a co-located target seeds credentials while publication is pending but doe
     );
     assert.equal(
       processCalls.filter(({ command }) => command === 'scp').length,
-      1,
-      'credential transfer must begin independently of server readiness',
+      0,
+      'daemon credentials must remain unavailable while companion publication is pending',
     );
     assert.equal(
       dependencyBootstrapCalls,
@@ -4395,6 +4431,11 @@ test('a co-located target seeds credentials while publication is pending but doe
       spawned.filter((child) => child.label === 'remote:mac' && !child.args.includes('-N')).length,
       1,
       'the remote Stack worker starts once current workspace bytes have been flushed',
+    );
+    assert.equal(
+      processCalls.filter(({ command }) => command === 'scp').length,
+      0,
+      'the daemon gate remains closed until post-server companion bootstrap succeeds',
     );
   } finally {
     releaseWorkspacePreparation?.();
