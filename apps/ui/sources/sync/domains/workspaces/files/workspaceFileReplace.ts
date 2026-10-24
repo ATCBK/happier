@@ -295,6 +295,8 @@ type Preview = Readonly<{
   targetKey: string;
   matcher: WorkspaceReplaceMatcher;
   files: readonly WorkspaceReplacePreviewFile[];
+  /** Drafts omitted from this review stay excluded until a fresh preview. */
+  excludedUnsavedPaths: ReadonlySet<string>;
   notText: number;
   hasMore: boolean;
   cursor?: Readonly<{ path: string }>;
@@ -528,6 +530,12 @@ export function useWorkspaceReplace(
     () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
     [scope?.serverId, accountId],
   );
+  const unsavedSet = React.useMemo(
+    () => new Set(input.unsavedPaths.map(path => replacePathKey(path, scope?.rootPath))),
+    [input.unsavedPaths, scope?.rootPath],
+  );
+  const currentUnsavedSet = React.useRef(unsavedSet);
+  currentUnsavedSet.current = unsavedSet;
 
   React.useEffect(() => {
     if (!key || !targetKey || !scope || !matcher || !options) {
@@ -590,6 +598,9 @@ export function useWorkspaceReplace(
           targetKey,
           matcher,
           files: response.files,
+          excludedUnsavedPaths: new Set(response.files
+            .filter(file => isUnsaved(file.path, currentUnsavedSet.current, scope.rootPath))
+            .map(file => file.path)),
           notText: response.skipped.notText,
           hasMore: response.hasMore,
           ...(response.cursor ? { cursor: response.cursor } : {}),
@@ -653,6 +664,9 @@ export function useWorkspaceReplace(
             ? {
                 ...previous,
                 files: [...previous.files, ...response.files],
+                excludedUnsavedPaths: new Set([...previous.excludedUnsavedPaths, ...response.files
+                  .filter(file => isUnsaved(file.path, currentUnsavedSet.current, scope.rootPath))
+                  .map(file => file.path)]),
                 notText: previous.notText + response.skipped.notText,
                 hasMore: response.hasMore,
                 cursor: response.cursor,
@@ -669,21 +683,19 @@ export function useWorkspaceReplace(
       });
   }, [available, key, loadingMore, options, preview, scope]);
 
-  const unsavedSet = React.useMemo(
-    () => new Set(input.unsavedPaths.map(path => replacePathKey(path, scope?.rootPath))),
-    [input.unsavedPaths, scope?.rootPath],
-  );
   const allFiles = preview?.files ?? NO_FILES;
   const unsavedFiles = React.useMemo(
-    () => allFiles.filter((file) => isUnsaved(file.path, unsavedSet, scope?.rootPath)),
-    [allFiles, unsavedSet, scope?.rootPath],
+    () => allFiles.filter((file) => preview?.excludedUnsavedPaths.has(file.path)
+      || isUnsaved(file.path, unsavedSet, scope?.rootPath)),
+    [allFiles, preview?.excludedUnsavedPaths, unsavedSet, scope?.rootPath],
   );
   const files = React.useMemo(
     () =>
       unsavedFiles.length
-        ? allFiles.filter((file) => !isUnsaved(file.path, unsavedSet, scope?.rootPath))
+        ? allFiles.filter((file) => !preview?.excludedUnsavedPaths.has(file.path)
+          && !isUnsaved(file.path, unsavedSet, scope?.rootPath))
         : allFiles,
-    [allFiles, unsavedFiles.length, unsavedSet, scope?.rootPath],
+    [allFiles, preview?.excludedUnsavedPaths, unsavedFiles.length, unsavedSet, scope?.rootPath],
   );
   const totals = React.useMemo(() => {
     let selectedMatches = 0;
@@ -745,7 +757,13 @@ export function useWorkspaceReplace(
     totals.selectedMatches > 0;
   const apply = React.useCallback(async () => {
     if (!canApply || !preview || !scope || !options || pendingApply.current) return;
-    const selection = buildReplaceApplyFiles(files, excluded, []);
+    const selection = buildReplaceApplyFiles(allFiles, excluded, [...preview.excludedUnsavedPaths], scope.rootPath);
+    // A selected target becoming dirty invalidates the whole reviewed set. Do
+    // not silently drop it and dispatch writes for the remaining targets.
+    if (selection.some(file => isUnsaved(file.path, currentUnsavedSet.current, scope.rootPath))) {
+      setError({ key: preview.key, code: 'failed' });
+      return;
+    }
     const controller = new AbortController();
     applyController.current = controller;
     setApplying(true);
@@ -837,7 +855,7 @@ export function useWorkspaceReplace(
     pendingApply.current = { key: preview.key, scope, options, completion };
     try { await completion; }
     finally { pendingApply.current = null; }
-  }, [canApply, excluded, files, options, preview, scope, setResultState, unsavedFiles]);
+  }, [allFiles, canApply, excluded, options, preview, scope, setResultState, unsavedFiles]);
   const cancelApply = React.useCallback(() => {
     applyController.current?.abort();
   }, []);

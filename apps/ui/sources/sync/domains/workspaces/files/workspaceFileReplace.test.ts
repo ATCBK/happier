@@ -224,7 +224,9 @@ describe('replace review model', () => {
 });
 
 describe('useWorkspaceReplace', () => {
+    const boundaryErrors: string[] = [];
     beforeEach(async () => {
+        boundaryErrors.length = 0;
         await homes.reset(); rpc.call.mockReset();
         scope = { ...scope, serverId: await homes.addHome({ name: 'Replace Home', serverUrl: 'https://replace-review.test',
             serverIdentityId: 'srv_replace_review', accountId: 'acct', currentAccount: true, active: false }) };
@@ -239,9 +241,12 @@ describe('useWorkspaceReplace', () => {
             },
         });
         homes.answer(scope.serverId, '/v1/machines', { body: [boundary.machine] });
-        for (const path of ['/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
+        for (const path of ['/v1/machines/read-batch', '/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
             homes.answer(scope.serverId, path, { select: async (_body, request) => {
-                const response = await boundary.handle(new URL(request.url), request.init);
+                const response = await boundary.handle(new URL(request.url), request.init).catch((error: unknown) => {
+                    boundaryErrors.push(error instanceof Error ? error.message : String(error));
+                    throw error;
+                });
                 if (!response) throw new Error('Unhandled replacement Action request');
                 return { status: response.status, body: await response.json() };
             } });
@@ -252,11 +257,12 @@ describe('useWorkspaceReplace', () => {
     const previewOk = { ok: true, files: [modal, doc], skipped: { notText: 1 }, hasMore: false, coverage: 'complete' };
     let account = lifetime();
 
-    it('excludes a real editor immediately when it becomes dirty again after preview, before its text debounce', async () => {
+    it('refuses the whole reviewed edit set when a real editor becomes dirty after preview, before its text debounce', async () => {
         const workspaceRefs = [{ id: 'replace-dirty-workspace', serverId: scope.serverId,
             machineId: scope.machineId, rootPath: scope.rootPath, label: 'Replace draft', createdAtMs: 1 }];
-        rpc.call.mockResolvedValueOnce(previewOk).mockResolvedValueOnce({ ok: true,
-            results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits: [] }] });
+        rpc.call.mockImplementation((request: { method: string }) => request.method === 'daemon.workspaceFiles.replace.preview.v1'
+            ? previewOk : { ok: true,
+                results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits: [] }] });
         const tab = createWorkspaceFileDetailsTab(`${scope.rootPath}/${doc.path}`);
         const hook = await renderHook(() => {
             const context = useAppPaneContext();
@@ -298,13 +304,37 @@ describe('useWorkspaceReplace', () => {
             .toMatchObject({ isEditingFile: true, editorText: 'Use useSettingsRouteKey here\nunsaved' });
         expect(hook.getCurrent().replace.unsavedFiles.map(file => file.path)).toEqual([doc.path]);
         await React.act(async () => { await hook.getCurrent().replace.apply(); });
-        expect(rpc.call.mock.calls[1]![0]).toMatchObject({ payload: { operation: { kind: 'replace',
-            files: [{ path: modal.path, expectedHash: modal.hash }] } } });
-        expect(hook.getCurrent().replace.results).toEqual([
-            expect.objectContaining({ path: modal.path, status: 'replaced' }),
-            expect.objectContaining({ path: doc.path, status: 'skipped', reason: 'unsaved' }),
-        ]);
+        expect(homes.requestsFor('/v1/actions/workspace.files.replace').map(request => request.path)).toEqual([]);
+        expect(rpc.call.mock.calls.filter(([request]) => request.payload?.operation?.kind === 'replace')).toEqual([]);
+        expect(hook.getCurrent().replace).toMatchObject({ results: null, error: 'failed', applyError: null, applying: false, canApply: false });
         expect(hook.getCurrent().editor.getEditorText()).toContain('unsaved');
+        await act(async () => { hook.getCurrent().replace.retry(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().replace.canApply).toBe(true));
+        await act(async () => { await hook.getCurrent().replace.apply(); });
+        expect(rpc.call.mock.lastCall?.[0], JSON.stringify(boundaryErrors)).toMatchObject({ payload: { operation: {
+            files: [{ path: modal.path, expectedHash: modal.hash }],
+        } } });
+        expect(hook.getCurrent().replace.results?.map(result => [result.path, result.status]))
+            .toEqual([[modal.path, 'replaced'], [doc.path, 'skipped']]);
+        expect(hook.getCurrent().editor.getEditorText()).toContain('unsaved');
+    });
+
+    it('does not invalidate the reviewed selection when only a deselected target becomes dirty', async () => {
+        rpc.call.mockResolvedValueOnce(previewOk).mockResolvedValueOnce({ ok: true,
+            results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits: [] }] });
+        const initialProps: { unsavedPaths: readonly string[] } = { unsavedPaths: [] };
+        const hook = await renderHook((props: { unsavedPaths: readonly string[] }) => useWorkspaceReplace({
+            scope, accountLifetime: account, matcher, unsavedPaths: props.unsavedPaths,
+        }), { initialProps });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
+        await act(async () => { hook.getCurrent().toggleFile(doc.path); });
+        await hook.rerender({ unsavedPaths: [`${scope.rootPath}/${doc.path}`] });
+        await act(async () => { await hook.getCurrent().apply(); });
+        expect(rpc.call.mock.lastCall?.[0], JSON.stringify(boundaryErrors)).toMatchObject({ payload: { operation: {
+            files: [{ path: modal.path, expectedHash: modal.hash }],
+        } } });
+        expect(hook.getCurrent()).toMatchObject({ error: null, applyError: null });
+        expect(hook.getCurrent().results?.[0]).toMatchObject({ path: modal.path, status: 'replaced' });
     });
 
     it.each(['query', 'folder', 'machine', 'disarm', 'close'] as const)('withdraws an abandoned preview approval on %s, without executing its stale read', async (change) => {
@@ -672,15 +702,20 @@ describe('useWorkspaceReplace', () => {
         const edits = [{ startUtf16: 9, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
         rpc.call.mockResolvedValueOnce(previewOk)
             .mockResolvedValueOnce({ ok: true, results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits }] })
-            .mockResolvedValueOnce({ ok: true, results: [{ path: modal.path, status: 'restored', hash: hash('a') }] });
-        const unsavedPaths = [doc.path];
-        const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths }));
+            .mockResolvedValueOnce({ ok: true, results: [{ path: modal.path, status: 'restored', hash: hash('a') }] })
+            .mockResolvedValueOnce(previewOk);
+        const hook = await renderHook((props: { unsavedPaths: readonly string[] }) => useWorkspaceReplace({
+            scope, accountLifetime: account, matcher, unsavedPaths: props.unsavedPaths,
+        }), { initialProps: { unsavedPaths: [doc.path] } });
         await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
         expect(hook.getCurrent().canApply).toBe(true);
         expect(hook.getCurrent().unsavedFiles.map((file) => file.path)).toEqual([doc.path]);
         expect(hook.getCurrent().totals).toMatchObject({ selectedFiles: 1, selectedMatches: 3 });
+        // Saving a previously excluded draft does not silently add an unreviewed target.
+        await hook.rerender({ unsavedPaths: [] });
+        expect(hook.getCurrent().totals).toMatchObject({ selectedFiles: 1, selectedMatches: 3 });
         await act(async () => { await hook.getCurrent().apply(); });
-        expect(rpc.call.mock.calls[1]![0]).toMatchObject({ payload: { rootPath: '/repo',
+        expect(rpc.call.mock.calls[1]?.[0], JSON.stringify(boundaryErrors)).toMatchObject({ payload: { rootPath: '/repo',
             operation: { kind: 'replace', matcher, files: [{ path: modal.path, expectedHash: hash('a') }] } } });
         expect(hook.getCurrent().results?.map((entry) => [entry.path, entry.status])).toEqual([[modal.path, 'replaced'], [doc.path, 'skipped']]);
         expect(hook.getCurrent().canUndo).toBe(true);
@@ -690,6 +725,8 @@ describe('useWorkspaceReplace', () => {
         expect(hook.getCurrent().results?.[0]?.status).toBe('restored');
         expect(hook.getCurrent().canUndo).toBe(false);
         expect(acknowledged).toEqual([hash('d'), hash('a')]);
+        await act(async () => { hook.getCurrent().retry(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().totals.selectedFiles).toBe(2));
     });
 
     it('reports a file changed since the replace when Undo finds other bytes', async ({ onTestFinished }) => {
