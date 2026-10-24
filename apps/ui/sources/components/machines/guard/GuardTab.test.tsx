@@ -170,7 +170,7 @@ describe('GuardTab', () => {
             await act(async () => { policyControl(screen, 'machine-guard-browser-limit-select').props.onSelect('custom'); });
             await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(2)); });
             expect(writes[1]).toEqual({ processes: { browserMaxConcurrent: 12 } });
-        } finally { prompt.mockRestore(); }
+        } finally { prompt.mockRestore(); alert.mockRestore(); }
     });
     it('saves tool idle close and browser concurrency through the sole resources policy Action', async () => {
         const writes: unknown[] = [];
