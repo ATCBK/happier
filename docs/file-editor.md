@@ -21,6 +21,16 @@ or completed live-validation claim.
 - `apps/ui/sources/components/ui/code/editor/CodeEditor.tsx` selects the platform
   surface. `codeEditorTypes.ts` owns the single `CodeEditorHandle` contract for
   commands, reveal, history, selections and layered decorations.
+  `editorDocumentHistory.ts` supplies the compact inverse-edit history held by
+  the document buffer. Monaco, CodeMirror and Rich Markdown delegate Undo/Redo
+  to that instance when supplied; standalone engine consumers retain their
+  existing engine history. A standalone Markdown field owns one document
+  history across its Raw/Rich surfaces.
+  Native CodeMirror flushes its pending `docChanged` publication before replying
+  to `requestDoc` with a snapshot. Its incremental inline-suggestion mirror is
+  not itself a buffer publication: a confirmed flush must first deliver pending
+  typing to the shared buffer and history. Repeated flushes without new typing
+  do not republish that change.
 - `CodeEditorWithFind.tsx` in the same folder owns editor Find composition.
   `apps/ui/sources/components/ui/markdown/editor/useMarkdownEditMode.ts` owns
   Raw/Rich mode and flush-before-switch; `MarkdownCodeEditorField` consumes it.
@@ -62,6 +72,93 @@ and `filesDiffTokenizationMaxLineLength` preferences still govern highlighting;
 `evaluateCodeHighlightingBudget` protects code blocks and
 `resolveEffectiveSyntaxHighlighting` protects code-line views. Over-budget
 content remains readable without adding another size limit.
+
+## Editing intelligence (0.3 development)
+
+`CodeEditorHandle.setLanguageIntelligence` binds the mounted editor to the existing
+language-intelligence controller. `monacoLanguageIntelligence.ts` and
+`codeMirrorLanguageIntelligence.ts` translate its query results into their engine's
+completion, signature, hint, highlighting and selection APIs. They do not open
+another Machine connection, synchronize another document or start a server.
+Completion requests contain positions and context; the controller's held-document
+sync carries text changes. An incompatible engine edit aborts pending work and
+late results cannot enter the changed buffer.
+
+Completion snippets and additional edits use the engine's buffer transaction and
+undo history. Format, Format selection and Organize imports also edit only the
+buffer, using the shared semantic edit-set transform for validation. Saving stays
+with the existing hash-guarded writer. The Account setting
+`filesEditorFormatOnSave` is off by default; an enabled Save awaits the editor's
+format operation before reading the bytes it will write. Explicit conflict
+replacement retains its reviewed comparison instead of formatting it again.
+
+`filesEditorInlayHints` selects `off`, `parameters` or `all` (initial default
+`off`); `filesEditorSemanticHighlighting` defaults to `true`. The adapters request
+range hints and semantic tokens only for the engine's visible range and retain
+syntax highlighting as the baseline. Capabilities and trigger characters come
+from the server initialization result, through the controller.
+
+The bundled TypeScript language plugin declares server-side inlay preferences
+under the native server's requested `js/ts`, `typescript` and `javascript`
+configuration sections. Advertising `inlayHintProvider` alone does not enable
+hint production. The generic session owner sends these declared settings at
+startup; the editor preference still owns whether hints are requested and
+whether only parameter hints are displayed. This does not enable Account hints
+by default or add TypeScript policy to the generic adapters.
+
+Monaco's public reference provider and native Peek References action retain
+cross-file results. Its disposable preview models
+read through the File owner: a mounted file supplies its current draft; an unopened
+file uses the canonical file preview reader, classification and budget. A new peek
+or editor disposal releases those models, and edits cancel pending preview reads.
+Opening a result uses the existing File opener, with the captured Home/Account
+lifetime checked before reading or navigation. Card type-definition and
+implementation actions target the displayed inspected token; keys and menu actions
+retain caret intent.
+The Account semantic-highlighting preference explicitly configures Monaco's
+coloring option; standalone themes otherwise disable semantic coloring even
+when a range provider is registered. A document's capabilities still control
+provider registration, not the global Account coloring preference.
+
+The native WebView uses its existing chunked bridge for query, cancellation and
+result envelopes. `getSignatureHelp` and `subscribeSignatureHelp` expose parameter
+data to the phone's existing editor chrome. The CodeMirror bundle is produced and
+checked only by `tools/codemirror/buildCodeMirrorWebViewBundle.mjs`; changing the
+adapter requires regeneration. Phone chrome composition, loaded-server journeys
+and typing latency still need the integrated acceptance pass; source-level tests
+do not establish their live availability.
+
+## AI suggestion preferences and usage (0.3 development)
+
+The Account catalog owns `filesEditorAiSuggestionsV1` in
+`packages/protocol/src/account/settings/accountSettings.ts`. Suggestions are
+off by default. The policy retains one exact Provider connection and model,
+automatic or on-request delivery, a Fast / Normal / Relaxed pause preference,
+excluded path patterns and disabled language ids. The shared policy decision
+in `filesEditorAiSuggestionsV1.ts` is consumed by both the client controller and
+the Machine before credentials or outgoing inference. The default exclusions
+cover `.env*`, secrets directories and `secrets.*` files. Patterns use `/` paths
+with `*`, `**` and `?`; Machine paths normalize either separator style.
+
+`FileEditorAiSuggestionSettings` renders through the existing Source control
+settings shell and portable `settings.set` field bindings. Provider/model
+choices use the existing connection catalogs, source visibility preferences and
+declared inline-completion operation facts. They do not fabricate a coding
+Agent or require its tool capabilities. A model without a usable declared
+context and output allowance remains unavailable; nothing selects another
+source, downloads a model or enables billing automatically.
+
+Content-free request and quality counters use the existing device KV adapter
+through `sync/domains/state/filePaneUiState.ts`, with one record per Home/Account
+for the current local calendar day. Recently opened files likewise use one KV record per
+workspace. These frequently changing records are outside the settings document;
+the AI suggestion policy remains an Account setting. The settings row labels the counter scope as **On this device
+today**. Observed latency totals/counts and Provider-reported token and cost facts are retained when supplied;
+missing cost is not estimated. These counters do not contain source, paths,
+prompts or suggestions and do not enable telemetry or training collection.
+`AiSuggestionStatus` renders the controller's quiet off, sign-in, rate-limit or
+model-unavailable reason and links back to these settings. Whole-page and live
+model validation belong to the integrated AI suggestion delivery.
 
 ## State and rendering locality
 
@@ -117,7 +214,10 @@ The original-text draft shape is an undeployed 0.3 intermediate, not a legacy
 format requiring a second reader.
 
 Dirtying a preview tab pins it. Switching to View or Changes leaves its draft
-session open. Closing a dirty tab goes through the shared Save / Discard / Keep
+session and undo history open. Raw/Rich switches flush the current value and
+consume the same history, including edits to Markdown frontmatter. The history
+is in memory for the document lifetime; it is not a persisted crash-recovery
+guarantee. Closing a dirty tab goes through the shared Save / Discard / Keep
 editing decision; a failed Save keeps the tab and draft. The unsaved-file-path
 projection reads persisted tab state, so other-group and unmounted tabs count.
 The compact draft module has no second module cache; tab-move/remount continuity
@@ -147,6 +247,15 @@ The write corridor is `workspaceWriteFile` →
 upload finalizer (larger bytes), → `commitGuardedFileReplace` →
 `writeFileAtomically`. Executor-side Discard, Restore and Replace consume that
 same guarded replacement owner directly. No consumer owns a parallel writer.
+
+Multi-file replacement and normalized language-server edit sets first prepare
+all targets, including raw-byte hashes, text edits and move destinations. A
+known stale or invalid target refuses the whole set before a file or held
+buffer changes. Each publication still rechecks through the guarded writer;
+this admission check does not make separate file commits transactional.
+Cancellation or an external write during publication can leave completed-file
+receipts, whose inverse edits remain available for guarded Undo. Undo reads
+receipts in reverse time order, including repeated edits to the same path.
 
 The expectation is omitted for an unconditional write, `null` for a file that
 must be absent, or a SHA-256 hex hash for the existing raw bytes. Guard failures
