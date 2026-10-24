@@ -50,6 +50,20 @@ const EXPECTED_PRIVATE_ICON_NAMES: Readonly<Record<string, IconName>> = Object.f
     list: 'list',
     board: 'kanban',
     filter: 'funnel-simple',
+    watch: 'eye',
+    link: 'link',
+    tag: 'tag',
+    asset: 'cube',
+    branch: 'git-branch',
+    commit: 'git-commit',
+    download: 'download',
+    locked: 'lock',
+    run: 'play',
+    stop: 'stop',
+    send: 'paper-plane-tilt',
+    generate: 'sparkle',
+    workflow: 'play-circle',
+    neutral: 'minus-circle',
 });
 
 describe('resolvePluginUiIconToken', () => {
