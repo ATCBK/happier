@@ -9,6 +9,8 @@ import {
   isSharedPermissionWriteLikeToolName,
 } from '@/agent/permissions/permissionTaxonomy';
 import { resolveCausalPermissionMode } from '@/agent/permissions/causalPermissionMode';
+import type { PermissionMode } from '@/api/types';
+import { resolveProviderPermissionForHappierAction } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { isWorkspaceWriteDeniedByRole } from '@/agent/permissions/workspaceWritePolicy';
 import { applyAllowedToolsToAllowlist } from '@/agent/permissions/applyPermissionAllowlistUpdates';
@@ -29,7 +31,7 @@ export function resolveExecutionRunInputAuthority(input: Readonly<{
 }>): Readonly<{
   ok: true;
   causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
-  effectiveCallerPermissionMode: string;
+  effectiveCallerPermissionMode: PermissionMode;
 }> | Readonly<{ ok: false; errorCode: 'execution_run_not_allowed'; error: string }> {
   const failure = { ok: false as const, errorCode: 'execution_run_not_allowed' as const,
     error: 'causal_permission_authority_invalid' };
@@ -114,11 +116,19 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   const listed = isToolAllowedForSession(allowedIdentifiers, args.toolName, args.input);
   if (args.unlistedTools === 'deny' && !listed) return { decision: 'denied' };
 
+  // Legacy no_tools names a shared-safe tool allowlist, not the canonical
+  // read-only Action ceiling. Preserve that existing policy before adaptation.
+  if (rawLower === 'no_tools') {
+    return { decision: shouldAlwaysApproveExecutionRunTool(args.toolName) ? 'approved' : 'denied' };
+  }
+
+  const actionPermission = resolveProviderPermissionForHappierAction({
+    toolName: args.toolName, input: args.input, permissionMode: effectiveMode,
+  });
+  if (actionPermission.decision) return { decision: actionPermission.decision };
+
   if (shouldAlwaysApproveExecutionRunTool(args.toolName)) return { decision: 'approved' };
 
-  // Execution runs still support legacy "no_tools" semantics: deny everything except the shared-safe tools
-  // (e.g. title changes) regardless of how it normalizes onto the canonical PermissionMode surface.
-  if (rawLower === 'no_tools') return { decision: 'denied' };
   if (mcpTool) {
     if (mcpTool.decision.approval === 'deny') return { decision: 'denied' };
     if (mcpTool.decision.approval === 'allow') return { decision: 'approved' };

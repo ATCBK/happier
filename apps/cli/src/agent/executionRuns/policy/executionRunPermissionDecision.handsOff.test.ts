@@ -44,6 +44,34 @@ describe('execution-run hands-off permission ceiling', () => {
     expect(handler.getImmediateDecision('mcp', 'mcp__wilson-brief__save_brief', {}, context)).toEqual({ decision: 'approved_for_session' });
   });
 
+  it('checks semantic Happier Action effects before shared-safe tool approval', () => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: 'codex' });
+    const context = { causalPermissionAuthority: {
+      kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const,
+    } };
+    for (const [tool, input] of [
+      ['mcp__happier__session_stop', { sessionId: 'other-session' }],
+      ['mcp__happier__settings_invoke', { anchor: 'voicePrivacy.forgetVoiceAgentMemory' }],
+      ['mcp__happier__action_execute', { actionId: 'settings.set', input: { anchor: 'voiceConversations.minSpeechMs', value: 1100 } }],
+    ] as const) {
+      expect(handler.getImmediateDecision(tool, tool, input, context)).toEqual({ decision: 'denied' });
+      // Normal approval remains owned by the Action executor, with no second native Ask.
+      expect(handler.getImmediateDecision(tool, tool, input)).toEqual({ decision: 'approved' });
+    }
+    expect(handler.getImmediateDecision('read', 'mcp__happier__settings_get',
+      { anchor: 'voiceConversations.minSpeechMs' }, context)).toEqual({ decision: 'approved' });
+  });
+
+  it('retains the explicit legacy no_tools policy independently of its normalized mode', () => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'no_tools', backendId: 'codex' });
+    expect(handler.getImmediateDecision('safe', 'mcp__happier__session_stop', { sessionId: 'other-session' }))
+      .toEqual({ decision: 'approved' });
+    expect(handler.getImmediateDecision('dispatch', 'mcp__happier__action_execute',
+      { actionId: 'settings.get', input: { anchor: 'voiceConversations.minSpeechMs' } })).toEqual({ decision: 'denied' });
+    expect(handler.getImmediateDecision('invalid', 'mcp__happier__session_stop', { sessionId: 'other-session' },
+      { causalPermissionAuthority: null })).toEqual({ decision: 'denied' });
+  });
+
   it('uses the attached Run policy ahead of parent grants and preserves parent denial', async () => {
     const parent = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: 'claude',
       workspaceWrites: 'deny', allowedTools: ['Glob', 'Read'] });
