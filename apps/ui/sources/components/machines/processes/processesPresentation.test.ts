@@ -9,6 +9,7 @@ import {
   type ProcessesItem,
 } from './processesPresentation';
 import { resolveOwnershipLabel } from './ownershipLabelPresentation';
+import { resolveMachineCpuCapacityCores } from '@/components/machines/vitals/machineVitalsPresentation';
 
 const keys = (items: readonly ProcessesItem[]) => items.map((item) => item.key);
 const byKey = (items: readonly ProcessesItem[], key: string) =>
@@ -317,6 +318,10 @@ describe('totals, labels, emphasis and stable order', () => {
   });
 
   it('takes emphasis at one full core or when left behind', () => {
+    const capacity = resolveMachineCpuCapacityCores({ logicalCores: 18, effectiveCores: 1.26, memoryTotalBytes: 100, bootedAt: 0 });
+    expect(isProcessRowEmphasized({ cpuPercent: 77.5, level: 'proven' }, capacity)).toBe(false);
+    expect(isProcessRowEmphasized({ cpuPercent: 80, level: 'proven' }, capacity)).toBe(true);
+    expect(isProcessRowEmphasized({ cpuPercent: 100, level: 'proven' }, 0.5)).toBe(false);
     expect(isProcessRowEmphasized({ cpuPercent: 25, level: 'proven' }, 4)).toBe(
       true,
     );

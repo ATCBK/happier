@@ -11,6 +11,8 @@ import { downsampleMachineVitalsHistory } from '../../../../../cli/src/daemon/vi
 import {
   buildMachineVitalsTimeline,
   formatMachinePartOfWhole,
+  resolveMachineCoreCount,
+  resolveMachineCpuCapacityCores,
   resolveMemoryZoom,
   resolveNetworkDomain,
   selectHeadlineVolume,
@@ -28,6 +30,15 @@ const reporting: MachinePublishedResourceSummaryV1 = {
   vitals: { state: 'reporting' },
   host,
 };
+
+it('keeps CPU capacity exact for accounting while rounding the displayed core count', () => {
+  const quotaHost = { ...host, effectiveCores: 1.26 };
+  expect(resolveMachineCpuCapacityCores(quotaHost)).toBe(1.26);
+  expect(resolveMachineCoreCount(quotaHost)).toBe(1.3);
+  expect(resolveMachineCpuCapacityCores(host)).toBe(18);
+  expect(resolveMachineCpuCapacityCores({ ...host, effectiveCores: 0 })).toBe(18);
+  expect(resolveMachineCpuCapacityCores({ ...host, effectiveCores: 0.5 })).toBe(0.5);
+});
 
 function sample(
   at: number,

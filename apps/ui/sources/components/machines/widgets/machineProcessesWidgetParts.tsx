@@ -201,7 +201,7 @@ export function MachineProcessesWidgetRows(
     machineName: string;
     items: readonly ProcessesItem[];
     titles: ReadonlyMap<string, string>;
-    logicalCores: number | null;
+    cpuCapacityCores: number | null;
     table: boolean;
     accessibilityLabel: string;
     onOpen: () => void;
@@ -232,12 +232,12 @@ export function MachineProcessesWidgetRows(
       machineId: props.machineId,
       machineName: props.machineName,
       titles: props.titles,
-      logicalCores: props.logicalCores,
+      cpuCapacityCores: props.cpuCapacityCores,
       compact: !props.table,
       readOnly: true,
     }),
     [
-      props.logicalCores,
+      props.cpuCapacityCores,
       props.machineId,
       props.machineName,
       props.serverId,

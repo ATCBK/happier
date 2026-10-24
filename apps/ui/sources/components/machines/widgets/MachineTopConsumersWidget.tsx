@@ -375,7 +375,7 @@ function TopConsumersBody(
         machineName={facts.name}
         items={items}
         titles={titles}
-        logicalCores={null}
+        cpuCapacityCores={null}
         table={wideTable}
         onOpen={openProcesses}
         accessory={accessory}

@@ -10,6 +10,7 @@ import type {
   MachinePageTabParams,
 } from '@/components/machines/page/machinePageTabQuery';
 import { readMachinePublishedResources } from '@/components/machines/summary/machineResourceSentences';
+import { resolveMachineCpuCapacityCores } from '@/components/machines/vitals/machineVitalsPresentation';
 import { formatVitalsPercent } from '@/components/machines/vitals/vitalsFormat';
 import { VitalsMeterRow } from '@/components/machines/vitals/VitalsMeterRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -132,7 +133,7 @@ export function ProcessesOwnerPage(
     );
 
   const memoryTotal = published?.host?.memoryTotalBytes ?? null;
-  const cores = published?.host?.logicalCores ?? null;
+  const cores = published?.host ? resolveMachineCpuCapacityCores(published.host) : null;
   if (params.page === 'process') {
     const process = answer.owners
       .flatMap((owner) => owner.members.map((row) => ({ row, owner })))

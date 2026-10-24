@@ -60,7 +60,7 @@ it('shows the four biggest owners read-only, closes with the totals, and every w
       machineId="machine"
       machineName="leeroy-mbp"
       sample={sample}
-      logicalCores={18}
+      cpuCapacityCores={18}
       processes={answer}
       processesStatus="ready"
       offline={false}
@@ -112,7 +112,7 @@ const renderWith = (
     machineId="machine"
     machineName="leeroy-mbp"
     sample={sample}
-    logicalCores={18}
+    cpuCapacityCores={18}
     processes={processes}
     processesStatus={processesStatus}
     offline={offline}

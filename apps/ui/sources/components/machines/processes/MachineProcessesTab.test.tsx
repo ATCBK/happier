@@ -7,6 +7,7 @@ import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { DaemonLocalServiceActionExecuteResponseV1Schema, LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 
 import { renderScreen } from '@/dev/testkit';
+import { t } from '@/text';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
@@ -224,13 +225,17 @@ it('displays native ceiling utilization and the unverifiable count without inven
 });
 it('lists the one process of a single-process owner on its phone page, so it can be opened', async () => {
   const answer = createProcessesAnswer();
-  const { screen } = await mount({ answer, params: { id: 'processes', page: 'owner', owner: 'service:website' }, waitForRows: false });
+  const { screen } = await mount({ answer, params: { id: 'processes', page: 'owner', owner: 'service:website' }, waitForRows: false,
+    machine: { daemonState: { resources: { v: 1, vitals: { state: 'reporting' },
+      host: { logicalCores: 18, effectiveCores: 1.26, memoryTotalBytes: 128 * GB, bootedAt: 1 },
+      attention: { level: 'calm', reasons: [] } } } } });
   const row = await vi.waitFor(() => {
     const found = screen.findByTestId('machine-processes-owner-row-p:website');
     expect(found).not.toBeNull();
     return found;
   });
   expect(textOf(row)).toContain('1.2 GB');
+  expect(screen.getTextContent()).toContain(t('machineProcesses.phone.cpuOfCores', { cores: 1.26 }));
 });
 type Screen = Awaited<ReturnType<typeof mount>>['screen'];
 /** The row's menu owner (DropdownMenu): choose an item the way a press on it does. */

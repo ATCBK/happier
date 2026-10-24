@@ -174,13 +174,16 @@ export function resolveMachineUptimeParts(
   };
 }
 
-/** Cores as the machine has them: a container's fractional quota wins over the host's logical count. */
+/** Exact CPU capacity used by accounting, including a container's fractional quota. */
+export function resolveMachineCpuCapacityCores(host: MachineVitalsHostFactsV1): number {
+  return host.effectiveCores !== undefined && host.effectiveCores > 0 ? host.effectiveCores : host.logicalCores;
+}
+
+/** Cores as the machine has them, rounded only for the displayed machine fact. */
 export function resolveMachineCoreCount(
   host: MachineVitalsHostFactsV1,
 ): number {
-  return host.effectiveCores !== undefined && host.effectiveCores > 0
-    ? Math.round(host.effectiveCores * 10) / 10
-    : host.logicalCores;
+  return Math.round(resolveMachineCpuCapacityCores(host) * 10) / 10;
 }
 
 // ── Tone ─────────────────────────────────────────────────────────────────────────────────────────────

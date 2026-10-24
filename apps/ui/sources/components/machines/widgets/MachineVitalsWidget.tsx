@@ -23,6 +23,8 @@ import { MachineUsingTheMost } from '@/components/machines/vitals/MachineUsingTh
 import {
   formatMachinePartOfWhole,
   machineBytesParts,
+  resolveMachineCpuCapacityCores,
+  resolveMachineCoreCount,
 } from '@/components/machines/vitals/machineVitalsPresentation';
 import { NetworkTile } from '@/components/machines/vitals/NetworkTile';
 import { VitalsSubLine, VitalsValue } from '@/components/machines/vitals/VitalsSheet';
@@ -352,7 +354,7 @@ function VitalsPhrase(
   if (!props.facts.online) {
     const fixed = host
       ? t('machineVitals.header.coresMemory', {
-          cores: host.logicalCores,
+          cores: resolveMachineCoreCount(host),
           memory: machineBytesFigure(host.memoryTotalBytes, 'memory'),
         })
       : null;
@@ -367,7 +369,7 @@ function VitalsPhrase(
       host ? describeMachineUptime(host.bootedAt, nowMs) : null,
       host
         ? t('machineVitals.header.coresMemory', {
-            cores: host.logicalCores,
+            cores: resolveMachineCoreCount(host),
             memory: machineBytesFigure(host.memoryTotalBytes, 'memory'),
           })
         : null,
@@ -523,7 +525,7 @@ function describeRowDetail(
     published && 'host' in published ? (published.host ?? null) : null;
   if (metric === 'cpu')
     return host
-      ? t('machineVitals.cpu.cores', { count: host.logicalCores })
+      ? t('machineVitals.cpu.cores', { count: resolveMachineCoreCount(host) })
       : null;
   if (metric === 'memory') {
     const { availableBytes, totalBytes } = summary.memory;
@@ -598,7 +600,7 @@ function VitalsDetail(
       processesStatus={attribution.processes.status}
       offline={false}
       sample={sample}
-      logicalCores={vitals.published?.host?.logicalCores ?? null}
+      cpuCapacityCores={vitals.published?.host ? resolveMachineCpuCapacityCores(vitals.published.host) : null}
       onOpenProcesses={openProcesses}
     />
   ) : null;

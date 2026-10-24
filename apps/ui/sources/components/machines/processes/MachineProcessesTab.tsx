@@ -19,6 +19,7 @@ import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
 import { useMachineStartSession } from '@/components/machines/page/useMachineStartSession';
 import { MachineFreshnessChip, type MachineFreshness } from '@/components/machines/page/MachineFreshnessChip';
 import { readMachinePublishedResources } from '@/components/machines/summary/machineResourceSentences';
+import { resolveMachineCpuCapacityCores } from '@/components/machines/vitals/machineVitalsPresentation';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -478,7 +479,7 @@ function MachineProcessesTree(
       machineName,
       titles,
       compact,
-      logicalCores: published?.host?.logicalCores ?? null,
+      cpuCapacityCores: published?.host ? resolveMachineCpuCapacityCores(published.host) : null,
       history: answer?.history,
       wrapItem: (item: ProcessesItem, content: React.ReactNode) => (
         <LeavingRow itemKey={item.key}>{content}</LeavingRow>
@@ -490,6 +491,7 @@ function MachineProcessesTree(
       machineId,
       machineName,
       published?.host?.logicalCores,
+      published?.host?.effectiveCores,
       serverId,
       titles,
     ],

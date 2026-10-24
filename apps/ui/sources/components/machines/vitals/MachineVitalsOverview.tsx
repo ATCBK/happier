@@ -34,6 +34,7 @@ import { MachineAlertsRow } from './MachineAlertsRow';
 import { MachineMoreFrom } from './MachineMoreFrom';
 import {
   useMachineVitalsTimeline,
+  resolveMachineCpuCapacityCores,
   selectMachineVitalsExtras,
   selectMachineVitalsOverviewView,
   type MachineVitalsOverviewView,
@@ -200,7 +201,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
           processesStatus={attribution.processes.status}
           offline={props.online === false}
           sample={view.sample}
-          logicalCores={published?.host?.logicalCores ?? null}
+          cpuCapacityCores={published?.host ? resolveMachineCpuCapacityCores(published.host) : null}
           onOpenProcesses={props.onOpenProcesses}
         />
       ) : null}

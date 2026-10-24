@@ -207,7 +207,7 @@ function LeftBehindBody(
       machineName={facts.name}
       items={limit === undefined ? items : items.slice(0, limit)}
       titles={titles}
-      logicalCores={null}
+      cpuCapacityCores={null}
       table={false}
       onOpen={openProcesses}
       accessibilityLabel={t('machines.widgets.body.leftBehind.tableLabel', {

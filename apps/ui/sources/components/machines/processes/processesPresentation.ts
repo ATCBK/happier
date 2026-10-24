@@ -555,7 +555,7 @@ export function selectMachineProcessesTotals(
 }
 
 /**
- * PROC-17: a row takes emphasis when it uses at least one full core (100 ÷ logical CPUs percent of the
+ * PROC-17: a row takes emphasis when it uses at least one full core (100 ÷ effective CPU capacity percent of the
  * machine) or is left behind. Unknown core counts never emphasise on CPU.
  */
 export function isProcessRowEmphasized(
@@ -563,17 +563,17 @@ export function isProcessRowEmphasized(
     cpuPercent: number | null | undefined;
     level?: ProcessOwnershipLevelV1;
   }>,
-  logicalCores: number | null,
+  cpuCapacityCores: number | null,
 ): boolean {
   if (row.level === 'left_behind') return true;
   if (
-    !logicalCores ||
-    logicalCores <= 0 ||
+    !cpuCapacityCores ||
+    cpuCapacityCores <= 0 ||
     row.cpuPercent === null ||
     row.cpuPercent === undefined
   )
     return false;
-  return row.cpuPercent >= 100 / logicalCores;
+  return row.cpuPercent >= 100 / cpuCapacityCores;
 }
 
 /** A live sample never reorders rows under the pointer: known rows keep their place, new rows join the end. */

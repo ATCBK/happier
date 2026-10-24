@@ -58,7 +58,7 @@ export type ProcessesAnatomyInput = Readonly<{
   machineName: string;
   /** Owner titles from {@link useProcessOwnerTitles}. */
   titles: ReadonlyMap<string, string>;
-  logicalCores: number | null;
+  cpuCapacityCores: number | null;
   history?: MachineProcessesAnswerV1['history'];
   /** A phone row: CPU and the status under the name, memory at the right (lab `rp` Hp). */
   compact: boolean;
@@ -476,12 +476,12 @@ const ProcessSpark = React.memo(function ProcessSpark(
 
 function figureStrong(
   item: ProcessesItem,
-  logicalCores: number | null,
+  cpuCapacityCores: number | null,
 ): boolean {
   if (item.kind === 'owner' || item.kind === 'happier' || item.kind === 'app') return true;
   return isProcessRowEmphasized(
     { cpuPercent: item.cpuPercent, level: levelOf(item) },
-    logicalCores,
+    cpuCapacityCores,
   );
 }
 
@@ -533,14 +533,14 @@ export function useProcessesCollectionAnatomy(
     const cpu = (item: ProcessesItem) => (
       <ProcessFigure
         text={formatProcessCpu(item.cpuPercent)}
-        strong={figureStrong(item, input.logicalCores)}
+        strong={figureStrong(item, input.cpuCapacityCores)}
       />
     );
     const memory = (item: ProcessesItem) => (
       <ProcessFigure
         testID={`machine-processes-memory-${item.key}`}
         text={formatProcessMemory(item.memoryBytes, item.kind === 'owner' ? item.owner.ceiling : undefined)}
-        strong={figureStrong(item, input.logicalCores)}
+        strong={figureStrong(item, input.cpuCapacityCores)}
       />
     );
     const historyOf = (item: ProcessesItem) =>

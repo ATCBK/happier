@@ -50,7 +50,7 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
     /** An offline machine has no census to read; say that once, in the Processes tab's own words. */
     offline: boolean;
     sample: MachineVitalsSampleV1;
-    logicalCores: number | null;
+    cpuCapacityCores: number | null;
     onOpenProcesses: () => void;
   }>,
 ) {
@@ -93,13 +93,13 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
       machineId: props.machineId,
       machineName: props.machineName,
       titles,
-      logicalCores: props.logicalCores,
+      cpuCapacityCores: props.cpuCapacityCores,
       compact,
       readOnly: true,
     }),
     [
       compact,
-      props.logicalCores,
+      props.cpuCapacityCores,
       props.machineId,
       props.machineName,
       props.serverId,
