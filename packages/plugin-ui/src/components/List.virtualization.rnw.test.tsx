@@ -388,6 +388,32 @@ describe('virtualized List data ownership', () => {
     mount.unmount();
   });
 
+  it('reveals a requested row without moving focus away from the control that asked', async () => {
+    flatListCapture.imperativeReveals.length = 0;
+    const rows = Array.from({ length: 40 }, (_, index) => ({ id: `line-${index}`, label: `Line ${index}` }));
+    function Log() {
+      const [request, setRequest] = React.useState<Readonly<{ key: string }> | undefined>(undefined);
+      return (
+        <>
+          <button onClick={() => setRequest({ key: 'line-20' })}>Next match</button>
+          <List
+            items={rows}
+            keyForItem={(item) => item.id}
+            renderItem={(item) => <List.Item title={item.label} />}
+            {...(request === undefined ? {} : { revealRequest: request })}
+          />
+        </>
+      );
+    }
+    const mount = mountList(<Log />);
+    const button = mount.container.querySelector('button')!;
+    button.focus();
+    await act(async () => { button.click(); });
+    expect(flatListCapture.imperativeReveals).toContainEqual({ method: 'scrollToIndex', index: 20 });
+    expect(document.activeElement).toBe(button);
+    mount.unmount();
+  });
+
   it('keeps retained content still when content is inserted inside a stable keyed row', async () => {
     flatListCapture.imperativeReveals.length = 0;
     flatListCapture.onScroll.length = 0;

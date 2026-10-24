@@ -373,6 +373,12 @@ type VirtualizedListSharedProps<Item> = Readonly<{
     anchorKey: string;
     revision: string | number;
   }>;
+  /**
+   * Scrolls one keyed row into view without moving focus or selection: Find stepping to a match in a long
+   * log keeps the reader's caret in the Find field while the row comes to them. A new request object is a
+   * new request even for the same key. Focus-taking reveals stay with `selection.focusRequest`.
+   */
+  revealRequest?: Readonly<{ key: string }>;
   children?: never;
 }>;
 
@@ -1382,6 +1388,15 @@ function VirtualizedList<Item>(
       ? props.selection?.focusRequest
       : (collectionControl.focus.request ?? undefined);
   const handledFocusRequest = useRef<typeof authorFocusRequest>(undefined);
+  const handledRevealRequest = useRef<typeof props.revealRequest>(undefined);
+  useEffect(() => {
+    const request = props.revealRequest;
+    if (request === undefined || handledRevealRequest.current === request) return;
+    const rowIndex = rowIndexByKey.get(request.key);
+    if (rowIndex === undefined) return;
+    handledRevealRequest.current = request;
+    revealRow(rowIndex);
+  }, [props.revealRequest, rowIndexByKey, revealRow]);
   useEffect(() => {
     if (authorFocusRequest === undefined) return;
     if (handledFocusRequest.current === authorFocusRequest) return;
