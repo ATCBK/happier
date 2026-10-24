@@ -5,6 +5,7 @@ import {
 import {
     PluginUiArtifactsManifestEntryV2Schema,
 } from '@happier-dev/protocol/plugins/ui';
+import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
@@ -195,7 +196,8 @@ function resolve(projectionInput: PluginUiProjectionModel) {
 
 it('admits an Account Action and its exact custody without a Machine projection', () => {
     const accountOrigin = { serverId: 'home', accountId: 'account', custodyId: 'release:1',
-        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'current-app' } } };
+        sourceCustody: PluginSourceCustodyV1Schema.parse({ kind: 'bundled_first_party',
+            packagedRuntime: { kind: 'source_declaration', packageName: '@acme/shared-actions' } }) };
     const current = singleActionProjection();
     const accountAction = { ...action(firstActionId), occurrenceId: accountOrigin.custodyId,
         execution: { target: 'account' as const, account: { artifactId: target.artifactId, exportName: target.exportName } },
