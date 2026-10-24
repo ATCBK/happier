@@ -6,10 +6,22 @@ import { getActionSpec } from '@happier-dev/protocol/actions';
 import { ActionOperationCredentialUseV1Schema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionOperationSnapshotV1Schema, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
 import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './testFixtures/predecessorActionOperationV1';
+import { createRpcCallError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 const scope = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation canonical execution observer', () => {
+  it('retains a typed RPC refusal thrown by a managed Action in its terminal operation', async () => {
+    const store = createActionOperationStore();
+    const spec = getActionSpec('machines.managed.power.set');
+    const runner = createActionOperationRunner({ store,
+      resolveAction: () => ({ actionId: spec.id, title: spec.title, operation: spec.operation }) });
+    await expect(runner.observe({ actionId: 'machines.managed.power.set', scope, requestId: 'explicit-stop',
+      input: { homeId: 'home', managedId: 'managed', intent: 'stop', when: 'now' },
+      execute: async () => { throw createRpcCallError({ error: 'Guest refused the activity read', errorCode: RPC_ERROR_CODES.FORBIDDEN }); } }))
+      .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(store.list(scope).items).toMatchObject([{ state: 'failed', error: { errorCode: RPC_ERROR_CODES.FORBIDDEN } }]);
+  });
   it('continues an arbitrary tracked Action past its deferred approval receipt', async () => {
     const store = createActionOperationStore();
     let operationNumber = 0;

@@ -14,6 +14,7 @@ import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externa
 import { isOriginalLocalManagedSetupContext } from '@/api/externalActionExecutionAuthorization';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { logger } from '@/ui/logger';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { prepareInstalledWorkflowActionAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import type { StoredCredentials } from '@/persistence';
@@ -259,7 +260,8 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             await triggers.moveManagedMachineScopeBindings({ machine, isCurrent, ...(signal ? { signal } : {}) });
             return machine;
         } catch (error) {
-            const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'binding_outcome_unknown';
+            const code = readRpcErrorCode(error)
+                ?? (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'binding_outcome_unknown');
             return { ok: false, errorCode: 'managed_binding_move_incomplete', error: 'managed_binding_move_incomplete', details: { machine, code } };
         }
     };
@@ -336,7 +338,8 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                                 ? ActionExecuteFailureSchema.safeParse(error.actionFailure) : null;
                             if (!lifetime.signal.aborted && actionFailure?.success) return actionFailure.data;
                             const code = lifetime.signal.aborted ? 'cancelled'
-                                : error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'managed_controller_request_failed';
+                                : readRpcErrorCode(error)
+                                    ?? (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'managed_controller_request_failed');
                             return { ok: false as const, errorCode: code, error: code };
                         } finally {
                             operation.signal.removeEventListener('abort', cancel);

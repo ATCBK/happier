@@ -22,6 +22,7 @@ import { createActionOperationSetupReview } from './actionOperationSetupReview';
 import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { ActionOperationStore } from './actionOperationStore';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import type {
   ActionOperationOwnerUpdate,
   ActionOperationProgressUpdate,
@@ -69,10 +70,10 @@ function createCancellationRequestError(): Error {
 }
 
 function projectThrownFailure(error: unknown): ActionOperationFailureV1 {
-  const code = error && typeof error === 'object' && 'code' in error
+  const code = readRpcErrorCode(error) ?? (error && typeof error === 'object' && 'code' in error
     && typeof error.code === 'string' && error.code.trim()
     ? error.code.trim()
-    : 'action_operation_failed';
+    : 'action_operation_failed');
   const managed = ManagedControllerRequestFailureDetailsV1Schema.safeParse(error && typeof error === 'object' && 'details' in error ? error.details : undefined);
   return {
     errorCode: code,
