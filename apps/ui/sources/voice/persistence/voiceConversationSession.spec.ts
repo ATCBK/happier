@@ -16,6 +16,7 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import { ConnectedAccountCatalogRowReadResponseV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { SessionCreationTargetPreparationRequestV1Schema, SessionCreationTargetPreparationResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
@@ -79,6 +80,9 @@ const sessionRpcResponse = vi.fn();
 const operationResponse = vi.fn();
 const resumeResponse = vi.fn();
 let runnerObservedAtMs = 2000;
+let purposeBindings: ConnectedPurposeCatalogV1 = { v: 1, bindings: [] };
+let purposeCatalogUnavailable = false;
+let purposeCatalogReads = 0;
 const globalVoiceStartupInstructionsMarker = Object.freeze({
   v: 1 as const,
   id: GLOBAL_VOICE_AGENT_STARTUP_INSTRUCTIONS_ID,
@@ -116,7 +120,8 @@ function rejectNextMetadataCommitForSession(sessionId: string, error: Error): vo
   });
 }
 
-const voiceFixtureMetadataDefaults = { path: '/voice', host: 'voice.test', flavor: 'codex' };
+// Voice's real creator always records its admitted permission; retained fixtures need that same proof.
+const voiceFixtureMetadataDefaults = { path: '/voice', host: 'voice.test', flavor: 'codex', permissionMode: 'read-only' } as const;
 
 function sessionWireRecord(session: ReturnType<typeof createSessionFixture>) {
   const metadata = session.metadata ? { ...voiceFixtureMetadataDefaults, ...session.metadata,
@@ -157,6 +162,12 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
   if (path === '/v2/account/settings') return json({ content: { t: 'plain', v: state.settings }, version: 1 });
   if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
+  if (path === '/v1/account/entity-rows/connected-accounts/purposes') {
+    purposeCatalogReads += 1;
+    return purposeCatalogUnavailable ? new Response('{}', { status: 503 })
+      : json(ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+        content: { t: 'plain', v: { key: 'purposes', value: purposeBindings } } }));
+  }
   if (path === ACP_CATALOG_ROWS_ROUTE_V1) return json({ status: 'present', revision: 1,
     content: { t: 'plain', v: { v: 1, definitions: [] } } });
   if (path === '/v1/account/authoring-memory') return json({ rows: [{ key: 'recentMachinePaths', revision: 1,
@@ -326,6 +337,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 async function restoreAccount() {
+  purposeBindings = { v: 1, bindings: [] };
+  purposeCatalogUnavailable = false;
+  purposeCatalogReads = 0;
   sessionRecords.clear();
   sessionListWireOverride = null;
   sessionOrganizationFailure = null;
@@ -575,6 +589,55 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     sessionDetailResponse.mockClear();
   });
 
+  it('R41 gives changed fixed-Agent authentication distinct carriers while keeping unchanged retries stable', async () => {
+    state.settings.voice.providers.local_conversation.config.agent.agentSource = 'agent';
+    state.settings.voice.providers.local_conversation.config.agent.agentId = 'codex';
+    const createdByKey = new Map<string, string>();
+    spawnResponse.mockImplementation(async input => {
+      const key = input.userAttemptId!;
+      const id = createdByKey.get(key) ?? `fixed-carrier-${createdByKey.size + 1}`;
+      createdByKey.set(key, id);
+      state.sessions[id] = { id, active: true, updatedAt: createdByKey.size,
+        metadata: { machineId: input.machineId, path: input.directory, flavor: 'codex',
+          connectedServices: input.connectedServices }, permissionMode: input.permissionMode };
+      return { type: 'success', sessionId: id };
+    });
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    const first = await ensureVoiceConversationSessionForVoiceHome();
+    const firstRequest = spawnRequests.mock.calls.at(-1)![0];
+    expect(firstRequest.connectedServices).toEqual({ v: 2, bindingsByServiceId: {} });
+    // One demanded admission reads the one purpose row; no per-service catalog census.
+    expect(purposeCatalogReads).toBe(1);
+    purposeBindings = { v: 1, bindings: [{ purpose: {
+      consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary',
+    }, target: { kind: 'group', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'codex-pool' } }] };
+    // A new fixed choice must not silently adopt the still-live old carrier.
+    const second = await ensureVoiceConversationSessionForVoiceHome();
+    const secondRequest = spawnRequests.mock.calls.at(-1)![0];
+    expect(second).not.toBe(first);
+    expect(secondRequest.creationKey).not.toBe(firstRequest.creationKey);
+    expect(secondRequest.connectedServices?.bindingsByServiceId['happier.agent.codex/openai-codex'])
+      .toMatchObject({ source: 'connected', selection: 'group', groupId: 'codex-pool' });
+    state.sessions[second].active = false;
+    storage.setState({ sessions: { ...storage.getState().sessions,
+      [second]: { ...storage.getState().sessions[second]!, active: false } } });
+    expect(await ensureVoiceConversationSessionForVoiceHome()).toBe(second);
+    expect(spawnRequests.mock.calls.at(-1)![0].creationKey).toBe(secondRequest.creationKey);
+    expect(sessionRecords.has(first)).toBe(true);
+    expect(sessionRecords.has(second)).toBe(true);
+  });
+
+  it('R41 refuses an unavailable fixed-Agent purpose catalog before carrier creation', async () => {
+    state.settings.voice.providers.local_conversation.config.agent.agentSource = 'agent';
+    state.settings.voice.providers.local_conversation.config.agent.agentId = 'codex';
+    purposeCatalogUnavailable = true;
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForVoiceHome()).rejects.toMatchObject({
+      code: 'connected_account_purpose_catalog_unavailable',
+    });
+    expect(spawnRequests).not.toHaveBeenCalled();
+  });
+
   it.each(['account-1', 'other-account'])('keeps Voice preparation bound to %s while the canonical creation operation settles without a socket update', async accountId => {
     const spawn = spawnResponse.getMockImplementation()!;
     spawnResponse.mockImplementationOnce(async input => {
@@ -593,7 +656,7 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
         title: 'Create session', requestId: 'transport-request', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported',
         result: { type: 'success', disposition: 'created', sessionId: 'voice-home-session',
           executionTarget: { serverId: homeId, machineId: 'machine-1' },
-          organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } } } };
+          organizationPlacement: { sectionId: null, tagIds: [] }, initialInput: { status: 'notRequested' } } } };
     });
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
     const preparing = ensureVoiceConversationSessionForVoiceHome();
@@ -1052,6 +1115,8 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
         machineId: 'machine-1',
         directory: '/Users/test/repo',
         backendTarget: { kind: 'backend', backendId: 'codex' },
+        connectedServices: { v: 2, bindingsByServiceId: {} },
+        permissionMode: 'read-only',
         requirements: null,
       }),
     }));
@@ -2189,7 +2254,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     expect(retry.creationKey).toBe(first.creationKey);
   });
 
-  it.each(['Agent', 'connected account'])('refuses to reuse a scoped carrier with another %s', async mismatch => {
+  it.each(['Agent', 'connected account', 'permission'])('refuses to reuse a scoped carrier with another %s', async mismatch => {
     const rootBinding = { v: 2, bindingsByServiceId: {
       'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'root-account' },
     } };
@@ -2200,11 +2265,12 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     state.sessions['wrong-agent-carrier'] = { id: 'wrong-agent-carrier', active: false, updatedAt: 10, metadata: {
       machineId: 'machine-target', path: '/Users/test/workspace/rebound', host: 'target.local',
       flavor: mismatch === 'Agent' ? 'codex' : 'claude',
-      connectedServices: mismatch === 'Agent' ? rootBinding : { v: 2, bindingsByServiceId: {
+      connectedServices: mismatch !== 'connected account' ? rootBinding : { v: 2, bindingsByServiceId: {
         'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'another-account' },
       } },
       voiceConversationScopeV1: { v: 1, kind: 'session_root', sessionRootId: 'root-session' },
       systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+      permissionMode: mismatch === 'permission' ? 'yolo' : 'read-only',
     } };
     const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
     await expect(ensureVoiceConversationSessionForSessionRoot({

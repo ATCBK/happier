@@ -67,6 +67,7 @@ import { resolveVoiceSessionModelSelection } from '@/voice/agent/resolveVoiceSes
 import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { isVoiceConversationSystemSessionMetadata } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 
 type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
@@ -145,9 +146,10 @@ function buildVoiceAgentStartArgsBase(args: Readonly<{
 
 function resolveVoiceSessionConnectedServices(
     metadata: ReturnType<typeof readVoiceSessionOwnerMetadataFromState>,
-    agentId: string,
+    backendTarget: BackendTargetRefV1,
 ): VoiceAgentStartParams['connectedServices'] {
-    if (!metadata || resolveSessionActionDefaultBackend({ session: { metadata } })?.defaultAgentId !== agentId) return undefined;
+    const sessionTarget = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({ session: { metadata } }));
+    if (!metadata || !sessionTarget || !backendTargetKeysMatch(sessionTarget, backendTarget)) return undefined;
     const connectedServices = metadata.connectedServices;
     return connectedServices === null || connectedServices === undefined
         ? undefined
@@ -527,11 +529,12 @@ export async function initializeVoiceAgentHandle({
         );
         resolvedBackendTarget = resolveDaemonBackendTarget(nextRpcSessionId, targetAddress);
         resolvedAgentId = resolvedBackendTarget?.kind === 'builtInAgent' ? resolvedBackendTarget.agentId : null;
-        // Only session-sourced starts inherit the current binding from the exact
-        // Session Agent. Fixed Agent starts leave selection to the canonical
-        // Account-default resolver on the daemon.
-        connectedServices = agentSource === 'session' && resolvedAgentId
-            ? resolveVoiceSessionConnectedServices(sessionOwnerMetadata, resolvedAgentId)
+        // Session-sourced starts follow their bound coding root. A fixed Agent
+        // follows only its exact Voice carrier's admitted credential choice;
+        // without one, the daemon resolves the Account default.
+        connectedServices = resolvedAgentId && resolvedBackendTarget && (agentSource === 'session'
+            || isVoiceConversationSystemSessionMetadata(sessionOwnerMetadata))
+            ? resolveVoiceSessionConnectedServices(sessionOwnerMetadata, resolvedBackendTarget)
             : undefined;
         if (agentSource === 'session' && resolvedAgentId && targetAddress
             && targetAddress.sessionId !== nextRpcSessionId

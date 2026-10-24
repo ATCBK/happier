@@ -19,6 +19,8 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
+import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { createDeferred } from '@/dev/testkit';
 
 // Synthetic daemon ACKs only; the client, Run operations and installable owners stay real.
@@ -386,6 +388,57 @@ describe('initializeVoiceAgentHandle', () => {
             stallRootRunnerStatus = false;
             voiceSessionBindingStore.getState().unbind(carrierId);
             const sessions: typeof current.sessions = { ...storage.getState().sessions, s1: previousRoot };
+            delete sessions[carrierId];
+            storage.setState({ sessions, settings: previousSettings });
+            state = storage.getState();
+        }
+    });
+
+    it.each(['connected', 'native', 'ordinary', 'other_agent'] as const)(
+        'R41 preserves the fixed Agent carrier credential choice only for its exact Voice target (%s)', async scenario => {
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+        const carrierId = 'fixed-credential-carrier';
+        const current = storage.getState();
+        const previousSettings = current.settings;
+        const local = readLocalConversationSettingsFromAccountSettings(previousSettings);
+        const connectedServices: ConnectedServiceBindingsV2 = { v: 2, bindingsByServiceId: scenario === 'native' ? {} : {
+            'happier.agent.claude/claude-subscription': {
+                source: 'connected' as const, selection: 'profile' as const, profileId: 'carrier-account',
+            },
+        } };
+        storage.setState({ sessions: { ...current.sessions,
+            [carrierId]: createSessionFixture({ id: carrierId, serverId: connection.home.id, active: true,
+                presence: 'online', encryptionMode: 'plain', metadata: {
+                    path: '/voice', host: 'voice.test', flavor: scenario === 'other_agent' ? 'codex' : 'claude',
+                    connectedServices,
+                    ...(scenario === 'ordinary' ? {} : buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true })),
+                } }),
+        }, settings: { ...previousSettings, voice: voiceSettingsParse({ ...previousSettings.voice,
+            providers: { ...previousSettings.voice.providers, local_conversation: { schemaVersion: 1, config: {
+                ...local, agent: { ...local.agent, agentSource: 'agent', agentId: 'claude',
+                    chatModelSource: 'custom', chatModelId: 'claude-haiku-4-5' },
+            } } },
+        }) } });
+        voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation',
+            controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: carrierId,
+            conversationSessionAddress: { serverId: connection.home.id, sessionId: carrierId },
+            lifetime: 'runtime_attempt', transcriptMode: 'synthetic',
+            targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' }, updatedAt: 1 });
+        try {
+            const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+            const handle = await initializeVoiceAgentHandle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+                setDeferredTargetSessionContext: vi.fn() });
+            expect(handle.rpcSessionId).toBe(carrierId);
+            if (scenario === 'connected' || scenario === 'native') {
+                expect(admittedStart().connectedServices).toEqual(connectedServices);
+            } else {
+                expect(admittedStart().connectedServices).toBeUndefined();
+            }
+        } finally {
+            voiceSessionBindingStore.getState().unbind(carrierId);
+            const sessions = { ...storage.getState().sessions };
             delete sessions[carrierId];
             storage.setState({ sessions, settings: previousSettings });
             state = storage.getState();
