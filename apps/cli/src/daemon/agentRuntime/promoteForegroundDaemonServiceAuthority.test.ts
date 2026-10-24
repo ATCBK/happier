@@ -512,8 +512,9 @@ describe('promoteForegroundDaemonServiceAuthority', () => {
       };
       const persisted = {
         authorityFilePath: undefined as string | undefined,
-        sourceCustody: undefined as
-          AgentSessionRunnerBindingV1['sourceCustody'] | undefined,
+        sourceCustody: undefined as Parameters<
+          typeof updateSessionMarkerRunnerAgentSourceCustody
+        >[0]['sourceCustody'] | undefined,
         retention: undefined as typeof retention | undefined,
       };
       let releaseCustodyAttachment!: () => void;
@@ -659,8 +660,9 @@ describe('promoteForegroundDaemonServiceAuthority', () => {
       };
       const persisted = {
         authorityFilePath: undefined as string | undefined,
-        sourceCustody: undefined as
-          AgentSessionRunnerBindingV1['sourceCustody'] | undefined,
+        sourceCustody: undefined as Parameters<
+          typeof updateSessionMarkerRunnerAgentSourceCustody
+        >[0]['sourceCustody'] | undefined,
         retention: undefined as typeof retention | undefined,
       };
       const persistAuthorityPath = vi.fn(async ({

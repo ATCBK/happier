@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import type { EventEmitter } from 'node:events';
 import { dirname, join } from 'node:path';
 import { mkdirSync, watch, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,7 +82,9 @@ async function startUntilCredentialGate(startDaemon: () => Promise<void>) {
 
 describe('startDaemon ownership preflight', () => {
     const startupEvents = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection', 'exit', 'beforeExit'] as const;
-    let listenersBefore = new Map<string, ReturnType<typeof process.listeners>>();
+    // Process overloads name each startup event separately; this cleanup treats them as one listener set.
+    const processEvents: EventEmitter = process;
+    let listenersBefore = new Map<string, ReturnType<EventEmitter['listeners']>>();
     const envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',
@@ -107,7 +110,7 @@ describe('startDaemon ownership preflight', () => {
     let outputTty: boolean | undefined;
 
     beforeEach(() => {
-        listenersBefore = new Map(startupEvents.map(event => [event, process.listeners(event)]));
+        listenersBefore = new Map(startupEvents.map(event => [event, processEvents.listeners(event)]));
         envScope.patch({ HAPPIER_DAEMON_WAIT_FOR_AUTH: '1' });
         inputTty = process.stdin.isTTY;
         outputTty = process.stdout.isTTY;
@@ -138,8 +141,10 @@ describe('startDaemon ownership preflight', () => {
         Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: inputTty });
         Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: outputTty });
         for (const event of startupEvents) {
-            for (const listener of process.listeners(event)) {
-                if (!listenersBefore.get(event)?.includes(listener)) process.removeListener(event, listener);
+            for (const listener of processEvents.listeners(event)) {
+                if (!listenersBefore.get(event)?.includes(listener)) {
+                    processEvents.removeListener(event, listener as (...args: unknown[]) => void);
+                }
             }
         }
         vi.resetModules();

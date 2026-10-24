@@ -400,7 +400,8 @@ describe('switchSessionConnectedServiceAuth', () => {
     } });
     const accountApi = { getAccountEncryptionMode: async () => 'plain' as const,
       getConnectedServiceAuthGroup: async () => selectedGroup,
-      listConnectedServiceProfiles: async () => ({ profiles: [{ profileId: 'selected', status: 'connected' as const }] }) };
+      listConnectedServiceProfiles: async () => ({ serviceId: selectedGroup.serviceId,
+        profiles: [{ profileId: 'selected', status: 'connected' as const }] }) };
     // Qualified Home HTTP and the physical restart are the external boundaries.
     const transport = vi.spyOn(axios, 'get').mockImplementation(async () => ({ status: 200,
       data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
@@ -488,7 +489,8 @@ describe('switchSessionConnectedServiceAuth', () => {
           const allowed = signalAllowed || scenario === 'group_capture';
           if (pauseAdmission) { pauseAdmission = false; enterAdmission(); await admissionRelease; }
           if (!allowed && scenario === 'group_overlap_thrown') throw new Error('External restart refused before signal');
-          return allowed ? true : scenario === 'group_activity' ? 'activity_in_progress' : 'approval_pending';
+          // `false` is the gate's activity refusal; a named reason is a restart-disabled refusal.
+          return allowed ? true : scenario === 'group_activity' ? false : 'approval_pending';
         },
         captureRunnerRemainder: scenario === 'group_capture' ? async () => signalAllowed
           ? { scope: 'subtree', roots: [], ownership: [] } : undefined : undefined,

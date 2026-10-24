@@ -76,7 +76,7 @@ describe('refreshMemoryInventoryOnce', () => {
       }
       expect(opens).toHaveBeenCalledTimes(2);
       expect(read.isOnMachine({ ...local, metadata: metadata('elsewhere') }, 'e2ee')).toBe(false);
-      expect(read.isOnMachine({ ...local, share: { accessLevel: 'view' } }, 'e2ee')).toBe(false);
+      expect(read.isOnMachine({ ...local, share: { accessLevel: 'view', canApprovePermissions: false } }, 'e2ee')).toBe(false);
       expect(read.isOnMachine(local, 'e2ee')).toBe(true);
       read.forget([local.id]);
       expect(read.isOnMachine(local, 'e2ee')).toBe(true);

@@ -59,7 +59,7 @@ describe('runner-owned Agent session-open attestation', () => {
     tracked.runnerProcessIdentity = runner;
     // The OS child-exit fact is the only substituted boundary.
     tracked.childProcess = new ChildProcess();
-    tracked.childProcess.exitCode = 1;
+    Object.defineProperty(tracked.childProcess, 'exitCode', { value: 1 });
     const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
       error: new SessionTeamCredentialLaunchUnavailableError('broker_unavailable'),
       occurredAt: runner.processStartTimeMs + (age === 'current' ? 1 : -1) });

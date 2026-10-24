@@ -80,8 +80,9 @@ it.skipIf(!process.env.HAPPIER_R230_PROFILE).each(['claude', 'codex'] as const)(
         retirementSignal: new AbortController().signal, isCurrent: () => true,
         createInvocationExec: async () => createUnavailablePluginServices().exec });
       const source = { type: 'external_transcript' as const, agentId, sourceKey: 'synthetic', nativeSessionId: sessionId };
-      const native = { agentId, sourceKey: 'synthetic', reader, source: agentId === 'claude'
-        ? { kind: 'claudeConfig', configDir: directory } : { kind: 'codexHome', home: 'user' } };
+      const nativeSource: Readonly<{ kind: string } & Record<string, string>> = agentId === 'claude'
+        ? { kind: 'claudeConfig', configDir: directory } : { kind: 'codexHome', home: 'user' };
+      const native = { agentId, sourceKey: 'synthetic', reader, source: nativeSource };
       const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: [agentId] } } });
       db.init();

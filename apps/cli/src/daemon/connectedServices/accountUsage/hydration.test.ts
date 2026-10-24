@@ -71,11 +71,11 @@ function v4HydrationSource(): ProviderAccountUsageHydrationSource {
 
 describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
   it.each([
-    ['plain', undefined, 'org-current', false],
-    ['e2ee', undefined, 'org-current', false],
-    ['plain', 'org-old', 'org-current', false],
-    ['plain', 'org-current', null, false],
-    ['plain', 'org-current', 'org-current', true],
+    ['plain', undefined, 'org-current', false, undefined, undefined],
+    ['e2ee', undefined, 'org-current', false, undefined, undefined],
+    ['plain', 'org-old', 'org-current', false, undefined, undefined],
+    ['plain', 'org-current', null, false, undefined, undefined],
+    ['plain', 'org-current', 'org-current', true, undefined, undefined],
     ['plain', 'org-current', 'org-current', true, 'semantic-provider', 'semantic-provider'],
     ['plain', 'org-current', 'org-current', false, 'semantic-provider', 'happier.agent.codex/openai-codex'],
   ] as const)('admits %s scoped usage only with declared current organization proof (%s, %s)', async (mode, observedOrganization, currentOrganization, expectedHydrated, declaredProvider, observedProvider) => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -173,6 +174,8 @@ describe('sessionRegistry', () => {
       await import('@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol');
     const { buildTrackedSessionFromMarker } = await import('./sessions/trackedSessionFromMarker');
     const runner = { pid: 12346, processStartTimeMs: 1234, processCommandHash: 'a'.repeat(64) };
+    // The private service authority identity also names the runner snapshot; the marker keeps process identity only.
+    const attestedRunner = { ...runner, snapshotIdentity: 'fixture-runner' };
     const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.plugin', pluginVersion: '1.0.0',
       agentId: 'acme-agent', localAgentId: 'acme-agent', sourceCustody: {
         kind: 'managed', immutableGenerationId: 'registry:agent', installSource: 'localPath' },
@@ -187,12 +190,12 @@ describe('sessionRegistry', () => {
     const request = { kind: 'create' as const, sessionId: 'native-open-child', cwd: '/workspace' };
     // A mis-bound marker cannot publish readiness or refusal even for the right process.
     tracked.agentRuntimeDaemonServiceAuthorityFilePath = join(happyHomeDir, 'foreign-authority.json');
-    await expect(recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner, retainedAgent: binding,
+    await expect(recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner: attestedRunner, retainedAgent: binding,
       phase, request, providerSessionId: null })).resolves.toBeNull();
     await expect(awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked],
       sessionId: request.sessionId, timeoutMs: 0 })).resolves.toEqual({ status: 'timeout' });
     tracked.agentRuntimeDaemonServiceAuthorityFilePath = canonicalAuthority;
-    const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner, retainedAgent: binding,
+    const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner: attestedRunner, retainedAgent: binding,
       phase, request, providerSessionId: null });
     if (!recorded) throw new Error('Native-open attestation was not recorded');
     const extraAttestation = { ...recorded, future: true, request: { ...request, future: true },
@@ -711,7 +714,6 @@ describe('sessionRegistry', () => {
       return;
     }
     const { readFile, readdir, readlink } = await import('node:fs/promises');
-    const { once } = await import('node:events');
     const { buildCgroupSelfMigratingHappyCliLaunchSpec } = await import('./platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec');
     const { readProcessIdentityByPid } = await import('./processIdentity');
     const { persistAcceptedSpawnMarker } = await import('./spawn/persistAcceptedSpawnMarker');

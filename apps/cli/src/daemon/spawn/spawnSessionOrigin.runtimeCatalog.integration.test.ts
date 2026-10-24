@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, snapshotSessionRolesAtSpawnV1, projectSessionOwnerCompatibilityViewV1, type SessionRolesV1 } from '@happier-dev/protocol';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, snapshotSessionRolesAtSpawnV1, type SessionRolesV1 } from '@happier-dev/protocol';
+import type { SessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { ApiClient } from '@/api/api';
 import type { Metadata } from '@/api/types';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
@@ -247,11 +248,13 @@ describe('host-stamped Session creation facts transport', () => {
     expect(JSON.parse(childEnv[rolesEnvKey]!)).toEqual(initialSessionRolesV1);
     vi.stubEnv(rolesEnvKey, childEnv[rolesEnvKey]!);
     const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('observed-create-boundary'));
+    // The runner writes work headlines through the flat compatibility field the owner-metadata split moves into `work`.
+    const ownerWorkCompatibilityFields: Pick<SessionOwnerCompatibilityViewV1, 'sessionWorkflowActivityHeadlineV1'> = {
+      sessionWorkflowActivityHeadlineV1: { v: 1, backendId: 'codex', updatedAt: 1, activeRuns: [] },
+    };
     const api = await ApiClient.create(credentials);
     await expect(initializeBackendRunSession({
-      api, sessionTag: 'worker-roles-tag', metadata: { ...projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 },
-        ownerMetadata: { v: 1, work: { sessionWorkflowActivityHeadlineV1: { v: 1, backendId: 'codex', updatedAt: 1, activeRuns: [] } } } }),
-        ...runnerMetadata },
+      api, sessionTag: 'worker-roles-tag', metadata: { ...runnerMetadata, ...ownerWorkCompatibilityFields },
       state: { controlledByUser: false }, uiLogPrefix: '[test]',
       startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
     })).rejects.toMatchObject({ code: 'outcome_unknown' });

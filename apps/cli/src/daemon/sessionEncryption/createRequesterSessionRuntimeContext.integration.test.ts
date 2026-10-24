@@ -1014,7 +1014,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
         resolveRequesterSessionRuntimeContext: async (sessionId, attribution) => {
           expect(sessionId).toBe(requesterSessionId); expect(attribution).toEqual(requester.bootstrap.attribution); return requester;
         }, releaseRequesterSessionRuntimeContext: async context => { expect(context).toBe(requester); },
-        dispatchSessionFollowOccurrence: host.runtime.dispatchSessionFollowOccurrence,
+        dispatchSessionFollowOccurrence: host!.runtime.dispatchSessionFollowOccurrence,
         loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
         directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,

@@ -45,6 +45,7 @@ describe('deepIndexDb', () => {
           expect('insertChunk' in reader).toBe(false);
           expect(exec.mock.calls.flat().filter(sql => !/^PRAGMA busy_timeout=/i.test(sql))).toEqual([]);
           const connection = prepare.mock.contexts[0];
+          if (!(connection instanceof DatabaseSync)) throw new Error('Expected the reader connection');
           expect(() => connection.exec('DELETE FROM message_chunks')).toThrow(/readonly|read-only/i);
           if (process.platform !== 'win32') expect((await stat(dbPath)).mode & 0o777).toBe(0o400);
         } finally { reader.close(); }

@@ -42,7 +42,7 @@ afterEach(async () => {
 async function createHarness(input: Readonly<{
   clock?: () => number;
   onCredentialRead?: () => void;
-  profile?: () => Partial<QualifiedConnectedAccountProfileV4>;
+  profile?: () => Partial<Pick<QualifiedConnectedAccountProfileV4, 'kind' | 'expiresAt'>> & Readonly<{ credentialRevision?: string }>;
   noScheduledAccounts?: boolean;
   retireRegistry?: boolean;
   pluginEnabled?: boolean;

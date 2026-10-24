@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import axios, { AxiosHeaders } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -341,7 +342,8 @@ describe('finite host operation custody', () => {
             const fields = buildSessionMetadataEnvelopeCreateFields({ credentials, accountEncryptionMode: 'plain',
               storedContentMode: 'plain', agentState: null,
               metadata: buildCommittedLaunchMetadata({ options: request, directory: '/repo' }) });
-            committed = createCurrentSessionProjectionRecordFixture({ id: 'ordinary-session', encryptionMode: 'plain', share: null, effectiveAccess: null,
+            committed = createCurrentSessionProjectionRecordFixture({ id: 'ordinary-session', encryptionMode: 'plain', share: null,
+              effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
               metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext,
               ownerMetadata: fields.ownerMetadata, dataEncryptionKey: null });
             nativeStarts++;

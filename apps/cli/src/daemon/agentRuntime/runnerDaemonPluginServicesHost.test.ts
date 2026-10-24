@@ -496,7 +496,7 @@ describe('runner daemon PluginServices host', () => {
             local: { availability: unavailable.availability, logger: unavailable.logger, sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices, machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec, interactions: unavailable.interactions,
-                targetedContributions: unavailable.targetedContributions, composerContent: unavailable.composerContent },
+                targetedContributions: unavailable.targetedContributions, composerContent: unavailable.composerContent, backgroundServices: unavailable.backgroundServices },
         });
         try {
             const first = await services.sessions.external.list({ limit: 1 });
@@ -2930,6 +2930,7 @@ describe('runner daemon PluginServices host', () => {
                 interactions: unavailable.interactions,
                 targetedContributions: unavailable.targetedContributions,
                 composerContent: unavailable.composerContent,
+                backgroundServices: unavailable.backgroundServices,
             },
         });
 

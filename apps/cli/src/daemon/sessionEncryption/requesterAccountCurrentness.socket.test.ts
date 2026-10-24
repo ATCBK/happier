@@ -311,7 +311,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
             expect(post).toHaveBeenCalledTimes(1);
             const write = QualifiedProviderAccountUsageWriteV4Schema.parse(post.mock.calls[0]?.[1]);
             expect(write).toMatchObject({ payloadMode: 'sealed_account_scoped_v1' });
-            if (write.payloadMode !== 'sealed_account_scoped_v1') throw new Error('Expected sealed Usage');
+            if (write.payloadMode !== 'sealed_account_scoped_v1' || !write.sealedPayload) throw new Error('Expected sealed Usage');
             expect(openSealedProviderAccountUsageSnapshot({ material: encryption, sealed: write.sealedPayload })).toEqual(snapshot);
             expect(write).not.toHaveProperty('snapshot');
             expect(get.mock.calls.filter(([url]) => String(url).endsWith('/account/encryption'))).toHaveLength(1);

@@ -815,7 +815,7 @@ describe('executeExternalAction', () => {
     const client = createActionExecutor({ ...createUnavailableHostActionDeps(), ...approvalStore,
       isApprovalExecutionOriginCurrent: currentness,
       approvalRequestApprovedReplay: async request => {
-        if (!requiresExactDaemonApprovalReplay(request.request)) return null;
+        if (request.request.v !== 2 || !requiresExactDaemonApprovalReplay(request.request)) return null;
         const result = await handlers.get(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED)!({ artifactId: request.artifactId },
           { callerAuthority: 'present_user', signal: new AbortController().signal,
             ...(custody === 'admitted requester' ? { callerInputAuthorization: freshAdmission } : {}) });

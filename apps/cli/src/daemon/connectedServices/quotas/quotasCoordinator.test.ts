@@ -115,7 +115,7 @@ import {
 } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { createQualifiedConnectedAccountDaemonPersistence } from '../qualifiedConnectedAccountDaemonPersistence';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
-import type { PluginConnectedAccountDescriptorContributionV2 } from '@happier-dev/protocol';
+import { PluginConnectedAccountDescriptorContributionV2Schema, type PluginConnectedAccountDescriptorContributionV2 } from '@happier-dev/protocol';
 import { canonicalizeAgentAccountUsageSnapshot } from '@/agent/runtime/registry/engineRegistry/nativeAgentAccountUsage';
 import { recordProviderAccountUsageSnapshotForSession } from '../accountUsage/recordProviderAccountUsageSnapshotForSession';
 import { PLUGIN_MANIFEST as CLAUDE_USAGE_MANIFEST } from '../../../../../../packages/plugins/claude/src/manifest';
@@ -737,7 +737,8 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     const now = 1_000_000;
     const manifest = provider === 'claude' ? CLAUDE_USAGE_MANIFEST : CODEX_USAGE_MANIFEST;
     const service = { pluginId: `acme.native-${provider}-usage`, localId: provider === 'claude' ? 'claude-subscription' : 'openai-codex' };
-    const usageIdentity = manifest.contributes.connectedAccountDescriptors.find(descriptor => descriptor.id === service.localId)?.usageIdentity;
+    const usageIdentity = PluginConnectedAccountDescriptorContributionV2Schema.shape.usageIdentity.parse(
+      manifest.contributes.connectedAccountDescriptors?.find(descriptor => descriptor.id === service.localId)?.usageIdentity);
     const profileA: QualifiedConnectedAccountProfileV4 = {
       ref: { service, accountId: 'account-a' }, status: 'connected', authenticationModeId: 'manual',
       revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv', configurationReady: true,
@@ -790,7 +791,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     expect(store.resolveBySource(sourceB)?.recordId).toBe(native.recordId);
     expect(store.resolveBySource(sourceB)?.meters[0]?.utilizationPct).toBe(100);
     const switchState = buildConnectedServiceAuthGroupSwitchStateFromAccountUsage({ accountUsageStore: store, group: {
-      serviceId: sourceA.serviceId, groupId: 'pool', activeProfileId: 'account-a', generation: 1, policy: {},
+      serviceId: sourceA.serviceId, groupId: 'pool', activeProfileId: 'account-a', generation: 1, policy: DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
       members: profiles.map((profile, priority) => ({ profileId: profile.ref.accountId, priority,
         enabled: true, state: {}, createdAt: 0 })),
     } });
@@ -908,14 +909,16 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       providerIdentity: { accountId: 'provider-user' }, displayName: 'Work', scopes: [],
     };
     const fixture = await createQualifiedQuotaRuntimeFixture(profile, now, { organizationQuota: true });
+    // The runtime store keys qualified Accounts by contribution key; the snapshot body keeps its closed service id.
+    const serviceKey = `${service.pluginId}/${service.localId}`;
     const local: ConnectedServiceQuotaSnapshotV1 = {
-      v: 1, serviceId: `${service.pluginId}/${service.localId}`, profileId: 'account-a',
+      v: 1, serviceId: 'openai-codex', profileId: 'account-a',
       activeAccountId: 'provider-user', fetchedAt: now, staleAfterMs: 300_000, planLabel: null, accountLabel: null,
-      meters: [{ meterId: 'weekly', label: 'Weekly', used: 20, limit: 100, unit: 'percent',
+      meters: [{ meterId: 'weekly', label: 'Weekly', used: 20, limit: 100, unit: 'unknown',
         utilizationPct: 20, resetsAt: null, status: 'ok', details: {} }],
     };
     const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
-    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: local.serviceId, profileId: 'account-a', snapshot: local,
+    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: serviceKey, profileId: 'account-a', snapshot: local,
       verifiedCredentialFingerprint: computeConnectedServiceAccessTokenFingerprint(currentToken) });
     const store = createProviderAccountUsageStore();
     const coordinator = new ConnectedServiceQuotasCoordinator({
@@ -941,7 +944,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     proofAvailable = false;
     now += 1_000;
     await coordinator.tickOnce();
-    expect(runtimeQuotaSnapshots.getSnapshot({ serviceId: local.serviceId, profileId: 'account-a' })).toEqual(local);
+    expect(runtimeQuotaSnapshots.getSnapshotEntry({ serviceId: serviceKey, profileId: 'account-a' })?.snapshot ?? null).toEqual(local);
     const attemptsWhileUnavailable = await readFile(fixture.marker, 'utf8').catch(() => '');
     proofAvailable = true;
     now += 1_000;
@@ -952,10 +955,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     profile.credentialRevision = 'csr_bcdefghijklmnopqrstuvw';
     now += 1_000;
     await coordinator.tickOnce();
-    expect(runtimeQuotaSnapshots.getSnapshot({ serviceId: local.serviceId, profileId: 'account-a' })).toBeNull();
+    expect(runtimeQuotaSnapshots.getSnapshotEntry({ serviceId: serviceKey, profileId: 'account-a' })?.snapshot ?? null).toBeNull();
     expect((await readFile(fixture.marker, 'utf8').catch(() => '')).length).toBeGreaterThan(attemptsWhileUnavailable.length);
-    expect(store.resolveBySource({ serviceId: local.serviceId, profileId: 'account-a', bindingKind: 'profile' })).toBeNull();
-    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: local.serviceId, profileId: 'account-a', snapshot: local,
+    expect(store.resolveBySource({ serviceId: serviceKey, profileId: 'account-a', bindingKind: 'profile' })).toBeNull();
+    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: serviceKey, profileId: 'account-a', snapshot: local,
       verifiedCredentialFingerprint: computeConnectedServiceAccessTokenFingerprint(currentToken) });
     profile.providerIdentity = { accountId: 'provider-user', organizationId: 'org-current' };
     now += 1_000;
@@ -963,7 +966,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       quota: { observedAtMs: now, providerOrganizationId: 'org-current', limits: [{ id: 'weekly', used: 100, remaining: 0 }] },
       staleAfterMs: 300_000 });
     await coordinator.tickOnce();
-    expect(store.resolveBySource({ serviceId: local.serviceId, profileId: 'account-a', bindingKind: 'profile' })?.recordId)
+    expect(store.resolveBySource({ serviceId: serviceKey, profileId: 'account-a', bindingKind: 'profile' })?.recordId)
       .toBe(cloudSnapshot.recordId);
   });
 

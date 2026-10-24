@@ -200,8 +200,10 @@ describe('createLocalServicesDaemonRuntime', () => {
             inventoryEnabled: () => true, now: () => observedAt, projectManagedServices: owner,
             runTargets: () => runTargets,
             scan: async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }) });
-        const workspace = { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 };
-        const declaration = { workspaceRefId: workspace.id, selection: { kind: 'manifest', name: 'worker' } } as const;
+        const workspaceRef = { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 };
+        const workspace = { serverId: workspaceRef.serverId, machineId: workspaceRef.machineId, workspaceId: workspaceRef.id,
+            rootPath: workspaceRef.rootPath };
+        const declaration = { workspaceRefId: workspaceRef.id, selection: { kind: 'manifest', name: 'worker' } } as const;
         let publications = 0;
         runtime.inventoryRegistry.subscribe(() => { publications++; });
         const observe = async () => { observedAt += 10_000; await runtime.refreshInventoryNow(); };
@@ -210,7 +212,7 @@ describe('createLocalServicesDaemonRuntime', () => {
             expect(publications).toBe(1);
             await observe();
             expect(publications).toBe(1);
-            runTargets.push({ id: 'worker', cwd: workspace.rootPath, workspaceId: workspace.id,
+            runTargets.push({ id: 'worker', cwd: workspace.rootPath, workspaceId: workspace.workspaceId,
                 workspace, declaration, title: 'worker' });
             await observe();
             expect(publications).toBe(2);

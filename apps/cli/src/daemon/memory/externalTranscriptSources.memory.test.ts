@@ -49,6 +49,7 @@ async function withInventory(run: (sources: ReturnType<typeof createMemoryExtern
   // reach source inventory; the projection's legacy test hook is structural-only.
   const observation = createExternalSessionObservationReconciler({
     // Replace only OS attachments; admission, resource sharing and disposal stay real.
+    acquireObserver: async () => ({ dispose() {} }),
     watchFile: () => () => {},
     watchTopologyDirectories: (targets, lifecycle) => {
       for (const target of targets) {

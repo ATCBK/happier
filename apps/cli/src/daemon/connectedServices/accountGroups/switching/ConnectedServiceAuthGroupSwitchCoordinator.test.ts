@@ -59,7 +59,6 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       memberStatesByProfileId: new Map(['primary', 'backup'].map((profileId) => [profileId,
         buildConnectedServiceAuthGroupRuntimeStateFromMeters({
           capturedAtMs: 999,
-          selection: { mode: 'selected', providerLimitIds: ['five_hour', 'seven_day_opus'] },
           meters: [
             ConnectedServiceQuotaMeterV1Schema.parse({ meterId: 'five_hour', label: 'Session', providerLimitId: 'five_hour', remainingPct: 80, used: null, limit: null, unit: 'unknown', utilizationPct: 20, resetsAt: null, status: 'ok' }),
             ConnectedServiceQuotaMeterV1Schema.parse({ meterId: 'overage', label: 'Extra usage', providerLimitId: 'overage', remainingPct: 0, used: null, limit: null, unit: 'unknown', utilizationPct: 100, resetsAt: null, status: 'ok' }),

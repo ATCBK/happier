@@ -11,6 +11,12 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 await import('@/api/api');
 await import('./testkit/inProcessMemoryIndexer');
 
+// Configuration exposes the process role read-only; these specs flip it to
+// exercise daemon-only scheduling inside one worker lifetime.
+function setDaemonProcess(configuration: { readonly isDaemonProcess: boolean }, value: boolean): void {
+  Object.assign(configuration, { isDaemonProcess: value });
+}
+
 describe('memoryWorker', () => {
   it.each(['new_only', 'all_history'] as const)('keeps idle 6/6/5 readiness stable when only Session metadata changes (%s)', async backfillPolicy => {
     // The process logger's delayed file flush is not owned by worker.stop().
@@ -56,7 +62,7 @@ describe('memoryWorker', () => {
         sessionProgress: [{ sessionId: session.id, observedSeq: 6, checkedSeq: 6, indexedSeq: 5 }] });
       // Let the work wake finish against the old inventory while the real HTTP
       // boundary holds the new metadata row. Then publish inventory alone.
-      configuration.isDaemonProcess = true;
+      setDaemonProcess(configuration, true);
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
       await worker.reloadSettings();
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
@@ -76,7 +82,7 @@ describe('memoryWorker', () => {
       expect(after.lastTickAtMs).toBe(before.lastTickAtMs);
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
       inventoryGate = null;
-      configuration.isDaemonProcess = previousDaemon;
+      setDaemonProcess(configuration, previousDaemon);
       // The direct Session path consumes the same metadata contract.
       session.updatedAt++;
       await worker.ensureUpToDate(session.id);
@@ -93,7 +99,7 @@ describe('memoryWorker', () => {
       expect(stale.ok && stale.hits).toEqual([]);
       expect(worker.getWorkerStatus().sessionProgress).toEqual(initial.sessionProgress);
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
-    } finally { releaseInventory(); await worker.stop(); configuration.isDaemonProcess = previousDaemon; vi.useRealTimers(); }
+    } finally { releaseInventory(); await worker.stop(); setDaemonProcess(configuration, previousDaemon); vi.useRealTimers(); }
   });
   it.each(['new_only', 'all_history'] as const)('keeps a checked 6/5 event-tail Session ready while another Session in the %s batch is reading', async backfillPolicy => {
     const covered = { id: 'event-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
@@ -312,7 +318,7 @@ describe('memoryWorker', () => {
     }
     db.close(); deep.close();
     const previousDaemon = configuration.isDaemonProcess;
-    configuration.isDaemonProcess = true;
+    setDaemonProcess(configuration, true);
     const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     try {
@@ -348,7 +354,7 @@ describe('memoryWorker', () => {
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
       expect(worker.getIndexSources?.().filter(row => row.state !== 'ready')).toEqual([]);
       expect([...transcriptReads.values()]).toEqual(sessions.map(() => ({ selected: 1, legacy: 1 })));
-    } finally { await worker.stop(); configuration.isDaemonProcess = previousDaemon; }
+    } finally { await worker.stop(); setDaemonProcess(configuration, previousDaemon); }
   });
   it('publishes a retained queue failure code without exposing its private message', async () => {
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
@@ -618,7 +624,7 @@ describe('memoryWorker', () => {
     const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { configuration } = await import('@/configuration');
     const daemonBefore = configuration.isDaemonProcess;
-    configuration.isDaemonProcess = true;
+    setDaemonProcess(configuration, true);
     const worker = await startMemoryWorker({ credentials: { token: 't', encryption: { type: 'legacy', secret } },
       machineId: 'machine_1', deps: { fetchDecryptedTranscriptPageAfterSeq: async () => [] } });
     const opens = vi.spyOn(nacl.secretbox, 'open');
@@ -632,7 +638,7 @@ describe('memoryWorker', () => {
       const ownerBodies = sessions.map(session => Buffer.from(session.metadata, 'base64').subarray(nacl.secretbox.nonceLength));
       const localityOpens = opens.mock.calls.filter(([body]) => ownerBodies.some(expected => expected.equals(Buffer.from(body))));
       expect(localityOpens.length).toBe(0);
-    } finally { opens.mockRestore(); await worker.stop(); configuration.isDaemonProcess = daemonBefore; vi.useRealTimers(); }
+    } finally { opens.mockRestore(); await worker.stop(); setDaemonProcess(configuration, daemonBefore); vi.useRealTimers(); }
   });
 
   it('removes retained foreign and unknown Session ownership at restart and after a local Session moves', async () => {
@@ -1619,7 +1625,7 @@ describe('memoryWorker', () => {
     await worker.stop();
     unavailable = true;
     const daemonBefore = configuration.isDaemonProcess;
-    configuration.isDaemonProcess = true;
+    setDaemonProcess(configuration, true);
     try {
       worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
       expect(worker.getWorkerStatus().state).toBe('error');
@@ -1632,7 +1638,7 @@ describe('memoryWorker', () => {
       await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
       expect(worker.getTier1DbPath()).not.toBeNull();
       expect(worker.getWorkerStatus().state).not.toBe('error');
-    } finally { await worker.stop(); configuration.isDaemonProcess = daemonBefore; vi.useRealTimers(); }
+    } finally { await worker.stop(); setDaemonProcess(configuration, daemonBefore); vi.useRealTimers(); }
   });
 
   it('invalidates a real policy change before returning without waiting for source backfill', async () => {

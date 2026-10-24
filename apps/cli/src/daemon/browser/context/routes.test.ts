@@ -100,7 +100,9 @@ const annotationActionInputs = {
     ...validInput,
     styleIntent: 'highlight',
   },
-} as const satisfies Record<Extract<RuntimeActionIdV1, `browser.context.annotation.${string}`>, unknown>;
+// attachDraft executes on the client that mounts the view, so these daemon routes never back it.
+} as const satisfies Record<Exclude<Extract<RuntimeActionIdV1, `browser.context.annotation.${string}`>,
+  'browser.context.annotation.attachDraft'>, unknown>;
 
 describe('browser context routes', () => {
   it('does not disclose previously captured context through attach while its view is held', async () => {

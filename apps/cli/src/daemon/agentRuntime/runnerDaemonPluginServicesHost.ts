@@ -415,6 +415,8 @@ export type RunnerDaemonPluginServicesHost = Readonly<{
     }> | null>;
     dispatch(input: Readonly<{
         sessionId: string;
+        executionRunSnapshotId?: string;
+        runnerRetainedAgent?: AgentSessionRunnerBindingV1;
         runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
         retainedAgent: AgentSessionRunnerBindingV1;
         operation: RunnerDaemonPluginServiceOperationV1;

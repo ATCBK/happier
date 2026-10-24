@@ -890,6 +890,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
         conflicts: [],
       })),
       listRelationships: vi.fn(async () => { throw new Error('unexpected relationship inspection'); }),
+      watchStatuses: vi.fn(async () => { throw new Error('unexpected status watch'); }),
       inspectConflict: vi.fn(async () => { throw new Error('unexpected conflict inspection'); }),
       resolveConflict: vi.fn(async () => { throw new Error('unexpected conflict resolution'); }),
       readFile: vi.fn(async () => ({ status: 'missing' as const })),

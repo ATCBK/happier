@@ -323,7 +323,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             resolvePersistenceTargets: async () => [target],
             sessionId: 'sess_1',
             snapshot,
-        } as const;
+        } satisfies Parameters<typeof recordProviderAccountUsageSnapshotForSession>[0];
 
         await expect(recordProviderAccountUsageSnapshotForSession(input))
             .rejects.toThrow('provider_account_usage_persistence_disposed');
