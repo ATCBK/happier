@@ -1,7 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod/mini';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import {
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION,
@@ -439,6 +436,41 @@ async function loadCrossAccountLifetimeHarness() {
 }
 
 describe('active Account Collection direct client', () => {
+    it('admits each logical row once when reading a Collection page', async () => {
+        const rows = Array.from({ length: 50 }, (_, index) => ({
+            rowId: `channel-${index}`, revision: 1,
+            projection: { status: 'enabled', title: 'Operations' },
+            content: { t: 'plain', v: { privateNote: 'retained', retired: { nested: true } } },
+        }));
+        const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
+            rows, changeCursor: 1,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }) });
+        const client = harness.createActivePluginCollectionClient({ contract });
+        // loadClient resets modules. Observe the real compiler instance used by this client,
+        // not a validator retained by the test file before that reset.
+        const { compilePluginJsonSchema: compile } = await import('@happier-dev/protocol/plugins/actions/json-schema-validation');
+        const validate = compile(contract.schema);
+        // AJV publishes its error bag once per real validation; keep all validation logic real.
+        const descriptor = Object.getOwnPropertyDescriptor(validate, 'errors');
+        let errors: unknown = Reflect.get(validate, 'errors');
+        let admissions = 0;
+        Object.defineProperty(validate, 'errors', { configurable: true,
+            get: () => errors, set: (value: unknown) => { errors = value; admissions++; } });
+        try {
+            const page = await client.query({ indexId: 'by-status', prefix: ['enabled'], order: 'asc', limit: 50 });
+            expect(page.status).toBe('ready');
+            if (page.status !== 'ready') throw new Error('Expected an admitted Collection page');
+            expect(page.rows).toHaveLength(rows.length);
+            for (const row of page.rows) expect(row.value).toEqual({
+                id: row.rowId, status: 'enabled', title: 'Operations', privateNote: 'retained',
+            });
+            expect(admissions).toBe(rows.length);
+        } finally {
+            if (descriptor) Object.defineProperty(validate, 'errors', descriptor);
+            else Reflect.deleteProperty(validate, 'errors');
+        }
+    });
+
     it('keeps a resolved Account A client bound to Account A when global capture switches before its nested mutation', async () => {
         const harness = await loadCrossAccountLifetimeHarness();
         const resolved = await Reflect.apply(
@@ -627,9 +659,10 @@ describe('active Account Collection direct client', () => {
     });
 
     it('opens retained rows with unknown fields while keeping mutation admission strict', async () => {
+        let status = 'enabled';
         const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
             absenceEpoch: 0,
-            row: { rowId: 'channel-1', revision: 1, projection: { status: 'enabled', title: 'Ops channel' },
+            row: { rowId: 'channel-1', revision: 1, projection: { status, title: 'Ops channel' },
                 content: { t: 'plain', v: { privateNote: 'kept', retired: { nested: true } } } },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }) });
         const collection = harness.createActivePluginCollectionClient({ contract });
@@ -638,38 +671,11 @@ describe('active Account Collection direct client', () => {
         } });
         const opened = await collection.get('channel-1');
         if (opened.status === 'ready' && opened.row) expect(opened.row.value).not.toHaveProperty('retired');
+        status = 'invalid-known-status';
+        await expect(collection.get('channel-1')).resolves.toEqual({ status: 'unavailable', reason: 'account-content-mismatch' });
         await expect(collection.mutate([{ kind: 'put', expectedRevision: 1,
             value: { id: 'channel-1', status: 'enabled', title: 'Ops channel', retired: true },
         }])).resolves.toMatchObject({ status: 'rejected' });
-    });
-
-    it('decodes a Collection page with one logical schema admission per row', async () => {
-        const harness = await loadClient();
-        let logicalAdmissions = 0;
-        const compiled = compilePluginJsonSchema(contract.schema);
-        // Instrument the real compiler/parser without replacing either rule.
-        const validate = (value: unknown) => { logicalAdmissions++; return compiled(value); };
-        const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(contract.schema))
-            .check(z.superRefine(() => { logicalAdmissions++; }));
-        const rows = Array.from({ length: 50 }, (_, index) => ({
-            rowId: `channel-${index}`, revision: 1,
-            projection: { status: 'enabled', title: 'Ops channel' },
-            content: { t: 'plain' as const, v: { privateNote: 'kept', retired: { nested: true } } },
-        }));
-        for (const row of rows) {
-            const input = { contract, validate, storedReadSchema, row,
-                encryptionMode: 'plain' as const, material: null };
-            const decoded = harness.mergeLogicalRow(input);
-            expect(decoded).toMatchObject({ rowId: row.rowId, revision: 1, value: {
-                id: row.rowId, status: 'enabled', title: 'Ops channel', privateNote: 'kept',
-            } });
-            expect(decoded?.value).not.toHaveProperty('retired');
-        }
-        expect(logicalAdmissions).toBe(rows.length);
-        const invalid = { contract, validate, storedReadSchema,
-            row: { ...rows[0]!, projection: { status: 'invalid', title: 'Ops channel' } },
-            encryptionMode: 'plain' as const, material: null };
-        expect(harness.mergeLogicalRow(invalid)).toBeNull();
     });
 
     it('queries and CAS-mutates one admitted collection through the scoped Account authority', async () => {

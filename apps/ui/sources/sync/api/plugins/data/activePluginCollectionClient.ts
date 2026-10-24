@@ -602,7 +602,6 @@ export function encodePluginCollectionLogicalValue<TValue extends PluginAccountC
 /** Shared direct-UI logical-row decoder for ordinary and candidate-bound reads. */
 export function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(input: Readonly<{
     contract: NormalizedPluginAccountCollectionContractV1;
-    validate: ReturnType<typeof compilePluginJsonSchema>;
     storedReadSchema: ReturnType<typeof createPluginJsonSchemaZodValueAdapter>;
     row: PluginCollectionRowV1;
     encryptionMode: 'plain' | 'e2ee';
@@ -613,7 +612,8 @@ export function mergeLogicalRow<TValue extends PluginAccountCollectionValue<Plug
         parseStoredLogicalValue: (value) => {
             const parsed = input.storedReadSchema.safeParse(value);
             if (!parsed.success || parsed.data === null || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) return null;
-            return isLogicalCollectionValue<TValue>(input.validate, parsed.data) ? parsed.data : null;
+            // The canonical stored-read adapter already validates the projected logical object.
+            return parsed.data as TValue;
         },
         row: input.row,
         encryptionMode: input.encryptionMode,
@@ -831,7 +831,6 @@ export function createActivePluginCollectionClient<
                 ? null
                 : mergeLogicalRow<TValue>({
                     contract: params.contract,
-                    validate,
                     storedReadSchema,
                     row: result.data.row,
                     encryptionMode: prepared.operation.encryptionMode,
@@ -883,7 +882,6 @@ export function createActivePluginCollectionClient<
             for (const row of result.data.rows) {
                 const materialized = mergeLogicalRow<TValue>({
                     contract: params.contract,
-                    validate,
                     storedReadSchema,
                     row,
                     encryptionMode: prepared.operation.encryptionMode,

@@ -322,7 +322,6 @@ export function createActivePluginCollectionCandidatePreparation(input: Readonly
                 return rejected('collection_candidate_preparation_contract_mismatch');
             }
             const migrations = runtimeMigrations.slice(runtimeMigrations.length - declarations.length);
-            const sourceValidate = compilePluginJsonSchema(input.candidate.sourceContract.schema);
             const sourceStoredReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(input.candidate.sourceContract.schema));
             const targetValidate = compilePluginJsonSchema(input.candidate.targetContract.schema);
 
@@ -337,7 +336,6 @@ export function createActivePluginCollectionCandidatePreparation(input: Readonly
                     if (row.alreadyStaged) continue;
                     const source = mergeLogicalRow<Readonly<Record<string, JsonValue>>>({
                         contract: input.candidate.sourceContract,
-                        validate: sourceValidate,
                         storedReadSchema: sourceStoredReadSchema,
                         row,
                         encryptionMode: operation.encryptionMode,
