@@ -11,6 +11,7 @@ import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/doma
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createUiAccountAction } from './accountActionDeps';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 installApprovalCommonModuleMocks();
 
@@ -50,15 +51,17 @@ describe('private Account Action origination', () => {
             defaultSessionId: 'invoking-session' };
         const input = { sessionId: 'source', expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
             input: { localId: 'retained', text: 'Expanded prompt', meta: { displayText: 'Attachment' } } };
+        const machine = { ...createPlainMachineRowFixture({ id: 'machine', accountId: custodianAccountId }), active: false,
+            installationId: 'installation', installationPublicKey: encodeBase64(installation.publicKey),
+            access: { custodian: { accountId: custodianAccountId, displayName: custodianAccountId },
+                role: 'use' as const, resourceMode: 'plain' as const, accessState: 'ready' as const } };
         let admitted = false;
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
             expect(new URL(String(url)).origin).toBe(serverUrl);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v1/machines') return Response.json([{ id: 'machine', kind: 'persistent', active: false,
-                installationId: 'installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
-                replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-                access: { custodian: { accountId: custodianAccountId, displayName: custodianAccountId }, role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => id === machine.id ? machine : null);
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
             if (request.envelope.v !== 1) throw new Error('Expected the keyless Plain Account envelope');
