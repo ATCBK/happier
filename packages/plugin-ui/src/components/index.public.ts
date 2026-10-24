@@ -55,6 +55,7 @@ export {
 } from './Copresence.js';
 export { Avatar, type AvatarProps } from './Avatar.js';
 export { DetailsPane, DetailsPaneFooter, type DetailsPaneProps } from './DetailsPane.js';
+export { DetailsPaneOpenAsPageButton, type DetailsPaneOpenAsPageButtonProps } from './DetailsPaneOpenAsPageButton.js';
 export { DiffStat, type DiffStatProps } from './DiffStat.js';
 export { TaskStatusGlyph, type TaskStatusCategory, type TaskStatusGlyphProps } from './TaskStatusGlyph.js';
 export { CheckStatusGlyph, type CheckStatusGlyphProps, type CheckStatusKind } from './CheckStatusGlyph.js';

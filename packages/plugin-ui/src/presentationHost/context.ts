@@ -26,6 +26,7 @@ import type { DictationButtonProps, StatusCellProps, VoiceMarkArtProps } from '.
 import type { PluginUiScrollActivityTracker } from './scrollActivity.js';
 import type { FindSurfaceRegistrationHost } from '../presentation/find/useFindSurfaceRegistration.js';
 import type { ExecutableParticipantPickerProps } from '../components/ExecutableParticipantPicker.js';
+import type { DetailsPaneOpenAsPageButtonProps } from '../components/DetailsPaneOpenAsPageButton.js';
 
 export type PluginUiPopoverPresentation = 'popover' | 'menu' | 'dropdown' | 'context';
 
@@ -397,6 +398,8 @@ export type PluginUiPresentationHost = Readonly<{
     accessibilityLabel?: string;
     testID?: string;
   }>): ReactNode;
+  /** The incumbent pane action; navigation stays with the caller. */
+  renderDetailsPaneOpenAsPageButton?(input: DetailsPaneOpenAsPageButtonProps): ReactNode;
   /**
    * Render one QR code through the incumbent app QR renderer. Optional on
    * hosts without that capability; authors must keep a non-visual twin of any
