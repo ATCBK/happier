@@ -56,6 +56,10 @@ function targetForHost() {
 
 async function createSupportIdentityFixture(root: string): Promise<void> {
   await writeFixtureFile(
+    join(root, 'apps/stack/scripts/provision/.bun-version'),
+    await readFile(new URL('../../../../apps/stack/scripts/provision/.bun-version', import.meta.url), 'utf8'),
+  );
+  await writeFixtureFile(
     join(root, 'package.json'),
     JSON.stringify({ name: 'fixture-root', private: true }),
   );

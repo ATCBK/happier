@@ -125,15 +125,12 @@ export async function buildServerRuntimeSupportPayload({
     if (!resolvedRepoRoot) {
       throw new Error('[component-artifacts] server runtime support requires a repository root for Prisma migrate.');
     }
-    const bunCommand = resolveBunCommand({ commandProbe, processEnv: env });
-    if (!bunCommand) {
-      throw new Error('[component-artifacts] bun is required to build server Prisma migration support');
-    }
     await compilePrismaBinary({
       repoRoot: resolvedRepoRoot,
       target,
       outfile: join(payloadDir, 'runtime', resolveExecutableName({ baseName: 'prisma-migrate', target })),
-      bunCommand,
+      env,
+      commandProbe,
       runCommand,
     });
   }
@@ -208,6 +205,7 @@ export async function buildServerBinaryArtifactPayload({
 
   const executableName = resolveExecutableName({ baseName: 'happier-server', target });
   await compileBinary({
+    repoRoot,
     entrypoint,
     bunTarget: target.bunTarget,
     outfile: join(payloadDir, executableName),
@@ -224,6 +222,7 @@ export async function buildServerBinaryArtifactPayload({
     await ensureFileExists(migrationSourceEntrypoint);
     migrationEntrypoint = resolveExecutableName({ baseName: 'happier-server-migrate', target });
     await compileBinary({
+      repoRoot,
       entrypoint: migrationSourceEntrypoint,
       bunTarget: target.bunTarget,
       outfile: join(payloadDir, migrationEntrypoint),
@@ -242,6 +241,7 @@ export async function buildServerBinaryArtifactPayload({
       outfile: join(payloadDir, 'runtime', resolveExecutableName({ baseName: 'prisma-migrate', target })),
       bunCommand,
       runCommand,
+      env,
     });
   }
 

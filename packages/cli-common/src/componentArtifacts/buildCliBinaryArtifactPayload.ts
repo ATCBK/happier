@@ -835,6 +835,7 @@ export async function buildCliBinaryArtifactCodePayload({
           "await import(pathToFileURL(join(dirname(process.execPath), 'package-dist', 'index.mjs')).href);\n",
       );
       await compileBinary({
+        repoRoot,
         entrypoint: nativeEntry,
         bunTarget: target.bunTarget,
         outfile: join(payloadDir, executableName),

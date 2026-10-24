@@ -1,7 +1,8 @@
-import { spawn, type StdioOptions } from 'node:child_process';
+import { execFileSync, spawn, type StdioOptions } from 'node:child_process';
 import { join } from 'node:path';
 import { rm, stat } from 'node:fs/promises';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { accessSync, constants as fsConstants, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { commandExistsOnPath } from '../process/index.js';
 import { resolveWindowsCommandInvocation } from '../process/index.js';
@@ -137,6 +138,22 @@ function isRunnableExecutablePath(pathLike: string | null | undefined, platform:
   }
 }
 
+function assertBunCompilerVersion(command: string, repoRoot: string, processEnv: NodeJS.ProcessEnv): void {
+  const pinPath = join(repoRoot, 'apps', 'stack', 'scripts', 'provision', '.bun-version');
+  const expectedVersion = readFileSync(pinPath, 'utf8').trim();
+  if (!/^\d+\.\d+\.\d+$/.test(expectedVersion)) {
+    throw new Error(`[component-artifacts] invalid Bun build pin: ${pinPath}`);
+  }
+  const invocation = resolveWindowsCommandInvocation({ command, args: ['--version'], env: processEnv });
+  const actualVersion = execFileSync(invocation.command, invocation.args, {
+    encoding: 'utf8', env: processEnv,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  }).trim();
+  if (actualVersion !== expectedVersion) {
+    throw new Error(`[component-artifacts] this checkout requires Bun ${expectedVersion}; selected ${command} reports ${actualVersion}. Install the pinned runtime or set HAPPIER_BUN_PATH to it, then rebuild.`);
+  }
+}
+
 export function resolveBunCommand({
   processEnv = process.env,
   commandProbe = commandExists,
@@ -172,6 +189,24 @@ export function resolveBunCommand({
   }
 
   return null;
+}
+
+/** Build-only selection: every standalone compiler must match the checkout pin. */
+export function resolveBunCompilerCommand({
+  repoRoot = fileURLToPath(new URL('../../../../', import.meta.url)),
+  bunCommand,
+  processEnv = process.env,
+  commandProbe = commandExists,
+}: {
+  repoRoot?: string;
+  bunCommand?: string;
+  processEnv?: NodeJS.ProcessEnv;
+  commandProbe?: (cmd: string) => boolean;
+} = {}): string {
+  const command = String(bunCommand ?? '').trim() || resolveBunCommand({ processEnv, commandProbe });
+  if (!command) throw new Error('[component-artifacts] bun is required to compile binary artifacts');
+  assertBunCompilerVersion(command, repoRoot, processEnv);
+  return command;
 }
 
 export function resolvePnpmCommand({
@@ -231,6 +266,7 @@ async function clearTransientBunCompileArtifacts(error: unknown, outfile: string
 
 export async function compileBunBinary({
   entrypoint,
+  repoRoot,
   bunTarget,
   outfile,
   cwd = process.cwd(),
@@ -245,6 +281,7 @@ export async function compileBunBinary({
   defines = {},
 }: {
   entrypoint: string;
+  repoRoot?: string;
   bunTarget: string;
   outfile: string;
   cwd?: string;
@@ -258,13 +295,7 @@ export async function compileBunBinary({
   autoloadPackageJson?: boolean;
   defines?: Readonly<Record<string, string>>;
 }): Promise<void> {
-  const resolvedBunCommand = (() => {
-    const candidate = String(bunCommand ?? '').trim();
-    if (candidate) return candidate;
-    const fallback = resolveBunCommand();
-    if (fallback) return fallback;
-    throw new Error('[component-artifacts] bun is required to compile binary artifacts');
-  })();
+  const resolvedBunCommand = resolveBunCompilerCommand({ repoRoot, bunCommand });
   const args = buildRunnerEntrypoint
     ? [
         buildRunnerEntrypoint,

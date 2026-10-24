@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { DEFAULT_BUN_COMPILE_OPTIONS } from '../src/componentArtifacts/commands.ts';
+import { DEFAULT_BUN_COMPILE_OPTIONS, resolveBunCompilerCommand } from '../src/componentArtifacts/commands.ts';
 
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -31,6 +31,7 @@ if (!entrypointArg || !outfileArg || !target) {
 const entrypoint = resolve(entrypointArg);
 const outfile = resolve(outfileArg);
 const repoRoot = process.cwd();
+resolveBunCompilerCommand({ bunCommand: process.execPath });
 const workspacePackages = await readWorkspacePackages(repoRoot);
 const requireFromProject = createRequire(pathToFileURL(join(repoRoot, 'apps/server/package.json')));
 

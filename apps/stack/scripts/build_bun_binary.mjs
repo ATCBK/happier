@@ -3,6 +3,9 @@
 import { resolve } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { readBundledAgentNativeHomeEnvironmentKeys } from './utils/env/scrub_env.mjs';
+import { resolveBunCompilerCommand } from '../../../packages/cli-common/src/componentArtifacts/commands.ts';
+
+resolveBunCompilerCommand({ bunCommand: process.execPath });
 
 const { kv } = parseArgs(process.argv.slice(2));
 const entrypoint = kv.get('--entrypoint');

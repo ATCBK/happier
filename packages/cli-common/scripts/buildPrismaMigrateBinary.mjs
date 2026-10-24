@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { DEFAULT_BUN_COMPILE_OPTIONS } from '../src/componentArtifacts/commands.ts';
+import { DEFAULT_BUN_COMPILE_OPTIONS, resolveBunCompilerCommand } from '../src/componentArtifacts/commands.ts';
 
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -13,6 +13,7 @@ function readOption(name) {
 }
 
 const repoRoot = resolve(readOption('--repo-root'));
+resolveBunCompilerCommand({ repoRoot, bunCommand: process.execPath });
 const target = readOption('--target');
 const outfile = resolve(readOption('--outfile'));
 const prismaPackageJsonPath = join(repoRoot, 'node_modules', 'prisma', 'package.json');

@@ -1,20 +1,26 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock } = vi.hoisted(() => ({
+const { spawnMock, execFileSyncMock } = vi.hoisted(() => ({
     spawnMock: vi.fn(),
+    execFileSyncMock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
     spawn: spawnMock,
+    execFileSync: execFileSyncMock,
 }));
 
 import { compileBunBinary, execOrThrow, resolveBunCommand, resolvePnpmCommand } from './commands.js';
+import { compilePrismaMigrateBinary } from './compilePrismaMigrateBinary.js';
+import { SERVER_BINARY_TARGETS } from './targets.js';
+import { buildServerRuntimeSupportPayload } from './buildServerBinaryArtifactPayload.js';
+import { resolveServerRuntimePrismaEngineFileName } from '../firstPartyRuntime/serverRuntimeArtifactLayout.js';
 
 describe('resolvePnpmCommand', () => {
     it('uses pnpm directly when its executable is available', () => {
@@ -25,6 +31,98 @@ describe('resolvePnpmCommand', () => {
     it('requires pnpm even when Corepack or Yarn is available', () => {
         expect(() => resolvePnpmCommand({ commandProbe: command => command === 'corepack' || command === 'yarn' }))
             .toThrow(/requires pnpm/);
+    });
+});
+
+describe('repository compiler admission', () => {
+    it('enforces this checkout pin when the caller omits repoRoot', async () => {
+        execFileSyncMock.mockReturnValue('0.0.0\n');
+        try {
+            await expect(compileBunBinary({
+                bunCommand: 'bun', entrypoint: 'index.mjs', outfile: 'happier',
+                bunTarget: 'bun-linux-x64-baseline',
+                runCommand: () => { throw new Error('Compiler ran before admission'); },
+            })).rejects.toThrow(/requires Bun/);
+        } finally {
+            execFileSyncMock.mockReset();
+        }
+    });
+
+    it.each(['compiler', 'server-runtime-support'] as const)('refuses an unpinned Prisma compiler through %s', async (entrypoint) => {
+        const repoRoot = mkdtempSync(join(tmpdir(), 'cli-common-prisma-bun-pin-'));
+        try {
+            const provision = join(repoRoot, 'apps', 'stack', 'scripts', 'provision');
+            mkdirSync(provision, { recursive: true });
+            writeFileSync(join(provision, '.bun-version'), '1.4.4\n');
+            execFileSyncMock.mockReturnValue('1.3.11\n');
+
+            const target = SERVER_BINARY_TARGETS[0]!;
+            const runCommand = () => { throw new Error('Prisma compiler ran before admission'); };
+            if (entrypoint === 'compiler') {
+                await expect(compilePrismaMigrateBinary({
+                    repoRoot, bunCommand: 'bun', target,
+                    outfile: join(repoRoot, 'runtime', 'prisma-migrate'), runCommand,
+                })).rejects.toThrow(/requires Bun 1\.4\.4/);
+            } else {
+                const client = join(repoRoot, 'client');
+                mkdirSync(client);
+                writeFileSync(join(client, resolveServerRuntimePrismaEngineFileName({ platform: target.os, arch: target.arch })), 'engine');
+                await expect(buildServerRuntimeSupportPayload({
+                    repoRoot, target, payloadDir: join(repoRoot, 'payload'), buildDbProviders: 'postgresql',
+                    entries: [
+                        { sourcePath: client, targetPath: join('node_modules', '.prisma', 'client') },
+                        { sourcePath: client, targetPath: join('generated', 'postgresql-client') },
+                    ],
+                    commandProbe: command => command === 'bun', runCommand,
+                })).rejects.toThrow(/requires Bun 1\.4\.4/);
+            }
+        } finally {
+            rmSync(repoRoot, { recursive: true, force: true });
+            execFileSyncMock.mockReset();
+        }
+    });
+
+    it.each(['1.3.11', '1.4.2', 'not-a-version'])('rejects compiler %s before building a repository pinned to 1.4.4', async (version) => {
+        const repoRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-pin-'));
+        try {
+            const provision = join(repoRoot, 'apps', 'stack', 'scripts', 'provision');
+            mkdirSync(provision, { recursive: true });
+            writeFileSync(join(provision, '.bun-version'), '1.4.4\n');
+            execFileSyncMock.mockReturnValue(`${version}\n`);
+
+            await expect(compileBunBinary({
+                repoRoot, bunCommand: 'bun', entrypoint: join(repoRoot, 'index.mjs'),
+                outfile: join(repoRoot, 'happier'), bunTarget: 'bun-linux-x64-baseline',
+                runCommand: async () => { throw new Error('Compiler ran before admission'); },
+            })).rejects.toThrow(/requires Bun 1\.4\.4/);
+        } finally {
+            rmSync(repoRoot, { recursive: true, force: true });
+            execFileSyncMock.mockReset();
+        }
+    });
+
+    it('admits the pinned explicit compiler', async () => {
+        const repoRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-pin-'));
+        try {
+            const provision = join(repoRoot, 'apps', 'stack', 'scripts', 'provision');
+            const bunPath = join(repoRoot, process.platform === 'win32' ? 'bun.exe' : 'bun');
+            mkdirSync(provision, { recursive: true });
+            writeFileSync(join(provision, '.bun-version'), '1.4.4\n');
+            writeFileSync(bunPath, '', { mode: 0o755 });
+            execFileSyncMock.mockReturnValue('1.4.4\n');
+
+            const outfile = join(repoRoot, 'happier');
+            await compileBunBinary({
+                repoRoot, bunCommand: bunPath, entrypoint: join(repoRoot, 'index.mjs'),
+                outfile, bunTarget: 'bun-linux-x64-baseline',
+                // Compilation is the external process boundary; retain real admission and output validation.
+                runCommand: async () => { writeFileSync(outfile, 'compiled'); },
+            });
+            expect(existsSync(outfile)).toBe(true);
+        } finally {
+            rmSync(repoRoot, { recursive: true, force: true });
+            execFileSyncMock.mockReset();
+        }
     });
 });
 
@@ -205,6 +303,13 @@ describe('execOrThrow', () => {
 });
 
 describe('compileBunBinary', () => {
+    beforeEach(() => {
+        // Compiler version probing is an OS boundary; retain the real pin reader.
+        execFileSyncMock.mockReturnValue(readFileSync(new URL('../../../../apps/stack/scripts/provision/.bun-version', import.meta.url), 'utf8'));
+    });
+
+    afterEach(() => execFileSyncMock.mockReset());
+
     it('controls package metadata loading independently of ambient executable configuration', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-config-'));
         try {

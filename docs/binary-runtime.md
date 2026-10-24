@@ -416,12 +416,24 @@ The vendor-owned, exact-version Mutagen engine follows its existing separate acq
 ## Internal workspace packages
 
 In 0.3 development, `apps/stack/scripts/provision/.bun-version` is the single
-Bun build/provisioning version owner. CI setup reads that file; managed Lima
+Bun build/provisioning version owner, currently 1.4.4. This includes the
+[GHSA-26q8-h657-pf84 TLS trust-store correction](https://github.com/oven-sh/bun/security/advisories/GHSA-26q8-h657-pf84);
+standalone executables compiled with an affected Bun must be rebuilt.
+CI setup reads that file; managed Lima
 readiness and streamed Lima/WSL provisioning consume the same value. Downloaded
 Ubuntu provisioning needs the companion file from the script's same source ref,
 or an explicit `HAPPIER_PROVISION_BUN_VERSION` override. Component builders still
 resolve the selected executable and record its actual version in build identity;
 this pin is not a managed Agent runtime or a change to installed product state.
+The shared `resolveBunCompilerCommand` owner checks the selected executable's actual
+version against this file before every standalone compile, including Prisma migration
+support and directly invoked Bun build runners. Callers that omit `repoRoot` use
+the compiler module's checkout root, independent of their working directory.
+`HAPPIER_BUN_PATH` selects an
+executable, but does not waive the pin. A mismatch fails with the required and
+observed versions; install or select the pinned compiler and rebuild. Isolated
+QA build recipes must acquire the archive for that version rather than reuse an
+unversioned `bun.zip` without checking its contents.
 
 In 0.3 development, `dev-targets host prepare NAME --toolchain` also prepares
 user-local Rust through `packages/iroh-native/scripts/ensure-rust-toolchain.mjs`.

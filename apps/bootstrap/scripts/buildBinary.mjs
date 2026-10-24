@@ -19,6 +19,7 @@ await mkdir(outDir, { recursive: true });
 await rm(join(outDir, 'hsetup'), { force: true });
 await rm(join(outDir, exeName), { force: true });
 await componentArtifacts.compileBunBinary({
+  repoRoot,
   entrypoint: join(repoRoot, 'apps', 'bootstrap', 'src', 'bin', 'hsetup.ts'),
   bunTarget: process.env.HAPPIER_BUN_TARGET ?? target.bunTarget,
   outfile: join(outDir, exeName),
