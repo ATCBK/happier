@@ -7857,6 +7857,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             },
         },
         pendingActivation: {
+    held: { title: "Von dir gestoppt", body: "Deine Nachricht bleibt in der Warteschlange, bis du diese Sitzung fortsetzt." },
             waiting_offline: { title: 'Nachricht für diesen Computer eingereiht', body: 'Sie wird verarbeitet, sobald dieser Computer und sein Daemon wieder online sind.' },
             waiting: { title: 'Warten auf Fortsetzung', body: 'Deine Nachricht ist sicher eingereiht, während der Daemon diese Session fortsetzt.' },
             failed: { title: 'Session konnte nicht fortgesetzt werden', body: 'Deine Nachricht ist weiterhin sicher eingereiht. Versuche es erneut, wenn du bereit bist.' },

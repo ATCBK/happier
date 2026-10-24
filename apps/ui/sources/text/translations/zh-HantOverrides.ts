@@ -6405,6 +6405,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             },
           },
         pendingActivation: {
+    held: { title: "已由你停止", body: "在你恢復此工作階段之前，訊息會一直保留在佇列中。" },
             waiting_offline: { title: '訊息已加入此機器的佇列', body: '這台機器及其背景服務重新上線後，訊息將被處理。' },
             waiting: { title: '等待恢復', body: '背景服務恢復此工作階段時，你的訊息會安全地保留在佇列中。' },
             failed: { title: '無法恢復工作階段', body: '你的訊息仍安全地保留在佇列中。準備好後請重試。' },

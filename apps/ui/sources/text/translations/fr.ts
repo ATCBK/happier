@@ -7715,6 +7715,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       },
     },
         pendingActivation: {
+    held: { title: "Arrêtée par vous", body: "Votre message reste en attente jusqu’à ce que vous repreniez cette session." },
             waiting_offline: { title: 'Message en attente pour cette machine', body: 'Il sera traité lorsque cette machine et son daemon seront de nouveau en ligne.' },
             waiting: { title: 'Reprise en attente', body: 'Ton message est bien en attente pendant que le démon reprend cette session.' },
             failed: { title: 'Impossible de reprendre la session', body: 'Ton message est toujours bien en attente. Réessaie quand tu es prêt.' },

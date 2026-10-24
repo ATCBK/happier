@@ -7875,6 +7875,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       },
     },
         pendingActivation: {
+    held: { title: "Detenida por ti", body: "Tu mensaje queda en cola hasta que reanudes esta sesión." },
             waiting_offline: { title: 'Mensaje en cola para esta máquina', body: 'Se procesará cuando esta máquina y su daemon vuelvan a estar en línea.' },
             waiting: { title: 'Esperando para reanudar', body: 'Tu mensaje está guardado en cola mientras el daemon reanuda esta sesión.' },
             failed: { title: 'No se pudo reanudar la sesión', body: 'Tu mensaje sigue guardado en cola. Vuelve a intentarlo cuando quieras.' },

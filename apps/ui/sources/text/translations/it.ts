@@ -8098,6 +8098,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       },
     },
         pendingActivation: {
+    held: { title: "Interrotta da te", body: "Il messaggio resta in coda finché non riprendi questa sessione." },
             waiting_offline: { title: 'Messaggio in coda per questa macchina', body: 'Verrà elaborato quando questa macchina e il relativo daemon torneranno online.' },
             waiting: { title: 'In attesa di ripresa', body: 'Il messaggio è al sicuro nella coda mentre il daemon riprende questa sessione.' },
             failed: { title: 'Impossibile riprendere la sessione', body: 'Il messaggio è ancora al sicuro nella coda. Riprova quando vuoi.' },

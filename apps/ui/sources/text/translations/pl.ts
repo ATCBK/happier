@@ -7711,6 +7711,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       },
     },
         pendingActivation: {
+    held: { title: "Zatrzymana przez Ciebie", body: "Wiadomość pozostanie w kolejce, dopóki nie wznowisz tej sesji." },
             waiting_offline: { title: 'Wiadomość w kolejce dla tej maszyny', body: 'Zostanie przetworzona, gdy ta maszyna i jej daemon znów będą online.' },
             waiting: { title: 'Oczekiwanie na wznowienie', body: 'Wiadomość jest bezpiecznie w kolejce, gdy daemon wznawia tę sesję.' },
             failed: { title: 'Nie udało się wznowić sesji', body: 'Wiadomość nadal jest bezpiecznie w kolejce. Spróbuj ponownie, gdy chcesz.' },

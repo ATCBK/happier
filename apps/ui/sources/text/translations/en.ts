@@ -9361,6 +9361,7 @@ const enSession = {
     },
   },
   pendingActivation: {
+    held: { title: "Stopped by you", body: "Your message stays queued until you resume this session." },
     waiting_offline: {
       title: 'Message queued for this machine',
       body: 'It will be processed when this machine and its daemon are back online.',

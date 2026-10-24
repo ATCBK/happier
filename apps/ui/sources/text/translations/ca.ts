@@ -7136,6 +7136,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             },
         },
         pendingActivation: {
+    held: { title: "Aturada per tu", body: "El missatge queda a la cua fins que reprenguis aquesta sessió." },
             waiting_offline: { title: 'Missatge en cua per a aquesta màquina', body: 'Es processarà quan aquesta màquina i el seu dimoni tornin a estar en línia.' },
             waiting: { title: 'Esperant per reprendre', body: 'El missatge és segur a la cua mentre el dimoni reprèn aquesta sessió.' },
             failed: { title: 'No s’ha pogut reprendre la sessió', body: 'El missatge continua segur a la cua. Torna-ho a provar quan vulguis.' },

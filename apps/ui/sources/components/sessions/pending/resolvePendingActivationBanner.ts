@@ -1,10 +1,11 @@
 import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol';
+import type { SessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { ManagedWakeProjection } from '@/sync/domains/pending/managedWakeProjection';
 
 export type PendingActivationBannerPresentation = Readonly<{
-    kind: 'waiting_offline' | 'waiting' | 'failed' | 'queued' | 'queued_offline';
+    kind: 'waiting_offline' | 'waiting' | 'failed' | 'queued' | 'queued_offline' | 'held';
     row: PendingMessage | null;
     primaryAction: 'retry' | 'resume' | 'process_when_online' | null;
     secondaryAction: 'keep_queued' | null;
@@ -41,10 +42,15 @@ export function resolvePendingActivationBanner(input: Readonly<{
     resumingAt?: number | null;
     pendingMessages: readonly PendingMessage[];
     managedWakeProjection?: ManagedWakeProjection | null;
+    autoResumeAdmission?: SessionAutoResumeAdmissionV1;
 }>): PendingActivationBannerPresentation | null {
     if (!input.canWrite) return null;
     const managedWakeProjection = input.managedWakeProjection;
     const rows = input.pendingMessages.filter(isEligiblePendingUserRow).sort(comparePendingRows);
+    if (!input.active && input.resumingAt == null && rows.length > 0 && input.autoResumeAdmission === 'held_by_person') {
+        return { kind: 'held', row: rows[0], primaryAction: input.machineReachable === true ? 'resume' : null,
+            secondaryAction: null, settingsAction: 'settings' };
+    }
     // Current refusal can outlive a retained target after a grant downgrade.
     // Actual native progress/loss still wins over an older queue diagnostic.
     const held = !input.machineReachable && input.resumingAt == null

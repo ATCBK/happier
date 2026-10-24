@@ -7982,6 +7982,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       },
     },
         pendingActivation: {
+    held: { title: "Interrompida por você", body: "Sua mensagem fica na fila até você retomar esta sessão." },
             waiting_offline: { title: 'Mensagem na fila para esta máquina', body: 'Ela será processada quando esta máquina e o daemon voltarem a ficar online.' },
             waiting: { title: 'Aguardando retomada', body: 'Sua mensagem está segura na fila enquanto o daemon retoma esta sessão.' },
             failed: { title: 'Não foi possível retomar a sessão', body: 'Sua mensagem continua segura na fila. Tente novamente quando quiser.' },

@@ -12,6 +12,19 @@ const rows = [
 ];
 
 describe('resolvePendingActivationBanner', () => {
+    it('keeps a person-held queue behind explicit Resume, including stale waiting activation', () => {
+        const input = { activeAt: 100, active: false, machineReachable: true, canWrite: true,
+            pendingMessages: rows, authorization: waiting, autoResumeAdmission: 'held_by_person' as const };
+        expect(resolvePendingActivationBanner(input)).toMatchObject({ kind: 'held', row: rows[0], primaryAction: 'resume' });
+        expect(resolvePendingActivationBanner({ ...input, machineReachable: false }))
+            .toMatchObject({ kind: 'held', primaryAction: null });
+        expect(resolvePendingActivationBanner({ ...input, canWrite: false })).toBeNull();
+        expect(resolvePendingActivationBanner({ ...input, active: true })).toBeNull();
+        expect(resolvePendingActivationBanner({ ...input, resumingAt: 300 })).toBeNull();
+        expect(resolvePendingActivationBanner({ ...input, pendingMessages: [], authorization: null })).toBeNull();
+        expect(resolvePendingActivationBanner({ ...input, autoResumeAdmission: 'archived' }))
+            .toMatchObject({ kind: 'waiting', primaryAction: null });
+    });
     it('keeps unknown Machine queues generic and closed until observed reachability returns', () => {
         const input = { activeAt: 100, active: false, machineReachable: null, canWrite: true, pendingMessages: rows };
         expect(resolvePendingActivationBanner(input)).toMatchObject({ kind: 'queued', primaryAction: null });

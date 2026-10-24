@@ -1,4 +1,5 @@
 import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
+import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import { readRuntimeDescriptorV1FromMetadata } from "@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat";
 import type { CliAuthStatusData } from "@/sync/api/capabilities/capabilitiesProtocol";
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
@@ -1503,6 +1504,8 @@ export function useSessionComposerController({
             machineInventoryState: managedWakeInventoryStatus === 'loading' ? 'loading' : 'read',
         })
         : null, [managedPendingMachine, managedPendingObservation.kind, managedWakeInventoryStatus, managedWakeAuthorization, pendingMessages, pendingMessagesLoaded, pendingReadState, sessionRuntimeStatusSource.resumingAt]);
+    const autoResumeAdmission = resolveSessionAutoResumeAdmissionV1({ metadata: ownerMetadata,
+        archivedAt: session.archivedAt, machineAvailable: isMachineReachable, authorityAvailable: ownerMetadata !== null });
     const pendingActivationPresentation = React.useMemo(() => {
         // A Pending row can synchronize before an in-flight Agent transition
         // answers. The composer already owns that live submission and shows its
@@ -1520,8 +1523,9 @@ export function useSessionComposerController({
             resumingAt: sessionRuntimeStatusSource.resumingAt,
             pendingMessages,
             managedWakeProjection,
+            autoResumeAdmission,
         });
-    }, [hasWriteAccess, isComposerSending, isMachineReachable, machineReachability, managedWakeProjection, pendingMessages, session.active, session.activeAt, session.pendingActivationAuthorization, sessionRuntimeStatusSource.resumingAt]);
+    }, [autoResumeAdmission, hasWriteAccess, isComposerSending, isMachineReachable, machineReachability, managedWakeProjection, pendingMessages, session.active, session.activeAt, session.pendingActivationAuthorization, sessionRuntimeStatusSource.resumingAt]);
     const [pendingActivationActionBusy, setPendingActivationActionBusy] = React.useState(false);
     const goalControlMachineId = controlMachineTarget?.machineId ?? machineId;
     const goalControlMachineRecord = useMachine(typeof goalControlMachineId === 'string' ? goalControlMachineId : '');
@@ -5463,11 +5467,11 @@ export function useSessionComposerController({
         // The machine's guard is about to stop this Session, stopped it, or the next message is waking it.
         const guardPresentationKey = JSON.stringify(ownerMetadata?.sessionGuardStateV1 ?? null);
         const guardComposerState = React.useMemo(() => resolveSessionGuardComposerState({
-            guard: readSessionListGuardState(JSON.parse(guardPresentationKey)),
+            guard: autoResumeAdmission === 'held_by_person' ? null : readSessionListGuardState(JSON.parse(guardPresentationKey)),
             sessionActive: session.active === true,
             resuming: sessionStatusResuming,
             nowMs: Date.now(),
-        }), [guardPresentationKey, session.active, sessionStatusResuming]);
+        }), [autoResumeAdmission, guardPresentationKey, session.active, sessionStatusResuming]);
         const guardMachineId = controlMachineTarget?.machineId ?? null;
         const keepGuardedSessionRunning = React.useCallback(() => {
             if (!guardMachineId) return;
