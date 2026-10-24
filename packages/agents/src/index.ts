@@ -310,7 +310,6 @@ export {
   readExternalAgentObservationSessionState,
   writeExternalAgentObservationSessionState,
   isProviderBoundSessionMetadata,
-  readActiveSessionModelSelectionFromMetadata,
   resolveAmbientProviderConnectionForModelIntent,
   resolveModelSelectionIntentFromSessionMetadata,
   readSessionModelSelectionV2FromMetadata,

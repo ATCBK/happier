@@ -1,9 +1,8 @@
 import type { PermissionIntent } from '../../types.js';
 import { SessionModelSelectionIntentV1Schema, readSessionModelSelectionIntentSourceV1, resolveSessionModelSelectionIntentV1 } from '@happier-dev/protocol/providers/model-selection';
-import type { ProviderBoundModelRef, SessionModelSelectionIntentV1 } from '@happier-dev/protocol/providers/model-selection';
+import type { SessionModelSelectionIntentV1 } from '@happier-dev/protocol/providers/model-selection';
 import { SessionModelSelectionV2Schema } from '@happier-dev/protocol/providers/selection/v2';
 import type { SessionModelSelectionV2 } from '@happier-dev/protocol';
-import { readExactSessionActiveModelSelectionV1 } from '@happier-dev/protocol/providers/active-model-selection';
 import { readSessionProviderBindingMetadataStateV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import {
   readPermissionModeIntentFromMetadata,
@@ -24,33 +23,6 @@ export function readSessionModelSelectionV2FromMetadata(metadata: unknown): Sess
   if (!obj) return null;
   const parsed = SessionModelSelectionV2Schema.safeParse(obj.modelSelectionIntentV2);
   return parsed.success ? parsed.data : null;
-}
-
-/**
- * Returns model selection only when the Protocol owner proves it against the
- * exact current physical runner and, for Provider-bound selections, the exact
- * applied binding. The caller supplies the catalog-resolved Agent id because
- * target keys intentionally do not resolve arbitrary host catalog identities.
- * Persisted intent and fallback catalogs are excluded.
- */
-export function readActiveSessionModelSelectionFromMetadata(
-  metadata: unknown,
-  agentId: string,
-  agentTargetKey: string,
-  currentRunnerProcessIdentity: Readonly<{
-    pid: number;
-    processStartTimeMs: number;
-  }> | null,
-): ProviderBoundModelRef | null {
-  const record = asRecord(metadata);
-  if (!record) return null;
-
-  return readExactSessionActiveModelSelectionV1({
-    metadata: record,
-    agentId,
-    agentTargetKey,
-    currentRunnerProcessIdentity,
-  })?.selection ?? null;
 }
 
 /** Resolve canonical and deployed model intent once the session's canonical target is known. */

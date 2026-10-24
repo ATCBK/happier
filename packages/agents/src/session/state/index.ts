@@ -124,7 +124,6 @@ export {
 } from './sources/permissionModeInference.js';
 export {
   isProviderBoundSessionMetadata,
-  readActiveSessionModelSelectionFromMetadata,
   resolveAmbientProviderConnectionForModelIntent,
   resolveModelSelectionIntentFromSessionMetadata,
   readSessionModelSelectionV2FromMetadata,

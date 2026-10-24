@@ -1,6 +1,6 @@
-import { readActiveSessionModelSelectionFromMetadata } from '@happier-dev/agents';
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { resolveSessionModelSelectionDisposition } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
 import { storage } from '@/sync/domains/state/storage';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { getSessionRunnerRuntimeStatusSnapshot } from '@/sync/ops/sessionRunnerRestart';
@@ -23,11 +23,20 @@ export async function resolveVoiceSessionModelSelection(params: Readonly<{
         signal: params.signal,
     });
     if (!snapshot || snapshot.state.machineId !== machineId) return null;
-    const selection = readActiveSessionModelSelectionFromMetadata(
-        readVoiceSessionOwnerMetadataFromState(storage.getState(), params.sessionAddress),
-        params.agentId, params.agentTargetKey, snapshot.runnerProcessIdentity,
-    );
-    return selection ? SessionModelSelectionV1Schema.parse({
-        v: 1, ref: selection, updatedAt: snapshot.state.observedAtMs,
+    // The Session owner proves the source against the exact current runner.
+    // Voice's chat/commit contract cannot carry Team custody (startRequest.ts),
+    // so preserve that refusal instead of launching the backing native tuple.
+    const { activeSelection, activeRouteSelection } = resolveSessionModelSelectionDisposition({
+        agentId: params.agentId, agentTargetKey: params.agentTargetKey, sessionActive: true,
+        metadata: readVoiceSessionOwnerMetadataFromState(storage.getState(), params.sessionAddress),
+        currentRunnerProcessIdentity: snapshot.runnerProcessIdentity,
+    });
+    if (activeRouteSelection && 'source' in activeRouteSelection && activeRouteSelection.source === 'team_resource') {
+        throw Object.assign(new Error('Voice does not support Team credential models.'), {
+            code: 'VOICE_AGENT_TEAM_MODEL_UNSUPPORTED',
+        });
+    }
+    return activeSelection ? SessionModelSelectionV1Schema.parse({
+        v: 1, ref: activeSelection, updatedAt: snapshot.state.observedAtMs,
     }) : null;
 }
