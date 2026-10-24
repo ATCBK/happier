@@ -147,7 +147,7 @@ export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
 export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonly<{
     plugins: readonly Readonly<{
         manifest: unknown;
-        files: Readonly<Record<string, string>>;
+        files: Readonly<Record<string, string | Uint8Array>>;
         replaceExisting?: boolean;
         instantiateCommittedModule?: (
             module: PluginDaemonModuleNamespace,
