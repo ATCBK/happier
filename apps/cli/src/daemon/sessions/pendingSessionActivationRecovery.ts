@@ -105,11 +105,13 @@ export async function recoverPendingSessionActivations(params: Readonly<{
   warn: (message: string, input: PendingSessionActivationInput, error: unknown) => void;
   fetchSessionsPage?: typeof fetchSessionsPageDefault;
   visitOwnedSession?: (sessionId: string, session: RawSessionListRow) => Promise<void>;
+  visitOwnedSessions?: (sessions: readonly RawSessionListRow[]) => Promise<void>;
 }>): Promise<void> {
   const fetchSessionsPage = params.fetchSessionsPage ?? fetchSessionsPageDefault;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   const recoveries: Promise<void>[] = [];
+  const ownedSessions: RawSessionListRow[] = [];
   const visitFailures: unknown[] = [];
   try {
     while (true) {
@@ -120,6 +122,7 @@ export async function recoverPendingSessionActivations(params: Readonly<{
       });
       for (const session of page.sessions) {
         if (!isOwnedSessionForPendingActivation(session)) continue;
+        ownedSessions.push(session);
         // Each Session retains its own Follow observation and activation order;
         // its startup must not hold discovery or recovery of another Session.
         recoveries.push((async () => {
@@ -144,7 +147,10 @@ export async function recoverPendingSessionActivations(params: Readonly<{
       cursor = page.nextCursor;
     }
   } finally {
-    await Promise.all(recoveries);
+    await Promise.all([
+      ...recoveries,
+      params.visitOwnedSessions?.(ownedSessions),
+    ]);
     if (visitFailures.length > 0) throw visitFailures[0];
   }
 }
@@ -155,6 +161,7 @@ export function createPendingSessionActivationRecovery(params: Readonly<{
   warn: (message: string, input: PendingSessionActivationInput, error: unknown) => void;
   fetchSessionsPage?: typeof fetchSessionsPageDefault;
   visitOwnedSession?: (sessionId: string, session: RawSessionListRow) => Promise<void>;
+  visitOwnedSessions?: (sessions: readonly RawSessionListRow[]) => Promise<void>;
   /** Host composition discovers only already-held protected requester Session refs. */
   recoverRequesterSessions?: () => Promise<void>;
 }>): Readonly<{

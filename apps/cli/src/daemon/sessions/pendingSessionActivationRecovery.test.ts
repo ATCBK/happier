@@ -47,18 +47,21 @@ describe('pending session activation recovery', () => {
     expect(effects).toContain('activate:first');
     expect(recovered).toBe(true);
   });
-  it('visits owned idle receivers without Pending rows so Follow recovery survives reconnect', async () => {
+  it('visits owned followed and running receivers while also exposing one owned inventory', async () => {
     const visited: string[] = [];
+    const inventories: string[][] = [];
     const activated: string[] = [];
     const createRecovery = () => createPendingSessionActivationRecovery({
       token: 'token',
       activate: async input => { activated.push(input.sessionId); },
       visitOwnedSession: async sessionId => { visited.push(sessionId); },
+      visitOwnedSessions: async sessions => { inventories.push(sessions.map(session => session.id)); },
       warn: vi.fn(),
       fetchSessionsPage: async () => ({
         sessions: createSessionListResponseFixture([
           createSessionRecordFixture({ id: 'held-reset', pendingCount: 1 }),
           createSessionRecordFixture({ id: 'idle-follow', pendingCount: 0, active: false }),
+          createSessionRecordFixture({ id: 'active-running', pendingCount: 0, active: true }),
           createSessionRecordFixture({ id: 'shared', pendingCount: 1, share: { accessLevel: 'view', canApprovePermissions: false } }),
         ]).sessions,
         hasNext: false, nextCursor: null,
@@ -66,7 +69,14 @@ describe('pending session activation recovery', () => {
     });
     await createRecovery().recoverAfterConnect();
     await createRecovery().recoverAfterConnect();
-    expect(visited).toEqual(['held-reset', 'idle-follow', 'held-reset', 'idle-follow']);
+    expect(visited).toEqual([
+      'held-reset', 'idle-follow', 'active-running',
+      'held-reset', 'idle-follow', 'active-running',
+    ]);
+    expect(inventories).toEqual([
+      ['held-reset', 'idle-follow', 'active-running'],
+      ['held-reset', 'idle-follow', 'active-running'],
+    ]);
     expect(activated).toEqual([]);
   });
   it('routes live hints and the reconnect scan through one canonical activator', async () => {

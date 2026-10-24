@@ -16,14 +16,18 @@ const pending = (): SessionUsageLimitRecoveryV1 => ({ v: 1, status: 'waiting', i
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-function fixture() {
+function fixture(options: Readonly<{ unrelatedRows?: number }> = {}) {
   let intent = pending();
   let active = false;
   let latestTurnStatus: 'failed' | 'completed' = 'failed';
   let enabled = true;
   let ownerAccess = true;
   let unavailable = false;
+  let current = true;
+  let staleAfterCurrentness = false;
   let wakes = 0;
+  let currentnessReads = 0;
+  let exactSessionReads = 0;
   const row = () => createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active, latestTurnStatus,
     ...(ownerAccess ? {} : { share: { accessLevel: 'edit' as const, canApprovePermissions: false } }),
     metadata: JSON.stringify({ machineId: 'machine-1', [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: intent }) });
@@ -32,9 +36,25 @@ function fixture() {
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (unavailable) throw new Error('Home temporarily unavailable');
-    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
-    if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: row() } };
-    if (path === '/v2/sessions') return { status: 200, data: createSessionListResponseFixture([row(),
+    if (path === '/v1/account/encryption/currentness') {
+      currentnessReads += 1;
+      if (staleAfterCurrentness) current = false;
+      return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+    }
+    if (path.startsWith('/v2/sessions/')) {
+      exactSessionReads += 1;
+      const id = decodeURIComponent(path.slice('/v2/sessions/'.length));
+      if (id === sessionId) return { status: 200, data: { session: row() } };
+      if (id.startsWith('c00000000000000000000')) return { status: 200, data: { session: createSessionRecordFixture({
+        id, encryptionMode: 'plain', active: false, latestTurnStatus: 'completed', metadata: JSON.stringify({ machineId: 'machine-1' }),
+      }) } };
+    }
+    if (path === '/v2/sessions') return { status: 200, data: createSessionListResponseFixture([
+      row(),
+      ...Array.from({ length: options.unrelatedRows ?? 0 }, (_, index) => createSessionRecordFixture({
+        id: `c${String(index).padStart(24, '0')}`, encryptionMode: 'plain', active: false, latestTurnStatus: 'completed',
+        metadata: JSON.stringify({ machineId: 'machine-1' }),
+      })),
       createSessionRecordFixture({ ...row(), id: 'shared-editor-session', share: { accessLevel: 'edit', canApprovePermissions: false } }),
     ]) };
     throw new Error(`Unexpected Home read: ${path}`);
@@ -53,24 +73,50 @@ function fixture() {
       if (result && typeof result === 'object' && 'status' in result && result.status === 'cancelled') return { status: 'superseded' };
       return { status: 'wait', nextCheckAtMs: 5_000 };
     } });
-  const restore = async (id: string) => {
-    await owner.restoreSession({
-      sessionId: id, credentials: { token: 'fixture-token', encryption: null }, machineId: 'machine-1', scheduler,
-      currentMachineHost: 'worker', currentMachineHomeDir: '/users/worker', isCurrent: () => true,
-      getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
-        features: { sessions: { enabled: true, usageLimitRecovery: { enabled } } }, capabilities: {},
-      }) }),
-      runCheckNow: (currentSessionId: string) => machine.invokeLocal(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId: currentSessionId }),
-    });
-  };
+  const restoreInput = () => ({
+    credentials: { token: 'fixture-token', encryption: null } as const, machineId: 'machine-1', scheduler,
+    currentMachineHost: 'worker', currentMachineHomeDir: '/users/worker', isCurrent: () => current,
+    getServerFeaturesSnapshot: () => ({ status: 'ready' as const, features: FeaturesResponseSchema.parse({
+      features: { sessions: { enabled: true, usageLimitRecovery: { enabled } } }, capabilities: {},
+    }) }),
+    runCheckNow: (currentSessionId: string) => machine.invokeLocal(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId: currentSessionId }),
+  });
   const reconnect = createPendingSessionActivationRecovery({ token: 'fixture-token', activate: async () => {},
-    warn: (_message, _input, error) => { throw error; }, visitOwnedSession: restore });
-  return { owner, scheduler, reconnect, restore, wakes: () => wakes,
+    warn: (_message, _input, error) => { throw error; },
+    visitOwnedSessions: async sessions => await owner.restoreSessions({ ...restoreInput(), sessions }),
+  });
+  return { owner, scheduler, reconnect, wakes: () => wakes,
+    currentnessReads: () => currentnessReads, exactSessionReads: () => exactSessionReads,
     setActive: () => { active = true; }, setCompleted: () => { latestTurnStatus = 'completed'; },
     setIntent: (next: SessionUsageLimitRecoveryV1) => { intent = next; },
     disable: () => { enabled = false; }, revoke: () => { ownerAccess = false; },
+    staleAfterCurrentness: () => { staleAfterCurrentness = true; },
     unavailable: () => { unavailable = true; }, available: () => { unavailable = false; } };
 }
+
+it('restores one eligible recovery from an Account-scale inventory with bounded Home reads', async () => {
+  const f = fixture({ unrelatedRows: 1_000 });
+  try {
+    await f.reconnect.recoverAfterConnect();
+    expect(f.owner.hasRunner(sessionId)).toBe(true);
+    expect(f.currentnessReads()).toBe(1);
+    expect(f.exactSessionReads()).toBe(0);
+    await f.reconnect.recoverAfterConnect();
+    expect(f.currentnessReads()).toBe(2);
+    expect(f.exactSessionReads()).toBe(0);
+  } finally { f.scheduler.dispose(); }
+});
+
+it('refuses the recovery inventory when its Account lifetime becomes stale', async () => {
+  const f = fixture({ unrelatedRows: 1_000 });
+  try {
+    f.staleAfterCurrentness();
+    await f.reconnect.recoverAfterConnect();
+    expect(f.owner.hasRunner(sessionId)).toBe(false);
+    expect(f.currentnessReads()).toBe(1);
+    expect(f.exactSessionReads()).toBe(0);
+  } finally { f.scheduler.dispose(); }
+});
 
 it('restores ordinary waiting recovery through the owner reconnect scan and registered machine control', async () => {
   const f = fixture();

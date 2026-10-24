@@ -1850,9 +1850,9 @@ export async function bootstrapMachineSyncRuntime(
       const pendingSessionActivationRecovery = createPendingSessionActivationRecovery({
         token: credentials.token,
         activate: activatePendingSession,
-        visitOwnedSession: async (sessionId, session) => {
-          await inactiveUsageLimitRecoveryCheckOwner.restoreSession({
-            sessionId,
+        visitOwnedSessions: async sessions => {
+          await inactiveUsageLimitRecoveryCheckOwner.restoreSessions({
+            sessions,
             credentials,
             machineId: params.machineId,
             currentMachineHost: params.preferredHost ?? os.hostname(),
@@ -1864,6 +1864,8 @@ export async function bootstrapMachineSyncRuntime(
               RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId: currentSessionId },
             ),
           }).catch(error => logger.warn('[DAEMON RUN] Usage-limit reconnect recovery remains pending', error));
+        },
+        visitOwnedSession: async (sessionId, session) => {
           await reconcileFollowReceiver(sessionId).catch(error => logger.warn('[DAEMON RUN] Follow reconnect read remains pending', error));
           if ((session.pendingCount ?? 0) > 0) await inactiveUsageLimitRecoveryScheduler.reconcilePendingResetStarts(sessionId)
             .catch(error => logger.warn('[DAEMON RUN] Pending reset reconnect demand remains held', error));
