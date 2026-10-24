@@ -23,6 +23,7 @@ import type { UsageDayLabels } from '../usage/charts/UsageDayInAgents.js';
 import {
   HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
+  HappierPublicProfileWidget,
   type HappierPublicProfileLabels,
 } from '../../components/PublicProfile.js';
 import type { PublicUsageOriginalLabels } from './PublicProfileUsage.js';
@@ -180,6 +181,53 @@ function render(
 }
 
 describe('HappierPublicProfile', () => {
+  it('shares one model projection across twenty child widgets instead of revisiting 1000 facts per widget', () => {
+    const view = projectPublicProfile({ context, snapshot: { ...snapshot, facts: { ...snapshot.facts,
+      sessionDurations: Array.from({ length: 1000 }, () => ({ agentId: 'codex', durationMs: 100 })) } }, metadata: {},
+      policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, sessionDurations: true } },
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, layout: PublicProfileLayoutV1Schema.parse({ v: 1, items:
+        Array.from({ length: 20 }, (_, i) => ({ kind: 'widget', id: String(i), size: 'medium', frameStyle: 'plain',
+          presentation: { kind: 'usage', widgetId: 'usage_planet', inputs: {} } })) }) })!;
+    let visits = 0;
+    view.snapshot.facts.sessionDurations = view.snapshot.facts.sessionDurations!.map(row => ({ ...row,
+      get durationMs() { visits++; return row.durationMs; } }));
+    const environment = projectHappierUiEnvironment(createSurfaceContext());
+    const single = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, { environment,
+      children: createElement(HappierPublicProfile, { view, labels }) }));
+    single.unmount();
+    const oneProjectionVisits = visits;
+    expect(oneProjectionVisits).toBeGreaterThanOrEqual(1000);
+    visits = 0;
+    const page = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, { environment,
+      children: createElement(HappierPublicProfile, { view, labels, owner: {
+        onlyYou: 'Only you', hiddenBlockIds: new Set(), renderBlocks: () => view.layout.items.map(item =>
+          createElement(HappierPublicProfileWidget, { key: item.id, view, labels, widgetId: item.id })),
+      } }) }));
+    try { expect(visits).toBe(oneProjectionVisits); } finally { page.unmount(); }
+  });
+  it('gives the exported page and individual widget the same admitted project links and strips both when off', () => {
+    for (const projects of [true, false]) {
+      const view = projectPublicProfile({ context, snapshot, metadata: { projects: [{ label: 'Public project', url: 'https://example.com/project' }] },
+        policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, projects } },
+        appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+        layout: PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'projects', size: 'wide', frameStyle: 'plain',
+          presentation: { kind: 'usage', widgetId: 'usage_projects', inputs: {} } }] }) })!;
+      const usage = { cold: true, paint: { accent: '#aabbee', paper: '#111111', dark: true }, agent: (id: string) => ({ id, name: id, color: '#aabbee' }),
+        labels: { chartLabel: () => 'Projects', unavailable: 'Unavailable', projects: { empty: 'No projects' } } };
+      const mounts = [createElement(HappierPublicProfile, { view, labels, usage }),
+        createElement(HappierPublicProfileWidget, { view, widgetId: 'projects', labels, usage })].map(children =>
+          mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+            environment: projectHappierUiEnvironment(createSurfaceContext()), children,
+          })));
+      try {
+        expect(mounts[0]!.container.querySelector('a[href="https://example.com/project"]') !== null).toBe(projects);
+        // jsdom does not measure the standalone widget. Its real body still distinguishes
+        // admitted links (awaiting layout) from lost metadata (the explicit empty state).
+        expect(mounts[1]!.container.textContent).not.toContain('No projects');
+        expect(view.metadata.projects).toEqual(projects ? [{ label: 'Public project', url: 'https://example.com/project' }] : undefined);
+      } finally { mounts.forEach(mounted => mounted.unmount()); }
+    }
+  });
   it.each([
     ['usage_daily', {}, 'Activity level'],
     ['usage_period_summary', {}, 'Active days'],

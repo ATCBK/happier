@@ -1,17 +1,21 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import * as React from 'react';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
-import { WidgetDefinitionDraftV1Schema } from '@happier-dev/protocol/widgets';
+import { WidgetDefinitionDraftV1Schema, WidgetPublicSnapshotPresentationV1Schema } from '@happier-dev/protocol/widgets';
 
 import { renderHook } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { storage } from '@/sync/domains/state/storageStore';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { readUsageWidgetPageContext, readUsageWidgetPageScope, usageWidgetSurfaceContext } from '@/components/settings/usage/usageWidgetPageContext';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import type { AppShellPluginUiProjectionValue } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { widgetInstalledPackage, widgetProjectionEntry, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -37,11 +41,13 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
 let disposeLoader: (() => void) | undefined;
 let usePublicProfileWidgetArea: typeof import('./usePublicProfileWidgetArea')['usePublicProfileWidgetArea'];
 let useMountedActionExecution: typeof import('@/components/approvals/useMountedActionExecution')['useMountedActionExecution'];
+let AppShellPluginUiProjectionValueProvider: typeof import('@/components/appShell/plugins/AppShellPluginUiProjection')['AppShellPluginUiProjectionValueProvider'];
 beforeAll(async () => {
   const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
   disposeLoader = await installRealActionExecutorModuleLoader();
   ({ usePublicProfileWidgetArea } = await import('./usePublicProfileWidgetArea'));
   ({ useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution'));
+  ({ AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection'));
 });
 afterAll(() => disposeLoader?.());
 beforeEach(() => {
@@ -50,12 +56,101 @@ beforeEach(() => {
     settings: { ...storage.getState().settings, actionsSettingsV1: policy } });
 });
 
-async function openArea(context?: () => WidgetSurfaceContext) {
+async function openArea(context?: () => WidgetSurfaceContext, wrapper?: React.ComponentType<React.PropsWithChildren>) {
   return renderHook(() => {
     const execution = useMountedActionExecution({ serverId: runtime.serverId, accountId: 'account-a' });
     return { ...usePublicProfileWidgetArea(runtime.serverId, execution, undefined, context?.()), execution };
-  });
+  }, { wrapper });
 }
+
+function declarationValue(projection = EMPTY_PLUGIN_UI_PROJECTION): AppShellPluginUiProjectionValue {
+  return { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+    machineId: null, serverId: runtime.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
+    reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {} };
+}
+
+function installedDaysProjection(label: string | null, unrelated = false) {
+  const days = { ...widgetProjectionEntry({ pluginId: 'acme.public', localId: 'days', target: 'app', title: 'Shared days',
+    inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false } }),
+    publicPresentation: WidgetPublicSnapshotPresentationV1Schema.parse({ kind: 'declarative', document: { version: 1,
+      root: { kind: 'metric', label: label ?? 'Active days', data: { kind: 'value', value: { kind: 'public_profile' } },
+        value: { path: ['snapshot', 'facts', 'activeDays'], type: 'number' } } } }) };
+  const entries = [...(label === null ? [] : [days]), ...(unrelated
+    ? [widgetProjectionEntry({ pluginId: 'acme.other', localId: 'unrelated', target: 'app' })] : [])];
+  return normalizePluginUiProjection({ v: 2, generation: unrelated ? 2 : 1,
+    installedPackagesById: { 'acme.public': widgetInstalledPackage('acme.public', 'Public facts'),
+      // Gallery provenance changes, but this installed View's reviewed public copy does not.
+      ...(unrelated ? { 'acme.other': widgetInstalledPackage('acme.other', 'Public facts') } : {}) },
+    actionsById: {}, resourcesById: {}, familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map(entry => [entry.id, entry])) } } });
+}
+
+it('keeps a captured builtin edition current across declaration readiness and unrelated projection publications', async () => {
+  let value = declarationValue();
+  let declarationReady = false;
+  const wrapper = ({ children }: React.PropsWithChildren) => <AppShellPluginUiProjectionValueProvider value={value}
+    declarationReady={declarationReady}>{children}</AppShellPluginUiProjectionValueProvider>;
+  const hook = await openArea(undefined, wrapper);
+  try {
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    const captured = hook.getCurrent().candidate!;
+    const execution = hook.getCurrent().execution;
+    expect(captured.layout.items.map(item => item.id)).toEqual(['days', 'crew', 'planet']);
+    declarationReady = true;
+    await hook.rerender();
+    expect.soft(captured.isCurrent()).toBe(true);
+    value = { ...value, pluginUiProjection: widgetProjectionOf([{ pluginId: 'acme.unrelated', localId: 'status', target: 'app' }],
+      { 'acme.unrelated': widgetInstalledPackage('acme.unrelated', 'Unrelated') }) };
+    await hook.rerender();
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect.soft(captured.isCurrent()).toBe(true);
+    expect(hook.getCurrent().candidate?.layout).toBe(captured.layout);
+    expect(hook.getCurrent().candidate?.isCurrent).toBe(captured.isCurrent);
+    expect(execution.isCurrent()).toBe(true);
+    expect(execution.getSignal().aborted).toBe(false);
+  } finally { await hook.unmount(); }
+});
+
+it('tracks consumed installed declarations without retiring the edition for unrelated projection changes', async () => {
+  let value = declarationValue(installedDaysProjection('Active days'));
+  const wrapper = ({ children }: React.PropsWithChildren) => <AppShellPluginUiProjectionValueProvider value={value}>
+    {children}</AppShellPluginUiProjectionValueProvider>;
+  const hook = await openArea(undefined, wrapper);
+  try {
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    await act(async () => {
+      expect(await hook.getCurrent().binding.port!.execute({ actionId: 'widgets.item.add', size: 'medium',
+        instance: { v: 1, id: 'installed-days', definition: { kind: 'installed', surface: { pluginId: 'acme.public', localId: 'days' } }, bindings: {} },
+      })).toMatchObject({ ok: true });
+      await hook.getCurrent().area.reload();
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().candidate?.layout.items).toContainEqual(expect.objectContaining({ id: 'installed-days', title: 'Shared days' })));
+    const captured = hook.getCurrent().candidate!;
+    value = { ...value, pluginUiProjection: installedDaysProjection('Active days', true) };
+    await hook.rerender();
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect.soft(captured.isCurrent()).toBe(true);
+    expect.soft(hook.getCurrent().candidate?.layout).toBe(captured.layout);
+    expect(hook.getCurrent().candidate?.isCurrent).toBe(captured.isCurrent);
+    const beforeEdit = hook.getCurrent().candidate!;
+    value = { ...value, pluginUiProjection: installedDaysProjection('Updated days', true) };
+    await hook.rerender();
+    expect(beforeEdit.isCurrent()).toBe(false);
+    await vi.waitFor(() => expect(hook.getCurrent().candidate?.layout.items).toContainEqual(expect.objectContaining({ id: 'installed-days',
+      presentation: expect.objectContaining({ document: expect.objectContaining({ root: expect.objectContaining({ label: 'Updated days' }) }) }) })));
+    const beforeRemoval = hook.getCurrent().candidate!;
+    value = { ...value, pluginUiProjection: installedDaysProjection(null, true) };
+    await hook.rerender();
+    expect(beforeRemoval.isCurrent()).toBe(false);
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('unavailable'));
+    expect(hook.getCurrent().candidate).toBeNull();
+    value = { ...value, pluginUiProjection: installedDaysProjection('Restored days') };
+    await hook.rerender();
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    const beforeRetirement = hook.getCurrent().candidate!;
+    retireActiveServerAccountScopeLifetime();
+    expect(beforeRetirement.isCurrent()).toBe(false);
+  } finally { await hook.unmount(); }
+});
 
 it('compiles the acknowledged named area and copied placements, preserving a saved empty layout', async () => {
   const hook = await openArea();

@@ -17,10 +17,9 @@ export type { HappierPublicProfileUsageHost, HappierPublicProfileUsageLabels } f
 type PublishedProps = Omit<Extract<PresentationProps, { view: unknown }>, 'view' | 'projection'> & Readonly<{ view: PublicProfileInputView }>;
 export type HappierPublicProfileProps = PublishedProps | Extract<PresentationProps, { result: unknown }>;
 
-function usePublicProfileProjection(view: PublicProfileInputView, usage: HappierPublicProfileUsageHost | undefined,
-  metadata: PublicProfileInputView['metadata'] | undefined): PublicProfileProjection {
-  const models = useMemo(() => view.snapshot ? projectPublicUsageChartModels(view.snapshot, metadata) : null,
-    [view.snapshot, metadata]);
+function usePublicProfileProjection(view: PublicProfileInputView, usage: HappierPublicProfileUsageHost | undefined): PublicProfileProjection {
+  const models = useMemo(() => view.snapshot ? projectPublicUsageChartModels(view.snapshot, view.metadata) : null,
+    [view.snapshot, view.metadata]);
   const format = usage?.labels.records?.format;
   const records = useMemo(() => format && view.snapshot ? projectPublicUsageRecords(view.snapshot, format) : null,
     [view.snapshot, format]);
@@ -30,7 +29,7 @@ function usePublicProfileProjection(view: PublicProfileInputView, usage: Happier
 }
 
 function PublishedPublicProfile(props: PublishedProps) {
-  const projection = usePublicProfileProjection(props.view, props.usage, props.view.metadata);
+  const projection = usePublicProfileProjection(props.view, props.usage);
   return <ProfilePresentation {...props} projection={projection} />;
 }
 
@@ -40,6 +39,6 @@ export function HappierPublicProfile(props: HappierPublicProfileProps) {
 }
 
 export function HappierPublicProfileWidget(props: Omit<ComponentProps<typeof WidgetPresentation>, 'view' | 'projection'> & Readonly<{ view: PublicProfileInputView }>) {
-  const projection = usePublicProfileProjection(props.view, props.usage, undefined);
+  const projection = usePublicProfileProjection(props.view, props.usage);
   return <WidgetPresentation {...props} projection={projection} />;
 }

@@ -40,6 +40,8 @@ export type PublicProfileEditorProps = Readonly<{
   unavailable?: Readonly<{ reason: string; onRetry: () => void }> | null;
   /** The outcome of the last Publish, Apply or consent request. */
   notice: string | null;
+  /** Undo for an acknowledged Apply: the notice then reports success and offers it. */
+  noticeAction?: Readonly<{ label: string; onPress: () => void }> | null;
   submitting: boolean;
   /** A pending or unavailable private-area copy cannot Apply an older local layout. */
   canSubmit?: boolean;
@@ -87,10 +89,11 @@ export function PublicProfileEditor(
   const notice = props.notice ? (
     <SurfaceStateCard
       testID="public-profile-editor-notice"
-      kind="warning"
+      kind={props.noticeAction ? 'success' : 'warning'}
       layout="inline"
       size="line"
       title={props.notice}
+      {...(props.noticeAction ? { action: { ...props.noticeAction, testID: 'public-profile-editor-undo' } } : {})}
     />
   ) : null;
   const toolbar = (

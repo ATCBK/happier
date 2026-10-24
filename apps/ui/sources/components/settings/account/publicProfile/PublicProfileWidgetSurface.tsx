@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierPublicProfileWidget } from '@happier-dev/plugin-ui/components';
-import { type HappierPublicProfileLabels, type HappierPublicProfileUsageHost } from '@happier-dev/plugin-ui/presentation';
+import { type HappierPublicProfileLabels, type HappierPublicProfileOwner, type HappierPublicProfileUsageHost } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, type PublicProfileSnapshotV1 } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfilePreview } from '@happier-dev/protocol/account/projectPublicProfile';
 import { PublicProfilePreviewResultV1Schema } from '@happier-dev/protocol/account/publicProfileIntents';
@@ -24,7 +24,9 @@ type PreviewSource = Omit<Parameters<typeof projectPublicProfilePreview>[0], 'la
  * says why), so blocks keep their slots quietly instead of each reading again or naming another cause.
  */
 export type PublicProfileWidgetPreview =
-  | Readonly<{ kind: 'ready'; source: PreviewSource; labels: HappierPublicProfileLabels; usage?: HappierPublicProfileUsageHost }>
+  | Readonly<{ kind: 'ready'; source: PreviewSource; labels: HappierPublicProfileLabels; usage?: HappierPublicProfileUsageHost;
+      /** Edit on the owner's page: the same in-place hidden presentation the page itself draws for its owner. */
+      owner?: HappierPublicProfileOwner }>
   | Readonly<{ kind: 'unavailable'; reason: string }>;
 export const PublicProfileWidgetPreviewContext = React.createContext<PublicProfileWidgetPreview | null>(null);
 
@@ -96,7 +98,8 @@ export function PublicProfileWidgetSurface(props: Readonly<{
   }) : null;
   if (!view || !preview) return <SurfaceStateCard testID={props.testID} kind="unavailable" title={t('publicIdentity.page.blockUnavailable')} />;
   return <CorePluginUiPresentationScope><HappierPublicProfileWidget view={view} widgetId={props.instance.id}
-    labels={preview.labels} usage={preview.usage} testID={props.testID} /></CorePluginUiPresentationScope>;
+    labels={preview.labels} usage={preview.usage} testID={props.testID}
+    {...(preview.owner?.hiddenBlockIds.has(props.instance.id) ? { owner: preview.owner } : {})} /></CorePluginUiPresentationScope>;
 }
 
 const styles = StyleSheet.create((theme) => ({

@@ -71,47 +71,61 @@ function schemaAt(path: readonly string[]): JsonSchemaObject | undefined {
   for (const key of path) schema = key === '*' ? record(schema?.items) : record(record(schema?.properties)?.[key]);
   return schema;
 }
-function permitted(path: readonly string[], policy: PublicProfilePolicyV1): boolean {
+function pathDependencies(path: readonly string[]): readonly PublicProfileField[] | null {
   if (path[0] === 'snapshot' && path[1] === 'lenses') {
-    return enabled(policy, 'sourceSplit') && (path[2] !== '*' || permitted(['snapshot', ...path.slice(3)], policy));
+    const nested = path[2] === '*' ? pathDependencies(['snapshot', ...path.slice(3)]) : [];
+    return nested ? ['sourceSplit', ...nested] : null;
   }
   if (path[0] === 'snapshot' && path[1] === 'facts') {
     const field = factFields[path[2] as keyof PublicUsageFactsV1];
-    if (!field || !enabled(policy, field)) return false;
-    if (path.slice(3).includes('tokens') && !enabled(policy, 'tokens')) return false;
+    return field ? [field, ...(path.slice(3).includes('tokens') ? ['tokens' as const] : [])] : null;
   }
-  if (path[0] === 'snapshot' && path[1] === 'fieldCoverage') return enabled(policy, path[2] as PublicProfileField);
-  if (path[0] === 'identity') return enabled(policy, path[1] === 'sinceMs' ? 'since' : path[1] === 'avatarUrl' ? 'avatar' : 'name');
-  if (path[0] === 'metadata') return enabled(policy, path[1] as PublicProfileField);
-  return true;
+  if (path[0] === 'snapshot' && path[1] === 'fieldCoverage') return [path[2] as PublicProfileField];
+  if (path[0] === 'identity') return [path[1] === 'sinceMs' ? 'since' : path[1] === 'avatarUrl' ? 'avatar' : 'name'];
+  if (path[0] === 'metadata') return [path[1] as PublicProfileField];
+  return [];
+}
+function permitted(path: readonly string[], policy: PublicProfilePolicyV1): boolean {
+  const dependencies = pathDependencies(path);
+  return dependencies !== null && dependencies.every(field => enabled(policy, field));
+}
+type UsageDependencies = Readonly<{ anyOf: readonly (readonly PublicProfileField[])[]; fields: readonly PublicProfileField[] }>;
+/** Admission and placement explanations share the body's actual inputs, including optional encodings. */
+function usageDependencies(presentation: BuiltinUsagePublicPresentationV1): UsageDependencies {
+  const uses = (...fields: PublicProfileField[]): UsageDependencies => ({ anyOf: [fields], fields });
+  const optional = (required: UsageDependencies, ...fields: PublicProfileField[]): UsageDependencies =>
+    ({ ...required, fields: [...required.fields, ...fields] });
+  switch (presentation.widgetId) {
+    case 'usage_rhythm': return presentation.inputs.style === 'daylight' ? uses('punch', 'dayNightActivity')
+      : presentation.inputs.style === 'weekdayHour' || presentation.inputs.style === 'weekTide' ? uses('punch')
+        : presentation.inputs.style === 'sky'
+          ? optional(uses('calendar'), 'currentStreak', 'bestStreak') : uses('calendar');
+    case 'usage_daily': return uses('calendar');
+    case 'usage_period_summary': return uses('tokens', 'activeDays', 'agentTime', 'mergedPrs', 'currentStreak', 'bestStreak', 'peakParallel');
+    case 'usage_breakdowns': return presentation.inputs.style === 'crew' ? uses('agentMix', 'agentActiveDays') : uses('agentMix', 'sourceSplit');
+    case 'usage_constellation': return optional(uses('agentMix'), 'agentActiveDays');
+    case 'usage_orbit': return presentation.inputs.style === 'moons' ? uses('agentMix', 'agentActiveDays') : optional(uses('agentMix'), 'agentActiveDays');
+    case 'usage_machines': return uses('machineKinds');
+    case 'usage_projects': return uses('projects');
+    case 'usage_atmosphere': return optional(uses('weeklyPeakParallel'), 'peakParallel');
+    case 'usage_flow': return uses('weeklyAgentMix');
+    case 'usage_parallel': return uses('peakParallel');
+    case 'usage_outcomes': return uses('mergedPrs');
+    case 'usage_recap': {
+      const values = presentation.inputs.style === 'personalRecords'
+        ? uses('activeDays', 'currentStreak', 'bestStreak', 'peakParallel', 'sessionDurations') : uses('activeDays', 'peakParallel', 'mergedPrs');
+      return { anyOf: [['highlights'], ...values.anyOf], fields: ['highlights', ...values.fields] };
+    }
+    case 'usage_footprint': return optional(uses('footprint'), 'tokens');
+    case 'usage_source_coverage': return { anyOf: [Object.values(factFields)], fields: [] };
+    case 'usage_run_length': return uses('sessionDurations');
+    // Every encoding is independently masked; the neutral portrait carries no hidden fact.
+    case 'usage_planet': return { anyOf: [], fields: ['activeDays', 'peakParallel', 'currentStreak', 'bestStreak'] };
+  }
 }
 /** Built-in bodies receive only masked facts; placements cannot grant their own disclosure. */
 function permittedUsage(presentation: BuiltinUsagePublicPresentationV1, policy: PublicProfilePolicyV1): boolean {
-  const any = (...fields: PublicProfileField[]) => fields.some(field => enabled(policy, field));
-  switch (presentation.widgetId) {
-    case 'usage_rhythm': return presentation.inputs.style === 'daylight' ? any('punch', 'dayNightActivity')
-      : presentation.inputs.style === 'weekdayHour' || presentation.inputs.style === 'weekTide' ? enabled(policy, 'punch')
-        : enabled(policy, 'calendar');
-    case 'usage_daily': return enabled(policy, 'calendar');
-    case 'usage_period_summary': return any('tokens', 'activeDays', 'agentTime', 'mergedPrs', 'currentStreak', 'bestStreak', 'peakParallel');
-    case 'usage_breakdowns': return presentation.inputs.style === 'crew' ? any('agentMix', 'agentActiveDays') : any('agentMix', 'sourceSplit');
-    case 'usage_constellation': return enabled(policy, 'agentMix');
-    case 'usage_orbit': return presentation.inputs.style === 'moons' ? any('agentMix', 'agentActiveDays') : enabled(policy, 'agentMix');
-    case 'usage_machines': return enabled(policy, 'machineKinds');
-    case 'usage_projects': return enabled(policy, 'projects');
-    case 'usage_atmosphere': return enabled(policy, 'weeklyPeakParallel');
-    case 'usage_flow': return enabled(policy, 'weeklyAgentMix');
-    case 'usage_parallel': return enabled(policy, 'peakParallel');
-    case 'usage_outcomes': return enabled(policy, 'mergedPrs');
-    case 'usage_recap': return enabled(policy, 'highlights') && (presentation.inputs.style === 'personalRecords'
-      ? any('activeDays', 'currentStreak', 'bestStreak', 'peakParallel', 'sessionDurations')
-      : any('activeDays', 'peakParallel', 'mergedPrs'));
-    case 'usage_footprint': return enabled(policy, 'footprint');
-    case 'usage_source_coverage': return any(...Object.values(factFields));
-    case 'usage_run_length': return enabled(policy, 'sessionDurations');
-    // Every encoding is independently masked; the neutral portrait carries no hidden fact.
-    case 'usage_planet': return true;
-  }
+  return usageDependencies(presentation).anyOf.every(group => group.some(field => enabled(policy, field)));
 }
 function assertField(field: PluginDeclarativeDataFieldV1, prefix: readonly string[] = []) {
   const schema = schemaAt([...prefix, ...field.path]);
@@ -121,6 +135,33 @@ function fields(node: PluginDeclarativeDataNodeV1): readonly PluginDeclarativeDa
   return node.kind === 'metric' ? [node.value, ...(node.comparison ? [node.comparison.value] : [])]
     : node.kind === 'chart' ? [node.x, ...('y' in node ? [node.y] : [node.series, node.value])]
     : [...node.columns.map(column => column.field), ...(node.mark ? [node.mark.field] : [])];
+}
+/** Symbolic dependencies need only the layout, never a counterfactual snapshot or model rebuild. */
+export function resolvePublicProfileFieldDependencies(input: PublicProfileLayoutV1): ReadonlyMap<string, ReadonlySet<PublicProfileField>> {
+  const layout = validatePublicProfileLayout(input);
+  const dependencies = new Map<string, ReadonlySet<PublicProfileField>>();
+  for (const item of layout.items) for (const widget of item.kind === 'widget' ? [item] : item.children) {
+    const used = new Set<PublicProfileField>();
+    const addPath = (path: readonly string[]) => {
+      for (const field of pathDependencies(path) ?? []) used.add(field);
+    };
+    if (widget.presentation.kind === 'usage') for (const field of usageDependencies(widget.presentation).fields) used.add(field);
+    else {
+      const pending = [widget.presentation.document.root];
+      while (pending.length) {
+        const node = pending.pop()!;
+        if (isPluginDeclarativeDataNodeV1(node)) {
+          const prefix = node.kind === 'metric' ? [] : [...node.rows, '*'];
+          if (node.kind !== 'metric') addPath(node.rows);
+          for (const field of fields(node)) addPath([...prefix, ...field.path]);
+        }
+        if ('children' in node) pending.push(...node.children);
+      }
+    }
+    if (used.has('weeklyPeakParallel')) used.add('peakParallel');
+    dependencies.set(widget.id, used);
+  }
+  return dependencies;
 }
 /** Field vocabulary and semantics remain here; admission delegates to this owner. */
 export function validatePublicProfileDocumentBindings(document: WidgetPublicSnapshotDocumentV1): void {

@@ -90,6 +90,11 @@ export type HappierPublicProfileOwner = Readonly<{
   renderBlocks?: () => ReactNode;
   /** The owner's customizing bar, on the page between its header and the period (lab `ppcomp-E`). */
   renderToolbar?: () => ReactNode;
+  /**
+   * Under a block visitors don't see: why, with the one way to share what it needs (lab `ppcomp-E`
+   * "Share hours of the week"). Consent stays with the host's one policy owner.
+   */
+  renderHiddenNote?: (blockId: string) => ReactNode;
 }>;
 
 export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
@@ -411,13 +416,15 @@ export function HappierPublicProfileWidget(props: Readonly<{
   widgetId: string;
   labels: HappierPublicProfileLabels;
   usage?: HappierPublicProfileUsageHost;
+  /** The owner's in-place view of this block, exactly as the page draws it for its owner. */
+  owner?: HappierPublicProfileOwner;
   testID: string;
 }>) {
   const { models, records } = props.projection;
   const widget = props.view.layout.items.flatMap(item => item.kind === 'widget' ? [item] : item.children)
     .find(item => item.id === props.widgetId);
   return widget && models ? <PublicProfileBlock widget={widget} projection={props.projection} labels={props.labels} usageModels={models} usageRecords={records}
-    usage={props.usage} testID={props.testID} bare /> : null;
+    usage={props.usage} owner={props.owner} testID={props.testID} bare /> : null;
 }
 
 function PublicProfileBlock(
@@ -446,7 +453,10 @@ function PublicProfileBlock(
     ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels} records={props.usageRecords}
       host={props.usage} width={props.coldWidthPx} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
     : props.projection.renderDeclarative(props.widget.presentation.document.root, theme, props.labels.inert);
-  const shownBody = onlyYou ? <View style={styles.quieted}>{body}</View> : body;
+  const shownBody = onlyYou ? <>
+    <View style={styles.quieted}>{body}</View>
+    {props.owner?.renderHiddenNote?.(props.widget.id)}
+  </> : body;
   if (props.bare)
     return (
       <View

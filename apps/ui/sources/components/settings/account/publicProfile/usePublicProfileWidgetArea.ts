@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { compileWidgetAreaPublicProfileLayoutV1, flattenWidgetLayoutWidgetsV1,
   WidgetDefinitionActionOutputSchemasV1, type BuiltinUsagePublicPresentationV1, type PublicProfileLayoutV1 } from '@happier-dev/protocol/widgets';
 import { createPublicProfileWidgetAreaPresetsV1, type PublicProfileLayoutPresetIdV1 } from '@happier-dev/protocol/widgets/publicProfileWidgetPresetsV1';
@@ -49,7 +50,7 @@ export function usePublicProfileWidgetArea(serverId: string,
   const [compiled, setCompiled] = React.useState<Readonly<{ layout: PublicProfileLayoutV1; isCurrent(): boolean }> | null>(null);
   const [failure, setFailure] = React.useState<typeof source | null>(null);
 
-  const isCurrent = React.useCallback(() => {
+  const isCurrent = React.useCallback((installedViews?: readonly PluginContributionIdentityV1[]) => {
     const current = liveSource.current;
     // A new observation is not a new reviewed layout. Compare its admitted
     // inputs, while authority and Artifact publications remain live guards.
@@ -58,7 +59,16 @@ export function usePublicProfileWidgetArea(serverId: string,
       && sameStrictJsonValue(current.state.surface.owner, current.surface.owner)
       && sameStrictJsonValue(current.surface, source.surface) && sameStrictJsonValue(current.context, source.context)
       && sameStrictJsonValue(current.state.surface, source.state.surface) && current.state.items === source.state.items
-      && current.declarations === source.declarations && current.artifacts === source.artifacts
+      && (current.declarations === source.declarations || installedViews !== undefined && installedViews.every(surface => {
+        if (!source.declarations.accountLifetime?.isCurrent() || !current.declarations.accountLifetime?.isCurrent()) return false;
+        const previous = readWidgetDescriptor(source.declarations.projection, surface);
+        const next = readWidgetDescriptor(current.declarations.projection, surface);
+        // The public compiler consumes only these installed-view fields, not
+        // private inputs, provenance or unrelated declaration publications.
+        return previous !== null && next !== null && previous.title === next.title
+          && sameStrictJsonValue(previous.sizeDeclaration, next.sizeDeclaration)
+          && sameStrictJsonValue(previous.publicPresentation, next.publicPresentation);
+      })) && current.artifacts === source.artifacts
       && artifactIds.every((id, index) => (storage.getState().artifacts[id] ?? null) === artifacts[index]);
   }, [source, artifactIds, artifacts]);
 
@@ -66,19 +76,25 @@ export function usePublicProfileWidgetArea(serverId: string,
     if (state.status !== 'ready' || !isCurrent() || compiled?.isCurrent()) return;
     let active = true;
     const controller = new AbortController();
+    // Track the compiler's actual reads, including installed bodies reached
+    // through Artifact definitions; builtins consume no plugin declarations.
+    const installedViews: PluginContributionIdentityV1[] = [];
+    const isPreparationCurrent = () => isCurrent(installedViews);
     void compileWidgetAreaPublicProfileLayoutV1({ v: 1, surface: state.surface, items: state.items }, {
       resolveDefinition: async reference => {
-        if (!isCurrent()) return null;
+        if (!isPreparationCurrent()) return null;
         const result = await execute.current.executeValue('widgets.definition.get', {
           account: { serverId: state.surface.serverId, accountId: state.surface.accountId }, artifactId: reference.artifactId,
         }, { signal: controller.signal });
         return WidgetDefinitionActionOutputSchemasV1['widgets.definition.get'].parse(result).definition;
       },
-      resolveInstalledView: surface => declarations.accountLifetime?.isCurrent()
-        ? readWidgetDescriptor(declarations.projection, surface) : null,
+      resolveInstalledView: surface => {
+        installedViews.push(surface);
+        return declarations.accountLifetime?.isCurrent() ? readWidgetDescriptor(declarations.projection, surface) : null;
+      },
     }).then(layout => {
-      if (active && isCurrent()) setCompiled({ layout, isCurrent });
-    }).catch(() => { if (active && isCurrent()) setFailure(source); });
+      if (active && isPreparationCurrent()) setCompiled({ layout, isCurrent: isPreparationCurrent });
+    }).catch(() => { if (active && isPreparationCurrent()) setFailure(source); });
     return () => { active = false; controller.abort(); };
   }, [source, isCurrent, state, declarations, compiled]);
 

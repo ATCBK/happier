@@ -32,10 +32,31 @@ describe('public profile layout presets', () => {
     }
   });
 
-  it.each(PUBLIC_PROFILE_LAYOUT_PRESET_IDS_V1)('%s is a valid copied layout whose every block survives the default consent', id => {
+  it('offers the approved four starting compositions, Minimal opening with Totals', () => {
+    expect(PUBLIC_PROFILE_LAYOUT_PRESET_IDS_V1).toEqual(['minimal', 'dataRich', 'story', 'nightOwl']);
+    const minimal = createPublicProfilePresetLayoutV1('minimal', { title: () => undefined }).items
+      .flatMap(item => item.kind === 'widget' && item.presentation.kind === 'usage' ? [item.presentation.widgetId] : []);
+    expect(minimal).toEqual(expect.arrayContaining(['usage_period_summary', 'usage_rhythm', 'usage_breakdowns']));
+    expect(minimal.filter(id => id === 'usage_planet').length).toBeLessThanOrEqual(1);
+  });
+
+  it('builds Night owl from hours-of-the-week levels, which stay hidden until that item is shared', () => {
+    const layout = validatePublicProfileLayout(createPublicProfilePresetLayoutV1('nightOwl', { title: () => undefined }));
+    const hours = layout.items.flatMap(item => item.kind === 'widget' && item.presentation.kind === 'usage'
+      && item.presentation.widgetId === 'usage_rhythm' && item.presentation.inputs.style === 'weekdayHour' ? [item.id] : []);
+    expect(hours).toHaveLength(1);
+    const project = (punch: boolean) => projectPublicProfile({ context, metadata: {}, snapshot, layout, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, punch } } })
+      ?.layout.items.map(item => item.id) ?? [];
+    expect(project(false)).not.toContain(hours[0]);
+    expect(project(true)).toContain(hours[0]);
+  });
+
+  it.each(PUBLIC_PROFILE_LAYOUT_PRESET_IDS_V1)('%s is a valid copied layout whose every block survives consent to the items it needs', id => {
     const layout = validatePublicProfileLayout(createPublicProfilePresetLayoutV1(id, { title: presentation => `title:${presentation.widgetId}` }));
     expect(layout.items.length).toBeGreaterThan(0);
-    const view = projectPublicProfile({ context, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, snapshot, layout,
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, punch: true } };
+    const view = projectPublicProfile({ context, policy, metadata: {}, snapshot, layout,
       appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 });
     const shown = view?.layout.items.flatMap(item => item.kind === 'widget' ? [item.id] : item.children.map(child => child.id)) ?? [];
     const placed = layout.items.flatMap(item => item.kind === 'widget' ? [item.id] : item.children.map(child => child.id));

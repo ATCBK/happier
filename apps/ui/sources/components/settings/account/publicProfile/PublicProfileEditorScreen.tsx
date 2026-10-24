@@ -7,6 +7,8 @@ import type {
 } from '@happier-dev/plugin-ui/presentation';
 import {
   PUBLIC_PROFILE_FIELDS_V1,
+  type PublicProfileField,
+  type PublicProfileMetadataV1,
   type PublicProfilePolicyV1,
 } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfilePreview } from '@happier-dev/protocol/account/projectPublicProfile';
@@ -15,6 +17,7 @@ import type {
   PublicProfileAppearanceV1,
   PublicProfileContextV1,
   PublicProfileLocalPreviewViewV1,
+  PublicProfileOwnerRecordV1,
   PublicProfilePreparedAppearanceV1,
 } from '@happier-dev/protocol/account/publicProfilePublication';
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -46,13 +49,18 @@ import {
   usePreparePublicProfileLook,
 } from './PublicProfileLookPanel';
 import { PublicProfileConsentStatus } from './PublicProfileConsentStatus';
+import { PublicProfileDetailsPanel } from './PublicProfileDetailsPanel';
+import { PublicProfileHiddenBlockNote } from './PublicProfileHiddenBlockNote';
 import { PublicProfilePublicData } from './PublicProfilePublicData';
 import { PublicProfileReview } from './PublicProfileReview';
 import { preparedPictureCopy, useAppliedPictureCopy } from './publicPictureCopy';
 import {
   createPublicProfileDraft,
-  DEFAULT_PUBLIC_PROFILE_QUERY,
   draftLookPresentation,
+  draftPreviewMetadata,
+  draftVisitorTheme,
+  publicProfileDraftQuery,
+  setPublicProfileDraftTheme,
   resolvePublicFieldPlacements,
   resolvePublicProfileDraftChanges,
   type PublicProfileDraft,
@@ -73,6 +81,8 @@ const OWNER_POLICY: PublicProfilePolicyV1 = {
   ) as PublicProfilePolicyV1['fields'],
 };
 const BLOCK_TITLE_KEYS = {
+  usage_period_summary: 'totals',
+  usage_parallel: 'parallel',
   usage_rhythm: 'sky',
   usage_breakdowns: 'crew',
   usage_planet: 'planet',
@@ -83,8 +93,10 @@ const BLOCK_TITLE_KEYS = {
 function blockTitle(
   presentation: BuiltinUsagePublicPresentationV1,
 ): string | undefined {
-  const key =
-    BLOCK_TITLE_KEYS[presentation.widgetId as keyof typeof BLOCK_TITLE_KEYS];
+  // Rhythm's hour forms are their own blocks: Night owl's "When agents work" and "Week tide".
+  const key = presentation.widgetId === 'usage_rhythm' && presentation.inputs.style === 'weekdayHour' ? 'hours'
+    : presentation.widgetId === 'usage_rhythm' && presentation.inputs.style === 'weekTide' ? 'tide'
+      : BLOCK_TITLE_KEYS[presentation.widgetId as keyof typeof BLOCK_TITLE_KEYS];
   return key ? t(`publicIdentity.blocks.${key}`) : undefined;
 }
 
@@ -113,8 +125,10 @@ function previewAppearance(
   draft: PublicProfileDraft,
   applied: PublicProfilePreparedAppearanceV1 | null,
 ): PublicProfilePreparedAppearanceV1 {
-  if (draft.appearance.kind === 'applied')
-    return applied ?? { atmosphere: { source: 'none' }, theme: 'auto' };
+  if (draft.appearance.kind === 'applied') {
+    const base = applied ?? { atmosphere: { source: 'none' }, theme: 'auto' };
+    return draft.appearance.theme ? { ...base, theme: draft.appearance.theme } : base;
+  }
   const atmosphere = draft.appearance.atmosphere;
   return {
     theme: draft.appearance.theme,
@@ -147,8 +161,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
   const singleColumn = width < HAPPIER_PUBLIC_PROFILE_HERO_METRICS.singleColumnBelowWidthPx;
   const [privateDraft, setDraft] = React.useState<PublicProfileDraft | null>(null);
   // Placed widgets read the page's own public period, as visitors' numbers do.
-  const recordPeriod = record?.query?.period;
-  const areaPeriod = recordPeriod && 'relative' in recordPeriod && recordPeriod.relative ? recordPeriod.relative : DEFAULT_PUBLIC_PROFILE_QUERY.period.relative;
+  const areaPeriod = privateDraft?.period ?? createPublicProfileDraft(record, { layout: { v: 1, items: [] } }).period;
   const areaUsage = usePublicProfileUsageContext(areaPeriod);
   const presetNames = React.useMemo(publicProfilePresetNames, []);
   const widgetArea = usePublicProfileWidgetArea(serverId, execution, blockTitle, areaUsage.context, presetNames);
@@ -161,9 +174,12 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
   // Why the page's own Usage preview is missing: said once, on the page's period line.
   const [previewReason, setPreviewReason] = React.useState<PublicProfilePreparationUnavailableReasonV1 | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
-  const [panel, setPanel] = React.useState<'look' | 'publicData' | null>(null);
+  const [panel, setPanel] = React.useState<'look' | 'publicData' | 'details' | null>(null);
   const lookAnchor = React.useRef<View>(null);
   const dataAnchor = React.useRef<View>(null);
+  const detailsAnchor = React.useRef<View>(null);
+  // The edition an Apply replaced, kept on this device only so its Undo can be reviewed and applied again.
+  const [undoable, setUndoable] = React.useState<PublicProfileUndo | null>(null);
   const prepareLook = usePreparePublicProfileLook(serverId);
   const consent = usePublicProfileConsent({ record, draft, setDraft, execution, onAcknowledged: acknowledge });
 
@@ -179,7 +195,8 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     );
   }, [read, record]);
 
-  const query = record?.query ?? DEFAULT_PUBLIC_PROFILE_QUERY;
+  const query = publicProfileDraftQuery({ period: areaPeriod });
+  const previewMetadata = React.useMemo(() => draft ? draftPreviewMetadata(draft, record) : {}, [draft?.metadata, record]);
   const recordAppearance = record?.appearance ?? null;
   const appliedAppearance = React.useMemo<PublicProfilePreparedAppearanceV1 | null>(() => {
     // A planet or none look is its own prepared form; an applied picture has no local pixels.
@@ -235,7 +252,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
       const view = projectPublicProfilePreview({
         context,
         policy,
-        metadata: {},
+        metadata: previewMetadata,
         snapshot: previewSnapshot,
         layout: draft.layout,
         appearance: previewAppearance(draft, appliedAppearance),
@@ -255,7 +272,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
         draft,
       }),
     };
-  }, [previewSnapshot, draft, context, appliedAppearance]);
+  }, [previewSnapshot, draft, context, appliedAppearance, previewMetadata]);
 
   const changes = draft
     ? resolvePublicProfileDraftChanges(record, draft)
@@ -263,7 +280,9 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
   const changeCount = changes
     ? Number(changes.policy) +
       Number(changes.layout) +
-      Number(changes.appearance)
+      Number(changes.appearance) +
+      Number(changes.metadata) +
+      Number(changes.period)
     : 0;
   const usage = usePublicProfileUsageHost(
     serverId,
@@ -282,13 +301,26 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     v: 1 as const, handle: context.handle, indexable: false, state: 'published' as const, identity: context.identity,
     metadata: {}, snapshot: null, layout: { v: 1 as const, items: [] }, urls: context.urls,
   } : null, [context]);
+  // Read at press time, so the page's preview keeps its identity while consent state changes.
+  const consentLatest = React.useRef(consent);
+  consentLatest.current = consent;
+  const shareField = React.useCallback((field: PublicProfileField) => { void consentLatest.current.updateField(field, true); }, []);
+  const hiddenBlockIds = views?.hidden;
+  // Edit draws every block with the owner's values; one visitors don't see stays in place, quieted,
+  // with the one item it needs and its Share, exactly as the page draws it for its owner (lab ppcomp-E).
+  const owner = React.useMemo(() => hiddenBlockIds && draft && context && previewSnapshot ? {
+    hiddenBlockIds, onlyYou: t('publicIdentity.editor.onlyYou'),
+    renderHiddenNote: (blockId: string) => <PublicProfileHiddenBlockNote blockId={blockId} layout={draft.layout} context={context}
+      snapshot={previewSnapshot} policy={draft.policy} disabled={consent.state.kind === 'pending'}
+      onShare={shareField} />,
+  } : undefined, [hiddenBlockIds, draft, context, previewSnapshot, consent.state.kind, shareField]);
   const widgetPreview = React.useMemo<PublicProfileWidgetPreview | null>(() => !(context && draft && labels) ? null
     : !previewSnapshot ? { kind: 'unavailable', reason: awaitingReason } : {
     kind: 'ready',
-    source: { context, policy: mode === 'edit' ? OWNER_POLICY : draft.policy, metadata: {}, snapshot: previewSnapshot,
+    source: { context, policy: mode === 'edit' ? OWNER_POLICY : draft.policy, metadata: previewMetadata, snapshot: previewSnapshot,
       appearance: previewAppearance(draft, appliedAppearance) },
-    labels, usage,
-  }, [context, previewSnapshot, draft, labels, mode, appliedAppearance, usage, awaitingReason]);
+    labels, usage, ...(mode === 'edit' && owner ? { owner } : {}),
+  }, [context, previewSnapshot, draft, labels, mode, appliedAppearance, usage, awaitingReason, previewMetadata, owner]);
 
   const appliedPicture = record?.appearance?.atmosphere.source === 'picture' ? record.appearance.atmosphere.picture : null;
   const appliedPictureData = useAppliedPictureCopy(
@@ -304,7 +336,11 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
       return;
     }
     const publishing = !record || record.state === 'draft';
+    const changesNow = resolvePublicProfileDraftChanges(record, draft);
     let appearance: PublicProfilePreparedAppearanceV1 | undefined;
+    // A new theme on the applied planet or None look reuses that look's own prepared form.
+    if (draft.appearance.kind === 'applied' && changesNow.appearance && appliedAppearance)
+      appearance = { ...appliedAppearance, theme: draftVisitorTheme(draft, record?.appearance ?? null) };
     if (draft.appearance.kind === 'candidate') {
       const prepared = await prepareLook({
         serverId,
@@ -375,7 +411,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
       const preparedAppearance = appearance ?? previewAppearance(draft, appliedAppearance);
       const outcome = publishing
         ? await execution.execute('account.public_profile.publish', {
-            intent: 'publish', policy: draft.policy, metadataSelection: {}, query,
+            intent: 'publish', policy: draft.policy, metadataSelection: draft.metadata, query,
             layout: draft.layout, appearance: preparedAppearance,
           }, {
             // Canonical preparation happens once before F2. Ask and dispatch retain
@@ -393,14 +429,19 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
             formatUsageCalendarPeriod(snapshotView?.snapshot.period ?? query.period))
           ? await execution.execute('account.public_profile.update', {
               ...(changed.layout ? { layout: draft.layout } : {}), ...(appearance ? { appearance } : {}),
+              ...(changed.metadata ? { metadataSelection: draft.metadata } : {}), ...(changed.period ? { query } : {}),
             }) : null;
       if (!outcome) return;
       if (!outcome.ok) {
         if (!isActionApprovalDeclinedErrorCode(outcome.errorCode)) setNotice(publicProfileMutationNotice(outcome));
         return;
       }
-      setNotice(publicProfileMutationNotice(outcome.result) ??
+      const outcomeNotice = publicProfileMutationNotice(outcome.result);
+      setNotice(outcomeNotice ??
         (publishing ? t('publicIdentity.editor.published') : t('publicIdentity.editor.applied')));
+      // Undo is another reviewed Apply of the edition this one replaced; a picture it no longer has
+      // on this device cannot be put back, so a changed picture look offers no Undo.
+      setUndoable(!publishing && !outcomeNotice && record ? publicProfileUndo(record, changed, appliedAppearance) : null);
       seeded.current = false;
       await reload();
     } catch {
@@ -424,6 +465,49 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     snapshotView,
     views,
   ]);
+
+  const undo = React.useCallback(async () => {
+    const prior = undoable;
+    if (!prior || !context?.service) return;
+    const service = context.service;
+    const disclosure = previewSnapshot && prior.policy ? projectPublicProfilePreview({ context, policy: prior.policy,
+      metadata: prior.metadata, snapshot: previewSnapshot, layout: prior.layout ?? draft?.layout ?? { v: 1, items: [] },
+      appearance: prior.appearance ?? previewAppearance(draft ?? createPublicProfileDraft(record, { layout: { v: 1, items: [] } }), appliedAppearance) }) : null;
+    const confirmed = await new Promise<boolean>(resolve => {
+      let settled = false;
+      const finish = (value: boolean) => { if (!settled) { settled = true; resolve(value); } };
+      Modal.show({
+        component: PublicProfileReviewModal,
+        props: { kind: 'apply', service: service.displayName, pageUrl: context.urls?.page ?? null,
+          period: formatUsageCalendarPeriod(previewSnapshot?.period ?? query.period),
+          sharedFields: PUBLIC_PROFILE_FIELDS_V1.filter(field => prior.policy?.fields[field]),
+          disclosure: disclosure ? withoutAppearance(disclosure) : null, preparationReason: null,
+          endToEndEncrypted: encryption === 'e2ee', indexable: prior.policy?.indexable ?? false,
+          confirm: async () => { finish(true); }, cancel: () => finish(false) },
+        onRequestClose: () => finish(false), onHostUnmount: () => finish(false),
+        chrome: { kind: 'card', phonePresentation: 'sheet', testID: 'public-profile-undo-review-modal', title: t('publicIdentity.editor.undoTitle') },
+        closeOnBackdrop: true,
+      });
+    });
+    if (!confirmed || !execution.isCurrent()) return;
+    setSubmitting(true);
+    try {
+      const outcome = await execution.execute('account.public_profile.update', prior.update);
+      if (!outcome.ok) {
+        if (!isActionApprovalDeclinedErrorCode(outcome.errorCode)) setNotice(publicProfileMutationNotice(outcome));
+        return;
+      }
+      setUndoable(null);
+      setNotice(publicProfileMutationNotice(outcome.result) ?? t('publicIdentity.editor.undone'));
+      seeded.current = false;
+      await reload();
+    } catch {
+      setNotice(t('publicIdentity.profile.actionUncertain'));
+      await reload();
+    } finally {
+      setSubmitting(false);
+    }
+  }, [undoable, context, previewSnapshot, draft, record, appliedAppearance, query.period, encryption, execution, reload]);
 
   if (state.kind === 'failed') {
     return (
@@ -471,6 +555,8 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
           renderBand={renderBand}
           singleColumn={singleColumn}
           notice={widgetArea.status === 'unavailable' ? t('publicIdentity.profile.reasons.preparation_unavailable') : notice}
+          noticeAction={undoable && widgetArea.status !== 'unavailable' && notice
+            ? { label: t('publicIdentity.publicData.consent.undo'), onPress: () => { void undo(); } } : null}
           submitting={submitting || consent.state.kind === 'pending'}
           canSubmit={widgetArea.candidate !== null}
           consentStatus={panel === 'publicData' ? null : consentStatus}
@@ -486,6 +572,15 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
                   display="secondary"
                   title={t('publicIdentity.editor.look')}
                   onPress={() => setPanel('look')}
+                />
+              </View>
+              <View ref={detailsAnchor} collapsable={false}>
+                <RoundButton
+                  testID="public-profile-editor-details"
+                  size="small"
+                  display="secondary"
+                  title={t('publicIdentity.details.button')}
+                  onPress={() => setPanel('details')}
                 />
               </View>
               <View ref={dataAnchor} collapsable={false}>
@@ -513,16 +608,35 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
                             appearance: {
                               kind: 'candidate',
                               atmosphere,
-                              theme:
-                                current.appearance.kind === 'candidate'
-                                  ? current.appearance.theme
-                                  : (record?.appearance?.theme ?? 'auto'),
+                              theme: draftVisitorTheme(current, record?.appearance ?? null),
                             },
                           }
                         : current,
                     )
                   }
                 />
+              </LookPopover>
+              <LookPopover
+                open={panel === 'details'}
+                anchorRef={detailsAnchor}
+                onRequestClose={() => setPanel(null)}
+                accessibilityLabel={t('publicIdentity.details.aboutTitle')}
+              >
+                {scope ? (
+                  <PublicProfileDetailsPanel
+                    scope={scope}
+                    policy={draft.policy}
+                    metadata={draft.metadata}
+                    onMetadataChange={(metadata) => setDraft((current) => current ? { ...current, metadata } : current)}
+                    period={draft.period}
+                    onPeriodChange={(period) => setDraft((current) => current ? { ...current, period } : current)}
+                    theme={draftVisitorTheme(draft, record?.appearance ?? null)}
+                    themeUnavailableReason={draft.appearance.kind === 'applied' && record?.appearance?.atmosphere.source === 'picture'
+                      ? t('publicIdentity.details.themePicture') : null}
+                    onThemeChange={(theme) => setDraft((current) => current ? setPublicProfileDraftTheme(current, theme) : current)}
+                    hasAccountPhoto={Boolean(context?.identity.avatarUrl)}
+                  />
+                ) : null}
               </LookPopover>
               <LookPopover
                 open={panel === 'publicData'}
@@ -569,6 +683,30 @@ function profileBand(draft: PublicProfileDraft, applied: PublicProfileAppearance
   if (presentation.source === 'none') return undefined;
   const target = { publicProfile: presentation };
   return geometry => <View style={[styles.band, { height: geometry.bandHeightPx }]}><AtmospherePreview target={target} frame="band" /></View>;
+}
+
+type PublicProfileUndo = Readonly<{
+  update: Readonly<Record<string, unknown>>;
+  policy: PublicProfilePolicyV1 | null;
+  metadata: PublicProfileMetadataV1;
+  layout: PublicProfileOwnerRecordV1['layout'];
+  appearance: PublicProfilePreparedAppearanceV1 | null;
+}>;
+
+/** The members an Apply changed, as the edition it replaced held them; null when they cannot be put back. */
+function publicProfileUndo(record: PublicProfileOwnerRecordV1, changed: ReturnType<typeof resolvePublicProfileDraftChanges>,
+  appliedAppearance: PublicProfilePreparedAppearanceV1 | null): PublicProfileUndo | null {
+  if (changed.appearance && !appliedAppearance) return null;
+  const prior = createPublicProfileDraft(record, { layout: { v: 1, items: [] } });
+  const update = {
+    ...(changed.layout && record.layout ? { layout: record.layout } : {}),
+    ...(changed.appearance && appliedAppearance ? { appearance: appliedAppearance } : {}),
+    ...(changed.metadata ? { metadataSelection: prior.metadata } : {}),
+    ...(changed.period ? { query: publicProfileDraftQuery(prior) } : {}),
+  };
+  if (!Object.keys(update).length) return null;
+  return { update, policy: record.policy, metadata: record.metadata ?? {}, layout: record.layout,
+    appearance: changed.appearance ? appliedAppearance : null };
 }
 
 /** The review's picture at the public band's proportion, so the owner judges the crop visitors get. */
