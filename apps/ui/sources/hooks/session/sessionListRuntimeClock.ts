@@ -163,14 +163,19 @@ function useWakeToken(): object {
  * While `enabled` is false the consumer is not subscribed: it does not
  * re-render on clock ticks and simply keeps the value read at its last
  * render (used to freeze inactive session-list surfaces).
+ * A shared wakeToken with useSessionListRuntimeWake limits notifications to
+ * that consumer's deadline; omitted tokens retain the all-wakes read contract.
  */
 export function useSessionListRuntimeNowMs(
     enabled = true,
     clock: SessionListRuntimeClock = sessionListRuntimeClock,
+    wakeToken?: object,
 ): number {
     const subscribe = React.useCallback(
-        (listener: () => void) => (enabled ? clock.subscribe(listener) : noopSubscribe()),
-        [clock, enabled],
+        (listener: () => void) => enabled
+            ? wakeToken ? clock.subscribeWake(wakeToken, listener) : clock.subscribe(listener)
+            : noopSubscribe(),
+        [clock, enabled, wakeToken],
     );
     return React.useSyncExternalStore(subscribe, clock.getNowMs, clock.getNowMs);
 }
@@ -212,8 +217,10 @@ export function useSessionListRuntimeWake(
     wakeAtMs: number | null,
     enabled = true,
     clock: SessionListRuntimeClock = sessionListRuntimeClock,
+    wakeToken?: object,
 ): void {
-    useClockWake(wakeAtMs, enabled, clock, useWakeToken());
+    const ownedToken = useWakeToken();
+    useClockWake(wakeAtMs, enabled, clock, wakeToken ?? ownedToken);
 }
 
 function useClockWake(wakeAtMs: number | null, enabled: boolean, clock: SessionListRuntimeClock, token: object): void {

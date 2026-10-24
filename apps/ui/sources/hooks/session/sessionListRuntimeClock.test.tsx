@@ -124,6 +124,32 @@ describe('sessionListRuntimeClock', () => {
             census.stop();
         }
     });
+    it('scopes a list read/wake pair to its own deadline and clears it on unmount', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const clock = createSessionListRuntimeClock();
+        const listToken = {};
+        const machineToken = {};
+        let renders = 0;
+        const list = await renderHook(({ wakeAtMs }: { wakeAtMs: number }) => {
+            renders += 1;
+            const now = useSessionListRuntimeNowMs(true, clock, listToken);
+            useSessionListRuntimeWake(wakeAtMs, true, clock, listToken);
+            return now;
+        }, { initialProps: { wakeAtMs: 3_000 } });
+        const before = renders;
+        clock.requestWake(machineToken, 2_000);
+        await flushHookEffects({ advanceTimersMs: 1_000, cycles: 1, turns: 2 });
+        expect(renders).toBe(before);
+        expect(list.getCurrent()).toBe(1_000);
+        await flushHookEffects({ advanceTimersMs: 1_000, cycles: 1, turns: 2 });
+        expect(list.getCurrent()).toBe(3_000);
+        expect(renders).toBe(before + 1);
+        await list.rerender({ wakeAtMs: 5_000 });
+        expect(vi.getTimerCount()).toBe(1);
+        await list.unmount();
+        expect(vi.getTimerCount()).toBe(0);
+    });
     it('refreshes rounded occurrences and floor ages independently while unrelated subscribers stay stable', async () => {
         vi.useFakeTimers();
         const now = new Date(2026, 9, 10, 10).getTime();
