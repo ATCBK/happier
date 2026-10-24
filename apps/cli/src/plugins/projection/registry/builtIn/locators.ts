@@ -169,7 +169,7 @@ export function loadBundledPluginLocatorResult(
         });
         if (!ingestion.ok) {
             throw new Error(
-                `Invalid bundled plugin manifest '${locator.pluginId}': ${formatPluginManifestIngestionDiagnostics(ingestion.diagnostics)}`,
+                `Invalid bundled plugin manifest '${locator.pluginId}': ${formatPluginManifestIngestionDiagnostics(ingestion.diagnostics.map(diagnostic => ({ ...diagnostic, code: 'plugin_manifest_invalid' as const })))}`,
             );
         }
         if (ingestion.manifest.id !== locator.pluginId) {
