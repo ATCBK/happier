@@ -181,6 +181,7 @@ describe('Claude provider-binding adapter V1', () => {
       materialization: 'spawnEnv',
       applyPolicy: 'live',
       supportsFreeformModelIds: true,
+      supportsReasoningEffort: true,
     });
     expect(CLAUDE_PROVIDER_BINDING_ADAPTER_V1.prepare(prepareInput())).toEqual({
       v: 1,

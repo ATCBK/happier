@@ -8,6 +8,7 @@ import { projectAccountProviderCatalogCountsV1, projectAccountProviderConnection
 import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { DaemonProviderModelProjectionResponseV1Schema } from '../../rpc/providers.js';
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '../compatibility/resolve.js';
+import { projectProviderModelReasoningForAgent } from './reasoningEffort.js';
 
 const agentTargetKey = 'agent:happier.agent.claude/claude';
 const agent: AgentProviderRequirementsV1 = {
@@ -27,6 +28,26 @@ const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [conn
 const request = { agentTargetKey, mode: 'management' as const };
 
 describe('Account Provider model projection', () => {
+  it('does not offer Provider effort that the model explicitly disables', () => {
+    const model = { id: 'disabled', name: 'Disabled', capabilities: { reasoningControls: 'unsupported' as const },
+      modelOptions: [{ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'high',
+        options: [{ value: 'high', name: 'High' }] }] };
+    expect(projectProviderModelReasoningForAgent(model, { supportsReasoningEffort: true }).modelOptions).toBeUndefined();
+  });
+  it('offers declared model effort only when the selected Agent can apply it', () => {
+    const withEffort = { ...catalog, manualModelsByConnectionId: { pc_deepseek: [
+      { id: 'private-model', addedAt: 2, reasoningEffortLevels: ['low', 'high', 'max'] as ['low', 'high', 'max'] },
+    ] } };
+    for (const supportsReasoningEffort of [false, true]) {
+      const result = projectAccountProviderModelsV1({ catalog: withEffort, definitions,
+        agent: { ...agent, ...(supportsReasoningEffort ? { supportsReasoningEffort: true as const } : {}) }, request });
+      expect(result.status).toBe('success');
+      if (result.status !== 'success') throw new Error('Expected projection');
+      const model = result.groups.flatMap(group => group.rows).find(row => row.ref.modelId === 'private-model')?.descriptor;
+      expect(model?.modelOptions?.find(option => option.id === 'reasoning_effort')?.options?.map(option => option.value))
+        .toEqual(supportsReasoningEffort ? ['low', 'high', 'max'] : undefined);
+    }
+  });
   it('summarizes the same static/manual membership and per-model visibility as Account management', () => {
     const sourceCatalog = definitions[0]!.definition.catalog;
     const duplicateStaticId = ('staticModels' in sourceCatalog ? sourceCatalog.staticModels : [])[0]!.id;

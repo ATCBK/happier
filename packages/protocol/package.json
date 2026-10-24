@@ -4150,6 +4150,11 @@
       "types": "./dist/providers/runtimeState/v1.d.ts",
       "default": "./dist/providers/runtimeState/v1.js"
     },
+    "./providers/catalog/reasoningEffort": {
+      "happier-source": "./src/providers/catalog/reasoningEffort.ts",
+      "types": "./dist/providers/catalog/reasoningEffort.d.ts",
+      "default": "./dist/providers/catalog/reasoningEffort.js"
+    },
     "./providers/catalog/merge": {
       "happier-source": "./src/providers/catalog/merge.ts",
       "types": "./dist/providers/catalog/merge.d.ts",

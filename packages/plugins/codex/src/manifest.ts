@@ -321,6 +321,7 @@ export const CODEX_PLUGIN = definePlugin({
           materialization: 'engineConfig',
           applyPolicy: 'restart_session',
           supportsFreeformModelIds: true,
+          supportsReasoningEffort: true,
         },
         surfaces: { externalSession: {
           externalLinkedTakeover: { writerSafety: 'native_prevention' },

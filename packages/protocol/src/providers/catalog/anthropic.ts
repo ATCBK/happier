@@ -1,6 +1,7 @@
 import type { AgentModelOption } from '../../models/descriptor.js';
 import {
   PROVIDER_REASONING_EFFORT_LEVELS_V1,
+  PROVIDER_REASONING_EFFORT_OPTION_ID,
   buildProviderReasoningModelOptions,
   formatProviderReasoningEffortLevelLabel,
   type ProviderReasoningEffortLevelV1,
@@ -32,7 +33,7 @@ export function buildAnthropicModelOptions(input: Readonly<{
       description: 'Maximum coding effort. Forces XHigh Thinking effort while enabled.',
       type: 'boolean',
       currentValue: 'false',
-      overridesWhenOn: { optionIds: ['reasoning_effort'], forcedValue: 'xhigh' },
+      overridesWhenOn: { optionIds: [PROVIDER_REASONING_EFFORT_OPTION_ID], forcedValue: 'xhigh' },
     });
   }
   return options;

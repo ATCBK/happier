@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildClaudeEffortCliArgs,
+  resolveClaudeEffortLevelsForProviderModel,
   isClaudeUltracodeSupportedModelId,
   resolveClaudeDefaultEffortLevelForModelId,
   resolveClaudeEffectiveEffortForModel,
@@ -9,6 +10,14 @@ import {
 } from './reasoningEffort.js';
 
 describe('resolveClaudeEffectiveEffortForModel', () => {
+  it('does not apply a non-select or inconsistent Provider effort declaration', () => {
+    const model = { id: 'custom', name: 'Custom', capabilities: { reasoningControls: 'supported' as const },
+      modelOptions: [{ id: 'reasoning_effort', name: 'Thinking', type: 'boolean', currentValue: 'high',
+        options: [{ value: 'high', name: 'High' }] }] };
+    expect(resolveClaudeEffortLevelsForProviderModel(model)).toEqual([]);
+    expect(resolveClaudeEffortLevelsForProviderModel({ ...model,
+      modelOptions: [{ ...model.modelOptions[0]!, type: 'select', currentValue: 'low' }] })).toEqual([]);
+  });
   it('preserves a valid native effort for live control and launch serialization', () => {
     expect(resolveClaudeEffectiveEffortForModel({
       modelId: 'claude-sonnet-4-6',

@@ -3,6 +3,7 @@ import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { RoleEngineV1 } from '@happier-dev/protocol';
+import { PROVIDER_REASONING_EFFORT_OPTION_ID } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
 import { resolveRoleEngineTargetKey, useRoleEngineCatalog } from '@/components/roles/catalog/useRoleEnginePresentation';
 import { AgentInputChipPickerPopover } from '@/components/sessions/agentInput/components/AgentInputChipPickerPopover';
@@ -22,7 +23,7 @@ import { AgentInputSelectionPopover } from '@/components/sessions/agentInput/sel
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 
 /** The Agent config option a role's `engine.effort` is (the same id `admitAgentStartV1` stamps). */
-const ROLE_EFFORT_CONFIG_OPTION_ID = 'reasoning_effort';
+const ROLE_EFFORT_CONFIG_OPTION_ID = PROVIDER_REASONING_EFFORT_OPTION_ID;
 
 /**
  * A role's engine as a page field: the value ("Claude · opus-5.5") in the field box, opening the same

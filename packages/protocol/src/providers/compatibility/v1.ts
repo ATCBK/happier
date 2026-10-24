@@ -90,6 +90,8 @@ export const AgentProviderRequirementsV1Schema = lazyZodSchema(() => z.strictObj
   materialization: z.enum(['spawnEnv', 'engineConfig', 'configFile']),
   applyPolicy: ModelSelectionApplyPolicySchema,
   supportsFreeformModelIds: z.boolean(),
+  /** Applies the selected Provider model's canonical reasoning_effort option. */
+  supportsReasoningEffort: z.optional(z.literal(true)),
 }).check(z.superRefine((value, ctx) => {
   if (new Set(value.acceptsProtocols).size !== value.acceptsProtocols.length) {
     ctx.addIssue({ code: 'custom', path: ['acceptsProtocols'], message: 'Accepted protocols must be unique' });

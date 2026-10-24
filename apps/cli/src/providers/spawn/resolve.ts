@@ -50,6 +50,7 @@ import type {
 } from '@/plugins/projection/registry/types';
 import { projectProviderRuntimeBindingBasis } from './runtimeBindingBasis';
 import { readProviderModelNameCatalog } from '../registry/contributions';
+import { projectProviderModelReasoningForAgent } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
 export function selectProviderSpawnClaudeHelperModels(input: Readonly<{
   adapter?: Pick<AgentProviderBindingAdapter, 'supportsClaudeHelperModels'>;
@@ -1085,7 +1086,7 @@ export function resolveProviderSpawnAuthorization(
     const binding: ManagedProviderBindingAuthorizationFacts = {
       v: 1,
       agentTargetKey: input.agentTargetKey,
-      selection: { connectionId, model },
+      selection: { connectionId, model: projectProviderModelReasoningForAgent(model, adapter.support) },
       ...(modelSettings ? { modelSettings } : {}),
       ...(claudeHelperModels !== undefined ? { claudeHelperModels } : {}),
       contributionKey: contributionSource.contributionKey,
@@ -1239,7 +1240,7 @@ export function resolveProviderSpawnAuthorization(
     agentTargetKey: input.agentTargetKey,
     selection: {
       connectionId,
-      model,
+      model: projectProviderModelReasoningForAgent(model, adapter.support),
     },
     contributionKey: facts.contributionKey,
     ...(modelSettings ? { modelSettings } : {}),

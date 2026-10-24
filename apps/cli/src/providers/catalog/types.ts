@@ -31,6 +31,8 @@ export type AssembleProviderConnectionCatalogInput = Readonly<{
    * omitted it defaults to the closed side.
    */
   agentSupportsFreeformModelIds?: boolean;
+  /** Omitted only for an Agent-neutral source catalog. */
+  agentSupportsReasoningEffort?: boolean;
 }>;
 
 export type ProviderCatalogModelReferenceResolution =

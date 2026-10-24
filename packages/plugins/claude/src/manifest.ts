@@ -421,6 +421,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           materialization: 'spawnEnv',
           applyPolicy: 'live',
           supportsFreeformModelIds: true,
+          supportsReasoningEffort: true,
         },
         surfaces: { externalSession: {
           externalLinkedTakeover: { writerSafety: 'unsupported' },

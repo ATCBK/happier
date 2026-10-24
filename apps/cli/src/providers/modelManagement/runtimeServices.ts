@@ -78,6 +78,7 @@ import {
 import { selectCurrentProviderEndpointHealthByTemplateId } from '@/providers/connections/runtimeSummary';
 import { projectProviderBrokerApplication } from '@/providers/broker/applicationProjection';
 import { resolveProviderSourceFacts } from '@/providers/registry/sourceFacts';
+import { projectProviderModelReasoningForAgent, readProviderReasoningEffortOption } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
 import {
   indexAgentRoutingIdsByContributionIdentity,
@@ -128,17 +129,9 @@ export function projectDaemonProviderTeamCredentialRequestPolicySupportV1(input:
   const protocolKind = resolveTeamCredentialRequestPolicyProtocolKind(input.application.protocol);
   if (protocolKind === null) return null;
 
-  const reasoningOption = input.descriptor.capabilities?.reasoningControls === 'supported'
-    ? input.descriptor.modelOptions?.find((option) => (
-        option.id === 'reasoning_effort'
-        && option.type === 'select'
-      ))
-    : undefined;
+  const reasoningOption = readProviderReasoningEffortOption(input.descriptor);
   const reasoningValues = reasoningOption?.options?.map((option) => option.value) ?? [];
   const reasoningEffort = reasoningOption
-    && reasoningValues.length > 0
-    && new Set(reasoningValues).size === reasoningValues.length
-    && reasoningValues.includes(reasoningOption.currentValue)
     ? {
         supported: true as const,
         allowedValues: reasoningValues,
@@ -538,7 +531,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             supportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
             suppressedConnectedServiceIds: adapter.support.authIsolation.suppressConnectedServiceIds,
             rows: [{ ref: { agentTargetKey: request.agentTargetKey, providerConnectionId: confirmationSource.connectionId, modelId: model.descriptor.id },
-              descriptor: model.descriptor, application: model.application, sourceFacts: model.sourceFacts, confirmationSource,
+              descriptor: projectProviderModelReasoningForAgent(model.descriptor, adapter.support), application: model.application, sourceFacts: model.sourceFacts, confirmationSource,
               sources: { manual: false, static: false, probe: false }, confidence: 'account_unverified', compatibility,
               endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }],
           }], currentSelectionRecovery: null });
@@ -798,6 +791,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               ? { currentSelectionForRecovery: request.currentSelection }
               : {}),
             agentSupportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
+            agentSupportsReasoningEffort: adapter.support.supportsReasoningEffort === true,
           };
           const initial = assembleProviderConnectionCatalog({
             modelNameCatalog,

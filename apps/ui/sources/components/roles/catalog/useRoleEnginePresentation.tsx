@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { RoleEngineV1 } from '@happier-dev/protocol';
+import { PROVIDER_REASONING_EFFORT_OPTION_ID } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
 import { getResolvedBackendCatalogEntries, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { getEnabledAgentIds } from '@/agents/catalog/enabled';
@@ -25,7 +26,7 @@ export function resolveRoleEngineTargetKey(agentTargetKey: string): string {
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
 /** The Agent config option a role's `engine.effort` is (the same id `admitAgentStartV1` stamps). */
-const ROLE_EFFORT_CONFIG_OPTION_ID = 'reasoning_effort';
+const ROLE_EFFORT_CONFIG_OPTION_ID = PROVIDER_REASONING_EFFORT_OPTION_ID;
 
 /** The built-in Agent an engine key names, for naming its models before the Agent catalog answers. */
 function readRoleEngineAgentId(agentTargetKey: string): string | null {

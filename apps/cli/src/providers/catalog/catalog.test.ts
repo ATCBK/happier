@@ -278,6 +278,18 @@ function compatibilityMap(modelIds: readonly string[]) {
 }
 
 describe('provider catalog host assembly', () => {
+  it('keeps source effort facts but offers them only to an Agent that applies them', () => {
+    const connection = resolvedConnection();
+    const input = { agentTargetKey: 'agent_a', connection,
+      providerSettings: settings(connection, [{ id: 'manual', addedAt: 1, reasoningEffortLevels: ['low', 'high', 'max'] }]),
+      runtimeState: runtimeState(), catalogRuntimeKey: currentCatalogKey };
+    const efforts = (support?: boolean) => assembleProviderConnectionCatalog({ ...input,
+      ...(support === undefined ? {} : { agentSupportsReasoningEffort: support }) }).rows
+      .find(row => row.descriptor.id === 'manual')?.descriptor.modelOptions?.[0]?.options?.map(option => option.value);
+    expect(efforts()).toEqual(['low', 'high', 'max']);
+    expect(efforts(false)).toBeUndefined();
+    expect(efforts(true)).toEqual(['low', 'high', 'max']);
+  });
   it('projects only declared and configured Gateway slots from actual model-purpose facts through the strict picker consumer', () => {
     const initial = managedResolvedConnection();
     if (initial.deployment.kind !== 'managedLocal') throw new Error('Expected managed fixture');

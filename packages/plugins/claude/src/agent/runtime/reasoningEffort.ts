@@ -1,4 +1,5 @@
 import type { AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
+import { readProviderReasoningEffortOption } from '@happier-dev/plugin-sdk/providers';
 
 import { CLAUDE_FLAGSHIP_MODEL_ID } from '../flagshipModel.js';
 import {
@@ -31,8 +32,7 @@ function normalizeModelId(raw: unknown): string {
 function resolveProviderEffortOption(
     model: ClaudeProviderModel,
 ) {
-    if (model.capabilities?.reasoningControls !== 'supported') return null;
-    return model.modelOptions?.find((option) => option.id === 'reasoning_effort') ?? null;
+    return readProviderReasoningEffortOption(model);
 }
 
 export function resolveClaudeEffortLevelsForProviderModel(

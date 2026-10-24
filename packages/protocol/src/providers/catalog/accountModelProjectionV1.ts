@@ -17,6 +17,7 @@ import { canonicalizeProviderContributionKeyV1 } from '../contributionIdentityV1
 import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { DaemonProviderModelProjectionGroupV1Schema } from '../../rpc/providers.js';
 import { hasProviderExperimentalConfirmation } from '../settings/v1.js';
+import { projectProviderModelReasoningForAgent } from './reasoningEffort.js';
 
 /** Worker facts stay authoritative; experimental consent belongs to the reading Account. */
 export function projectAccountProviderModelConfirmationsV1(input: Readonly<{
@@ -131,7 +132,7 @@ export function projectAccountProviderModelsV1(input: AccountProviderModelProjec
       authorization: { authorized: false, errorCode: 'provider_machine_unavailable' },
       staleRows: [], rows: [...merged.rows, ...freeformCurrent].map(row => ({
         ref: { agentTargetKey: request.agentTargetKey, providerConnectionId: connection.id, modelId: row.descriptor.id },
-        descriptor: row.descriptor, sources: row.sources, confidence: 'account_unverified',
+        descriptor: projectProviderModelReasoningForAgent(row.descriptor, agent), sources: row.sources, confidence: 'account_unverified',
         presentation: {
           compatibility: resolveProviderBindingDeclarationCompatibilityV1({ agentTargetKey: request.agentTargetKey,
             endpoints, credential: source.credential, agent, model: row.descriptor,

@@ -73,6 +73,7 @@ import type {
 } from '../managed-services/contract.js';
 import type { PluginServices } from '../services/index.js';
 import * as providerProjection from './projections.js';
+import { PROVIDER_REASONING_EFFORT_OPTION_ID, readProviderReasoningEffortOption } from './index.public.js';
 import type {
     ManagedProviderEndpoint,
     ManagedProviderRuntime,
@@ -126,6 +127,8 @@ import type {
 } from './projections.js';
 
 const PROVIDER_EXPORTS = [
+    'PROVIDER_REASONING_EFFORT_OPTION_ID',
+    'readProviderReasoningEffortOption',
     'AgentProviderRequirementsV1',
     'ManagedProviderEndpoint',
     'ManagedProviderRuntime',
@@ -203,6 +206,8 @@ const PROVIDER_EXPORTS = [
 ] as const;
 
 const PROVIDER_RUNTIME_EXPORTS = [
+    'PROVIDER_REASONING_EFFORT_OPTION_ID',
+    'readProviderReasoningEffortOption',
     'ProviderConnectionIdSchema',
     'ProviderContributionV1Schema',
     'ProviderEndpointUrlSyntaxSchema',
@@ -376,6 +381,16 @@ type ProjectionTypes = [
 void (null as unknown as ProjectionTypes);
 
 describe('final Provider source projection', () => {
+    it('lets an external catalog author publish canonical effort options through the public surface', () => {
+        const model = { id: 'external-model', name: 'External model',
+            capabilities: { reasoningControls: 'supported' as const },
+            modelOptions: [{ id: PROVIDER_REASONING_EFFORT_OPTION_ID, name: 'Thinking', type: 'select', currentValue: 'high',
+                options: ['low', 'high', 'max'].map(value => ({ value, name: value })) }] };
+        const option = readProviderReasoningEffortOption(model);
+        expect(option?.id).toBe(PROVIDER_REASONING_EFFORT_OPTION_ID);
+        expect(option?.options?.map(choice => choice.value)).toEqual(['low', 'high', 'max']);
+        expect(model.modelOptions).toHaveLength(1);
+    });
     it('assembles the Plugin Services Provider context from the final projection', () => {
         const program = createSdkProgram();
 

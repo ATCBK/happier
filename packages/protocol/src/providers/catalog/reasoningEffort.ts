@@ -1,6 +1,34 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import type { AgentModelOption } from '../../models/descriptor.js';
+import type { AgentModelOption, ProviderModelDescriptorV1 } from '../../models/descriptor.js';
+import type { AgentProviderRequirementsV1 } from '../compatibility/v1.js';
+
+export const PROVIDER_REASONING_EFFORT_OPTION_ID = 'reasoning_effort' as const;
+
+/** Exact admitted model facts. A capability bit alone does not declare any effort values. */
+export function readProviderReasoningEffortOption(
+  model: Pick<ProviderModelDescriptorV1, 'capabilities' | 'modelOptions'>,
+): AgentModelOption | null {
+  if (model.capabilities?.reasoningControls !== 'supported') return null;
+  const option = model.modelOptions?.find(candidate => candidate.id === PROVIDER_REASONING_EFFORT_OPTION_ID);
+  if (option?.type !== 'select' || !option.options?.length) return null;
+  const values = new Set(option.options.map(candidate => candidate.value));
+  return values.size === option.options.length && values.has(option.currentValue) ? option : null;
+}
+
+/** Agent declarations govern application; source descriptors retain their model-owned facts. */
+export function projectProviderModelReasoningForAgent(
+  model: ProviderModelDescriptorV1,
+  agent: Pick<AgentProviderRequirementsV1, 'supportsReasoningEffort'>,
+): ProviderModelDescriptorV1 {
+  if (!model.modelOptions
+    || agent.supportsReasoningEffort === true && readProviderReasoningEffortOption(model) !== null) return model;
+  const retained = model.modelOptions.filter(option => option.id !== PROVIDER_REASONING_EFFORT_OPTION_ID
+    && option.overridesWhenOn?.optionIds.includes(PROVIDER_REASONING_EFFORT_OPTION_ID) !== true);
+  if (retained.length === model.modelOptions.length) return model;
+  const { modelOptions: _modelOptions, ...rest } = model;
+  return { ...rest, ...(retained.length ? { modelOptions: retained } : {}) };
+}
 
 export const PROVIDER_REASONING_EFFORT_LEVELS_V1 = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const ProviderReasoningEffortLevelV1Schema = lazyZodSchema(() => z.enum(PROVIDER_REASONING_EFFORT_LEVELS_V1));
@@ -34,6 +62,6 @@ export function buildProviderReasoningModelOptions(input: Readonly<{
   if (levels.length === 0) return [];
   const currentValue = input.defaultEffort && supported.has(input.defaultEffort)
     ? input.defaultEffort : supported.has('high') ? 'high' : levels[levels.length - 1]!;
-  return [{ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue,
+  return [{ id: PROVIDER_REASONING_EFFORT_OPTION_ID, name: 'Thinking', type: 'select', currentValue,
     options: levels.map(level => ({ value: level, name: formatProviderReasoningEffortLevelLabel(level) })) }];
 }

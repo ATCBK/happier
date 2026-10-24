@@ -61,6 +61,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   runtimeAuthHost?: Pick<CodexAppServerRuntimeHost, 'nativeHome' | 'refreshRuntimeAuth'>;
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
   providerBinding?: AgentSessionOpenRequest['providerBinding'];
+  configuration?: AgentSessionConfigurationSnapshot;
   connectedAccounts?: AgentSessionRuntimeContext['services']['connectedAccounts'];
   processEnv?: Readonly<Record<string, string | undefined>>;
   skills?: AgentSessionOpenRequest['skills'];
@@ -355,6 +356,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
           permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 },
           options: { reasoning_effort: { value: 'low', updatedAtMs: 1 } },
           ...options.toolRestriction,
+          ...options.configuration,
         },
         ...(mcpServers ? { mcpServers } : {}),
         ...(options.providerBinding ? { providerBinding: options.providerBinding } : {}),
@@ -384,7 +386,9 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 }, options: {},
           ...options.toolRestriction,
+          ...options.configuration,
         },
+        ...(options.providerBinding ? { providerBinding: options.providerBinding } : {}),
         ...(options.skills ? { skills: options.skills } : {}),
         ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
         ...(options.mcpToolPolicy ? { mcpToolPolicy: options.mcpToolPolicy } : {}),

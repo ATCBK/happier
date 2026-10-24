@@ -85,6 +85,7 @@ describe('Codex provider-binding adapter V1', () => {
       materialization: 'engineConfig',
       applyPolicy: 'restart_session',
       supportsFreeformModelIds: true,
+      supportsReasoningEffort: true,
     });
     expect(CODEX_PROVIDER_BINDING_ADAPTER_V1.prepare(prepareInput())).toMatchObject({
       materialization: requirements?.materialization,

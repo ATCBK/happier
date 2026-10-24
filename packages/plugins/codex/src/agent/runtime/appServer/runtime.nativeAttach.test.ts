@@ -108,6 +108,58 @@ describe('native Codex attachment preparation', () => {
       materialization: { v: 1, kind: 'engineConfig', engineConfig } } });
   });
 
+  it.each([
+    { requested: 'medium', expected: 'low' },
+    { requested: 'max', expected: 'max' },
+  ])('applies only the selected Provider model effort subset ($requested)', async ({ requested, expected }) => {
+    const engineConfig = { v: 1 as const, modelProvider: 'ollama', config: {} };
+    await withFixture(async ({ openConfiguredSession, requests }) => {
+      const session = await openConfiguredSession();
+      await session.updateConfiguration?.({
+        mode: { value: null, updatedAtMs: 1 }, model: { value: 'fixture-model', updatedAtMs: 1 },
+        permissionIntent: { value: 'read-only', updatedAtMs: 1 },
+        options: { reasoning_effort: { value: requested, updatedAtMs: 2 } },
+      });
+      await session.send({ inputIds: ['effort-input'], input: { text: 'Reply OK.' },
+        delivery: { kind: 'newTurn', turnId: 'effort-turn' } });
+      expect(requests.find(request => request.method === 'turn/start')?.params).toMatchObject({ effort: expected });
+    }, { providerBinding: { connectionId: 'pc_work',
+      model: { id: 'fixture-model', name: 'Fixture', capabilities: { reasoningControls: 'supported' },
+        modelOptions: [{ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'high',
+          options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }, { value: 'max', name: 'Max' }] }] },
+      upstream: { protocol: 'openai-responses', normalizedUrl: 'https://gateway.example.test/v1', credential: 'apiKey' },
+      materialization: { v: 1, kind: 'engineConfig', engineConfig } } });
+  });
+
+  it.each([
+    { scope: 'session', requested: 'max', declared: true, expected: 'max' },
+    { scope: 'run', requested: 'max', declared: true, expected: 'max' },
+    { scope: 'session', requested: 'medium', declared: true, expected: undefined },
+    { scope: 'run', requested: 'medium', declared: true, expected: undefined },
+    { scope: 'session', requested: 'high', declared: false, expected: undefined },
+    { scope: 'run', requested: 'high', declared: false, expected: undefined },
+  ])('applies declared Provider effort at $scope startup ($requested, declared=$declared)', async ({ scope, requested, declared, expected }) => {
+    await withFixture(async ({ openConfiguredSession, openConfiguredRun, requests }) => {
+      const conversation = scope === 'session' ? await openConfiguredSession() : await openConfiguredRun();
+      await conversation.send({ inputIds: ['effort-input'], input: { text: 'Reply OK.' },
+        delivery: { kind: 'newTurn', turnId: 'effort-turn' } });
+      const thread = requests.find(request => request.method === 'thread/start')?.params;
+      const turn = requests.find(request => request.method === 'turn/start')?.params;
+      expect(turn).toHaveProperty('model', 'fixture-model');
+      expect(turn?.effort).toBe(expected);
+      expect((thread?.config as Record<string, unknown> | undefined)?.model_reasoning_effort).toBe(expected);
+    }, { configuration: {
+      mode: { value: null, updatedAtMs: 1 }, model: { value: 'stale-selected-model', updatedAtMs: 1 },
+      permissionIntent: { value: 'read-only', updatedAtMs: 1 },
+      options: { reasoning_effort: { value: requested, updatedAtMs: 1 } },
+    }, providerBinding: { connectionId: 'pc_work',
+      model: { id: 'fixture-model', name: 'Fixture', capabilities: { reasoningControls: 'supported' },
+        ...(declared ? { modelOptions: [{ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'high',
+          options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }, { value: 'max', name: 'Max' }] }] } : {}) },
+      upstream: { protocol: 'openai-responses', normalizedUrl: 'https://gateway.example.test/v1', credential: 'apiKey' },
+      materialization: { v: 1, kind: 'engineConfig', engineConfig: { v: 1, modelProvider: 'ollama', config: {} } } } });
+  });
+
   it.skipIf(process.platform === 'win32')('keeps the primary turn active when a completed execution run releases its process', async () => {
     const nativeTurns = new Map<string, { complete(): void; isOpen(): boolean }>();
     await withFixture(async ({ openConfiguredSession, openConfiguredRun, endpoints, nativeProcessExits }) => {

@@ -50,6 +50,10 @@ import type { PluginCancellationOptions } from '../lifecycle.js';
 export { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
 export { containsProviderRegisteredSensitiveValue } from '@happier-dev/protocol/providers/sensitive-value-redaction';
 export { normalizeProviderCredentialHeaderName } from '@happier-dev/protocol/providers/credential-headers';
+export {
+    PROVIDER_REASONING_EFFORT_OPTION_ID,
+    readProviderReasoningEffortOption,
+} from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 export { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 export type {
     ProviderConnectionId,

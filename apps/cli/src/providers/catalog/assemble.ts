@@ -5,6 +5,7 @@ import { mergeProviderCatalogV1, providerCatalogPermitsUnlistedModelIdV1 } from 
 import { readOwnRecordValue } from '@happier-dev/protocol/providers/ownRecordValue';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { resolveModelDisplayName } from '@happier-dev/protocol/models/descriptor';
+import { projectProviderModelReasoningForAgent } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
 import type {
   AssembleProviderConnectionCatalogInput,
@@ -219,7 +220,10 @@ function bindRow(input: Readonly<{
       providerConnectionId: input.hostInput.connection.connectionId,
       modelId,
     },
-    descriptor: input.merged.descriptor,
+    descriptor: input.hostInput.agentSupportsReasoningEffort === undefined ? input.merged.descriptor
+      : projectProviderModelReasoningForAgent(input.merged.descriptor, {
+          supportsReasoningEffort: input.hostInput.agentSupportsReasoningEffort ? true : undefined,
+        }),
     sources: input.merged.sources,
     confidence: input.merged.confidence,
     ...(gatewaySlots.length > 0 ? { gatewaySlots } : {}),
