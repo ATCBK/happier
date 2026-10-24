@@ -2,11 +2,11 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { captureMountedWorkspaceAction, resolveWorkspaceUiActionOutcome } from '@/components/appShell/workspace/workspaceActionRuntime';
 
-import { useOptionalAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
-import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
-import { storage, useWorkspaceRefs, useLocalSetting } from '@/sync/domains/state/storage';
+import { AppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { isMobileWorkspaceCockpitEnabled } from '@/components/workspaceCockpit/mobileWorkspaceExperience';
+import { storage, useWorkspaceRefs, useLocalSetting, useSetting } from '@/sync/domains/state/storage';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
-import { useDeviceType } from '@/utils/platform/responsive';
+import { getDeviceType } from '@/utils/platform/responsive';
 
 import { buildProjectPaneScopeId } from './detail/projectPaneScope';
 import { buildProjectRouteHref, resolveProjectOpenHref, type ProjectAttachedDashboardSelection } from './detail/projectRouteState';
@@ -40,9 +40,8 @@ export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions
 export function useOpenProject(): OpenProject {
     const router = useRouter();
     const { open: openFile } = useWorkspaceFileOpener();
-    const deviceType = useDeviceType();
-    const paneContext = useOptionalAppPaneContext();
-    const { cockpitEnabled } = useMobileWorkspaceExperienceState();
+    const paneSubscription = React.useContext(AppPaneContext);
+    const mobileWorkspaceExperience = useSetting('mobileWorkspaceExperienceV1');
     const workspaceRefs = useWorkspaceRefs();
     const lastMobileSurfaceByWorkspaceRefId = useLocalSetting('projectLastMobileSurfaceByWorkspaceRefId');
     const lastActiveRootPathByWorkspaceRefId = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
@@ -55,6 +54,7 @@ export function useOpenProject(): OpenProject {
     }, []);
 
     const open = React.useCallback(async (workspaceRefId: string, options?: OpenProjectOptions) => {
+        const deviceType = getDeviceType();
         const normalizedId = workspaceRefId.trim();
         if (options?.workspaceAddress && options.workspaceAddress.workspaceId !== normalizedId) {
             publishIssue({ kind: 'invalid', reason: 'workspace_address_id_mismatch' });
@@ -125,8 +125,8 @@ export function useOpenProject(): OpenProject {
         return await openHref(resolveProjectOpenHref({
             workspaceRef,
             deviceType,
-            cockpitEnabled,
-            rememberedRightTabId: paneContext?.state.scopes[scopeId]?.right?.activeTabId,
+            cockpitEnabled: isMobileWorkspaceCockpitEnabled({ deviceType, mobileWorkspaceExperience }),
+            rememberedRightTabId: paneSubscription?.getSnapshot().state.scopes[scopeId]?.right?.activeTabId,
             persistedMobileSurface: readRealmQualifiedMobileSurface(lastMobileSurfaceByWorkspaceRefId, pagePreferenceKey),
             persistedActiveRootPath: activeRootPath,
             persistedWorktreeId: activeWorktreeId,
@@ -142,7 +142,7 @@ export function useOpenProject(): OpenProject {
             const result = await execute({ actionId: 'workspace.tabs.open', input: { href, ...(find ? { find } : {}) } });
             return resolveWorkspaceUiActionOutcome(result);
         }
-    }, [cockpitEnabled, deviceType, openFile, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneContext, publishIssue, router, workspaceRefs]);
+    }, [mobileWorkspaceExperience, openFile, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneSubscription, publishIssue, router, workspaceRefs]);
     return React.useMemo(() => Object.defineProperties(open, {
         resolution: { configurable: true, get: () => issueRef.current },
         dismissResolution: { configurable: true, value: () => publishIssue(null) },
