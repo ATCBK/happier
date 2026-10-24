@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createServer, type ServerResponse } from 'node:http';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { createDeferred } from '@/testkit/async/deferred';
 import { requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { createSessionLiveWorkProducer } from './sessionLiveWorkProducer';
 import { waitForChangeOrDeadline } from './waitForChangeOrDeadline';
+import { createActionOperationStore } from '../actionOperations/actionOperationStore';
 
 import { createManagedActivityInventory, createLiveWorkProducerGroup, readWorkspaceSessionIdle, type LiveWorkProducerV1, type LiveWorkItemV1 } from './managedActivity';
 
@@ -23,6 +25,113 @@ function producer() {
 }
 
 describe('managed activity inventory', () => {
+    it('refreshes every Session for explicit confirmation during a partial passive read and retires its late idle reply', async () => {
+        const passiveRequest = createDeferred();
+        const passiveTransportCompleted = createDeferred();
+        let passiveResponse: ServerResponse | undefined;
+        let peerWorking = false;
+        let sourceReads = 0;
+        let peerReads = 0;
+        const reply = (response: ServerResponse, working: boolean) => {
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ session: working ? 'active' : 'settled', input: 'settled',
+                agents: 'settled', attention: 'settled' }));
+        };
+        const server = createServer((request, response) => {
+            if (request.url === '/source') {
+                sourceReads += 1;
+                if (sourceReads === 2) {
+                    passiveResponse = response;
+                    passiveRequest.resolve();
+                    return;
+                }
+                reply(response, false);
+            } else {
+                peerReads += 1;
+                reply(response, peerWorking);
+            }
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('HTTP transport address unavailable');
+        let sourceObservations = 0;
+        const session = (id: string, pid: number) => {
+            const tracked = { pid, startedBy: 'daemon' as const, happySessionId: id };
+            return createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: async () => {
+                const latePassiveRead = id === 'source' && ++sourceObservations === 2;
+                const result = await requestSessionInputLiveWork({ callRpc: async () =>
+                    (await fetch(`http://127.0.0.1:${address.port}/${id}`)).json() });
+                if (latePassiveRead) passiveTransportCompleted.resolve();
+                return result;
+            } });
+        };
+        const source = session('source', 1);
+        const peer = session('peer', 2);
+        const inventory = createManagedActivityInventory({ producers: [source, peer] });
+        const decisions: Awaited<ReturnType<typeof inventory.readDecision>>[] = [];
+        const unsubscribe = inventory.subscribe(decision => { decisions.push(decision); });
+        try {
+            expect((await inventory.readDecision()).kind).toBe('idle');
+            source.notifyChanged('observation');
+            await passiveRequest.promise;
+            // The peer has changed before its hint arrives. A destructive caller's
+            // explicit confirmation must refresh it, even while the passive read waits.
+            peerWorking = true;
+            const confirmation = inventory.readDecision();
+            await vi.waitFor(() => expect(peerReads).toBe(2));
+            expect(await confirmation).toEqual({ kind: 'busy', reasons: ['session'] });
+            expect(sourceReads).toBe(3);
+            const beforeLateReply = [...decisions];
+            reply(passiveResponse!, false);
+            await passiveTransportCompleted.promise;
+            // The transport continuation and aggregate projection finish before
+            // the next event-loop turn; no timer budget governs product behavior.
+            await nextTurn();
+            expect(decisions).toEqual(beforeLateReply);
+        } finally {
+            unsubscribe(); inventory.dispose(); server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        }
+    });
+    it('does not use a partial passive projection as a fresh confirmation of unrelated Session work', async () => {
+        let working = false;
+        let sessionReads = 0;
+        const server = createServer((_request, response) => {
+            sessionReads++;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ session: working ? 'active' : 'settled', input: 'settled',
+                agents: 'settled', attention: 'settled' }));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('HTTP transport address unavailable');
+        const tracked = { pid: 1, startedBy: 'daemon' as const, happySessionId: 'session' };
+        const sessions = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: () =>
+            requestSessionInputLiveWork({ callRpc: async () => (await fetch(`http://127.0.0.1:${address.port}/activity`)).json() }) });
+        const operations = createActionOperationStore();
+        const inventory = createManagedActivityInventory({ producers: [sessions,
+            { read: operations.readLiveWork, subscribe: operations.subscribe }] });
+        const passive = createDeferred<Awaited<ReturnType<typeof inventory.readDecision>>>();
+        let unsubscribe = () => {};
+        try {
+            expect((await inventory.readDecision()).kind).toBe('idle');
+            expect(sessionReads).toBe(1);
+            unsubscribe = inventory.subscribe(decision => passive.resolve(decision));
+            // A delayed Session hint must not let the retained peer projection
+            // satisfy an explicit fresh confirmation while another owner updates.
+            working = true;
+            operations.create({ operationId: 'finite', actionId: 'projects.compute.exec',
+                scope: { accountId: 'owner', machineId: 'machine' }, title: 'Work',
+                cancellation: { supported: true }, inputIdentity: 'finite' });
+            await passive.promise;
+            expect(sessionReads).toBe(1);
+            expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['session', 'finite'] });
+            expect(sessionReads).toBe(2);
+        } finally {
+            unsubscribe(); inventory.dispose(); server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        }
+    });
     it('retains idle across healthy Session observations but publishes discovered work and material invalidations', async () => {
         let now = 100;
         let working = false;

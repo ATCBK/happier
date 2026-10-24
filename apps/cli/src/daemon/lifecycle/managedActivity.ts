@@ -139,8 +139,8 @@ export function projectManagedActivityDecision(inventory: LiveWorkInventoryV1): 
 }
 
 /**
- * The only retained fact is the aggregate settled edge's timestamp. Concurrent
- * reads share a live observation; a failed read cannot manufacture zero.
+ * Passive publications refresh only their emitting owner. Peer projections stay
+ * in this inventory lifetime; explicit confirmations still read every live owner.
  */
 export function createManagedActivityInventory(params: Readonly<{
     producers: readonly LiveWorkProducerV1[];
@@ -155,7 +155,8 @@ export function createManagedActivityInventory(params: Readonly<{
     let publishedOwnerEdge = -1;
     let disposed = false;
     let ownerEdge = 0;
-    let inFlight: Readonly<{ ownerEdge: number; result: Promise<LiveWorkInventoryV1> }> | null = null;
+    const producerObservations = new Map<LiveWorkProducerV1, Promise<Omit<LiveWorkInventoryV1, 'idleSince'>>>();
+    let inFlight: Readonly<{ ownerEdge: number; allOwners: boolean; result: Promise<LiveWorkInventoryV1> }> | null = null;
     let unsubscribe: Array<() => void> | null = null;
     const observe = () => {
         if (unsubscribe || disposed) return;
@@ -166,20 +167,35 @@ export function createManagedActivityInventory(params: Readonly<{
                 // the exact owner can be reread. Never carry idle through that gap.
                 if (change !== 'observation') idleSince = undefined;
                 ownerEdge += 1;
-                void read();
+                void read(producer);
             }));
         }
     };
-    const read = (): Promise<LiveWorkInventoryV1> => {
+    const read = (changedProducer?: LiveWorkProducerV1): Promise<LiveWorkInventoryV1> => {
         observe();
         const observedEdge = ownerEdge;
-        // Concurrent readers of the same owner edge share its live observation.
-        // A new edge still captures immediately; completed results are never cached.
-        if (inFlight?.ownerEdge === observedEdge) return inFlight.result;
+        // A passive partial projection cannot satisfy a fresh all-owner confirmation.
+        // Concurrent full confirmations still share their pending live observation.
+        if (inFlight?.ownerEdge === observedEdge && (changedProducer !== undefined || inFlight.allOwners)) return inFlight.result;
         // Capture synchronous owner edges immediately. Deferring the read until
         // a prior asynchronous producer settles would lose busy→idle within one turn.
+        let allOwners = true;
         const observationsPending = Promise.allSettled(params.producers.map(producer => {
-            try { return producer.read(); } catch (error) { return Promise.reject(error); }
+            const previous = producerObservations.get(producer);
+            if (changedProducer !== undefined && producer !== changedProducer && previous) {
+                allOwners = false;
+                return previous;
+            }
+            let observation: Promise<Omit<LiveWorkInventoryV1, 'idleSince'>>;
+            try {
+                observation = Promise.resolve(producer.read()).catch(() => ({ items: [], coverage: 'unknown' as const }));
+            } catch {
+                observation = Promise.resolve({ items: [], coverage: 'unknown' as const });
+            }
+            // Retain only the owner's projection, not a rejected transport's
+            // credential-bearing error. A failed owner never proves absence.
+            producerObservations.set(producer, observation);
+            return observation;
         }));
         const next = observationsPending.then(observations => {
             const items: LiveWorkItemV1[] = [];
@@ -191,7 +207,7 @@ export function createManagedActivityInventory(params: Readonly<{
             }
             // A retired observation neither blocks its successor nor changes the
             // successor's idle anchor/publication when its transport finally replies.
-            if (observedEdge !== ownerEdge) return { items, coverage: 'unknown' as const };
+            if (observedEdge !== ownerEdge || inFlight?.result !== next) return { items, coverage: 'unknown' as const };
             const settled = coverage === 'complete' && items.every(item => item.state === 'settled');
             // All applicable asynchronous owners must have proved absence before
             // starting the interval; a slow read cannot backdate an idle proof.
@@ -223,7 +239,7 @@ export function createManagedActivityInventory(params: Readonly<{
             }
             return inventory;
         });
-        inFlight = { ownerEdge: observedEdge, result: next };
+        inFlight = { ownerEdge: observedEdge, allOwners, result: next };
         const release = () => { if (inFlight?.result === next) inFlight = null; };
         void next.then(release, release);
         return next;
@@ -236,6 +252,6 @@ export function createManagedActivityInventory(params: Readonly<{
             factListeners.add(listener);
             return () => { factListeners.delete(listener); if (!factListeners.size) publishedFacts = undefined; };
         },
-        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); factListeners.clear(); publishedFacts = undefined; },
+        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); factListeners.clear(); publishedFacts = undefined; producerObservations.clear(); inFlight = null; },
     };
 }
