@@ -236,7 +236,7 @@ const readAppVersion = () => readCurrentAppRuntimeInfo().appVersion;
  * The top-right slot of an atmosphere surface: the picture's caption (or plain credit), then the Look
  * chip. Backdrop in the caption opens the same Look popover as the chip.
  */
-export function AtmosphereTopChips(
+export const AtmosphereTopChips = React.memo(function AtmosphereTopChips(
   props: Readonly<{
     picture: AtmospherePicture | null;
     lookTarget: LookTarget;
@@ -256,7 +256,7 @@ export function AtmosphereTopChips(
       <LookChip target={props.lookTarget} open={lookOpen} onOpenChange={setLookOpen} />
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create((theme) => ({
   slot: {
