@@ -8594,6 +8594,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
           askedFromHere: 'Спрошено отсюда',
           openQuestion: 'Открыть вопрос',
           questionUnavailable: 'Не удалось загрузить вопрос',
+          showMore: 'Показать ещё',
+          showLess: 'Показать меньше',
         },
         subagents: {
           messages: {

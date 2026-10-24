@@ -8054,6 +8054,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
             askedFromHere: 'Demandé d’ici',
             openQuestion: 'Ouvrir la question',
             questionUnavailable: 'Impossible de charger la question',
+            showMore: 'Afficher plus',
+            showLess: 'Afficher moins',
           },
           subagents: {
             messages: {

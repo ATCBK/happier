@@ -13,6 +13,10 @@ import {
   type SessionInputReturnedAnswerV1,
 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
+import { resolveAgentIdFromFlavor } from '@/agents/registry/registryCore';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useSelectedSessionMessageReply } from '@/components/sessions/transcript/references/useSelectedSessionMessageReply';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
@@ -79,6 +83,7 @@ export function ReturnedAnswerQuote(
   const senderName = sender
     ? getSessionName(sender, serverId)
     : t('message.provenanceSession');
+  const senderAgentId = resolveAgentIdFromFlavor(sender ? readSessionOwnerMetadataView(sender)?.flavor ?? null : null);
   const navigate = transcriptSource.navigate;
   const [questionOpen, setQuestionOpen] = React.useState(false);
   // One exact read, only while the question is open; never one per transcript row.
@@ -118,6 +123,7 @@ export function ReturnedAnswerQuote(
         : undefined}
       question={{ open: questionOpen, onToggle: () => setQuestionOpen((open) => !open), state: question }}
       labels={labels}
+      answererMark={<AgentIcon agentId={senderAgentId} size={ICON_SIZE.xs} />}
       informationMark={<Icon name="info" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
       Text={QuoteText}
       Action={QuoteAction}
@@ -126,6 +132,13 @@ export function ReturnedAnswerQuote(
         secondaryText: theme.colors.text.secondary,
         danger: theme.colors.status.error,
         border: theme.colors.border.default,
+        surface: theme.colors.surface.inset,
+      }}
+      radius={theme.borderRadius.xl}
+      collapse={{
+        lineHeight: transcriptMarkdownTextStyle.lineHeight,
+        showMore: t('session.returnedAnswer.showMore'),
+        showLess: t('session.returnedAnswer.showLess'),
       }}
       space={theme.space}
     >

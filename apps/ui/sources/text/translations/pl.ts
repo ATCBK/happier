@@ -8050,6 +8050,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
           askedFromHere: 'Zapytano stąd',
           openQuestion: 'Otwórz pytanie',
           questionUnavailable: 'Nie udało się wczytać pytania',
+          showMore: 'Pokaż więcej',
+          showLess: 'Pokaż mniej',
         },
         subagents: {
           messages: {

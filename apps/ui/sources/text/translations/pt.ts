@@ -8321,6 +8321,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
           askedFromHere: 'Perguntado daqui',
           openQuestion: 'Abrir pergunta',
           questionUnavailable: 'Não foi possível carregar a pergunta',
+          showMore: 'Mostrar mais',
+          showLess: 'Mostrar menos',
         },
         subagents: {
           messages: {

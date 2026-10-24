@@ -8214,6 +8214,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
             askedFromHere: 'Preguntado desde aquí',
             openQuestion: 'Abrir pregunta',
             questionUnavailable: 'No se pudo cargar la pregunta',
+            showMore: 'Mostrar más',
+            showLess: 'Mostrar menos',
           },
           subagents: {
             messages: {

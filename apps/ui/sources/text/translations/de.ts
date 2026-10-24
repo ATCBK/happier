@@ -8207,6 +8207,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             askedFromHere: 'Von hier gefragt',
             openQuestion: 'Frage öffnen',
             questionUnavailable: 'Frage konnte nicht geladen werden',
+            showMore: 'Mehr anzeigen',
+            showLess: 'Weniger zeigen',
         },
         subagents: {
             messages: {

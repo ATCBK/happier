@@ -36,6 +36,23 @@ function renderScreen(element: React.ReactElement<{ sessionId: string; serverId?
     );
 }
 
+// The persisted shape of an answer another session returned to an Ask (QA15 seq15), with its text.
+function returnedAnswerMessage(serverId: string, origin: 'host' | 'happierSession', text: string): UserTextMessage {
+    return {
+        kind: 'user-text', id: 'returned-answer', localId: 'returned-local', createdAt: 1, text,
+        meta: {
+            happierProvenanceV1: origin === 'host'
+                ? { v: 1, kind: 'host', producer: 'sessionAction' }
+                : { v: 1, kind: 'happierSession', sourceSessionId: 'answerer', via: 'mcp' },
+            happierInputAuthorityV1: { v: 1, producer: 'sessionAction', permission: { admittedPermissionCeiling: 'read-only' },
+                caller: { kind: 'host' },
+                returnedAnswer: { requestSessionId: 'answerer', requestLocalId: 'question/1', outcome: 'answer', delivery: 'wake',
+                    senderSessionId: 'answerer', sourceMessageRef: { kind: 'session',
+                        session: { serverId, sessionId: 'answerer' }, messageId: 'answer-message' } } },
+        },
+    };
+}
+
 afterEach(() => {
     standardCleanup();
     storage.setState(storage.getInitialState(), true);
@@ -342,7 +359,9 @@ describe('MessageView Account attribution', () => {
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Other Home title');
     });
 
-    it('quotes an answer another Session returned as information, named from the transcript Home, not as the person’s bubble', async () => {
+    it.each(['host', 'happierSession'] as const)('quotes a %s returned answer as information instead of a host notice or person’s bubble', async (origin) => {
+        const { UserMessageBubble } = await import('./UserMessageBubble');
+        const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
         const home = await upsertServerProfile({ serverUrl: 'https://returned-answer-home.example.test' });
         const answerer = createSessionFixture({ id: 'answerer', serverId: home.id, metadataLayoutVersion: 1,
             metadata: { ...createSessionFixture().metadata!, name: 'Checkout UI retry states' } });
@@ -353,16 +372,7 @@ describe('MessageView Account attribution', () => {
         const screen = await renderScreen(
             <MessageViewWithSessionCommon
                 sessionId="asker" serverId={home.id} metadata={null}
-                message={{
-                    kind: 'user-text', id: 'returned-answer', localId: 'returned-local', createdAt: 1,
-                    text: 'No. A replayed charge shows “Payment confirmed”.',
-                    meta: {
-                        happierProvenanceV1: { v: 1, kind: 'happierSession', sourceSessionId: 'answerer', via: 'mcp' },
-                        happierInputAuthorityV1: { v: 1, producer: 'sessionAction', permission: { admittedPermissionCeiling: 'read-only' },
-                            returnedAnswer: { requestSessionId: 'answerer', requestLocalId: 'question/1', outcome: 'answer', delivery: 'wake',
-                                senderSessionId: 'answerer' } },
-                    },
-                }}
+                message={returnedAnswerMessage(home.id, origin, 'No. A replayed charge shows “Payment confirmed”.')}
                 forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
                 messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
                 toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }}
@@ -370,6 +380,8 @@ describe('MessageView Account attribution', () => {
         );
         const quote = screen.findHostByTestId('transcript-returned-answer:returned-answer');
         expect(quote).not.toBeNull();
+        expect(screen.findAllByType(UserMessageBubble)).toHaveLength(0);
+        expect(screen.findAllByType(TranscriptEventRow)).toHaveLength(0);
         const text = screen.getTextContent();
         expect(text).toContain('Checkout UI retry states');
         expect(text).toContain('session.returnedAnswer.answered');
@@ -378,6 +390,42 @@ describe('MessageView Account attribution', () => {
         expect(screen.findHostByTestId('transcript-provenance-attribution:returned-answer')).toBeNull();
         // The exact request read mounts only when the person opens it.
         expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.questionState')).toBeNull();
+    });
+
+    it('bounds a long returned answer behind Show more and keeps the whole answer one press away', async () => {
+        const home = await upsertServerProfile({ serverUrl: 'https://returned-answer-long.example.test' });
+        const long = Array.from({ length: 40 }, (_, line) => `Line ${line} of a long answer.`).join('\n\n');
+        const common = {
+            forkCommon: { ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null },
+            messageDisplayCommon: { ...settingsDefaults, workspacePath: null, debugInformationEnabled: false },
+            toolChromeCommon: settingsDefaults, toolRouteCommon: { messagesById: {}, reducerState: null },
+        };
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon sessionId="asker" serverId={home.id} metadata={null}
+                message={returnedAnswerMessage(home.id, 'host', long)} {...common} />,
+        );
+        const body = screen.findHostByTestId('transcript-returned-answer:returned-answer.body');
+        expect(body).not.toBeNull();
+        const clip = () => screen.findHostByTestId('transcript-returned-answer:returned-answer.body')!.props.style;
+        const measure = (height: number) => act(() => {
+            const measured = screen.findHostByTestId('transcript-returned-answer:returned-answer.body')!
+                .findAll((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function');
+            measured[0]!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 600, height } } });
+        });
+        // Before it is measured the answer is already clipped, so it never paints full length first.
+        expect(JSON.stringify(clip())).toContain('maxHeight');
+        expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.body.fold')).toBeNull();
+        // Measured longer than the bound: Show more appears, and pressing it releases the clip.
+        measure(4000);
+        expect(screen.getTextContent()).toContain('session.returnedAnswer.showMore');
+        await screen.pressByTestIdAsync('transcript-returned-answer:returned-answer.body.fold');
+        expect(JSON.stringify(clip())).not.toContain('maxHeight');
+        expect(screen.getTextContent()).toContain('session.returnedAnswer.showLess');
+        await screen.pressByTestIdAsync('transcript-returned-answer:returned-answer.body.fold');
+        expect(JSON.stringify(clip())).toContain('maxHeight');
+        // An answer that fits is drawn whole: no control.
+        measure(48);
+        expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.body.fold')).toBeNull();
     });
 
     it('renders a single trusted human byline before the bubble while preserving recovered-history status', async () => {

@@ -8519,6 +8519,8 @@ localTailscale: {
           askedFromHere: 'ここから質問',
           openQuestion: '質問を開く',
           questionUnavailable: '質問を読み込めませんでした',
+          showMore: 'さらに表示',
+          showLess: '折りたたむ',
         },
         subagents: {
           messages: {

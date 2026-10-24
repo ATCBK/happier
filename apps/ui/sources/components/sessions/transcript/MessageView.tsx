@@ -305,8 +305,6 @@ function MessageProvenanceAttribution(props: Readonly<{ message: Message; server
   // only a producer that is not the person (a Workflow, an Automation, a Session, a plugin) is named.
   if (!provenance || provenance.kind === 'host' || provenance.kind === 'happierApp'
     || provenance.kind === 'cli' || provenance.kind === 'voice') return null;
-  // The returned-answer quote names its sender in its own header.
-  if (readReturnedAnswer(props.message)) return null;
   if (provenance.kind === 'workflow_invocation') {
     return <WorkflowMessageProvenanceAttribution
       messageId={props.message.id}
@@ -450,6 +448,9 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
     () => [styles.messageContent, messageContentMaxWidthStyle],
     [messageContentMaxWidthStyle],
   );
+  // Recognized returns use the quote even when the host delivered the input.
+  // Carry this one classification into rendering and attribution.
+  const returnedAnswer = React.useMemo(() => readReturnedAnswer(props.message), [props.message]);
   if (shouldHideVoiceAgentTurnMessage(props.message)) return null;
   // Placeholders for content we could not render are dropped here rather than inside the message
   // blocks, so toggling developer diagnostics never changes the hook order of a mounted row.
@@ -470,13 +471,14 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
             hasOtherNamedCollaborator={props.messageDisplayCommon.hasOtherNamedCollaborator === true}
           />
         )}
-        {!props.hideProvenanceAttribution && <MessageProvenanceAttribution
+        {!props.hideProvenanceAttribution && !returnedAnswer && <MessageProvenanceAttribution
           message={props.message}
           serverId={resolveTranscriptMessageServerId(props.sessionId, props.serverId, props.forkCommon.sessionForkSupportSource?.serverId)}
         />}
         <RenderBlock
           message={props.message}
           isHostFollowInput={isHostFollowInput}
+          returnedAnswer={returnedAnswer}
           metadata={props.metadata}
           sessionId={props.sessionId}
           layoutContext={props.layoutContext ?? 'transcript'}
@@ -510,6 +512,7 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
 // RenderBlock function that dispatches to the correct component based on message kind
 function RenderBlock(props: {
   isHostFollowInput: boolean;
+  returnedAnswer: ReturnType<typeof readReturnedAnswer>;
   message: Message;
   metadata: Metadata | null;
   sessionId: string;
@@ -540,12 +543,13 @@ function RenderBlock(props: {
   const transcriptSource = useSessionTranscriptSource();
   switch (props.message.kind) {
     case 'user-text':
-      if (props.isHostFollowInput) {
+      if (props.isHostFollowInput && !props.returnedAnswer) {
         return <TranscriptTextNoticeRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} />;
       }
       return (
         <UserTextBlock
           message={props.message}
+          returnedAnswer={props.returnedAnswer}
           metadata={props.metadata}
           sessionId={props.sessionId}
           serverId={props.toolChromeCommon.serverId}
@@ -685,6 +689,7 @@ function TranscriptTextNoticeRow(props: Readonly<{
 
 function UserTextBlock(props: {
   message: UserTextMessage;
+  returnedAnswer: ReturnType<typeof readReturnedAnswer>;
   metadata: Metadata | null;
   sessionId: string;
   serverId?: string | null;
@@ -726,7 +731,7 @@ function UserTextBlock(props: {
   }), [props.message, props.messageDisplayCommon.debugInformationEnabled]);
   const isVoiceAgentTurn = messageDisplay.isVoiceAgentTurn;
   // An answer another session returned here is quoted as information, not drawn as the person's bubble.
-  const returnedAnswer = React.useMemo(() => readReturnedAnswer(props.message), [props.message]);
+  const returnedAnswer = props.returnedAnswer;
 
   const structuredNode = renderStructuredMessage({
 	    message: props.message,

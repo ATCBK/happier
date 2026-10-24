@@ -9792,6 +9792,8 @@ const enSession = {
     askedFromHere: 'Asked from here',
     openQuestion: 'Open question',
     questionUnavailable: 'Couldn’t load the question',
+    showMore: 'Show more',
+    showLess: 'Show less',
   },
   subagents: {
     messages: {

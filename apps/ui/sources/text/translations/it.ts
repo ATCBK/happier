@@ -8437,6 +8437,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
             askedFromHere: 'Chiesto da qui',
             openQuestion: 'Apri domanda',
             questionUnavailable: 'Impossibile caricare la domanda',
+            showMore: 'Mostra altro',
+            showLess: 'Mostra meno',
           },
           subagents: {
             messages: {

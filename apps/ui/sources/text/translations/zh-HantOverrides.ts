@@ -6763,6 +6763,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 askedFromHere: '從這裡提問',
                 openQuestion: '開啟問題',
                 questionUnavailable: '無法載入問題',
+                showMore: '顯示更多',
+                showLess: '顯示更少',
             },
             subagents: {
                 messages: {

@@ -7528,6 +7528,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                     askedFromHere: 'Preguntat des d’aquí',
                     openQuestion: 'Obre la pregunta',
                     questionUnavailable: 'No s’ha pogut carregar la pregunta',
+                    showMore: 'Mostra’n més',
+                    showLess: 'Mostra menys',
                 },
                 subagents: {
                     messages: {

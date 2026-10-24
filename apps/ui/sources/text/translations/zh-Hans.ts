@@ -7896,6 +7896,8 @@ export const zhHans: TranslationStructure = {
         askedFromHere: '从这里提问',
         openQuestion: '打开问题',
         questionUnavailable: '无法加载问题',
+        showMore: '显示更多',
+        showLess: '显示更少',
       },
       subagents: {
         messages: {
