@@ -92,6 +92,11 @@ pub fn run() {
 
     #[cfg(debug_assertions)]
     {
+        if std::env::var("HAPPIER_TAURI_QA_BOOT_OBSERVER").as_deref() == Ok("1") {
+            builder = builder.append_invoke_initialization_script(
+                include_str!("desktop_boot_observer.js").to_string(),
+            );
+        }
         builder = builder.plugin(mcp_bridge::build_debug_mcp_bridge_plugin());
     }
 
