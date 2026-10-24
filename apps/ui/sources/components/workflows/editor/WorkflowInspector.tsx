@@ -22,6 +22,7 @@ import {
     workflowInputToFieldHint,
 } from '@happier-dev/protocol/workflows/workflowV1';
 import {
+    applyWorkflowDefinitionEditsV1,
     findWorkflowBlock,
     setWorkflowDefaultField,
     setWorkflowFinalOutput,
@@ -273,7 +274,11 @@ function WorkflowSettingsContent(props: WorkflowInspectorProps): React.ReactElem
                 summary={(draft.roles?.map((role) => 'name' in role ? role.name : role.roleId).join(' · ')) || t('workflows.page.inspector.none')}
                 attention={issuesUnder(issues, ['/roles'])} valueSet={(draft.roles?.length ?? 0) > 0}
                 testID={`${testIDPrefix}-group-roles`}>
-                <WorkflowRolesEditor draft={draft} onChange={onChange} prefix={testIDPrefix} editable={!readOnly} />
+                <WorkflowRolesEditor draft={draft} onEdit={(ops) => {
+                    if (readOnly) return;
+                    const result = applyWorkflowDefinitionEditsV1(draft, ops);
+                    if (result.ok) onChange(result.draft);
+                }} prefix={testIDPrefix} editable={!readOnly} />
             </WorkflowInspectorGroup>
 
             <WorkflowInspectorGroup

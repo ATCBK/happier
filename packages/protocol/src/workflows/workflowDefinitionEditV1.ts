@@ -4,6 +4,7 @@ import { z } from 'zod/mini';
 import { WorkflowAuthoredResultReferenceSchema, WorkflowBlockIdSchema, type WorkflowAuthoredResultReference } from './workflowReferenceV1.js';
 import { WorkflowArtifactRevisionV1Schema, WorkflowDefinitionMetadataV1Schema } from './workflowDefinitionV1.js';
 import { WorkflowDefinitionIdV1Schema } from './workflowIdsV1.js';
+import { RoleOverrideV1Schema, WorkflowRoleV1Schema } from '../prompts/roles/rolesV1.js';
 import {
   WorkflowBlockSchema, WorkflowDefinitionV1Schema, WorkflowInputDefinitionSchema, WorkflowStepExecutionSelectionSchema,
   WorkflowStepSchema, WorkflowActionLeafV1Schema, WorkflowInsertBlockV1Schema, WorkflowBlockNameV1Schema,
@@ -1153,6 +1154,8 @@ export const WorkflowDefinitionEditOpV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('set_step_setting'), blockId: WorkflowBlockIdSchema, field: z.literal('timeoutMs'), value: WorkflowStepSchema.shape.timeoutMs }),
   selectionEditSchema('set_default'),
   z.strictObject({ kind: z.literal('set_inputs'), inputs: z.array(WorkflowInputDefinitionSchema) }),
+  z.strictObject({ kind: z.literal('upsert_role'), role: WorkflowRoleV1Schema }),
+  z.strictObject({ kind: z.literal('remove_role'), roleId: RoleOverrideV1Schema.shape.roleId }),
   z.strictObject({ kind: z.literal('set_final_output'), finalOutput: zMini.nullable(WorkflowAuthoredResultReferenceSchema) }),
   z.strictObject({ kind: z.literal('rename'), name: z.string().check(z.trim(), z.minLength(1)) }),
   z.strictObject({ kind: z.literal('rename_result_field'), blockId: WorkflowBlockIdSchema, from: z.string().check(z.minLength(1)), to: z.string().check(z.trim(), z.minLength(1), z.refine(isWorkflowResultFieldNameValid)) }),
@@ -1235,6 +1238,19 @@ export function applyWorkflowDefinitionEditsV1<TDraft extends WorkflowDefinition
         break;
       case 'set_default': next = setWorkflowDefaultField(next, op.field, op.value); break;
       case 'set_inputs': next = setWorkflowInputs(next, op.inputs); break;
+      case 'upsert_role': {
+        const roles = next.roles ?? [];
+        const existingIndex = roles.findIndex(role => role.roleId === op.role.roleId);
+        next = { ...next, roles: existingIndex === -1 ? [...roles, op.role]
+          : roles.map((role, index) => index === existingIndex ? op.role : role) };
+        break;
+      }
+      case 'remove_role': {
+        const roles = next.roles ?? [];
+        if (!roles.some(role => role.roleId === op.roleId)) return fail('invalid_target');
+        next = { ...next, roles: roles.filter(role => role.roleId !== op.roleId) };
+        break;
+      }
       case 'set_final_output': next = setWorkflowFinalOutput(next, op.finalOutput); break;
       case 'rename': next = { ...next, name: op.name }; break;
       case 'rename_result_field': {
@@ -1247,6 +1263,7 @@ export function applyWorkflowDefinitionEditsV1<TDraft extends WorkflowDefinition
       }
     }
   }
+  if (changed.size === 0) return { ok: true, draft: next, changedBlockIds: [] };
   const surviving = new Set(walkWorkflowBlocks(next.blocks).map((block) => block.id));
   return { ok: true, draft: next, changedBlockIds: [...changed].filter((id) => surviving.has(id)) };
 }

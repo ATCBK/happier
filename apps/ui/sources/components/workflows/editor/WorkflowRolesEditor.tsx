@@ -3,8 +3,8 @@ import { View } from 'react-native';
 import { resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { resolveRoleRunsAsKindV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { describeRoleRunsAs } from '@/components/roles/catalog/rolePresentation';
-import type { RoleOverrideV1, WorkflowRoleV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
-import { walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import type { RoleOverrideV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
+import { walkWorkflowBlocks, type WorkflowDefinitionEditOpV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleEnginePresentation } from '@/components/roles/catalog/useRoleEnginePresentation';
 import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
@@ -21,7 +21,7 @@ import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEdito
  * every edit is a draft change recorded by the editor's existing history owner. */
 export function WorkflowRolesEditor(props: Readonly<{
     draft: WorkflowEditorDraft;
-    onChange: (next: WorkflowEditorDraft) => void;
+    onEdit: (ops: readonly WorkflowDefinitionEditOpV1[]) => void;
     prefix: string;
     editable?: boolean;
 }>) {
@@ -38,12 +38,11 @@ export function WorkflowRolesEditor(props: Readonly<{
             return engine && 'role' in engine ? [engine.role] : [];
         }),
     ])];
-    const update = (next: WorkflowRoleV1[]) => props.onChange({ ...props.draft, roles: next });
     const addInline = () => {
         let ordinal = 1;
         while (roleIds.includes(`workflow_role_${ordinal}`) || catalog.entries.some((entry) => entry.roleId === `workflow_role_${ordinal}`)) ordinal += 1;
-        update([...roles, { roleId: `workflow_role_${ordinal}`, name: t('roles.settings.newRoleName'),
-            instructions: '', runsAs: { kind: 'session' } }]);
+        props.onEdit([{ kind: 'upsert_role', role: { roleId: `workflow_role_${ordinal}`, name: t('roles.settings.newRoleName'),
+            instructions: '', runsAs: { kind: 'session' } } }]);
     };
     return <View>
         {catalog.status === 'failed' ? <View>
@@ -57,7 +56,7 @@ export function WorkflowRolesEditor(props: Readonly<{
                 settingsOverrides: entry?.override ? { [roleId]: entry.override } : {}, workflowRoles: roles });
             const change = (patch: Partial<Omit<RoleOverrideV1, 'roleId'>>) => {
                 const next = { ...pin, roleId, ...patch };
-                update(pin ? roles.map((role) => role.roleId === roleId ? next : role) : [...roles, next]);
+                props.onEdit([{ kind: 'upsert_role', role: next }]);
             };
             const prefix = `${props.prefix}-role-${roleId}`;
             const inline = pin && 'name' in pin ? pin : null;
@@ -66,11 +65,11 @@ export function WorkflowRolesEditor(props: Readonly<{
                 {inline ? <>
                     <FieldItem label={t('roles.settings.nameTitle')}>
                         <FieldTextInput value={inline.name} accessibilityLabel={t('roles.settings.nameTitle')}
-                            testID={`${prefix}-name`} editable={editable} onChangeText={(name) => { if (editable) update(roles.map((role) => role.roleId === roleId ? { ...inline, name } : role)); }} />
+                            testID={`${prefix}-name`} editable={editable} onChangeText={(name) => { if (editable) props.onEdit([{ kind: 'upsert_role', role: { ...inline, name } }]); }} />
                     </FieldItem>
                     <FieldItem label={t('roles.settings.instructionsTitle')}>
                         <FieldTextInput value={inline.instructions} multiline accessibilityLabel={t('roles.settings.instructionsTitle')}
-                            testID={`${prefix}-instructions`} editable={editable} onChangeText={(instructions) => { if (editable) update(roles.map((role) => role.roleId === roleId ? { ...inline, instructions } : role)); }} />
+                            testID={`${prefix}-instructions`} editable={editable} onChangeText={(instructions) => { if (editable) props.onEdit([{ kind: 'upsert_role', role: { ...inline, instructions } }]); }} />
                     </FieldItem>
                 </> : null}
                 {effective.ok ? <>
@@ -87,7 +86,7 @@ export function WorkflowRolesEditor(props: Readonly<{
                         onChange={(kind) => change({ runsAs: resolveRoleRunsAsKindV1(kind, effective.selection.runsAs) })} />
                 </> : <Text accessibilityRole="alert">{`${inline?.name ?? roleId} · ${t(catalog.status === 'loading' ? 'common.loading' : 'roles.settings.engineUnavailable')}`}</Text>}
                 {pin && editable ? <RoundButton size="small" display="inverted" title={t(inline ? 'common.remove' : 'roles.session.reset')}
-                    testID={`${prefix}-reset`} onPress={() => update(roles.filter((role) => role.roleId !== roleId))} /> : null}
+                    testID={`${prefix}-reset`} onPress={() => props.onEdit([{ kind: 'remove_role', roleId }])} /> : null}
             </View>;
         })}
         {!editable ? null : <DropdownMenu testID={`${props.prefix}-add-role`} open={adding} onOpenChange={setAdding} search
@@ -103,7 +102,7 @@ export function WorkflowRolesEditor(props: Readonly<{
                 if (choiceId === 'new-inline-role') addInline();
                 else {
                     const entry = catalog.entries.find((candidate) => `catalog:${candidate.roleId}` === choiceId);
-                    if (entry) update([...roles, { roleId: entry.roleId }]);
+                    if (entry) props.onEdit([{ kind: 'upsert_role', role: { roleId: entry.roleId } }]);
                 }
             }} />}
     </View>;

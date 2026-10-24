@@ -20,6 +20,43 @@ function fixture(): WorkflowDefinitionDraftV1 {
 }
 
 describe('typed workflow definition edits', () => {
+  it('does not traverse unrelated blocks for a role-only edit', () => {
+    let traversals = 0;
+    const blocks = new Proxy(fixture().blocks, { get(target, key, receiver) {
+      if (key === Symbol.iterator) traversals += 1;
+      return Reflect.get(target, key, receiver);
+    } });
+    const result = applyWorkflowDefinitionEditsV1({ ...fixture(), blocks }, [WorkflowDefinitionEditOpV1Schema.parse({
+      kind: 'upsert_role', role: { roleId: 'plugin:acme.review/reviewer' },
+    })]);
+    expect(result).toMatchObject({ ok: true, changedBlockIds: [] });
+    expect(traversals).toBe(0);
+  });
+  it('upserts and removes workflow-local roles through the shared edit schema without changing defaults or blocks', () => {
+    const original = fixture();
+    const role = { roleId: 'workflow_reviewer', name: 'Reviewer', instructions: 'Review changes', runsAs: { kind: 'session' } };
+    const apply = (draft: WorkflowDefinitionDraftV1, ops: unknown[]) => {
+      const result = applyWorkflowDefinitionEditsV1(draft, ops.map(op => WorkflowDefinitionEditOpV1Schema.parse(op)));
+      if (!result.ok) throw new Error('Expected role edit');
+      expect(result.changedBlockIds).toEqual([]);
+      expect(result.draft.defaults).toBe(original.defaults);
+      expect(result.draft.blocks).toBe(original.blocks);
+      return result.draft;
+    };
+    const added = apply(original, [{ kind: 'upsert_role', role },
+      { kind: 'upsert_role', role: { roleId: 'plugin:acme.review/reviewer' } }]);
+    const renamed = apply(added, [{ kind: 'upsert_role', role: { ...role, name: 'Security reviewer',
+      engine: { agentTargetKey: 'agent:happier.agent.claude/claude' }, runsAs: { kind: 'background_run', intent: 'task' } } }]);
+    expect(renamed.roles).toEqual([{ ...role, name: 'Security reviewer',
+      engine: { agentTargetKey: 'agent:happier.agent.claude/claude' }, runsAs: { kind: 'background_run', intent: 'task' } },
+      { roleId: 'plugin:acme.review/reviewer' }]);
+    expect(apply(renamed, [{ kind: 'remove_role', roleId: role.roleId }]).roles)
+      .toEqual([{ roleId: 'plugin:acme.review/reviewer' }]);
+    expect(applyWorkflowDefinitionEditsV1(added, [WorkflowDefinitionEditOpV1Schema.parse({ kind: 'remove_role', roleId: 'missing' })]))
+      .toEqual({ ok: false, issue: { opIndex: 0, code: 'invalid_target' } });
+    expect(original).not.toHaveProperty('roles');
+    expect(WorkflowDefinitionEditOpV1Schema.safeParse({ kind: 'upsert_role', role: { ...role, unknown: true } }).success).toBe(false);
+  });
   it('remaps copied Session conversation inputs and preserves their bound Action value paths', () => {
     const block = WorkflowBlockSchema.parse({ kind: 'step', id: 'verify', document: { text: 'Verify', references: [], attachments: [] },
       execution: { conversation: { kind: 'input', name: 'reviewSession' } },
