@@ -19,6 +19,11 @@ import { router as expoRouter } from 'expo-router';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readAccountAgentProviderRequirements, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
+import { MetadataSchema } from '@happier-dev/session-core/state';
+import { createSessionActiveModelSelection } from '@happier-dev/protocol/providers/selection/v2';
+import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+import { resolveSessionModelSelectionDisposition } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
+import { sessionModelSelectionKey } from './sessionModelSelectionKey';
 
 /**
  * Committing a freeform model id is a SUBMIT, not a keystroke: the overlay's custom
@@ -80,6 +85,43 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
+    it('selects the runtime-applied Team row rather than a same-model Built-in row after a V1 launch', async () => {
+        const selection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-luna' };
+        const active = createSessionActiveModelSelection({ selection, source: 'runtime_apply', runner: { pid: 42, processStartTimeMs: 10 },
+            teamCredentialModel: { kind: 'team_credential_provider_model', teamId: 'team', resourceId: 'resource',
+                expectedResourceRevision: 0, deliveryMode: 'brokered', agentTargetKey: selection.agentTargetKey, modelId: selection.modelId } });
+        if (active?.v !== 2) throw new Error('Expected canonical Team runtime fact');
+        const metadata = MetadataSchema.parse({ path: '/workspace', host: 'test',
+            modelSelectionIntentV1: { v: 1, updatedAt: 11, selection },
+            sessionModelsV1: { v: 1, agentId: 'codex', updatedAt: 0, currentModelId: selection.modelId,
+                availableModels: [{ id: selection.modelId, name: 'Luna' }], activeSelectionV1: active } });
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({ id: 'resource', teamId: 'team', displayName: 'QA43 Leeroy brokered', resourceRevision: 0,
+            readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed', providerModels: [{
+                selection: active.teamCredentialModel, descriptor: { id: selection.modelId, name: 'Luna' },
+                application: { agentTargetKey: selection.agentTargetKey, implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+                    endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' },
+                sourceRevision: 'source-v1', availability: 'available',
+            }], sourcePresentation: { kind: 'provider', provider: { identity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' }, definitionRevision: 1 } } });
+        for (const sessionActive of [true, false]) {
+            const disposition = resolveSessionModelSelectionDisposition({ metadata, agentId: 'codex', agentTargetKey: selection.agentTargetKey,
+                sessionActive, currentRunnerProcessIdentity: sessionActive ? active.runner : null });
+            const screen = await renderScreen(<SessionModelPicker agentTargetKey={selection.agentTargetKey} declarationContext={{ kind: 'account' }}
+                nativeModels={[{ value: selection.modelId, label: 'Luna' }]} providerGroups={[]} providerProjectionAuthoritative
+                teamCredentialResources={[resource]} currentTeamCredentialResourceKeys={new Set(['team:resource'])}
+                selected={selection} selectedTeamCredentialModel={disposition.selectedTeamCredentialModel}
+                reportedModel={{ ref: disposition.reportedTeamCredentialModel ?? selection, status: 'last_used' }}
+                effectiveLabel="Luna" onSelect={() => {}} />);
+            const list = screen.findByType(SelectionList);
+            expect(list.props.selectedOptionId).toBe(sessionModelSelectionKey(active.teamCredentialModel));
+            expect(list.props.selectedOptionId).not.toBe(sessionModelSelectionKey(selection));
+            expect(screen.findByTestId(`model-picker-overlay-option-selected-indicator:${sessionModelSelectionKey(active.teamCredentialModel)}`)).toBeTruthy();
+            expect(screen.findByTestId(`model-picker-overlay-option-selected-indicator:${sessionModelSelectionKey(selection)}`)).toBeNull();
+            expect(screen.findByTestId(`model-picker-overlay-option-status-icon:${sessionModelSelectionKey(active.teamCredentialModel)}`)).toBeTruthy();
+            expect(screen.findByTestId(`model-picker-overlay-option-status-icon:${sessionModelSelectionKey(selection)}`)).toBeNull();
+            await screen.unmount();
+        }
+    });
     it('keeps independent Account model rows inert until the addressed Machine answers, and after withdrawal', async () => {
         const { selected, providerGroups } = experimentalProviderGroup('pc_independent_account');
         const group = createProviderModelProjectionGroupFixture({ ...providerGroups[0]!,

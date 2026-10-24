@@ -170,7 +170,7 @@ export type SessionModelPickerProps = Readonly<{
     selected: SessionModelPickerValue;
     effectiveLabel: string;
     reportedModel?: Readonly<{
-        ref: ProviderBoundModelRef;
+        ref: NonNullable<SessionModelPickerOptionValue>;
         label?: string;
         status: ReportedModelStatus;
     }> | null;

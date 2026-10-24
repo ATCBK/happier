@@ -10,7 +10,11 @@ import {
   createProviderModelProjectionFixture,
   createProviderModelProjectionGroupFixture,
   createProviderSettingsAccountHarness,
+  createProviderSettingsHarness,
+  installProviderSettingsRpcBoundary,
+  installBundledProviderDeclarationsRpcBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { t } from '@/text';
@@ -23,18 +27,10 @@ const { describeProviderModels, projectionRequests } = vi.hoisted(() => ({
     payload: unknown;
   }>[],
 }));
-// Replace only network delivery; the real client parses the daemon's strict response.
-vi.mock(
-  '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
-  () => ({
-    machineRpcWithServerScope: (
-      request: Readonly<{ serverId: string | null; payload: unknown }>,
-    ) => {
-      projectionRequests.push(request);
-      return describeProviderModels(request.payload);
-    },
-  }),
-);
+// Substitute only Socket delivery; Account admission and neighboring registry
+// requests retain their real owners and canonical boundary responses.
+const rpc = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(rpc);
 
 const AGENT = 'agent:happier.agent.codex/codex';
 const GATEWAY = ProviderConnectionIdSchema.parse('pc_gateway');
@@ -76,10 +72,16 @@ await loadSyncSingletonForTests();
 afterEach(async () => {
   standardCleanup();
   await account.reset();
+  rpc.reset();
   describeProviderModels.mockReset();
   projectionRequests.length = 0;
 });
 beforeEach(async () => {
+  installBundledProviderDeclarationsRpcBoundary(rpc);
+  rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request => {
+    projectionRequests.push(request);
+    return describeProviderModels(request.payload);
+  });
   serverId = (
     await account.restore({ waivedActions: ['providers.models.refresh'] })
   ).serverId;
@@ -230,7 +232,7 @@ describe('SessionModelPicker source browsing', () => {
         }>
       ).flatMap((section) => section.options.map((option) => option.label));
     // Only the browsed source; the native selection elsewhere is not reported as missing.
-    expect(optionLabels()).toEqual(['Fable 5.1', 'Fable 5.2']);
+    await waitForHomeGovernance(() => expect(optionLabels()).toEqual(['Fable 5.1', 'Fable 5.2']));
     // The scope bar already names the one source; its group heading would say it twice.
     expect((screen.findByType(SelectionList).props.rootStep.sections as ReadonlyArray<{ title?: string }>)
       .map((section) => section.title)).toEqual([undefined]);
