@@ -596,10 +596,12 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
                     createdAt: decrypted.createdAt,
                     raw: decrypted.content,
                     seq: normalizedSeq,
+                    sidechainId: rawMessage.sidechainId,
                     messageRole: decrypted.messageRole ?? undefined,
                 }, params.rawMessageNormalizationState)
                 : normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, {
                     seq: normalizedSeq,
+                    sidechainId: rawMessage.sidechainId,
                     messageRole: decrypted.messageRole ?? undefined,
                 });
             lastMessage = telemetryFields

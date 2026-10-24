@@ -139,6 +139,16 @@ describe('socket Account actor metadata', () => {
 });
 
 describe('handleMessageUpdatedSocketUpdate', () => {
+    it('preserves the committed sidechain when updating encrypted Run input', async () => {
+        const update = buildUpdate({ messageId: 'run-input', messageSeq: 3 });
+        const harness = buildHarness({ updateData: { ...update, body: { ...update.body,
+            message: { ...update.body.message, sidechainId: 'subagent_run-owned' } } } });
+        await handleMessageUpdatedSocketUpdate(harness.params);
+        expect(harness.applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
+            role: 'user', sidechainId: 'subagent_run-owned', isSidechain: true,
+        });
+    });
+
     it('preserves update message seq on normalized messages and advances session seq', async () => {
         const { params, applyMessages, applySessions } = buildHarness({
             updateData: buildUpdate({ sid: 's1', messageId: 'm2', messageSeq: 2 }),

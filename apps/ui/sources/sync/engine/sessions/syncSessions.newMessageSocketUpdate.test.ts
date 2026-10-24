@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecryptedMessage, Session } from '@/sync/domains/state/storageTypes';
 import { handleNewMessageSocketUpdate } from './sessionSocketUpdate';
 import { createRawMessageNormalizationSequenceState, type NormalizedMessage } from "@happier-dev/session-core/raw";
+import { createReducer, reducer } from '@happier-dev/session-core/reducer';
 import { createSessionMessageApplyCoalescer } from './sessionMessageApplyCoalescer';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { flushRealtimeFanoutTelemetry, resetRealtimeFanoutTelemetry } from '@/sync/runtime/performance/realtimeFanoutTelemetry';
@@ -162,6 +163,26 @@ describe('handleNewMessageSocketUpdate', () => {
         resetRealtimeFanoutTelemetry();
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
+    });
+
+    it.each([false, true])('keeps committed Run input in its sidechain (sequence normalization: %s)', async (sequenceNormalization) => {
+        const sidechainId = 'subagent_run_dbbb89d2-redacted';
+        const update = buildUpdate({ messageId: 'cmvmloos400c9mc4s7gpiqeqi', messageSeq: 3,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'x'.repeat(111_733) } } } });
+        const harness = buildHarness({
+            updateData: { ...update, body: { ...update.body, message: { ...update.body.message, sidechainId } } },
+            getSession: () => ({ ...buildSession('s1'), encryptionMode: 'plain' }),
+            ...(sequenceNormalization ? { rawMessageNormalizationState: createRawMessageNormalizationSequenceState() } : {}),
+        });
+        await handleNewMessageSocketUpdate(harness.params);
+        const normalized: NormalizedMessage | undefined = harness.applyMessages.mock.calls[0]?.[1]?.[0];
+        expect(normalized).toMatchObject({ role: 'user', sidechainId, isSidechain: true });
+        if (!normalized) throw new Error('Run input was not materialized');
+        const state = createReducer();
+        expect(reducer(state, [normalized]).messages).toEqual([]);
+        expect(state.sidechains.get(sidechainId)).toMatchObject([{ realID: update.body.message.id, role: 'user' }]);
+        expect(reducer(state, [normalized]).messages).toEqual([]);
+        expect(state.sidechains.get(sidechainId)).toHaveLength(1);
     });
 
     it('preserves update message seq on normalized messages', async () => {
