@@ -4,6 +4,7 @@ import {
     type SessionAddress,
 } from '@/sync/domains/session/sessionAddress';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
+import { ExecutionRunMachineActivityEphemeralV1Schema } from '@happier-dev/protocol/execution/runs/activityV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
@@ -24,12 +25,29 @@ type Listener = (notification: ExecutionRunActivityNotification) => void;
 
 const UNKNOWN_RUN_NOTIFICATION: ExecutionRunActivityNotification = Object.freeze({ runId: null });
 
-const listenersBySessionAddress = new Map<string, { address: SessionAddress; listeners: Set<Listener> }>();
+export type ExecutionRunActivityAddress = SessionAddress | Readonly<{ serverId: string; machineId: string }>;
+function activityAddressKey(address: ExecutionRunActivityAddress): string {
+    return 'sessionId' in address ? sessionAddressKey(address) : JSON.stringify(['machine', address.serverId, address.machineId]);
+}
+function normalizeActivityAddress(address: ExecutionRunActivityAddress): ExecutionRunActivityAddress | null {
+    if ('sessionId' in address) return normalizeSessionAddress(address.serverId, address.sessionId);
+    const serverId = address.serverId.trim();
+    const machineId = address.machineId.trim();
+    return serverId && machineId ? { serverId, machineId } : null;
+}
+const listenersByAddress = new Map<string, { address: ExecutionRunActivityAddress; listeners: Set<Listener> }>();
 
 const EMPTY_RUNNING_RUNS: readonly ExecutionRunPublicState[] = Object.freeze([]);
+export type RunningExecutionRunRosterSnapshot = Readonly<{
+    runs: readonly ExecutionRunPublicState[];
+    loading: boolean;
+    failed: boolean;
+}>;
+const UNREAD_ROSTER: RunningExecutionRunRosterSnapshot = Object.freeze({ runs: EMPTY_RUNNING_RUNS, loading: true, failed: false });
+const EMPTY_ROSTER: RunningExecutionRunRosterSnapshot = Object.freeze({ runs: EMPTY_RUNNING_RUNS, loading: false, failed: false });
 type RosterRead = () => Promise<readonly ExecutionRunPublicState[] | null>;
 type Roster = {
-    snapshot: readonly ExecutionRunPublicState[];
+    snapshot: RunningExecutionRunRosterSnapshot;
     listeners: Set<() => void>;
     read: RosterRead;
     request: object | null;
@@ -42,14 +60,20 @@ type Roster = {
 // subscriber releases it, and a later mount starts with a new baseline.
 const rostersBySessionAddress = new Map<string, Roster>();
 
-function publishRoster(roster: Roster, runs: readonly ExecutionRunPublicState[]): void {
-    const previousById = new Map(roster.snapshot.map((run) => [run.runId, run]));
-    const next = runs.map((run) => {
-        const previous = previousById.get(run.runId);
-        return previous && JSON.stringify(previous) === JSON.stringify(run) ? previous : run;
-    });
-    if (next.length === roster.snapshot.length && next.every((run, index) => run === roster.snapshot[index])) return;
-    roster.snapshot = next.length > 0 ? next : EMPTY_RUNNING_RUNS;
+function publishRoster(roster: Roster, status: Readonly<{ loading: boolean; failed: boolean }>, runs = roster.snapshot.runs): void {
+    const previous = roster.snapshot;
+    let next = runs;
+    if (runs !== previous.runs) {
+        const previousById = new Map(previous.runs.map((run) => [run.runId, run]));
+        next = runs.map((run) => {
+            const previous = previousById.get(run.runId);
+            return previous && JSON.stringify(previous) === JSON.stringify(run) ? previous : run;
+        });
+    }
+    const unchangedRuns = next === previous.runs
+        || next.length === previous.runs.length && next.every((run, index) => run === previous.runs[index]);
+    if (unchangedRuns && status.loading === previous.loading && status.failed === previous.failed) return;
+    roster.snapshot = { ...status, runs: unchangedRuns ? previous.runs : next.length > 0 ? next : EMPTY_RUNNING_RUNS };
     for (const listener of [...roster.listeners]) listener();
 }
 
@@ -62,15 +86,18 @@ function refreshRoster(key: string, roster: Roster): void {
     const request = {};
     roster.request = request;
     roster.invalidated = false;
+    publishRoster(roster, { loading: true, failed: false });
     void (async () => {
         try {
             const runs = await roster.read();
             if (rostersBySessionAddress.get(key) !== roster || roster.request !== request) return;
             // A failed/unavailable read cannot prove that the last-known runs
             // finished. Reconnect, activity or explicit refresh will catch up.
-            if (runs !== null) publishRoster(roster, runs);
+            publishRoster(roster, { loading: false, failed: runs === null }, runs ?? roster.snapshot.runs);
         } catch {
-            // Keep the last-known projection until the next owner wake.
+            if (rostersBySessionAddress.get(key) === roster && roster.request === request) {
+                publishRoster(roster, { loading: false, failed: true });
+            }
         } finally {
             if (rostersBySessionAddress.get(key) === roster && roster.request === request) {
                 roster.request = null;
@@ -81,7 +108,11 @@ function refreshRoster(key: string, roster: Roster): void {
 }
 
 export function readRunningExecutionRunRoster(address: SessionAddress | null): readonly ExecutionRunPublicState[] {
-    return address ? rostersBySessionAddress.get(sessionAddressKey(address))?.snapshot ?? EMPTY_RUNNING_RUNS : EMPTY_RUNNING_RUNS;
+    return readRunningExecutionRunRosterSnapshot(address).runs;
+}
+
+export function readRunningExecutionRunRosterSnapshot(address: SessionAddress | null): RunningExecutionRunRosterSnapshot {
+    return address ? rostersBySessionAddress.get(sessionAddressKey(address))?.snapshot ?? UNREAD_ROSTER : EMPTY_ROSTER;
 }
 
 export function refreshRunningExecutionRunRoster(address: SessionAddress): void {
@@ -99,7 +130,7 @@ export function subscribeRunningExecutionRunRoster(
     let roster = rostersBySessionAddress.get(key);
     if (!roster) {
         const created: Roster = {
-            snapshot: EMPTY_RUNNING_RUNS, listeners: new Set(), read,
+            snapshot: UNREAD_ROSTER, listeners: new Set(), read,
             request: null, invalidated: false, dispose: () => {},
         };
         roster = created;
@@ -120,7 +151,7 @@ export function subscribeRunningExecutionRunRoster(
             // An old request may finish, but can no longer publish its rows.
             created.request = null;
             created.invalidated = false;
-            publishRoster(created, EMPTY_RUNNING_RUNS);
+            publishRoster(created, { loading: false, failed: true }, EMPTY_RUNNING_RUNS);
             if (event.kind === 'credentials_set') refreshRoster(key, created);
         });
         created.dispose = () => {
@@ -141,13 +172,13 @@ export function subscribeRunningExecutionRunRoster(
 }
 
 export function notifyExecutionRunActivity(
-    address: SessionAddress,
+    address: ExecutionRunActivityAddress,
     notification: ExecutionRunActivityNotification = UNKNOWN_RUN_NOTIFICATION,
 ): void {
-    const normalizedAddress = normalizeSessionAddress(address.serverId, address.sessionId);
+    const normalizedAddress = normalizeActivityAddress(address);
     if (!normalizedAddress) return;
 
-    const listeners = listenersBySessionAddress.get(sessionAddressKey(normalizedAddress))?.listeners;
+    const listeners = listenersByAddress.get(activityAddressKey(normalizedAddress))?.listeners;
     if (!listeners || listeners.size === 0) return;
 
     // Defensive copy: listeners may add/remove subscriptions while handling the notification.
@@ -168,6 +199,11 @@ export function notifyExecutionRunActivityFromUpdate(
     serverId: string | null | undefined,
     update: unknown,
 ): void {
+    if (update && typeof update === 'object' && 'machineId' in update) {
+        const parsed = ExecutionRunMachineActivityEphemeralV1Schema.safeParse(update);
+        if (parsed.success && typeof serverId === 'string') notifyExecutionRunActivity({ serverId, machineId: parsed.data.machineId }, { runId: parsed.data.runId });
+        return;
+    }
     if (!update || typeof update !== 'object'
         || !('type' in update) || update.type !== 'execution-run-updated'
         || !('sessionId' in update) || typeof update.sessionId !== 'string') return;
@@ -181,26 +217,26 @@ export function notifyExecutionRunActivityFromUpdate(
 
 /** Ephemerals have no replay cursor: every connection catches up demanded addresses. */
 export function notifyExecutionRunActivityReconnect(serverId: string): void {
-    for (const { address } of [...listenersBySessionAddress.values()]) {
+    for (const { address } of [...listenersByAddress.values()]) {
         if (areServerProfileIdentifiersEquivalent(address.serverId, serverId)) notifyExecutionRunActivity(address);
     }
 }
 
-export function subscribeExecutionRunActivity(address: SessionAddress, listener: Listener): () => void {
-    const normalizedAddress = normalizeSessionAddress(address.serverId, address.sessionId);
+export function subscribeExecutionRunActivity(address: ExecutionRunActivityAddress, listener: Listener): () => void {
+    const normalizedAddress = normalizeActivityAddress(address);
     if (!normalizedAddress) return () => {};
 
-    const key = sessionAddressKey(normalizedAddress);
-    const entry = listenersBySessionAddress.get(key) ?? { address: normalizedAddress, listeners: new Set<Listener>() };
+    const key = activityAddressKey(normalizedAddress);
+    const entry = listenersByAddress.get(key) ?? { address: normalizedAddress, listeners: new Set<Listener>() };
     entry.listeners.add(listener);
-    listenersBySessionAddress.set(key, entry);
+    listenersByAddress.set(key, entry);
 
     return () => {
-        const current = listenersBySessionAddress.get(key);
+        const current = listenersByAddress.get(key);
         if (!current) return;
         current.listeners.delete(listener);
         if (current.listeners.size === 0) {
-            listenersBySessionAddress.delete(key);
+            listenersByAddress.delete(key);
         }
     };
 }
