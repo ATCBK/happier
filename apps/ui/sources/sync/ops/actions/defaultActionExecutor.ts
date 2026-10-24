@@ -1800,7 +1800,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     },
     uiCurrentContextAction: (request) => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
     accountHomeContinuationAction: (request) => executeCurrentUiContextAction(request),
-    sessionAuthoringOpen: openSessionAuthoringDraft,
+    sessionAuthoringOpen: args => openSessionAuthoringDraft(args, accountContext ?? undefined),
     invokeContributedAction: (request) => executeCurrentUiContextContributedAction(request, { execute: executor.execute, context: request.context }),
     uiFindAction: executeFindAction,
     uiPromptPickerOpen: executePromptPickerOpenAction,
