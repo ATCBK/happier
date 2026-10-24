@@ -387,10 +387,13 @@ export const PluginCollectionContentEnvelopeV1Schema = lazyZodSchema(() => z.dis
   z.strictObject({ t: z.literal('plain'), v: PluginCollectionPrivatePayloadV1Schema }),
   z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]).check(z.superRefine((value, context) => {
-  if (encodedJsonUtf8ByteLength(value) > PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes) {
+  const encodedBytes = encodedJsonUtf8ByteLength(value);
+  const effectiveMaximum = PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes;
+  if (encodedBytes > effectiveMaximum) {
     context.addIssue({
       code: "custom",
       message: 'Collection private envelope exceeds the 512 KiB encoded limit.',
+      params: { reason: 'private-payload-too-large', encodedBytes, effectiveMaximum },
     });
   }
 })));

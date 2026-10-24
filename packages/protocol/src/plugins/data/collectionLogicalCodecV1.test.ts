@@ -19,6 +19,7 @@ import {
   isValidPluginJsonSchemaValue,
 } from '../actions/jsonSchemaValidation.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { PLUGIN_COLLECTION_LIMITS_V1 } from './collectionLimitsV1.js';
 
 /**
  * `bindingId` is deliberately server-readable and NOT required: it is the exact
@@ -72,6 +73,69 @@ const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(5) }
 const randomBytes = (length: number): Uint8Array => new Uint8Array(length).fill(3);
 
 describe('plugin Collection logical row codec', () => {
+  it.each(['plain', 'e2ee'] as const)('distinguishes the exact private envelope bound in %s mode', (encryptionMode) => {
+    const maximum = PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes;
+    const largeContract = { ...contract, schema: {
+      ...contract.schema,
+      properties: { ...contract.schema.properties, privateNote: { type: 'string' as const } },
+    } };
+    const largeValidate = compilePluginJsonSchema(largeContract.schema);
+    const accepts = (value: PluginCollectionLogicalValueV1): value is PluginCollectionLogicalValueV1 =>
+      isValidPluginJsonSchemaValue(largeValidate, value);
+    const value = { id: 'large', connectionId: 'connection-1', attention: true,
+      privateNote: 'é'.repeat(maximum / 2) };
+    const envelope = encryptionMode === 'plain'
+      ? { t: 'plain', v: { privateNote: value.privateNote } }
+      : { t: 'encrypted', c: sealPluginCollectionPrivatePayloadV1({
+        material, payload: { privateNote: value.privateNote }, randomBytes,
+      }) };
+    const outcome = encodePluginCollectionLogicalValueV1({ contract: largeContract,
+      isValidLogicalValue: accepts, value, encryptionMode,
+      material: encryptionMode === 'e2ee' ? material : null, randomBytes });
+    expect(outcome).toEqual({ status: 'failed', reason: 'private-payload-too-large',
+      dimension: 'maxRowEncodedBytes', effectiveMaximum: maximum,
+      encodedBytes: new TextEncoder().encode(JSON.stringify(envelope)).byteLength });
+    expect(preparePluginCollectionLogicalMutationRequestV1({ contract: largeContract,
+      isValidLogicalValue: accepts, operations: [{ kind: 'put', value, expectedRevision: 1 }],
+      encryptionMode, material: encryptionMode === 'e2ee' ? material : null, randomBytes,
+    })).toEqual(outcome);
+  });
+
+  it('keeps malformed private JSON and crypto failures distinct from size refusals', () => {
+    const input = { contract, isValidLogicalValue: () => true,
+      value: { id: 'invalid', connectionId: 'connection-1', attention: true, privateNote: Number.NaN },
+      encryptionMode: 'plain' as const, material: null, randomBytes };
+    expect(encodePluginCollectionLogicalValueV1(input)).toEqual({
+      status: 'failed', reason: 'private-payload-invalid',
+    });
+    expect(encodePluginCollectionLogicalValueV1({ ...input,
+      value: { ...input.value, privateNote: 'valid' }, encryptionMode: 'e2ee', material,
+      randomBytes: () => { throw new Error('too large'); },
+    })).toEqual({ status: 'failed', reason: 'private-payload-invalid' });
+    expect(encodePluginCollectionLogicalValueV1({ ...input, encryptionMode: 'e2ee' })).toEqual({
+      status: 'failed', reason: 'encryption-material-unavailable',
+    });
+  });
+
+  it('accepts the exact existing envelope ceiling and refuses the next byte', () => {
+    const maximum = PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes;
+    const largeContract = { ...contract, schema: {
+      ...contract.schema,
+      properties: { ...contract.schema.properties, privateNote: { type: 'string' as const } },
+    } };
+    const largeValidate = compilePluginJsonSchema(largeContract.schema);
+    const envelopeOverhead = new TextEncoder().encode(JSON.stringify({ t: 'plain', v: { privateNote: '' } })).byteLength;
+    const input = { contract: largeContract,
+      isValidLogicalValue: (value: PluginCollectionLogicalValueV1) => isValidPluginJsonSchemaValue(largeValidate, value),
+      value: { id: 'boundary', connectionId: 'connection-1', attention: true,
+        privateNote: 'a'.repeat(maximum - envelopeOverhead) },
+      encryptionMode: 'plain' as const, material: null, randomBytes };
+    expect(encodePluginCollectionLogicalValueV1(input).status).toBe('encoded');
+    expect(encodePluginCollectionLogicalValueV1({ ...input,
+      value: { ...input.value, privateNote: `${input.value.privateNote}a` },
+    })).toEqual({ status: 'failed', reason: 'private-payload-too-large',
+      dimension: 'maxRowEncodedBytes', effectiveMaximum: maximum, encodedBytes: maximum + 1 });
+  });
   it('projects retired stored fields at both transport halves while refusing malformed known values', () => {
     const row = { rowId: 'delivery-1', revision: 3,
       projection: { connectionId: 'connection-1', attention: true, bindingId: null, retired: true },

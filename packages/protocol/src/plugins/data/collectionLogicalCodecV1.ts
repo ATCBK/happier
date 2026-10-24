@@ -60,8 +60,23 @@ export type PluginCollectionLogicalEncodeFailureReasonV1 =
   | 'projection-invalid'
   /** The remaining fields are not a valid private payload, or sealing failed. */
   | 'private-payload-invalid'
+  /** The content envelope exceeds its existing encoded-byte ceiling. */
+  | 'private-payload-too-large'
   /** An E2EE Account was named without the Account-scoped material to seal with. */
   | 'encryption-material-unavailable';
+
+type PluginCollectionLogicalEncodeFailureV1 =
+  | Readonly<{
+    status: 'failed';
+    reason: Exclude<PluginCollectionLogicalEncodeFailureReasonV1, 'private-payload-too-large'>;
+  }>
+  | Readonly<{
+    status: 'failed';
+    reason: 'private-payload-too-large';
+    dimension: 'maxRowEncodedBytes';
+    effectiveMaximum: number;
+    encodedBytes: number;
+  }>;
 
 export type PluginCollectionLogicalEncodeOutcomeV1 =
   | Readonly<{
@@ -70,7 +85,7 @@ export type PluginCollectionLogicalEncodeOutcomeV1 =
     content: PluginCollectionContentEnvelopeV1;
     projection: PluginCollectionProjectionV1;
   }>
-  | Readonly<{ status: 'failed'; reason: PluginCollectionLogicalEncodeFailureReasonV1 }>;
+  | PluginCollectionLogicalEncodeFailureV1;
 
 export type PluginCollectionLogicalMutationV1<
   TValue extends PluginCollectionLogicalValueV1 = PluginCollectionLogicalValueV1,
@@ -85,10 +100,8 @@ export type PluginCollectionLogicalMutationRequestOutcomeV1 =
     encodedBytes: number;
     measurement: PluginCollectionMutationRequestMeasurementV1;
   }>
-  | Readonly<{
-    status: 'failed';
-    reason: PluginCollectionLogicalEncodeFailureReasonV1 | 'mutation-request-invalid';
-  }>;
+  | PluginCollectionLogicalEncodeFailureV1
+  | Readonly<{ status: 'failed'; reason: 'mutation-request-invalid' }>;
 
 export type PluginCollectionLogicalDecodeFailureReasonV1 =
   /** The stored envelope does not match the Account's current encryption mode. */
@@ -204,20 +217,36 @@ export function encodePluginCollectionLogicalValueV1(input: Readonly<{
     return { status: 'failed', reason: 'encryption-material-unavailable' };
   }
   try {
-    const content = material && input.encryptionMode === 'e2ee'
-      ? PluginCollectionContentEnvelopeV1Schema.parse({
-        t: 'encrypted',
+    const envelope = material && input.encryptionMode === 'e2ee'
+      ? {
+        t: 'encrypted' as const,
         c: sealPluginCollectionPrivatePayloadV1({
           material,
           payload: PluginCollectionPrivatePayloadV1Schema.parse(privatePayload),
           randomBytes: input.randomBytes,
         }),
-      })
-      : PluginCollectionContentEnvelopeV1Schema.parse({ t: 'plain', v: privatePayload });
+      }
+      : { t: 'plain' as const, v: privatePayload };
+    const content = PluginCollectionContentEnvelopeV1Schema.safeParse(envelope);
+    if (!content.success) {
+      // Consume only the size issue emitted by the owning envelope schema.
+      // Invalid JSON and crypto errors must never become split/retry signals.
+      const sizeIssue = content.error.issues.find((issue) => issue.code === 'custom'
+        && issue.params?.reason === 'private-payload-too-large');
+      if (sizeIssue?.code === 'custom') {
+        const encodedBytes: unknown = sizeIssue.params?.encodedBytes;
+        const effectiveMaximum: unknown = sizeIssue.params?.effectiveMaximum;
+        if (typeof encodedBytes === 'number' && typeof effectiveMaximum === 'number') {
+          return { status: 'failed', reason: 'private-payload-too-large',
+            dimension: 'maxRowEncodedBytes', encodedBytes, effectiveMaximum };
+        }
+      }
+      return { status: 'failed', reason: 'private-payload-invalid' };
+    }
     return {
       status: 'encoded',
       rowId: rowId.data,
-      content,
+      content: content.data,
       projection: parsedProjection.data,
     };
   } catch {

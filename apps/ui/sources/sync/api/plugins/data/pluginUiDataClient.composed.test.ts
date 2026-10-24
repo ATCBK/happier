@@ -205,7 +205,7 @@ describe('Collection raw read acquisition after caller admission', () => {
                 expect(currentnessCount() - beforeRefusedWrite).toBe(1);
                 expect(home.requests.filter(request => request.path === '/v1/plugins/data/mutate')).toHaveLength(2);
                 const beforeRefusedRead = currentnessCount();
-                await expect(client.get('same')).resolves.toEqual({ status: 'unavailable', reason: 'account-content-mismatch' });
+                await expect(client.get('same')).resolves.toEqual({ status: 'rejected', code: 'collection_content_mode_mismatch' });
                 expect(currentnessCount()).toBe(beforeRefusedRead);
                 retireActiveServerAccountScopeLifetime();
                 const beforeRetired = home.httpRequests.length;
@@ -546,6 +546,50 @@ describe('mounted Collection contract acquisition through real Home authority', 
             expect(changes).toEqual([{ kind: 'changed', changeCursor: 31 }]);
             resetActivePluginCollectionChanges();
             await vi.waitFor(() => expect(changes).toContainEqual({ kind: 'reset', changeCursor: 37 }));
+            const rowChanges: Array<Readonly<{ kind: string; changeCursor: number }>> = [];
+            const otherRowChanges: typeof rowChanges = [];
+            const rowReads: Array<ReturnType<typeof collection.get>> = [];
+            const rowWatch = collection.watch({ kind: 'row', rowId: 'link' }, change => {
+                rowChanges.push(change);
+                const read = collection.get('link');
+                // A failed assertion can retire the Account before this read settles.
+                void read.catch(() => undefined);
+                rowReads.push(read);
+            });
+            const otherRowWatch = collection.watch({ kind: 'row', rowId: 'other' }, change => otherRowChanges.push(change));
+            const rowNotice = (cursor: number, rowIds: string[]) => ({
+                cursor, kind: 'pluginDomain', entityId: `pluginDomain/${pluginId}/data-collection/links`, changedAt: 1,
+                hint: { pluginDomain: 'dataCollection', pluginId, collectionId: 'links', contractDigest: ref.contractDigest, revision: 3, rowIds },
+            });
+            const beforeUnrelated = home.requests.length;
+            publishActivePluginCollectionChanges(Array.from({ length: 1_000 }, (_, index) => rowNotice(100 + index, [`unrelated-${index}`])));
+            expect(rowChanges).toEqual([]);
+            expect(otherRowChanges).toEqual([]);
+            expect(rowReads).toHaveLength(0);
+            expect(home.requests).toHaveLength(beforeUnrelated);
+            expect(changes.at(-1)).toEqual({ kind: 'changed', changeCursor: 1_099 });
+            publishActivePluginCollectionChanges([rowNotice(1_100, ['unrelated', 'link']), rowNotice(1_101, ['other'])]);
+            expect(rowChanges).toEqual([{ kind: 'changed', changeCursor: 1_100 }]);
+            expect(otherRowChanges).toEqual([{ kind: 'changed', changeCursor: 1_101 }]);
+            expect(changes.at(-1)).toEqual({ kind: 'changed', changeCursor: 1_101 });
+            await expect(Promise.all(rowReads.splice(0))).resolves.toEqual([null]);
+            expect(home.requests.slice(beforeUnrelated).filter(request => request.path === '/v1/plugins/data/get')).toHaveLength(1);
+            expect(home.requests.slice(beforeUnrelated).some(request => request.path === '/v1/plugins/data/query')).toBe(false);
+            publish(1_102);
+            expect(rowChanges).toContainEqual({ kind: 'changed', changeCursor: 1_102 });
+            expect(otherRowChanges).toContainEqual({ kind: 'changed', changeCursor: 1_102 });
+            await Promise.all(rowReads.splice(0));
+            resetActivePluginCollectionChanges();
+            await vi.waitFor(() => {
+                expect(rowChanges).toContainEqual({ kind: 'reset', changeCursor: 37 });
+                expect(otherRowChanges).toContainEqual({ kind: 'reset', changeCursor: 37 });
+            });
+            await Promise.all(rowReads.splice(0));
+            rowWatch.dispose();
+            otherRowWatch.dispose();
+            expect(() => collection.watch({ kind: 'row', rowId: '' }, () => undefined))
+                .toThrowError(expect.objectContaining({ code: 'plugin_collection_invalid_value' }));
+            const beforeRetirement = changes.length;
             enabled = false;
             const storageRequests = () => home.requests.filter(request => request.path.startsWith('/v1/plugins/data/')
                 || request.path.startsWith('/v1/account/plugin-storage/'));
@@ -554,7 +598,7 @@ describe('mounted Collection contract acquisition through real Home authority', 
             await expect(collection.get('link')).rejects.toMatchObject({ code: 'plugin_collection_undeclared' });
             await expect(storage.kv.set('selected', 'other', { expectedVersion: 'absent' })).rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
             expect(storageRequests()).toHaveLength(beforeRefused);
-            expect(changes).toHaveLength(2);
+            expect(changes).toHaveLength(beforeRetirement);
             enabled = true;
             currentRef = { ...ref, collectionId: 'other' };
             expect(() => collection.watch({ kind: 'collection' }, () => undefined)).toThrowError(expect.objectContaining({ code: 'plugin_collection_undeclared' }));
@@ -568,7 +612,7 @@ describe('mounted Collection contract acquisition through real Home authority', 
                     signal: invocation.signal, isCurrent: () => current });
                 const retained = bound.collection(definition);
                 const invalidated = vi.fn();
-                const subscription = retained.watch({ kind: 'collection' }, invalidated);
+                const subscription = retained.watch({ kind: 'row', rowId: 'link' }, invalidated);
                 if (reason === 'cancelled') invocation.abort(); else current = false;
                 const code = reason === 'cancelled' ? 'plugin_collection_cancelled' : 'plugin_account_storage_unavailable';
                 const before = storageRequests().length;
@@ -590,11 +634,11 @@ describe('mounted Collection contract acquisition through real Home authority', 
                 .rejects.toMatchObject({ code: 'plugin_collection_cancelled' });
             expect(storageRequests().filter(request => request.method === 'POST')).toHaveLength(writesBefore);
             cancelKvRead = null;
-            const retainedWatch = collection.watch({ kind: 'collection' }, change => changes.push(change));
+            const retainedWatch = collection.watch({ kind: 'row', rowId: 'link' }, change => changes.push(change));
             await home.switchAccount('home', 'bob');
             publish(39);
             await expect(collection.get('link')).rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
-            expect(changes).toHaveLength(2);
+            expect(changes).toHaveLength(beforeRetirement);
             watch.dispose();
             retainedWatch.dispose();
         } finally { await home.dispose(); }

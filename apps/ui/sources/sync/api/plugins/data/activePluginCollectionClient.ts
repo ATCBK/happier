@@ -6,7 +6,7 @@ import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { createAccountScopedCryptoMaterialSnapshotV1, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
+import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1, type PluginCollectionLogicalMutationRequestOutcomeV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
@@ -642,10 +642,8 @@ function mapReadError(value: unknown): ActivePluginCollectionUnavailableV1 | Act
         case 'collection_unavailable':
             return unavailable('collection-unavailable');
         case 'collection_content_mode_mismatch':
-            return unavailable('account-content-mismatch');
         case 'collection_index_not_ready':
         case 'collection_contract_inconsistent':
-            return unavailable('collection-unavailable');
         case 'collection_query_invalid':
         case 'collection_cursor_invalid':
         case 'collection_update_required':
@@ -693,6 +691,19 @@ function mapMutationError(value: unknown, httpStatus: number): ActivePluginColle
             return rejected(parsed.data.error);
     }
     return unavailable('response-invalid');
+}
+
+function mapEncodeFailure(
+    failure: Extract<PluginCollectionLogicalMutationRequestOutcomeV1, { status: 'failed' }>,
+): ActivePluginCollectionRejectedV1 {
+    return failure.reason === 'private-payload-too-large'
+        ? rejected('collection_quota_incompatible', {
+            quotaIncompatibility: {
+                dimension: failure.dimension,
+                effectiveMaximum: failure.effectiveMaximum,
+            },
+        })
+        : rejected('collection_mutation_invalid');
 }
 
 export function contractMatchesRef(
@@ -965,7 +976,7 @@ export function createActivePluginCollectionClient<
         if (prepared.status === 'unavailable') return prepared;
         try {
             const sealed = prepareMutationRequest(operations, prepared.operation, absence.absenceEpoch);
-            if (sealed.status === 'failed') return rejected('collection_mutation_invalid');
+            if (sealed.status === 'failed') return mapEncodeFailure(sealed);
             const response = await requestCollectionOperation({
                 operation: prepared.operation,
                 path: PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1,
@@ -1122,7 +1133,7 @@ export function createActivePluginCollectionClient<
                     prepared.operation,
                     absence.absenceEpoch,
                 );
-                if (sealed.status === 'failed') return rejected('collection_mutation_invalid');
+                if (sealed.status === 'failed') return mapEncodeFailure(sealed);
                 overheadEncodedBytes = sealed.measurement.overheadEncodedBytes;
                 operationEncodedBytes.push(...sealed.measurement.operationEncodedBytes);
             }

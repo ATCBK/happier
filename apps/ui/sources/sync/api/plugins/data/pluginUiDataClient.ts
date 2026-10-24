@@ -1,5 +1,6 @@
 import { normalizePluginAccountCollectionContractV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import {
     PluginError,
@@ -276,6 +277,11 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 if (!('kind' in request) && !definition.indexes.some(index => index.id === request.index)) {
                     throw dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection watch names an undeclared index');
                 }
+                const row = 'kind' in request && request.kind === 'row'
+                    ? PluginCollectionRowIdV1Schema.safeParse(request.rowId) : undefined;
+                if (row?.success === false) {
+                    throw dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection watch names an invalid row');
+                }
                 const controller = new AbortController();
                 let disposed = false;
                 let retirement: Readonly<{ dispose(): void }> | undefined;
@@ -301,6 +307,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 watch = registerActivePluginCollectionChangeWatch({
                     pluginId: requested.pluginId,
                     collectionId: requested.collectionId,
+                    ...(row?.success ? { rowId: row.data } : {}),
                     lifetime: input.accountLifetime,
                     onInvalidated(invalidation) {
                         if (disposed) return;

@@ -30,6 +30,7 @@ import {
     type PluginAccountAvailabilitySnapshot,
 } from '@/sync/domains/plugins/availability/reader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
+import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 
 const pluginId = 'example.tasks';
 const collectionDefinition = defineAccountCollection({
@@ -211,8 +212,9 @@ async function loadClient(options: Readonly<{
                 headers: { 'Content-Type': 'application/json' },
             });
         }
-        if (path === '/v1/plugins/data/get') {
+        if (path === '/v1/plugins/data/get' || path === '/v1/plugins/data/query') {
             if (options.collectionRead) return options.collectionRead();
+            if (path === '/v1/plugins/data/query') return Response.json({ rows: [], changeCursor: 1 });
             return new Response(JSON.stringify({ row: null, absenceEpoch: 0 }), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' },
@@ -1063,6 +1065,21 @@ describe('Plugin UI Data client', () => {
         });
         expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
     });
+    it.each([
+        'collection_index_not_ready', 'collection_update_required',
+        'collection_content_mode_mismatch', 'collection_contract_inconsistent',
+    ])('preserves %s as a nonretryable Collection read refusal without extra requests', async code => {
+        const { client, transport } = await loadClient({
+            collectionRead: () => new Response(JSON.stringify({ error: code }), { status: 409 }),
+        });
+        const collection = client.collection(collectionDefinition);
+        await expect(collection.get('task-1')).rejects.toMatchObject({ code, retryable: false });
+        await expect(collection.query({ index: 'by-status', prefix: ['open'], order: 'asc' }))
+            .rejects.toMatchObject({ code, retryable: false });
+        expect(transport.mock.calls.filter(([path]) => path === '/v1/plugins/data/get')).toHaveLength(1);
+        expect(transport.mock.calls.filter(([path]) => path === '/v1/plugins/data/query')).toHaveLength(1);
+    });
+
     it('keeps the exact compiled reader refusal visible to a bundled plugin UI', async () => {
         const { client, transport } = await loadClient({
             collectionContractRead: () => new Response(JSON.stringify({ error: 'collection_update_required' }), {
@@ -1070,6 +1087,37 @@ describe('Plugin UI Data client', () => {
             }),
         });
         await expect(client.collection(collectionDefinition).limits()).rejects.toMatchObject({ code: 'collection_update_required' });
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
+    });
+
+    it('projects local envelope size refusals through the real UI Data adapter as PluginError', async () => {
+        const definition = defineAccountCollection({ ...collectionDefinition,
+            schema: defineProtocolObject({
+                id: defineProtocolString({ maxLength: 256 }),
+                title: defineProtocolString({ maxLength: 256 }),
+                status: defineProtocolUnion([defineProtocolLiteral('open'), defineProtocolLiteral('closed')]),
+                privateNote: defineProtocolString(),
+            }, { policy: 'closed' }),
+        });
+        const largeContract = normalizePluginAccountCollectionContractV1({ pluginId,
+            contribution: PluginAccountCollectionContributionV1Schema.parse(
+                projectPluginAccountCollectionDeclaration(definition.id, definition),
+            ),
+        });
+        const { client, transport } = await loadClient({
+            availabilityReader: createAvailabilityReader({ ...ref, contractDigest: largeContract.contractDigest }),
+            collectionContractRead: () => new Response(JSON.stringify({ access: 'writable', contract: largeContract }), {
+                status: 200, headers: { 'Content-Type': 'application/json' },
+            }),
+        });
+        const maximum = PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes;
+        const operations = [{ kind: 'put' as const, expectedRevision: 1,
+            value: { id: 'task-1', title: 'Large', status: 'open' as const, privateNote: 'é'.repeat(maximum / 2) } }];
+        const collection = client.collection(definition);
+        const expected = { code: 'collection_quota_incompatible',
+            details: { dimension: 'maxRowEncodedBytes', effectiveMaximum: maximum } };
+        await expect(collection.measureBatch(operations)).rejects.toMatchObject(expected);
+        await expect(collection.batch(operations)).rejects.toMatchObject(expected);
         expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
     });
 

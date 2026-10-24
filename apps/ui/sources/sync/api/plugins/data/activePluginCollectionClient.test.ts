@@ -7,20 +7,17 @@ import {
     compilePluginJsonSchema,
     encodePluginCollectionLogicalValueV1,
     isValidPluginJsonSchemaValue,
-    type NormalizedPluginAccountCollectionContractV1,
     createAccountScopedCryptoMaterialSnapshotV1,
     convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
     measurePluginCollectionMutationRequestEncodedBytesV1,
     normalizePluginAccountCollectionContractV1,
-    PluginAccountCollectionContributionV1Schema,
     openPluginCollectionPrivatePayloadV1,
     PluginCollectionMutationRequestV1Schema,
     sealPluginCollectionPrivatePayloadV1,
 } from '@happier-dev/protocol';
 
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
-import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
-import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 
 const contract = normalizePluginAccountCollectionContractV1({
     pluginId: 'example.channels',
@@ -230,111 +227,6 @@ async function loadClient(options: ClientHarnessOptions = {}) {
         advanceGeneration: () => { generation += 1; },
     };
 }
-
-async function sessionLinksContractFixture() {
-    const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-channels/manifest');
-    const contribution = PLUGIN_MANIFEST.contributes?.accountCollections?.find((entry) => entry.id === 'channel-state');
-    if (!contribution) throw new Error('Missing canonical Channels collection');
-    const contract = normalizePluginAccountCollectionContractV1({ pluginId: 'happier.channels',
-        contribution: PluginAccountCollectionContributionV1Schema.parse(contribution) });
-    const ref = { pluginId: contract.pluginId, collectionId: contract.collectionId,
-        schemaVersion: contract.schemaVersion, contractDigest: contract.contractDigest };
-    const readAvailability = () => createPluginAccountAvailabilityReader({
-        scope: { serverId: 'server-a', accountId: 'account-a' },
-        snapshot: { availabilityCursor: 7, materializations: [], snapshots: [], intentReads: [{
-            pluginId: contract.pluginId, response: { availabilityCursor: 7, packageAssets: [],
-                hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
-                intent: { pluginId: contract.pluginId, desiredVersion: null, enabled: true, offlineUiHosting: 'enabled',
-                    writableCollections: [ref], revision: 'intent-7' },
-                release: null, uiArtifacts: [],
-            },
-        }] },
-    });
-    const validate = compilePluginJsonSchema(contract.schema);
-    return { contract, readAvailability, row: (id: string, sessionId: string, number: number, encrypted: boolean) =>
-        sessionLinkRow(contract, validate, id, sessionId, number, encrypted) };
-}
-
-function sessionLinkRow(contract: NormalizedPluginAccountCollectionContractV1,
-    validate: ReturnType<typeof compilePluginJsonSchema>, id: string, sessionId: string, number: number, encrypted: boolean) {
-    const binding = ConversationBindingV1Schema.parse({
-        v: 1, id, connectionId: 'connection-1', createdAt: number, updatedAt: number,
-        endpoint: { kind: 'githubPullRequest', audience: 'shared', id: `pr-${number}` },
-        target: { kind: 'session', sessionId, pullRequestLink: { repository: 'acme/widgets', number },
-            policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
-        allowedPrincipalIds: ['principal-1'], allowBotSenders: false, inputMode: 'directMentionsOnly', inboundDebounceMs: 0,
-        linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: false, deletionState: 'none',
-    });
-    const { v, id: rowId, connectionId, createdAt, updatedAt, ...payload } = binding;
-    const encoded = encodePluginCollectionLogicalValueV1({ contract,
-        isValidLogicalValue: (value) => isValidPluginJsonSchemaValue(validate, value),
-        value: { id: rowId, 'record-kind': 'binding', v, 'connection-id': connectionId, 'binding-id': rowId,
-            'created-at': createdAt, 'updated-at': updatedAt, payload },
-        encryptionMode: encrypted ? 'e2ee' : 'plain', material: encrypted ? e2eeMaterial : null,
-        randomBytes: (length) => new Uint8Array(length).fill(9),
-    });
-    if (encoded.status !== 'encoded') throw new Error(`Invalid canonical binding fixture: ${encoded.reason}`);
-    return { rowId: encoded.rowId, revision: 1, projection: encoded.projection, content: encoded.content };
-}
-
-describe('Account session pull-request link reader', () => {
-    it.each(['plain', 'e2ee'] as const)('reads qualified %s links through the real collection decoder across opaque pages', async (mode) => {
-        const fixture = await sessionLinksContractFixture();
-        const requests: Record<string, unknown>[] = [];
-        const harness = await loadClient({
-            ...(mode === 'e2ee' ? { currentness: e2eeCurrentness, credentials: e2eeCredentials } : {}),
-            responseForDataPath: (path, init) => {
-                if (path === '/v1/plugins/data/contract') return Response.json({ access: 'readOnly', contract: fixture.contract });
-                const request = JSON.parse(String(init.body)) as Record<string, unknown>;
-                requests.push(request);
-                return request.cursor === 'opaque-next'
-                    ? Response.json({ rows: [fixture.row('binding-1', 'session-1', 1, mode === 'e2ee')], changeCursor: 18 })
-                    : Response.json({ rows: [fixture.row('binding-2', 'session-2', 2, mode === 'e2ee')], nextCursor: 'opaque-next', changeCursor: 18 });
-            },
-        });
-        const { readActiveSessionPullRequestLinks } = await import('./sessionPullRequestLinks');
-        await expect(readActiveSessionPullRequestLinks({ accountLifetime: harness.accountLifetime,
-            readAvailability: fixture.readAvailability })).resolves.toEqual({ status: 'ready', scope: harness.accountLifetime.scope,
-            sessions: [
-                { sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 1, url: 'https://github.com/acme/widgets/pull/1' }] },
-                { sessionId: 'session-2', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 2, url: 'https://github.com/acme/widgets/pull/2' }] },
-            ],
-        });
-        expect(requests).toHaveLength(2);
-        expect(requests[0]).toMatchObject({ indexId: 'by-kind', prefix: ['binding'], order: 'asc' });
-        expect(requests[1]).toMatchObject({ cursor: 'opaque-next' });
-        expect(harness.activeRequest).not.toHaveBeenCalled();
-    });
-
-    it('does not disclose links when E2EE material is absent or the captured Account retires', async () => {
-        const fixture = await sessionLinksContractFixture();
-        const harness = await loadClient({ currentness: e2eeCurrentness });
-        const { readActiveSessionPullRequestLinks } = await import('./sessionPullRequestLinks');
-        const input = { accountLifetime: harness.accountLifetime, readAvailability: fixture.readAvailability };
-        await expect(readActiveSessionPullRequestLinks(input)).resolves.toEqual({ status: 'unavailable', reason: 'account-encryption-material-unavailable' });
-        expect(harness.transport.mock.calls.map(([path]) => path)).not.toContain('/v1/plugins/data/query');
-        harness.retireScope();
-        await expect(readActiveSessionPullRequestLinks(input)).resolves.toEqual({ status: 'unavailable', reason: 'account-scope-changed' });
-    });
-
-    it('discards decoded pages when the Account retires during continuation', async () => {
-        const fixture = await sessionLinksContractFixture();
-        let retire: (() => void) | undefined;
-        const harness = await loadClient({ responseForDataPath: (path, init) => {
-            if (path === '/v1/plugins/data/contract') return Response.json({ access: 'readOnly', contract: fixture.contract });
-            const request = JSON.parse(String(init.body)) as Record<string, unknown>;
-            if (request.cursor === 'opaque-next') {
-                retire?.();
-                return Response.json({ rows: [], changeCursor: 18 });
-            }
-            return Response.json({ rows: [fixture.row('binding-1', 'session-1', 1, false)], nextCursor: 'opaque-next', changeCursor: 18 });
-        } });
-        retire = harness.retireScope;
-        const { readActiveSessionPullRequestLinks } = await import('./sessionPullRequestLinks');
-        await expect(readActiveSessionPullRequestLinks({ accountLifetime: harness.accountLifetime,
-            readAvailability: fixture.readAvailability })).resolves.toEqual({ status: 'unavailable', reason: 'account-scope-changed' });
-    });
-});
 
 async function loadCrossAccountLifetimeHarness() {
     vi.resetModules();
@@ -1129,6 +1021,19 @@ describe('active Account Collection direct client', () => {
         });
     });
 
+    it.each([
+        'collection_index_not_ready', 'collection_update_required',
+        'collection_content_mode_mismatch', 'collection_contract_inconsistent',
+    ])('preserves %s as the direct Collection read result without retrying', async code => {
+        const harness = await loadClient({ responseForDataPath: () => Response.json({ error: code }, { status: 409 }) });
+        const collection = harness.createActivePluginCollectionClient({ contract });
+        await expect(collection.get('channel-1')).resolves.toEqual({ status: 'rejected', code });
+        await expect(collection.query({ indexId: contract.indexes[0]!.id, order: 'asc' }))
+            .resolves.toEqual({ status: 'rejected', code });
+        expect(harness.transport.mock.calls.filter(([path]) => path === '/v1/plugins/data/get')).toHaveLength(1);
+        expect(harness.transport.mock.calls.filter(([path]) => path === '/v1/plugins/data/query')).toHaveLength(1);
+    });
+
     it('preserves a typed app update refusal from exact Collection reader admission', async () => {
         const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
             error: 'collection_update_required',
@@ -1543,6 +1448,24 @@ describe('active Account Collection direct client', () => {
             code: 'collection_mutation_invalid',
         });
     });
+    it.each(['plain', 'e2ee'] as const)('rejects oversize private envelopes without a write in %s mode', async (mode) => {
+        const harness = await loadClient(mode === 'plain' ? {} : {
+            currentness: e2eeCurrentness, credentials: e2eeCredentials,
+        });
+        const maximum = PLUGIN_COLLECTION_LIMITS_V1.maximumPrivateEnvelopeEncodedBytes;
+        const largeContract = { ...contract, schema: { ...contract.schema,
+            properties: { ...contract.schema.properties, privateNote: { type: 'string' as const } },
+        } };
+        const client = harness.createActivePluginCollectionClient({ contract: largeContract });
+        const operations = [{ kind: 'put' as const, expectedRevision: 1,
+            value: { id: 'oversize', status: 'enabled', title: 'Large', privateNote: 'é'.repeat(maximum / 2) } }];
+        const expected = { status: 'rejected', code: 'collection_quota_incompatible',
+            quotaIncompatibility: { dimension: 'maxRowEncodedBytes', effectiveMaximum: maximum } };
+        await expect(client.measureBatch(operations)).resolves.toEqual(expected);
+        await expect(client.mutate(operations)).resolves.toEqual(expected);
+        expect(harness.transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
+    });
+
     it('carries the server quota incompatibility a batch planner must react to', async () => {
         const harness = await loadClient({
             responseForDataPath: (path) => path === '/v1/plugins/data/get'

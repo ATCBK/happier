@@ -11,6 +11,7 @@ export type PluginCollectionChangeWatchV1 = Readonly<{ dispose(): void }>;
 export type WatchActivePluginCollectionChangesInput = Readonly<{
     pluginId: string;
     collectionId: string;
+    rowId?: string;
     onInvalidated(invalidation?: PluginCollectionInvalidation): void;
     accountLifetime?: ActiveServerAccountScopeLifetime;
 }>;
@@ -18,6 +19,7 @@ export type WatchActivePluginCollectionChangesInput = Readonly<{
 type ActivePluginCollectionChangeWatch = Readonly<{
     pluginId: string;
     collectionId: string;
+    rowId?: string;
     lifetime: ActiveServerAccountScopeLifetime;
     onInvalidated: (invalidation?: PluginCollectionInvalidation) => void;
 }>;
@@ -27,6 +29,7 @@ const activeWatches = new Set<ActivePluginCollectionChangeWatch>();
 export function registerActivePluginCollectionChangeWatch(input: Readonly<{
     pluginId: string;
     collectionId: string;
+    rowId?: string;
     lifetime: ActiveServerAccountScopeLifetime;
     onInvalidated(invalidation?: PluginCollectionInvalidation): void;
 }>): PluginCollectionChangeWatchV1 {
@@ -70,9 +73,11 @@ export function publishActivePluginCollectionChanges(changes: readonly unknown[]
     for (const rawChange of changes) {
         const parsed = PluginDomainChangeEntrySchema.safeParse(rawChange);
         if (!parsed.success || parsed.data.hint.pluginDomain !== 'dataCollection') continue;
-        const { pluginId, collectionId } = parsed.data.hint;
+        const { hint } = parsed.data;
+        const { pluginId, collectionId } = hint;
         for (const watch of activeWatches) {
-            if (watch.pluginId === pluginId && watch.collectionId === collectionId) {
+            if (watch.pluginId === pluginId && watch.collectionId === collectionId
+                && (watch.rowId === undefined || 'full' in hint || hint.rowIds.includes(watch.rowId))) {
                 affected.set(watch, Math.max(affected.get(watch) ?? parsed.data.cursor, parsed.data.cursor));
             }
         }
