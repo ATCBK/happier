@@ -8008,7 +8008,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'authoring', 'open'], visibility: 'canonical' }] },
     inputHints: { title: 'Open editable Session draft', fields: [
-      { path: 'seed', title: 'New Session seed', widget: 'json', required: true },
+      { path: 'seed', title: 'New Session seed', widget: 'json' },
+      { path: 'sourceSession', title: 'Source Session address', widget: 'json' },
     ] },
     examples: { voice: { argsExample: '{"seed":{"prompt":"Help me author this checkout."}}' } },
     inputSchema: SessionAuthoringOpenV1Schema,
