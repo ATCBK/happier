@@ -10,6 +10,7 @@ import { ConnectedServiceAuthGroupPolicyV1Schema } from '@happier-dev/protocol/c
 import { encodeQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { QualifiedConnectedAccountServiceRefSchema, QualifiedConnectedAccountGroupRefSchema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { buildQualifiedConnectedAccountGroupMutationRequestV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountGroupRequestsV4';
+import { QualifiedConnectedAccountGroupMemberMutationV4Schema, type QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -34,7 +35,7 @@ function listPathFor(identity: typeof service) {
 }
 const listPath = listPathFor(service);
 
-function wireGroup(groupId = 'group-a') {
+function wireGroup(groupId = 'group-a'): QualifiedConnectedAccountGroupV4 {
     return { v: 1 as const, ref: { service, groupId }, displayName: groupId, policy, activeConnectedAccountId: null as string | null,
         incarnation: 'group-row:' + groupId, generation: 1, runtimeStateRevision: 1, state: {}, members: [], createdAt: 0, updatedAt: 0 };
 }
@@ -94,6 +95,41 @@ async function mountedPools(fixture: Awaited<ReturnType<typeof poolHome>>) {
 }
 
 describe('useQualifiedConnectedAccountGroups', () => {
+    it('threads acknowledged create and member revisions through one draft submit before React commits another render', async () => {
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const created = wireGroup('draft-pool');
+        fixture.home.answer(fixture.serverId, 'POST /v4/connect/qualified/groups', { select: () => {
+            fixture.setGroups([...fixture.groups(), created]);
+            return { body: { group: created } };
+        } });
+        fixture.home.answer(fixture.serverId, 'POST /v4/connect/qualified/group/members', { select: input => {
+            const mutation = QualifiedConnectedAccountGroupMemberMutationV4Schema.parse(input);
+            const current = fixture.groups().find(group => group.ref.groupId === mutation.group.groupId)!;
+            expect(mutation.expectedGeneration).toBe(current.generation);
+            const next = { ...current, generation: current.generation + 1, members: [...current.members, {
+                v: 1 as const, connectedAccountId: mutation.connectedAccountId, priority: mutation.priority ?? 100,
+                enabled: true, state: {}, createdAt: 0, updatedAt: 0,
+            }] };
+            fixture.setGroups(fixture.groups().map(group => group.ref.groupId === next.ref.groupId ? next : group));
+            return { body: { group: next } };
+        } });
+        const draft = hook.getCurrent();
+        await act(async () => {
+            let current = await draft.create({ groupId: created.ref.groupId, displayName: 'Draft pool' });
+            expect(current).not.toBeNull();
+            for (const accountId of ['account-a', 'account-b']) {
+                current = await draft.addMember({ group: current!, account: { service, accountId } });
+                expect(fixture.groups().find(group => group.ref.groupId === created.ref.groupId)?.members.map(member => member.connectedAccountId))
+                    .toContain(accountId);
+                expect(current, `acknowledged ${accountId}`).not.toBeNull();
+            }
+        });
+        expect(fixture.groups().find(group => group.ref.groupId === created.ref.groupId)?.members.map(member => member.connectedAccountId))
+            .toEqual(['account-a', 'account-b']);
+        expect(hook.getCurrent().groups.find(group => group.ref.groupId === created.ref.groupId)?.revision.generation).toBe(3);
+        await hook.unmount();
+    });
     it('loads Account pools without a machine description', async () => {
         const fixture = await poolHome();
         const hook = await renderHook(() => fixture.useQualifiedConnectedAccountGroups({ serverId: fixture.serverId, service }));

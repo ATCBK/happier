@@ -326,13 +326,18 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
             }
             const appliedGroup = listedGroup ?? group;
             groupsEpochRef.current += 1;
-            setState((previous) => ({
-                ...previous,
+            const acknowledged: State = {
+                ...stateRef.current,
                 basis,
                 status: 'loaded',
-                groups: upsertGroup(previous.groups, appliedGroup),
+                groups: upsertGroup(stateRef.current.groups, appliedGroup),
                 error: null,
-            }));
+            };
+            // A draft threads this acknowledged revision into its next member write before
+            // React necessarily commits another render. The existing ref is the same owner,
+            // not an older render's veto over an already acknowledged Account mutation.
+            stateRef.current = acknowledged;
+            setState(acknowledged);
             invalidateConnectedServiceGroupsRefreshSignal();
             return appliedGroup;
         } catch (error) {
