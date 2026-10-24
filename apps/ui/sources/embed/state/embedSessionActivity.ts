@@ -13,6 +13,8 @@ export function projectEmbedActivity(primary: SessionAwarenessOperationalPrimary
         case 'failed':
         case 'permission_required':
         case 'action_required':
+        // A blocking usage limit holds the Session until someone (or recovery) acts.
+        case 'usage_limited':
             return 'needs_attention';
         case 'working':
             return 'working';

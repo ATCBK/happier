@@ -13,13 +13,15 @@ export type SessionListAttentionState =
     | 'unread'
     | 'pending'
     | 'thinking'
+    /** A blocking usage limit: Protocol ranks it below requests and above work. */
+    | 'usage_limited'
     | 'permission_required'
     | 'action_required';
 
 /** One shared translation from Protocol personal reasons into UI presentation vocabulary. */
 export function presentSessionPersonalAttentionReason(
     reason: SessionPersonalAttentionReasonV1 | null,
-): SessionListAttentionState {
+): Exclude<SessionListAttentionState, 'usage_limited'> {
     switch (reason) {
         case 'failed': return 'failed';
         case 'permission_required': return 'permission_required';

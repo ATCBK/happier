@@ -14,6 +14,7 @@ import {
     serializeExternalSessionSourceForComparison,
 } from '@/sync/domains/session/external/serializeExternalSessionSourceForComparison';
 import type { SessionListRenderableMetadata } from './sessionListRenderable';
+import { readSessionUsageLimitRecoveryFromMetadata } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 export type SessionListRenderableExternalSessionIdentity = Readonly<{
     v: 1;
@@ -28,6 +29,7 @@ export type SessionListRenderableExternalSessionIdentity = Readonly<{
 }>;
 
 export type SessionListRenderableMetadataComparison = Readonly<{
+    sessionUsageLimitRecoveryV1?: SessionListRenderableMetadata['sessionUsageLimitRecoveryV1'];
     lifecycleState?: string;
     projectId?: string | null;
     workspaceId?: string | null;
@@ -53,6 +55,7 @@ export type SessionListRenderableMetadataComparison = Readonly<{
 }>;
 
 type SessionListRenderableMetadataComparisonSnapshot = Readonly<{
+    sessionUsageLimitRecoveryV1?: SessionListRenderableMetadata['sessionUsageLimitRecoveryV1'];
     lifecycleState?: string;
     projectId?: string | null;
     workspaceId?: string | null;
@@ -206,6 +209,7 @@ function isSessionListRenderableMetadataComparisonSnapshotEqual(
     nextReadStateV1: SessionListRenderableMetadataComparison['readStateV1'],
 ): boolean {
     return previous.lifecycleState === snapshot.lifecycleState
+        && JSON.stringify(previous.sessionUsageLimitRecoveryV1 ?? null) === JSON.stringify(snapshot.sessionUsageLimitRecoveryV1 ?? null)
         && previous.name === snapshot.name
         && (previous.projectId ?? null) === (snapshot.projectId ?? null)
         && (previous.workspaceId ?? null) === (snapshot.workspaceId ?? null)
@@ -269,6 +273,7 @@ export function normalizeSessionListRenderableMetadataComparison(
     }
 
     const next: SessionListRenderableMetadataComparison = {
+        ...(normalizedSnapshot.sessionUsageLimitRecoveryV1 ? { sessionUsageLimitRecoveryV1: normalizedSnapshot.sessionUsageLimitRecoveryV1 } : {}),
         ...(normalizedSnapshot.lifecycleState === undefined ? {} : { lifecycleState: normalizedSnapshot.lifecycleState }),
         ...(normalizedSnapshot.projectId === undefined ? {} : { projectId: normalizedSnapshot.projectId }),
         ...(normalizedSnapshot.workspaceId === undefined ? {} : { workspaceId: normalizedSnapshot.workspaceId }),
@@ -301,6 +306,7 @@ export function readSessionListRenderableMetadataComparison(
     if (metadata.bot !== undefined && readSessionBotV1(metadata.bot) === null) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        sessionUsageLimitRecoveryV1: readSessionUsageLimitRecoveryFromMetadata(metadata),
         lifecycleState: typeof metadata.lifecycleState === 'string' ? metadata.lifecycleState : undefined,
         projectId: typeof metadata.projectId === 'string' || metadata.projectId === null ? metadata.projectId : undefined,
         workspaceId: typeof metadata.workspaceId === 'string' || metadata.workspaceId === null ? metadata.workspaceId : undefined,
@@ -328,6 +334,7 @@ export function readSessionListRenderableMetadataComparisonFromRenderable(
     if (!metadata) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        sessionUsageLimitRecoveryV1: metadata.sessionUsageLimitRecoveryV1,
         lifecycleState: metadata.lifecycleState,
         projectId: metadata.projectId,
         workspaceId: metadata.workspaceId,
@@ -367,6 +374,7 @@ export function areSessionListRenderableMetadataComparisonsEqual(
     if (!previous || !next) return previous === next;
 
     return previous.lifecycleState === next.lifecycleState
+        && JSON.stringify(previous.sessionUsageLimitRecoveryV1 ?? null) === JSON.stringify(next.sessionUsageLimitRecoveryV1 ?? null)
         && previous.name === next.name
         && (previous.projectId ?? null) === (next.projectId ?? null)
         && (previous.workspaceId ?? null) === (next.workspaceId ?? null)

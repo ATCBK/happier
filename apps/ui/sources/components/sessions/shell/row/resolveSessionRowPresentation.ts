@@ -52,7 +52,10 @@ export type SessionRowPresentation = Readonly<{
 export function resolveSessionRowAttentionState(
     attentionState: SessionListAttentionState,
 ): SessionRowAttentionState {
-    return attentionState === 'thinking' ? 'working' : attentionState;
+    if (attentionState === 'thinking') return 'working';
+    // The row has no usage-limit marker of its own; it reads as a non-urgent look-here marker.
+    if (attentionState === 'usage_limited') return 'attention';
+    return attentionState;
 }
 
 export function resolveSessionRowPresentation(input: Readonly<{

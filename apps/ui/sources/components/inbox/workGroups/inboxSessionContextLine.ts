@@ -1,10 +1,5 @@
 import type { InboxSessionAttentionEntry } from '@/activity/presentation/buildInboxSessionPresentation';
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
-import {
-  resolveSessionRowAttentionState,
-  resolveSessionRowPresentation,
-} from '@/components/sessions/shell/row/resolveSessionRowPresentation';
-import type { WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { resolveSessionContextLine } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { t } from '@/text';
@@ -63,14 +58,8 @@ export function buildInboxSessionContextLine(
 export function readInboxSessionNeed(
   candidate: InboxSessionAttentionEntry['candidate'],
 ): string | null {
-  if (candidate.attentionState === 'failed') return null;
-  const needKey = resolveSessionRowPresentation({
-    attentionState: resolveSessionRowAttentionState(candidate.attentionState),
-    density: 'default',
-    requestedSecondaryLineMode: 'status',
-    hasPathSubtitle: false,
-  }).accessibilityStatusTextKey;
-  if (!needKey) return null;
-  const words = t(needKey);
+  const { state, word } = candidate.workStatus;
+  if (state !== 'finished_unseen' && state !== 'mentioned' && state !== 'unread' && state !== 'pending_input') return null;
+  const words = word;
   return words.charAt(0).toLocaleUpperCase() + words.slice(1);
 }

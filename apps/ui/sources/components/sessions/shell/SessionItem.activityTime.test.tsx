@@ -119,7 +119,10 @@ vi.mock('./sessionTagIcons', () => ({
 type MockSessionStatus = SessionStatus;
 let projectStatus: typeof import('@/utils/sessions/sessionUtils').getSessionStatus;
 
-function createStatusFixture(display: Omit<SessionStatus, 'awareness'>): SessionStatus {
+/** Display fields a test chooses; awareness and its work-status bucket/tone come from the real owner. */
+type StatusFixtureDisplay = Omit<SessionStatus, 'awareness' | 'bucket' | 'tone'>;
+
+function createStatusFixture(display: StatusFixtureDisplay): SessionStatus {
     const nowMs = Date.now();
     const session = createSessionFixture({
         id: 'status-fixture',
@@ -134,11 +137,12 @@ function createStatusFixture(display: Omit<SessionStatus, 'awareness'>): Session
             requests: { permission: { tool: 'Bash', kind: 'permission', arguments: {}, createdAt: nowMs } },
         } : null,
     });
-    return { ...display, awareness: projectStatus(session, nowMs).awareness };
+    const projected = projectStatus(session, nowMs);
+    return { ...display, bucket: projected.bucket, tone: projected.tone, awareness: projected.awareness };
 }
 
 
-const defaultSessionStatus: Omit<SessionStatus, 'awareness'> = {
+const defaultSessionStatus: StatusFixtureDisplay = {
     state: 'thinking',
     isConnected: true,
     statusText: 'Working on it',
@@ -1234,6 +1238,8 @@ describe('SessionItem activity time', () => {
                     sessionStatus: {
                         awareness: projectStatus(rowSession, Date.now()).awareness,
                         state: 'waiting',
+                        bucket: 'idle',
+                        tone: 'neutral',
                         isConnected: true,
                         statusText: 'online',
                         shouldShowStatus: false,

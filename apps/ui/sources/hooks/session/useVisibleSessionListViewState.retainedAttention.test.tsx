@@ -61,11 +61,12 @@ function currentViewer(seq: number, cursor: number, latestReadyEventSeq: number 
         visibleSessionSeq: seq,
     });
     return SessionViewerProjectionV1Schema.parse({
+        latestFailureSeq: 0,
         readState,
         relevance: resolveSessionPersonalRelevanceV1({ ...NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, ownedByMe: true }),
         attention: resolveSessionPersonalAttentionV1({
             tracked: true, accessible: true, accountSuspended: false, contentAvailable: true,
-            visibleSessionSeq: seq, readState, latestReadyEventSeq, hasPrimarySessionFailure: false,
+            visibleSessionSeq: seq, readState, latestReadyEventSeq, latestFailureSeq: null, hasPrimarySessionFailure: false,
             pendingBlockedCount: 0, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0,
             capabilities: { canSubmitAgentInput: true, canApprovePermissions: true },
             responsible: false, discussion: { hasUnread: false, hasMention: false },

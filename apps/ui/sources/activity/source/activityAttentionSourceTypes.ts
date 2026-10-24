@@ -41,6 +41,8 @@ export type ActivityAttentionSource = Readonly<{
     followRuleWorkspaceRefsV1?: ReadonlyArray<WorkspaceRefV1>;
     /** Explicit loaded assignments only; an absent entry is not a proven empty tag set. */
     followRuleTagAssignmentsBySessionKey?: StorageState['sessionOrganizationTagAssignmentsBySessionKey'];
+    /** An absent entry is unavailable; a loaded null folder is a proven empty Section. */
+    followRuleFolderAssignmentsBySessionKey?: StorageState['sessionOrganizationFolderAssignmentsBySessionKey'];
     /** Canonical fallback presentation preference when a workspace has no custom name. */
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     serverProfilesById?: Readonly<Record<string, ServerProfile | null | undefined>>;

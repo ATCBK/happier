@@ -21,6 +21,7 @@ import type { ExternalAgentObservationSnapshotV1 } from '@happier-dev/protocol/s
 import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import type { SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
+import type { SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { compareSessionMetadataRevisions, readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { isSessionAccessRecipient } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { isSessionListRenderableOwnerProjection } from './sessionListRenderableSessionProjection';
@@ -69,6 +70,7 @@ import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 export interface SessionListRenderableMetadata {
+    sessionUsageLimitRecoveryV1?: SessionUsageLimitRecoveryV1 | null;
     /** Process lifecycle fact, retained for the shared status presenter. */
     lifecycleState?: string;
     projectId?: string | null;
@@ -143,6 +145,8 @@ export interface SessionListRenderableSession {
     /** Store-produced recipient-safe title; memory only, never metadata or a wire/cache field. */
     lockedDisplayTitle?: Session['lockedDisplayTitle'];
     id: string;
+    /** Qualified memory-only source; never serialized by wire or warm-cache mappers. */
+    serverId?: string;
     seq: number;
     createdAt: number;
     updatedAt: number;
@@ -631,6 +635,7 @@ export function buildSessionListRenderableFromSession(
             && previous?.workerQuestionHandling?.explicitlyStopped === workerQuestionHandling?.explicitlyStopped
                 ? previous?.workerQuestionHandling ?? null : workerQuestionHandling,
         id: session.id,
+        serverId: session.serverId ?? previous?.serverId,
         seq: session.seq,
         encryptionMode: session.encryptionMode,
         encryptedContentAvailability: session.encryptedContentAvailability,
@@ -958,6 +963,7 @@ export function areSessionListRenderablesEqual(
     const nextMetadata = readSessionListRenderableMetadataComparisonFromRenderable(next.metadata);
 
     return previous.id === next.id
+        && previous.serverId === next.serverId
         && JSON.stringify(previous.agentActivityHeadline ?? null) === JSON.stringify(next.agentActivityHeadline ?? null)
         && previous.seq === next.seq
         && previous.createdAt === next.createdAt

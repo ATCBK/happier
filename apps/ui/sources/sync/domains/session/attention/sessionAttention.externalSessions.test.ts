@@ -23,6 +23,7 @@ function trackedAttention(overrides: Record<string, unknown> = {}) {
         visibleSessionSeq: 0,
         readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
         latestReadyEventSeq: null,
+        latestFailureSeq: null,
         hasPrimarySessionFailure: false,
         pendingBlockedCount: 0,
         pendingPermissionRequestCount: 0,
@@ -38,7 +39,7 @@ function trackedAttention(overrides: Record<string, unknown> = {}) {
 
 describe('sessionAttention canonical owners (direct sessions)', () => {
     it('treats a tracked primary failure as personal attention, while untracked stays quiet', () => {
-        const failed = trackedAttention({ hasPrimarySessionFailure: true });
+        const failed = trackedAttention({ hasPrimarySessionFailure: true, latestFailureSeq: 1 });
         expect(failed.needsAttention).toBe(true);
         expect(failed.reasons).toContain('failed');
 
@@ -50,6 +51,7 @@ describe('sessionAttention canonical owners (direct sessions)', () => {
             visibleSessionSeq: 3,
             readState: { state: 'not_started' },
             latestReadyEventSeq: null,
+            latestFailureSeq: null,
             hasPrimarySessionFailure: true,
             pendingBlockedCount: 0,
             pendingPermissionRequestCount: 0,
@@ -79,6 +81,7 @@ describe('sessionAttention canonical owners (direct sessions)', () => {
             visibleSessionSeq: 3,
             readState: { state: 'not_started' },
             latestReadyEventSeq: null,
+            latestFailureSeq: null,
             hasPrimarySessionFailure: false,
             pendingBlockedCount: 0,
             pendingPermissionRequestCount: 0,

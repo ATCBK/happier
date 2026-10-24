@@ -38,7 +38,8 @@ function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords:
 describe('createActivityAttentionStoreSourceSelector', () => {
     it('uses held Section assignments for rule preview and invalidates only affected membership', () => {
         const base = storage.getState();
-        const session = createSessionFixture({ id: 'section-source', serverId: 'home-a', viewer: createSessionViewerFixture() });
+        const session = createSessionFixture({ id: 'section-source', serverId: 'home-a', ownerAccountId: 'alice',
+            origin: { kind: 'none' }, viewer: createSessionViewerFixture() });
         const key = buildSessionOrganizationSessionKey('home-a', session.id);
         const state = { ...base, sessions: { [session.id]: session }, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: { 'home-a': [session.id] } };
@@ -59,6 +60,19 @@ describe('createActivityAttentionStoreSourceSelector', () => {
         const address = { serverId: 'home-a', sessionId: session.id };
         expect(readActivitySessionRulePolicies(source, address, session, 1_000)).toEqual([{ preset: 'important' }]);
         expect(readActivitySessionRulePolicies({ ...source, followRuleFolderAssignmentsBySessionKey: {} }, address, session, 1_000)).toEqual([]);
+        const cleared = selector({ ...state, sessionOrganizationFolderAssignmentsBySessionKey: {
+            [key]: { sessionId: session.id, folderId: null },
+        } });
+        expect(cleared).not.toBe(changed);
+        const exclusion = { ...source, ...cleared, personalFollowRulesByServerId: { 'home-a': {
+            ...source.personalFollowRulesByServerId['home-a'], rules: source.personalFollowRulesByServerId['home-a'].rules.map(rule => ({
+                ...rule, definition: { ...rule.definition, filter: normalizeSessionListFilterV1({
+                    ...rule.definition.filter, sections: { include: [], exclude: [{ serverId: 'home-a', sectionId: 'section-a' }] },
+                }) },
+            })),
+        } } };
+        expect(readActivitySessionRulePolicies(exclusion, address, session, 1_000)).toEqual([{ preset: 'important' }]);
+        expect(readActivitySessionRulePolicies({ ...exclusion, followRuleFolderAssignmentsBySessionKey: {} }, address, session, 1_000)).toEqual([]);
     });
     it('invalidates demanded rule facts after a tag-only assignment change', () => {
         const base = storage.getState();

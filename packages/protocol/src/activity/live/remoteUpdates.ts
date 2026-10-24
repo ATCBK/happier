@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { PUSH_NOTIFICATION_BUNDLED_SOUND_FILES } from '../../push/pushNotificationActions.js';
+import { SessionAwarenessPresentationStateV1Schema } from '../../sessions/awareness/presentationV1.js';
 
 export const HAPPIER_FOCUS_LIVE_ACTIVITY_NAME = 'HappierFocusLiveActivity';
 
@@ -26,14 +27,7 @@ export type LiveActivityRemoteTargetKind = z.infer<typeof LiveActivityRemoteTarg
 export const LiveActivityRemoteUpdateEventSchema = lazyZodSchema(() => z.enum(['update', 'end']));
 export type LiveActivityRemoteUpdateEvent = z.infer<typeof LiveActivityRemoteUpdateEventSchema>;
 
-export const HappierFocusLiveActivityAttentionStateSchema = lazyZodSchema(() => z.enum([
-  'quiet',
-  'unread',
-  'pending',
-  'thinking',
-  'permission_required',
-  'action_required',
-]));
+export const HappierFocusLiveActivityAttentionStateSchema = SessionAwarenessPresentationStateV1Schema;
 export type HappierFocusLiveActivityAttentionState =
   z.infer<typeof HappierFocusLiveActivityAttentionStateSchema>;
 

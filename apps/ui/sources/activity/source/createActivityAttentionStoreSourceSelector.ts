@@ -43,6 +43,7 @@ type StoreActivityAttentionSource = Pick<
     | 'workspaceRefsV1'
     | 'followRuleWorkspaceRefsV1'
     | 'followRuleTagAssignmentsBySessionKey'
+    | 'followRuleFolderAssignmentsBySessionKey'
 >;
 
 type SignatureCacheEntry<T> = Readonly<{
@@ -94,7 +95,7 @@ function readFollowRuleFactsSignature(row: Session | SessionListRenderableSessio
     ]);
 }
 
-function buildFollowRuleTagsSignature(state: StorageState, personalMembershipByServerId: Readonly<Record<string, readonly string[]>>): string {
+function buildFollowRuleOrganizationSignature(state: StorageState, personalMembershipByServerId: Readonly<Record<string, readonly string[]>>): string {
     const keys = new Set<string>();
     forEachRecordValue(state.sessions, session => {
         if (session.serverId) keys.add(buildSessionOrganizationSessionKey(session.serverId, session.id));
@@ -105,7 +106,11 @@ function buildFollowRuleTagsSignature(state: StorageState, personalMembershipByS
     for (const [serverId, ids] of Object.entries(personalMembershipByServerId)) {
         for (const id of ids) keys.add(buildSessionOrganizationSessionKey(serverId, id));
     }
-    return JSON.stringify([...keys].sort().map(key => [key, state.sessionOrganizationTagAssignmentsBySessionKey[key]?.tagIds ?? null]));
+    return JSON.stringify([...keys].sort().map(key => {
+        const folder = state.sessionOrganizationFolderAssignmentsBySessionKey[key];
+        return [key, state.sessionOrganizationTagAssignmentsBySessionKey[key]?.tagIds ?? null,
+            folder === undefined ? [] : [folder.folderId]];
+    }));
 }
 
 function readRuntimeIssueSignature(issue: SessionRuntimeIssueV1 | null | undefined): string {
@@ -480,7 +485,8 @@ export function readActivityAttentionStoreSource(
         ...(includeSessionMessages ? { sessionMessagesById: state.sessionMessages } : {}),
         workspaceRefsV1: readProjectWorkspaceRefs(state),
         ...(includeFollowRuleFacts ? { followRuleWorkspaceRefsV1: readProjectAccountWorkspaceRefs(state),
-            followRuleTagAssignmentsBySessionKey: state.sessionOrganizationTagAssignmentsBySessionKey } : {}),
+            followRuleTagAssignmentsBySessionKey: state.sessionOrganizationTagAssignmentsBySessionKey,
+            followRuleFolderAssignmentsBySessionKey: state.sessionOrganizationFolderAssignmentsBySessionKey } : {}),
         workspacePathDisplayModeV1: 'name',
     };
 }
@@ -495,7 +501,7 @@ export function createActivityAttentionStoreSourceSelector(
     let previousSignature: string | null = null;
     let previousSource: StoreActivityAttentionSource | null = null;
     let previousInputs: StoreActivityAttentionSource | null = null;
-    const signatures = { sessions: '', rows: '', index: '', cache: '', messages: '', workspace: '', tags: '' };
+    const signatures = { sessions: '', rows: '', index: '', cache: '', messages: '', workspace: '', organization: '' };
     let potentialSessionIds: readonly string[] = [];
     const includeSessionMessages = options.includeSessionMessages !== false;
     const includeFollowRuleFacts = options.includeFollowRuleFacts === true;
@@ -509,8 +515,9 @@ export function createActivityAttentionStoreSourceSelector(
         const indexChanged = !previousInputs || previousInputs.sessionListIndexByServerId !== inputs.sessionListIndexByServerId;
         const cacheChanged = !previousInputs
             || previousInputs.concurrentSessionListCacheByServerId !== inputs.concurrentSessionListCacheByServerId;
-        const tagsChanged = includeFollowRuleFacts && (!previousInputs
-            || previousInputs.followRuleTagAssignmentsBySessionKey !== inputs.followRuleTagAssignmentsBySessionKey);
+        const organizationChanged = includeFollowRuleFacts && (!previousInputs
+            || previousInputs.followRuleTagAssignmentsBySessionKey !== inputs.followRuleTagAssignmentsBySessionKey
+            || previousInputs.followRuleFolderAssignmentsBySessionKey !== inputs.followRuleFolderAssignmentsBySessionKey);
         const messagesChanged = includeSessionMessages && (sessionsChanged || membershipChanged
             || previousInputs?.sessionMessagesById !== inputs.sessionMessagesById);
         const workspaceChanged = !previousInputs || previousInputs.workspaceRefsV1 !== inputs.workspaceRefsV1
@@ -518,7 +525,7 @@ export function createActivityAttentionStoreSourceSelector(
             || previousInputs.workspacePathDisplayModeV1 !== inputs.workspacePathDisplayModeV1;
         if (previousSource && previousInputs?.isDataReady === inputs.isDataReady
             && !sessionsChanged && !membershipChanged && !rowsChanged && !indexChanged
-            && !cacheChanged && !messagesChanged && !workspaceChanged && !tagsChanged) {
+            && !cacheChanged && !messagesChanged && !workspaceChanged && !organizationChanged) {
             return previousSource;
         }
 
@@ -539,14 +546,14 @@ export function createActivityAttentionStoreSourceSelector(
         if (cacheChanged) signatures.cache = buildConcurrentCacheSignature(state.concurrentSessionListCacheByServerId);
         if (messagesChanged) signatures.messages = buildSessionMessagesRecordSignature(potentialSessionIds, state.sessionMessages, sessionMessagesSignatureCache);
         if (workspaceChanged) signatures.workspace = buildWorkspaceDisplaySettingsSignature(state, includeFollowRuleFacts);
-        if (includeFollowRuleFacts && (tagsChanged || sessionsChanged || membershipChanged || rowsChanged || cacheChanged)) {
-            signatures.tags = buildFollowRuleTagsSignature(state, personalMembershipByServerId);
+        if (includeFollowRuleFacts && (organizationChanged || sessionsChanged || membershipChanged || rowsChanged || cacheChanged)) {
+            signatures.organization = buildFollowRuleOrganizationSignature(state, personalMembershipByServerId);
         }
         previousInputs = inputs;
         const signature = joinSignatureParts([
             inputs.isDataReady === true ? 1 : 0,
             signatures.sessions, signatures.rows, signatures.index, signatures.cache, signatures.messages, signatures.workspace,
-            signatures.tags,
+            signatures.organization,
         ]);
 
         if (previousSource && previousSignature === signature) {

@@ -30,9 +30,13 @@ export function readActivitySessionRulePolicies(source: ActivityAttentionSource,
         hasPersistentFollow: follow == null ? undefined : follow.notificationLevel !== null }).rules : [];
     const rules = [...snapshot.rules.filter(rule => rule.receiver.kind === 'account' && rule.definition.enabled), ...defaults];
     if (rules.length === 0) return NO_RULE_POLICIES;
+    const organizationKey = buildSessionOrganizationSessionKey(address.serverId, session.id);
+    const folderAssignment = source.followRuleFolderAssignmentsBySessionKey?.[organizationKey];
     const facts = buildSessionListRowFilterFacts(session, address.serverId, {
         nowMs, viewerAccountId: snapshot.accountId, workspaceRefs: source.followRuleWorkspaceRefsV1,
-        tagIds: source.followRuleTagAssignmentsBySessionKey?.[buildSessionOrganizationSessionKey(address.serverId, session.id)]?.tagIds,
+        tagIds: source.followRuleTagAssignmentsBySessionKey?.[organizationKey]?.tagIds,
+        section: folderAssignment === undefined ? undefined : folderAssignment.folderId === null
+            ? null : { serverId: address.serverId, sectionId: folderAssignment.folderId },
         includeStatus: rules.some(rule => Boolean(rule.definition.filter.statuses?.length)),
         includeSource: rules.some(rule => rule.definition.filter.source !== 'all'),
     });

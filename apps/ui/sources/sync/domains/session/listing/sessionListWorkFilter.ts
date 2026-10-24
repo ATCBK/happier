@@ -3,6 +3,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { matchSessionListFilterV1, readSessionListStartedByV1, type SessionListFilterFactsV1, type SessionListFilterMatchV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { projectSessionListFilterAfterHomeQueryV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import type { QualifiedSessionSectionV1 } from '@happier-dev/protocol/sessions/organization/folders';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { projectUiSessionAwareness } from '../awareness/sessionAwareness';
 import { getSessionStorageKind } from '../sessionStorageKind';
@@ -25,6 +26,7 @@ export type SessionListRowFilterFactsOptions = Readonly<{
     audiences?: SessionListFilterFactsV1['audiences'];
     tagIds?: readonly string[];
     attentionRequired?: boolean;
+    section?: QualifiedSessionSectionV1 | null;
     /** List consumers avoid awareness work unless their selected facet demands it. */
     includeStatus?: boolean;
     includeSource?: boolean;
@@ -55,6 +57,7 @@ export function buildSessionListRowFilterFacts(
         managedSessions: row?.managedSessions,
         receivedRuleCount: row?.receivedRuleCount,
         startedBy: readSessionListStartedByV1({ origin: row?.origin, ownerAccountId: row?.ownerAccountId, viewerAccountId: options.viewerAccountId }),
+        ...(options.section === undefined ? {} : { section: options.section }),
         metadata: metadata ? { bot: metadata.bot } : null,
         projectMetadata: ownerMetadata ? { projectId: ownerMetadata.projectId, workspaceId: ownerMetadata.workspaceId,
             machineId: ownerMetadata.machineId, path: ownerMetadata.path } : null,

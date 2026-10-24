@@ -49,6 +49,15 @@ function createRemoteUpdateRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe('Live Activity remote update protocol', () => {
+  it('accepts the canonical Session presentation states without collapsing failure or stopped work', async () => {
+    const remoteUpdates = await loadRemoteUpdatesModule();
+    expect(remoteUpdates).not.toBeNull();
+    if (!remoteUpdates) return;
+    for (const attentionState of ['failed', 'stopped', 'usage_limited', 'finished_unseen', 'mentioned', 'waiting', 'pending_input']) {
+      expect(remoteUpdates.HappierFocusLiveActivityContentStateV1Schema.safeParse(createContentState({ attentionState })).success)
+        .toBe(true);
+    }
+  });
   it('accepts versioned update and end requests for the Happier Focus Live Activity only', async () => {
     const remoteUpdates = await loadRemoteUpdatesModule();
     expect(remoteUpdates).not.toBeNull();

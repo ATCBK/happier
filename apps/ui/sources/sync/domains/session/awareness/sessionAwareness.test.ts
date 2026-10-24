@@ -13,7 +13,7 @@ describe('UI Session awareness acquisition adapter', () => {
             lastProbeError: null, selectedAuth: { kind: 'native' },
         });
         const session = createSessionFixture({ encryptionMode: 'plain', active: true, presence: 'online', activeAt: 1_000,
-            latestTurnStatus: 'failed', metadata: { path: '/work', sessionUsageLimitRecoveryV1: recovery },
+            latestTurnStatus: 'failed', metadata: { path: '/work', host: 'local', sessionUsageLimitRecoveryV1: recovery },
             lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit',
                 agentId: 'codex', agentTurnId: 'turn-a', occurredAt: 1_000,
                 usageLimit: { v: 1, resetAtMs: 5_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } },

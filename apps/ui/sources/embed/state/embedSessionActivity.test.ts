@@ -40,4 +40,17 @@ describe('embed session activity', () => {
 
         expect(seen).toEqual(['idle', 'working', 'needs_attention']);
     });
+
+    it('reports a Session held by a blocking usage limit as needing attention', () => {
+        storage.getState().applySessions([createSessionFixture({
+            id: 's1', active: true, presence: 'online', activeAt: NOW, updatedAt: NOW,
+            latestTurnStatus: 'failed', latestTurnStatusObservedAt: NOW,
+            lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: NOW },
+        })]);
+        const seen: string[] = [];
+        const stop = watchEmbedSessionActivity({ sessionId: 's1', onActivity: (activity) => seen.push(activity), now: () => NOW + 1 });
+        stop();
+
+        expect(seen).toEqual(['needs_attention']);
+    });
 });

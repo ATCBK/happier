@@ -11,6 +11,8 @@ import type { SessionListRowViewModel } from './sessionListRowViewModels';
 
 const DEFAULT_SESSION_ITEM_ROW_PRESENTATION: Omit<SessionStatus, 'awareness'> = {
     state: 'waiting',
+    bucket: 'idle',
+    tone: 'neutral',
     isConnected: true,
     statusText: '',
     shouldShowStatus: false,

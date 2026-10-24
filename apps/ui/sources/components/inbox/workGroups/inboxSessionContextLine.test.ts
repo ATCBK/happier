@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import {
   buildSessionContextFacts,
   projectSessionContextPresentation,
@@ -55,9 +55,9 @@ function readyCandidate() {
 
 describe('Inbox session row line', () => {
   it.each([
-    { total: 2, working: 0, needsYou: 0, stalled: 2, finished: 0, attentionPrimary: null },
-    { total: 2, working: 0, needsYou: 2, stalled: 0, finished: 0, attentionPrimary: null },
-    { total: 6, working: 2, needsYou: 1, stalled: 3, finished: 0, attentionPrimary: null },
+    { total: 2, working: 0, needsYou: 0, stalled: 2, finished: 0, attentionPrimary: 'disconnected' as const },
+    { total: 2, working: 0, needsYou: 2, stalled: 0, finished: 0, attentionPrimary: 'permission_required' as const },
+    { total: 6, working: 2, needsYou: 1, stalled: 3, finished: 0, attentionPrimary: 'permission_required' as const },
   ])('labels only server-bucketed working reports as still working: %j', (reports) => {
     const candidate = readyCandidate();
     const line = buildInboxSessionContextLine({ ...candidate, session: { ...candidate.session, managedSessions: reports } }) ?? '';
@@ -71,13 +71,20 @@ describe('Inbox session row line', () => {
   it('says what the session needs first, as the start of a sentence, before where it runs', () => {
     const line =
       buildInboxSessionContextLine(readyCandidate(), { showHome: true }) ?? '';
-    const need = t('status.readyForReview');
+    const need = t('workStatus.finished');
     expect(line.startsWith(need.charAt(0).toLocaleUpperCase() + need.slice(1))).toBe(true);
     expect(line).toContain('0.3');
   });
 
   it('never states a failure on the line: the row says its one status through the work-status owner', () => {
-    const failed = { ...readyCandidate(), attentionState: 'failed' as const };
+    const ready = readyCandidate();
+    const session = { ...ready.session, latestTurnStatus: 'failed' as const,
+      viewer: createSessionViewerFixture({ latestFailureSeq: 4,
+        readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+        attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' },
+      }),
+    };
+    const failed = { ...buildSessionActivityAttention({ session, nowMs: 1000 }), context: ready.context };
     const line = buildInboxSessionContextLine(failed, { showHome: true }) ?? '';
     expect(line.toLowerCase()).not.toContain(t('status.error').toLowerCase());
     expect(line).toContain('0.3');
