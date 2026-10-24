@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { Platform, View, type ViewProps } from 'react-native';
+import { Platform, View } from 'react-native';
 import { Freeze } from 'react-freeze';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { PluginSurfaceFocusEligibilityProvider, useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * `flow` fills the height its host gives it (a pane). `content` takes its own content's height, for a surface that sits
@@ -12,8 +12,54 @@ import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentat
 type RetainedPanelSurfaceMode = 'absolute-overlay' | 'flow' | 'content';
 
 const WebInertView = View as React.ComponentType<
-    ViewProps & Pick<React.HTMLAttributes<HTMLElement>, 'inert'>
+    React.ComponentPropsWithRef<typeof View> & Pick<React.HTMLAttributes<HTMLElement>, 'inert'>
 >;
+
+const RETAINED_SCROLL_ROOT = 'data-retained-panel-surface';
+
+/** Hidden DOM moves can reset native scroll offsets without a scroll event. Keep only presented view state. */
+function useRetainedWebScroll(active: boolean, isWeb: boolean) {
+    const presented = useLayoutPresentationActive() && active;
+    const rootRef = React.useRef<HTMLElement | null>(null);
+    const positions = React.useRef(new Map<HTMLElement, Readonly<{ top: number; left: number }>>());
+    const attach = React.useCallback((node: React.ComponentRef<typeof View> | null) => {
+        if (!isWeb || typeof HTMLElement === 'undefined' || !(node instanceof HTMLElement)) {
+            rootRef.current = null;
+            return;
+        }
+        node.setAttribute(RETAINED_SCROLL_ROOT, '');
+        rootRef.current = node;
+    }, [isWeb]);
+
+    React.useLayoutEffect(() => {
+        const root = rootRef.current;
+        if (!isWeb || !root) return;
+        const owns = (node: HTMLElement) => root.contains(node) && node.closest(`[${RETAINED_SCROLL_ROOT}]`) === root;
+        const prune = () => {
+            for (const node of positions.current.keys()) {
+                if (!owns(node)) positions.current.delete(node);
+            }
+        };
+        prune();
+        if (!presented) return;
+        for (const [node, position] of positions.current) {
+            if (!node.isConnected) continue;
+            node.scrollTop = position.top;
+            node.scrollLeft = position.left;
+        }
+        const capture = (event: Event) => {
+            const node = event.target;
+            if (!(node instanceof HTMLElement) || !owns(node)) return;
+            // Established scrollers stay O(1); new admission also releases removed descendants.
+            if (!positions.current.has(node)) prune();
+            positions.current.set(node, { top: node.scrollTop, left: node.scrollLeft });
+        };
+        root.addEventListener('scroll', capture, true);
+        return () => root.removeEventListener('scroll', capture, true);
+    }, [isWeb, presented]);
+
+    return attach;
+}
 
 export const RetainedPanelSurface = React.memo((props: Readonly<{
     isActive: boolean;
@@ -30,6 +76,7 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
     const [frozen, setFrozen] = React.useState(!active);
     const mode = props.mode ?? 'flow';
     const isWeb = Platform.OS === 'web';
+    const attachScrollRoot = useRetainedWebScroll(active, isWeb);
 
     React.useLayoutEffect(() => {
         if (active) {
@@ -59,6 +106,7 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
     if (mode === 'absolute-overlay') {
         return (
             <WebInertView
+                ref={attachScrollRoot}
                 testID={props.testID}
                 pointerEvents={active ? 'auto' : 'none'}
                 inert={isWeb && !active ? true : undefined}
@@ -80,6 +128,7 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
 
     return (
         <WebInertView
+            ref={attachScrollRoot}
             testID={props.testID}
             pointerEvents={active ? 'auto' : 'none'}
             inert={isWeb && !active ? true : undefined}
