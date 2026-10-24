@@ -13,8 +13,12 @@ function roleMetrics(role: Parameters<typeof resolveHappierTypeScale>[0]): PageR
 /**
  * The densities a configuration-page row is drawn at: the user's list-density preference. An explicit
  * `tight` (editor-like lists) has no page shape of its own and draws as `compact`.
+ *
+ * `inspector` is not a preference: a page hosted as a side-pane inspector (Session Info beside its
+ * conversation, lab csinfo I2) draws its rows at it whatever the preference — small type, regular-weight
+ * titles, 36px rows with right-aligned values — so the pane reads as a dense inspector, not a settings page.
  */
-export type HappierPageRowDensity = 'comfortable' | 'cozy' | 'compact';
+export type HappierPageRowDensity = 'comfortable' | 'cozy' | 'compact' | 'inspector';
 
 /**
  * A page row's two shapes. `standard` is any row of a section; `list` is a row of a long index-style
@@ -30,6 +34,13 @@ export type HappierPageRowMetrics = Readonly<{
     minHeightPx: number;
     paddingVerticalPx: number;
     title: PageRowText;
+    /** A settings row's title is medium; an inspector row's is the body face, its value carrying the weight. */
+    titleWeight: 'regular' | 'medium';
+    /**
+     * A fact row (an inspector's list of facts: Run on, Folder, Started) reads value first: its label
+     * steps back to secondary and the value takes the primary ink. Settings rows keep label first.
+     */
+    valueLeads: boolean;
     subtitle: PageRowText & Readonly<{ marginTop: number }>;
     iconGlyphPx: number;
 }>;
@@ -51,6 +62,7 @@ const PAGE_ROW_DENSITY_METRICS: Record<HappierPageRowDensity, Readonly<{
     standard: Readonly<{ minHeightPx: number; paddingVerticalPx: number }>;
     list: Readonly<{ minHeightPx: number; paddingVerticalPx: number }>;
     title: PageRowText;
+    titleWeight?: 'regular';
     subtitle: PageRowText;
     iconGlyphPx: number;
 }>> = {
@@ -75,6 +87,14 @@ const PAGE_ROW_DENSITY_METRICS: Record<HappierPageRowDensity, Readonly<{
         subtitle: roleMetrics('meta'),
         iconGlyphPx: resolveHappierIconSize('small'),
     },
+    inspector: {
+        standard: { minHeightPx: 36, paddingVerticalPx: 5 },
+        list: { minHeightPx: 32, paddingVerticalPx: 4 },
+        title: roleMetrics('body'),
+        titleWeight: 'regular',
+        subtitle: roleMetrics('meta'),
+        iconGlyphPx: resolveHappierIconSize('small'),
+    },
 };
 
 /** Between a page row's title and its description, at every density. */
@@ -96,6 +116,8 @@ export function resolveHappierPageRowMetrics(input: Readonly<{ density: HappierP
         minHeightPx: input.touch ? Math.max(box.minHeightPx, HAPPIER_PAGE_ROW_TOUCH_MIN_HEIGHT_PX) : box.minHeightPx,
         paddingVerticalPx: box.paddingVerticalPx,
         title: table.title,
+        titleWeight: table.titleWeight ?? 'medium',
+        valueLeads: input.density === 'inspector' && input.shape === 'list',
         subtitle: Object.freeze({ ...table.subtitle, marginTop: PAGE_ROW_SUBTITLE_GAP_PX }),
         iconGlyphPx: table.iconGlyphPx,
     });
