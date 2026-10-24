@@ -92,12 +92,16 @@ async function requireArtifactHtmlWriteContent(params: Readonly<{
     }
 }
 
+function artifactStorageIdentity(artifact: Pick<Artifact, 'dataEncryptionKey' | 'provenanceDataEncryptionKey'>) {
+    return { contentKeyEnvelope: artifact.dataEncryptionKey,
+        provenanceKeyEnvelope: artifact.provenanceDataEncryptionKey ?? null };
+}
+
 function artifactAccessProjection(artifact: Artifact) {
     return { kind: artifact.kind, ...(Object.hasOwn(artifact, 'kindHint') ? { kindHint: artifact.kindHint } : {}),
         access: artifact.access, ownerAccountId: artifact.ownerAccountId,
         publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
-        storageIdentity: { contentKeyEnvelope: artifact.dataEncryptionKey,
-            provenanceKeyEnvelope: artifact.provenanceDataEncryptionKey ?? null } };
+        storageIdentity: artifactStorageIdentity(artifact) };
 }
 
 async function sharedArtifactWriteContext(params: Readonly<{
@@ -1641,6 +1645,7 @@ export async function decryptSocketNewArtifactUpdate(params: {
                 updatedAt,
                 isDecrypted: true,
                 storageMode: 'plain',
+                storageIdentity: artifactStorageIdentity(params),
             };
         } catch {
             return createLockedArtifactView({
@@ -1737,6 +1742,7 @@ export async function decryptSocketNewArtifactUpdate(params: {
             updatedAt,
             isDecrypted: true,
             storageMode: 'e2ee',
+            storageIdentity: artifactStorageIdentity(params),
         };
     } catch (error) {
         log.log(`Failed to decrypt new artifact ${artifactId}: ${error}`);

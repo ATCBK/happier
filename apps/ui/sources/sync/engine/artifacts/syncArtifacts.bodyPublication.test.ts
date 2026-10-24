@@ -3,12 +3,19 @@ import { createStore } from 'zustand/vanilla';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
-import { createDeferred } from '@/dev/testkit';
+import * as approvalAdmission from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import { Encryption } from '@/sync/encryption/encryption';
+import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
+import { encodeBase64 } from '@/encryption/base64';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { useOpenApprovalArtifactsForSession } from '@/sync/domains/state/storage';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
-import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactsList, type ArtifactDataKeyCache } from './syncArtifacts';
+import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactsList, handleNewArtifactSocketUpdate, type ArtifactDataKeyCache } from './syncArtifacts';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { standardCleanup(); vi.useRealTimers(); });
 
 function createHarness() {
     const store = createStore<ArtifactsDomain>((set, get) => createArtifactsDomain({ set, get }));
@@ -34,6 +41,87 @@ function createHarness() {
 }
 
 describe('Artifact body hydration publications', () => {
+    it.each(['plain', 'e2ee'] as const)('admits a socket approval once through unchanged list/body revalidation (%s)', async mode => {
+        const store = getStorage();
+        const previous = store.getState();
+        const target = { serverId: 'socket-refresh-home', sessionId: `socket-refresh-${mode}` };
+        const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: target.sessionId }, requestedSurface: 'agent',
+            actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+            origin: { kind: 'transcript_tool_call', sessionId: target.sessionId, toolCallId: 'native' } });
+        const header = buildApprovalRequestArtifactHeaderV1(approval, { legacyServerId: target.serverId });
+        const encryption = mode === 'e2ee' ? await Encryption.create(new Uint8Array(32).fill(17)) : null;
+        const dataKey = new Uint8Array(32).fill(18);
+        const codec = new ArtifactEncryption(dataKey);
+        const sealHeader = async (value: typeof header) => mode === 'plain'
+            ? encodePlainArtifactStoredContent(value) : codec.encryptHeader(value);
+        let artifact: Artifact = {
+            id: mode === 'plain' ? '11111111-1111-4111-8111-111111111181' : '11111111-1111-4111-8111-111111111182',
+            ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, publicAudience: 'none', kind: 'other',
+            header: await sealHeader(header), body: mode === 'plain'
+                ? encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }) : await codec.encryptBody({ body: JSON.stringify(approval) }),
+            dataEncryptionKey: encryption ? encodeBase64(await encryption.encryptEncryptionKey(dataKey)) : ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        };
+        const artifactDataKeys: ArtifactDataKeyCache = new Map();
+        const params = { credentials: { token: 'socket-refresh-fixture' }, encryption, artifactDataKeys,
+            applyArtifacts: store.getState().applyArtifacts };
+        let bodyReads = 0;
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.startsWith('/v1/artifacts?')) return Response.json([{ ...artifact, body: undefined }]);
+            expect(path).toBe('/v1/artifacts/read');
+            expect(ArtifactReadBatchInputV1Schema.parse(JSON.parse(String(init?.body))).artifactIds).toEqual([artifact.id]);
+            bodyReads++;
+            return Response.json({ items: [{ artifactId: artifact.id, ok: true, artifact,
+                recipientCensus: mode === 'plain' ? null : { artifactId: artifact.id, ownerAccountId: artifact.ownerAccountId,
+                    access: artifact.access, encryptionMode: mode, dataEncryptionKey: artifact.dataEncryptionKey,
+                    callerDataEncryptionKey: artifact.dataEncryptionKey, recipients: [] } }] });
+        };
+        const refresh = () => {
+            const startedWith = store.getState().artifacts;
+            return fetchAndApplyArtifactsList({ ...params, request, inventoryReadStartedWith: startedWith,
+                readCurrentArtifacts: () => store.getState().artifacts,
+                applyArtifacts: (rows, source) => store.getState().applyArtifacts(rows, source === 'inventory' ? startedWith : undefined) });
+        };
+        store.setState({ isDataReady: true, artifacts: {}, artifactsLoaded: true });
+        const admit = vi.spyOn(approvalAdmission, 'approvalArtifactBodyMatchesHeaderV1');
+        let publications = 0;
+        const hook = await renderHook(() => {
+            const selected = useOpenApprovalArtifactsForSession(target);
+            publications++;
+            return selected;
+        });
+        try {
+            publications = 0;
+            await act(async () => handleNewArtifactSocketUpdate({ ...params, ...artifact, artifactId: artifact.id,
+                addArtifact: store.getState().addArtifact, invalidateArtifactsSync: () => {}, log: { log: () => {} } }));
+            expect(hook.getCurrent()).toHaveLength(1);
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(publications).toBe(1);
+            const arrived = hook.getCurrent();
+            publications = 0;
+            await act(async () => { await refresh(); });
+            await act(async () => { await fetchAndApplyArtifactBodies({ ...params, request, artifactIds: [artifact.id] }); });
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(publications).toBe(0);
+            expect(hook.getCurrent()).toBe(arrived);
+            expect(bodyReads).toBe(1); // Only the explicit unchanged-body positive control, not the list.
+            expect(store.getState().artifacts[artifact.id]).toMatchObject({ access: 'owner', ownerAccountId: 'owner' });
+
+            // A new header revision cannot borrow the old admission, even with the same stored body.
+            artifact = { ...artifact, headerVersion: 2, seq: 2, updatedAt: 2,
+                header: await sealHeader({ ...header, title: 'Invalid duplicated approval title' }) };
+            await act(async () => { await refresh(); });
+            expect(hook.getCurrent()).toHaveLength(0);
+            expect(admit.mock.calls.length).toBeGreaterThan(1);
+            expect(bodyReads).toBe(2);
+        } finally {
+            await hook.unmount();
+            admit.mockRestore();
+            store.setState(previous);
+        }
+    });
+
     it('does not redemand a retained approval body on header refresh, but reads a changed revision', async () => {
         const { store, artifacts, params } = createHarness();
         const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
