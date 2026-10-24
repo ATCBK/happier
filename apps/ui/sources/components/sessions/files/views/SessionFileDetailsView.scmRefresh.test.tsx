@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
@@ -15,12 +15,14 @@ const snapshot = (pendingAdded: number) => fileViewSnapshot({ fetchedAt: pending
     stats: { pendingAdded, pendingRemoved: 0, includedAdded: 0, includedRemoved: 0, isBinary: false },
 }], capabilities: { writeCommitPathSelection: true, writeCommitLineSelection: true } });
 
-beforeAll(prepareSessionFilesViewTestkit);
+// Load the shared runtime graph during collection, outside this file-refresh operation's budget.
+await prepareSessionFilesViewTestkit();
 beforeEach(async () => {
     standardCleanup();
     diffVersion = 1;
     const transfer = createSessionFileNativeTransferBoundary({ bytes: new TextEncoder().encode('file-content'), name: 'a.txt' });
     fixture = await createSessionFilesViewFixture({
+        serverIdentityId: 'srv_scm_refresh',
         machineCarrierOrigin: 'http://127.0.0.1:48126', request: transfer.request,
         rpc: (request) => {
             if (request.method === 'statFile') return { success: true, exists: true, kind: 'file', sizeBytes: 12 };
@@ -35,19 +37,20 @@ afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
 
 describe('SessionFileDetailsView (SCM refresh)', () => {
     it('refreshes diff content in-place when SCM entry fingerprint changes', async () => {
-        const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
+        const { WorkspaceFileDetailsView } = await import('@/components/workspaces/files/details/WorkspaceFileDetailsView');
         const { FileContentPanel } = await import('@/components/workspaces/files/file/FileContentPanel');
         const { FileLoadingState } = await import('@/components/workspaces/files/file/FileScreenState');
-        const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath="src/a.txt" />);
-        expect(screen.tree.root.findAllByType(FileContentPanel)).toHaveLength(1);
-        expect(screen.tree.root.findByType(FileContentPanel).props.diffContent).toBe(diff(1));
+        // This contract is the live Uncommitted diff. Session-scope Changes uses a captured comparison.
+        const screen = await fixture.render(<WorkspaceFileDetailsView scope={fixture.scope} scopeId="project:scm-refresh"
+            filePath="src/a.txt" initialView={{ view: 'changes' }} />);
+        await vi.waitFor(() => expect(screen.tree.root.findByType(FileContentPanel).props.diffContent).toBe(diff(1)));
         await act(async () => {
             diffVersion = 2;
             fixture.setSnapshot(snapshot(0));
         });
         await flushHookEffects({ cycles: 20 });
         expect(screen.tree.root.findAllByType(FileContentPanel)).toHaveLength(1);
-        expect(screen.tree.root.findByType(FileContentPanel).props.diffContent).toBe(diff(2));
+        await vi.waitFor(() => expect(screen.tree.root.findByType(FileContentPanel).props.diffContent).toBe(diff(2)));
         expect(screen.tree.root.findAllByType(FileLoadingState)).toHaveLength(0);
     });
 

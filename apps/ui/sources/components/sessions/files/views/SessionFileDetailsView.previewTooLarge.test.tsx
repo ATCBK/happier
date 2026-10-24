@@ -16,6 +16,7 @@ beforeEach(async () => {
     standardCleanup();
     transfer = createSessionFileNativeTransferBoundary({ bytes: new Uint8Array([65, 66, 67]), name: filePath });
     fixture = await createSessionFilesViewFixture({
+        serverIdentityId: 'srv_preview_too_large',
         machineCarrierOrigin: 'http://127.0.0.1:48126',
         request: transfer.request,
         rpc: (request) => request.method === 'statFile'
@@ -62,7 +63,7 @@ describe('SessionFileDetailsView (preview too large)', () => {
         expect(fixture.requests).toEqual(expect.arrayContaining([expect.objectContaining({
             targetId: 'm1',
             method: getActionSpec('daemon.filesystem.download').bindings?.rpcMethod,
-            payload: expect.objectContaining({ input: expect.objectContaining({ rootPath: '/workspace', path: '/workspace/' + filePath, asZip: false }) }),
+            payload: expect.objectContaining({ rootPath: '/workspace', path: '/workspace/' + filePath, asZip: false }),
         })]));
     });
 });

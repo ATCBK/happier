@@ -6,11 +6,16 @@ import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesVie
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
 import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
 
-installSessionFilesViewBoundaries({ confirmResult: true });
+const nativeShare = vi.hoisted(() => ({ share: vi.fn(), sharedAction: 'sharedAction', dismissedAction: 'dismissedAction' }));
+installSessionFilesViewBoundaries({ confirmResult: true, reactNativeOverrides: { Share: nativeShare } });
 const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn() }));
 vi.mock('expo-clipboard', () => clipboard);
 await prepareSessionFilesViewTestkit();
 const { WorkspaceFileDetailsView } = await import('@/components/workspaces/files/details/WorkspaceFileDetailsView');
+const { FilePageHeader } = await import('@/components/workspaces/files/file/FilePageHeader');
+const { FileContentPanel } = await import('@/components/workspaces/files/file/FileContentPanel');
+const { FileViewerBody } = await import('@/components/workspaces/files/file/FileViewerBody');
+const { FileTooLargeState } = await import('@/components/workspaces/files/file/FilePageStates');
 
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
@@ -31,16 +36,20 @@ beforeEach(async () => {
     shareAvailable = true;
     sharedBytes.length = 0;
     fileSystem = createExpoFileSystemFileMock();
+    nativeShare.share.mockReset().mockImplementation(async (content: { url: string }) => {
+        sharedBytes.push([...fileSystem.files.get(content.url)!]);
+        return { action: nativeShare.sharedAction };
+    });
     // Native filesystem and share-sheet adapters only; transfers and byte delivery stay real.
     vi.doMock('expo-file-system', () => fileSystem.module);
     vi.doMock('expo-sharing', () => ({
         isAvailableAsync: async () => shareAvailable,
-        shareAsync: async (uri: string) => { sharedBytes.push([...fileSystem.files.get(uri)!]); },
     }));
     const bytes = new TextEncoder().encode(fileText);
     previewSize = bytes.byteLength;
     transfer = createSessionFileNativeTransferBoundary({ bytes, name: 'example.txt' });
     fixture = await createSessionFilesViewFixture({
+        serverIdentityId: 'srv_content_actions',
         machineCarrierOrigin: transfer.origin,
         request: transfer.request,
         rpc: request => request.method === 'statFile'
@@ -54,6 +63,9 @@ afterEach(async () => { standardCleanup(); await fixture?.dispose(); vi.unstubAl
 async function renderFile(path = filePath) {
     const screen = await fixture.render(<WorkspaceFileDetailsView scopeId="project:content-actions" scope={fixture.scope} filePath={path} presentation="screen" />);
     await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
+    await vi.waitFor(() => expect([
+        ...screen.findAllByType(FileContentPanel), ...screen.findAllByType(FileViewerBody), ...screen.findAllByType(FileTooLargeState),
+    ]).toHaveLength(1));
     return screen;
 }
 
@@ -61,30 +73,37 @@ async function setToolbarWidth(screen: Awaited<ReturnType<typeof renderFile>>, w
     await act(async () => { invokeTestInstanceHandler(screen.findByTestId('file-details-header.root'), 'onLayout', { nativeEvent: { layout: { width } } }); });
 }
 
+function menuItem(screen: Awaited<ReturnType<typeof renderFile>>, id: string) {
+    const items: React.ComponentProps<typeof FilePageHeader>['menuActions'] = screen.findByType(FilePageHeader).props.menuActions;
+    return items?.find(item => item.id === id);
+}
+
+async function selectMenuItem(screen: Awaited<ReturnType<typeof renderFile>>, id: string) {
+    await screen.pressByTestIdAsync('file-details-header.menu.trigger');
+    await flushHookEffects({ cycles: 4 });
+    await screen.pressByTestIdAsync(`file-menu-${id}`);
+}
+
 describe('shared file reader content actions', () => {
-    it('copies the whole current file and exports its actual raw bytes from the wide toolbar', async () => {
+    it('copies the whole current file and downloads its actual raw bytes from the wide page menu', async () => {
         const screen = await renderFile();
         await setToolbarWidth(screen, 900);
-        await screen.pressByTestIdAsync('file-details-copy-content');
-        expect(clipboard.setStringAsync).toHaveBeenCalledWith(fileText);
-        await screen.pressByTestIdAsync('file-details-raw');
+        await selectMenuItem(screen, 'copyContents');
+        await vi.waitFor(() => expect(clipboard.setStringAsync).toHaveBeenCalledWith(fileText));
+        await selectMenuItem(screen, 'download');
         await vi.waitFor(() => expect(sharedBytes).toEqual([Array.from(new TextEncoder().encode(fileText))]));
         expect(transfer.httpRequests.some(request => request.url.endsWith('/complete'))).toBe(true);
     });
 
-    it('keeps whole-file copy and raw export reachable through the narrow accessible menu', async () => {
+    it('keeps whole-file copy and download reachable through the narrow accessible menu', async () => {
         const screen = await renderFile();
         await setToolbarWidth(screen, 390);
         expect(screen.findHostByTestId('file-details-copy-content')).toBeNull();
         const menu = screen.findHostByTestId('file-details-header.menu.trigger');
         expect(menu?.props.accessibilityLabel).toBeTruthy();
-        await screen.pressByTestIdAsync('file-details-header.menu.trigger');
-        await flushHookEffects({ cycles: 4 });
-        await screen.pressByTestIdAsync('file-details-copy-content');
-        expect(clipboard.setStringAsync).toHaveBeenCalledWith(fileText);
-        await screen.pressByTestIdAsync('file-details-header.menu.trigger');
-        await flushHookEffects({ cycles: 4 });
-        await screen.pressByTestIdAsync('file-details-raw');
+        await selectMenuItem(screen, 'copyContents');
+        await vi.waitFor(() => expect(clipboard.setStringAsync).toHaveBeenCalledWith(fileText));
+        await selectMenuItem(screen, 'download');
         await vi.waitFor(() => expect(sharedBytes).toEqual([Array.from(new TextEncoder().encode(fileText))]));
     });
 
@@ -93,9 +112,10 @@ describe('shared file reader content actions', () => {
         previewSize = 0;
         const screen = await renderFile('empty.txt');
         await setToolbarWidth(screen, 900);
-        expect(screen.findHostByTestId('file-details-copy-content')?.props.disabled).toBe(false);
-        await screen.pressByTestIdAsync('file-details-copy-content');
-        expect(clipboard.setStringAsync).toHaveBeenCalledWith('');
+        expect(menuItem(screen, 'copyContents')).toBeDefined();
+        expect(menuItem(screen, 'copyContents')?.disabled).not.toBe(true);
+        await selectMenuItem(screen, 'copyContents');
+        await vi.waitFor(() => expect(clipboard.setStringAsync).toHaveBeenCalledWith(''));
     });
 
     it('exports binary bytes without offering text copy', async () => {
@@ -104,18 +124,18 @@ describe('shared file reader content actions', () => {
         previewSize = bytes.byteLength;
         const screen = await renderFile('opaque.bin');
         await setToolbarWidth(screen, 900);
-        expect(screen.findHostByTestId('file-details-copy-content')?.props.disabled).toBe(true);
-        await screen.pressByTestIdAsync('file-details-raw');
+        expect(menuItem(screen, 'copyContents')).toBeUndefined();
+        await selectMenuItem(screen, 'download');
         await vi.waitFor(() => expect(sharedBytes).toEqual([Array.from(bytes)]));
         expect(clipboard.setStringAsync).not.toHaveBeenCalled();
     });
 
-    it('disables text copy when preview content is unavailable but retains raw download', async () => {
+    it('omits text copy when preview content is unavailable but retains raw download', async () => {
         previewSize = Number.MAX_SAFE_INTEGER;
         const screen = await renderFile();
         await setToolbarWidth(screen, 900);
-        expect(screen.findHostByTestId('file-details-copy-content')?.props.disabled).toBe(true);
-        await screen.pressByTestIdAsync('file-details-raw');
+        expect(menuItem(screen, 'copyContents')).toBeUndefined();
+        await selectMenuItem(screen, 'download');
         await vi.waitFor(() => expect(sharedBytes).toEqual([Array.from(new TextEncoder().encode(fileText))]));
         expect(clipboard.setStringAsync).not.toHaveBeenCalled();
     });
@@ -126,10 +146,10 @@ describe('shared file reader content actions', () => {
         shareAvailable = false;
         const screen = await renderFile();
         await setToolbarWidth(screen, 900);
-        await screen.pressByTestIdAsync('file-details-copy-content');
+        await selectMenuItem(screen, 'copyContents');
         await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalled());
         vi.mocked(Modal.alert).mockClear();
-        await screen.pressByTestIdAsync('file-details-raw');
+        await selectMenuItem(screen, 'download');
         await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalled());
         expect(sharedBytes).toEqual([]);
     });

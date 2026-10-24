@@ -13,7 +13,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit, type FileViewRpcRequest } from './sessionFilesViewTestkit';
 
 const machineRpcSpy = vi.hoisted(() => vi.fn(async (params: FileViewRpcRequest) => {
-    if (params.method === 'listDirectory') return { success: true, entries: [] };
+    if (params.method === 'daemon.filesystem.listDirectory') return { ok: true, path: '/repo', entries: [], truncated: false };
     return { success: true, exists: false };
 }));
 let SessionRepositoryTreeBrowserView: typeof import('./SessionRepositoryTreeBrowserView').SessionRepositoryTreeBrowserView;
@@ -46,7 +46,7 @@ describe('SessionRepositoryTreeBrowserView (drag overlay)', () => {
 
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: machineRpcSpy });
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', serverIdentityId: 'srv_tree_drag', rpc: machineRpcSpy });
         machineRpcSpy.mockClear();
     });
 
@@ -189,8 +189,15 @@ describe('SessionRepositoryTreeBrowserView (drag overlay)', () => {
         const { Platform } = await import('react-native');
         Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
         let finishSelection!: (value: unknown) => void;
+        let nativeCredentials: import('@/auth/storage/tokenStorage').HomeCredentialWriteRollback | null = null;
         nativeDocumentPickerBoundary.mockImplementationOnce(() => new Promise(resolve => { finishSelection = resolve; }));
         try {
+            // The fixture restored on web; native credential admission reads the device keychain.
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            nativeCredentials = await TokenStorage.setCredentialsForServerUrlWithRollback(
+                fixture.home.serverUrl, { serverId: fixture.scope.serverId }, fixture.credentials,
+            );
+            if (!nativeCredentials) throw new Error('Expected native Home credential fixture');
             await renderRepositoryTreeBrowserView();
             const requested = invokeRepositoryUploadPick({
                 scope: { serverId: fixture.scope.serverId, accountId: 'alice' },
@@ -206,6 +213,7 @@ describe('SessionRepositoryTreeBrowserView (drag overlay)', () => {
             });
             expect(transferRequests()).toHaveLength(0);
         } finally {
+            await nativeCredentials?.rollback();
             Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
         }
     });

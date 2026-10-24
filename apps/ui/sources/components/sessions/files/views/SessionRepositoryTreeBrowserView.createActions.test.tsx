@@ -12,7 +12,7 @@ const { promptSpy, alertSpy, machineRpcSpy } = vi.hoisted(() => ({
     promptSpy: vi.fn<(...args: unknown[]) => Promise<string | null>>(async () => null),
     alertSpy: vi.fn<(...args: unknown[]) => void>(),
     machineRpcSpy: vi.fn(async (params: FileViewRpcRequest) => {
-        if (params.method === 'listDirectory') return { success: true, entries: [] };
+        if (params.method === 'daemon.filesystem.listDirectory') return { ok: true, path: '/repo', entries: [], truncated: false };
         if (params.method === 'daemon.filesystem.writeFile') return { success: true, hash: 'created-file-hash' };
         if (params.method === 'daemon.filesystem.createDirectory') return { success: true };
         if (params.method === 'statFile') return { success: true, exists: false };
@@ -48,7 +48,7 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
 
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: machineRpcSpy });
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', serverIdentityId: 'srv_tree_create', rpc: machineRpcSpy });
         promptSpy.mockReset();
         alertSpy.mockClear();
         machineRpcSpy.mockClear();
@@ -80,7 +80,7 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
             <PaneHeaderSlotProvider>
                 <HeaderAction />
                 <PaneHeaderSlotScope slotKey="files">
-                    <SessionRepositoryTreeBrowserView sessionId="s1" onOpenFile={vi.fn()} {...overrides} />
+                    <SessionRepositoryTreeBrowserView sessionId={fixture.session.id} onOpenFile={vi.fn()} {...overrides} />
                 </PaneHeaderSlotScope>
             </PaneHeaderSlotProvider>,
             { createNodeMock: element => {
@@ -115,7 +115,7 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
 
     it('disables create actions when no machine RPC target is available', async () => {
         await fixture.dispose();
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', machine: null, rpc: machineRpcSpy });
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', serverIdentityId: 'srv_tree_create', machine: null, rpc: machineRpcSpy });
         const session = fixture.session;
         await changeSession({ metadata: session.metadata ? { ...session.metadata, machineId: undefined, host: 'unknown-host' } : null });
         const screen = await renderRepositoryTreeBrowserView();
@@ -124,8 +124,9 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
     });
 
     it('disables create and upload actions when no workspace target is resolvable', async () => {
-        const session = fixture.session;
-        await changeSession({ metadata: session.metadata ? { ...session.metadata, path: '' } : null });
+        await fixture.dispose();
+        // Start without a workspace so the real Project projection has no retained root to resolve.
+        fixture = await createSessionFilesViewFixture({ rootPath: '', sessionId: 'without-workspace', serverIdentityId: 'srv_tree_create', rpc: machineRpcSpy });
         const screen = await renderRepositoryTreeBrowserView();
         expect(createMenuItem(screen, 'repository-tree-upload-files')?.disabled).toBe(true);
         expect(createMenuItem(screen, 'repository-tree-create-file')?.disabled).toBe(true);

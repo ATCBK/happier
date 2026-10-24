@@ -5,7 +5,7 @@ import { ScmComparisonSchema } from '@happier-dev/protocol/scm';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { standardCleanup } from '@/dev/testkit';
-import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
+import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 
 installSessionFilesViewBoundaries();
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
@@ -25,7 +25,10 @@ describe('SessionScmReviewDetailsView (comparison)', () => {
             source: { kind: 'turnCheckpoint', turnId: 'turn_1' }, repository: { rootPath: '/tmp/repo' },
             endpoints: { before: 'turn-1-before', after: 'turn-1-after' },
             inventory: { state: 'complete', reasons: [], files: [{ path: 'src/earlier.ts', changeKind: 'modified',
-                binary: false, generated: false, lockfile: false, occurrences: [],
+                binary: false, generated: false, lockfile: false, occurrences: [{
+                    id: 'earlier-change', alias: 'c1', path: 'src/earlier.ts', position: 0,
+                    before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 },
+                }],
                 evidence: { state: 'available', unifiedDiff: 'diff --git a/src/earlier.ts b/src/earlier.ts\n--- a/src/earlier.ts\n+++ b/src/earlier.ts\n@@ -1 +1 @@\n-before\n+after\n' } }] } });
         fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>
             request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE ? { success: true, comparison,
@@ -67,11 +70,13 @@ describe('SessionScmReviewDetailsView (comparison)', () => {
 
     it('says it cannot show a comparison it cannot read yet, instead of showing another one', async () => {
         fixture = await createSessionFilesViewFixture();
+        fixture.setSnapshot(fileViewSnapshot());
         const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
         const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
         const screen = await fixture.render(<SessionScmReviewDetailsView sessionId="s1" serverId={fixture.home.id}
             scopeId="session:s1" target={{ comparison: { kind: 'turnCheckpoint' } }} />);
         expect(screen.findAllByType(ChangedFilesReview)).toHaveLength(0);
         expect(screen.findByTestId('scm-comparison-unsupported')).not.toBeNull();
+        expect(screen.findByTestId('captured-comparison-files')).toBeNull();
     });
 });

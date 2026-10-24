@@ -53,6 +53,7 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
 /** Only native/Expo presentation and the embedded editor cross this renderer boundary. */
 export function installSessionFilesViewBoundaries(options: Readonly<{
     platformOS?: 'ios' | 'android' | 'web';
+    reactNativeOverrides?: import('@/dev/testkit/mocks/reactNative').TestReactNativeOverrides;
     confirmResult?: boolean;
     renderItemLimit?: number;
     emitViewability?: boolean;
@@ -60,8 +61,8 @@ export function installSessionFilesViewBoundaries(options: Readonly<{
 }> = {}) {
     vi.doMock('react-native', async () => {
         const { createReactNativeNativeMock, createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return options.platformOS === 'web' ? createReactNativeWebMock()
-            : createReactNativeNativeMock({ platformOS: options.platformOS ?? 'ios' });
+        return options.platformOS === 'web' ? createReactNativeWebMock(options.reactNativeOverrides)
+            : createReactNativeNativeMock({ platformOS: options.platformOS ?? 'ios' }, options.reactNativeOverrides);
     });
     vi.doMock('react-native-unistyles', async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
