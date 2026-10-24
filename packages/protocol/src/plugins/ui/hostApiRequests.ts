@@ -3,6 +3,10 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { SessionIdentityAdditionsV1Schema } from '../../sessions/identity/sessionBotV1.js';
 import { SessionPromptStackV1Schema } from '../../sessions/context/sessionContextV1.js';
+import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
+import { ActionSessionAddressV1Schema } from '../../actions/sessionTargetV1.js';
+import { SessionIdSchema } from '../../sessions/idsV1.js';
+import { PendingLocalIdSchema } from '../../sessions/pending/pendingLocalId.js';
 
 import {
   PluginContributionIdentityV1Schema,
@@ -689,6 +693,7 @@ export const PluginUiNewSessionSeedV1Schema = lazyZodSchema(() => z.strictObject
     { message: 'Current-screen context must fit the Composer attachment value contract.' },
   ))),
   profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  agentTarget: z.optional(AgentExecutionTargetV1Schema),
   origin: zMini.optional(PluginUiNewSessionSeedOriginV1Schema),
   /**
    * A resolved checkout question, not a concrete checkout draft. The New

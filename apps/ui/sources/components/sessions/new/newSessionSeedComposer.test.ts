@@ -129,6 +129,16 @@ describe('seedAndOpenNewSession', () => {
         });
     });
 
+    it('preserves an explicit Agent through the public seed and durable authoring draft', () => {
+        const agentTarget = { kind: 'agent', identity: { pluginId: 'acme.agent', localId: 'worker' } } as const;
+        const { outcome, navigate } = harness({ seed: { agentTarget } });
+        expect(outcome.kind).toBe('opened');
+        expect(navigate.mock.results[0]?.value).toMatchObject({ agentTarget });
+        resetSessionDraftRepositoryForTests();
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({ agentTarget });
+        expect(readPluginNewSessionSeedV1({ agentTarget: { ...agentTarget, targetKey: 'untrusted' } })).toBeNull();
+    });
+
     it('routes incumbent checkout questions and rejects a prepared intent that bypassed mounted materialization', () => {
         for (const checkoutIntent of ['createWorktree', 'ask'] as const) {
             expect(harness({ seed: { checkoutIntent } }).navigate).toHaveBeenCalledWith({

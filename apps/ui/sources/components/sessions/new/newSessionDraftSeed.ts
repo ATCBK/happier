@@ -71,6 +71,7 @@ export type NewSessionDraftSeedV1 = Readonly<{
     origin?: PluginUiNewSessionSeedOriginV1;
     prompt?: NewSessionDraftPromptSeedV1;
     profileId?: string;
+    agentTarget?: NonNullable<NewSessionDraft['agentTarget']>;
     /**
      * A reader question only. A concrete `checkoutCreationDraft` needs a
      * user-selected name and base ref, so it remains solely in the mounted New
@@ -106,6 +107,7 @@ export function newSessionDraftSeedDeclaresChangeV1(seed: NewSessionDraftSeedV1)
         || seed.promptStack !== undefined
         || normalizedNonEmpty(seed.prompt?.text) !== null
         || normalizedNonEmpty(seed.profileId) !== null
+        || seed.agentTarget !== undefined
         // An explicit checkout question opens the established picker route. It
         // is not persisted into this draft because it is not yet a concrete
         // worktree selection, but it is still a whole user-visible request.
@@ -171,6 +173,7 @@ export function applyNewSessionDraftSeedV1(input: Readonly<{
                     : promptText,
             }),
         ...(profileId === null ? {} : { selectedProfileId: profileId }),
+        ...(input.seed.agentTarget === undefined ? {} : { agentTarget: input.seed.agentTarget }),
         ...(exactTarget === null
             ? {}
             : {

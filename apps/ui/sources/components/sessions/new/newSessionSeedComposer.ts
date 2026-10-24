@@ -121,6 +121,7 @@ export function seedAndOpenNewSession(params: Readonly<{
         && seed.promptStack === undefined
         && seed.currentUiContext === undefined
         && seed.profileId === undefined
+        && seed.agentTarget === undefined
         && seed.checkoutIntent === undefined
         && seed.placement === undefined
         && seed.candidates === undefined
@@ -177,6 +178,7 @@ export function seedAndOpenNewSession(params: Readonly<{
             ...(seed.promptStack === undefined ? {} : { promptStack: seed.promptStack }),
             ...(seed.prompt === undefined ? {} : { prompt: { text: seed.prompt, mode: 'replace' as const } }),
             ...(seed.profileId === undefined ? {} : { profileId: seed.profileId }),
+            ...(seed.agentTarget === undefined ? {} : { agentTarget: seed.agentTarget }),
             ...(seed.checkoutIntent === undefined ? {} : { checkoutIntent: seed.checkoutIntent }),
             ...(seed.placement === undefined ? {} : { placement: seed.placement }),
             ...(seed.candidates === undefined ? {} : { candidates: seed.candidates }),
