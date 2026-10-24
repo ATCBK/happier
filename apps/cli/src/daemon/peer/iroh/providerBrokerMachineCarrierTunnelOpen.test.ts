@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import { createServer } from 'node:http';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createServer, request as requestHttp } from 'node:http';
 import { once } from 'node:events';
+import { spawn } from 'node:child_process';
 import tweetnacl from 'tweetnacl';
 
 import {
@@ -12,8 +13,22 @@ import {
 import { createProviderBrokerMachineCarrierTunnelOpen } from './providerBrokerMachineCarrierTunnelOpen';
 import type { DaemonMachineIrohRuntime } from './daemonMachineIrohRuntime';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
-import { registerPidSpawnResourceCleanup } from '@/daemon/sessions/cleanupPidSessionResources';
+import { registerPidSpawnResourceCleanup, retireUpstreamAuthorityBeforeProcessStop } from '@/daemon/sessions/cleanupPidSessionResources';
+import { createStopSession } from '@/daemon/sessions/stopSession';
+import { createOnChildExited } from '@/daemon/sessions/onChildExited';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import type { TrackedSession } from '@/daemon/types';
+import { readProcessIdentityByPid } from '@/daemon/processIdentity';
+import { hashProcessCommand } from '@/daemon/sessionRegistry';
 import { logger } from '@/ui/logger';
+import { createDaemonMachineIrohRuntime } from './daemonMachineIrohRuntime';
+import { IrohNativeOperationError, type IrohNodeStartMachineHttpTunnelRequest } from '@happier-dev/iroh-native/node';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
+import type { SessionTurnMutationV1 } from '@happier-dev/protocol';
+import { presentSessionTeamCredentialDenial } from '../../../../../ui/sources/components/sessions/presentation/sessionTeamCredentialDenialPresentation';
+import { createSessionBrokerApplicationEvidence } from '@/providers/broker/sessionBrokerApplicationEvidence';
+import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
 const root = { keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') };
@@ -79,6 +94,263 @@ function brokerOpen(
 }
 
 describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
+  it('abandons a pending dial at the existing endpoint budget and closes a late tunnel without redial', async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const lateClose = vi.fn(async () => {});
+    let completeDial!: (tunnel: Awaited<ReturnType<DaemonMachineIrohRuntime['openHttpTunnel']>>) => void;
+    const pending = new Promise<Awaited<ReturnType<DaemonMachineIrohRuntime['openHttpTunnel']>>>(resolve => { completeDial = resolve; });
+    let started!: () => void;
+    const dialStarted = new Promise<void>(resolve => { started = resolve; });
+    let opens = 0;
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    try {
+      const tunnel = await createProviderBrokerMachineCarrierTunnelOpen({ accountId: 'account-worker', localMachineId: 'machine-worker',
+        resolveTrustRoots: () => [root], nowMs: () => 200, fetchImpl,
+        runtime: { endpoint: { endpointId: initiatorEndpoint }, openHttpTunnel: async () => {
+          if (opens++ > 0) { started(); return pending; }
+          return { localPort: 41001, localCapability: 'c'.repeat(64), remoteEndpointId: targetEndpoint, observedPath: 'direct', close: async () => {} };
+        } },
+      })({ brokerOpen: brokerOpen() });
+      const retirement = tunnel.retire();
+      await dialStarted;
+      expect(timeout.mock.calls).toEqual([[PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs]]);
+      controller.abort(new DOMException('Endpoint budget expired', 'TimeoutError'));
+      await expect(retirement).resolves.toBeUndefined();
+      await tunnel.retire();
+      expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-release]', expect.objectContaining({
+        outcome: 'abandoned', reasonCode: 'release_budget_expired', phase: 'private_control_dial',
+      })]);
+      completeDial({ localPort: 41002, localCapability: 'd'.repeat(64), remoteEndpointId: targetEndpoint, observedPath: 'direct', close: lateClose });
+      await pending;
+      await vi.waitFor(() => expect(lateClose).toHaveBeenCalledOnce());
+      expect(opens).toBe(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally { timeout.mockRestore(); diagnostics.mockRestore(); }
+  });
+
+  it.each((['released', 'target_gone', 'abandoned'] as const).flatMap(outcome =>
+    (['session', 'daemon'] as const).map(surface => ({ outcome, surface }))))(
+    'settles $outcome once through $surface Stop', async ({ outcome, surface }) => {
+      await withConfiguredDaemonTestHome({ prefix: 'broker-release-stop-' }, async () => {
+        const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const child = spawn(process.execPath, ['-e', "process.send('ready'); setInterval(() => {}, 1000)"],
+          { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+        const exited = once(child, 'exit');
+        let opens = 0;
+        let deletes = 0;
+        let withdrawn = false;
+        const open = createProviderBrokerMachineCarrierTunnelOpen({
+          accountId: 'account-worker', localMachineId: 'machine-worker', resolveTrustRoots: () => [root], nowMs: () => 200,
+          // Native transport and HTTP are system boundaries; the cleanup/Stop
+          // owners below are real, including the refusal gate and exit settlement.
+          runtime: { endpoint: { endpointId: initiatorEndpoint }, openHttpTunnel: async () => {
+            const control = opens++ > 0;
+            if (control) {
+              expect(withdrawn).toBe(true);
+              if (outcome === 'abandoned') throw new DOMException('Dial timed out', 'TimeoutError');
+              if (outcome === 'target_gone') throw new IrohNativeOperationError('endpoint-identity-mismatch', 'Authenticated endpoint changed');
+            }
+            return { localPort: control ? 41002 : 41001, localCapability: 'c'.repeat(64), observedPath: 'direct',
+              remoteEndpointId: targetEndpoint,
+              close: async () => { if (!control) withdrawn = true; } };
+          } },
+          fetchImpl: async () => { deletes++; return new Response(null, { status: 204 }); },
+        });
+        let app: ReturnType<typeof createDaemonControlApp> | undefined;
+        try {
+          await once(child, 'message');
+          const pid = child.pid!;
+          const identity = await readProcessIdentityByPid(pid);
+          if (!identity) throw new Error('Missing owned test process identity');
+          const tracked: TrackedSession = { pid, childProcess: child, happySessionId: 'session-1', startedBy: 'daemon',
+            processStartTimeMs: identity.processStartTimeMs, processCommandHash: hashProcessCommand(identity.command) };
+          const sessions = new Map([[pid, tracked]]);
+          const cleanups = new Map<number, () => void | Promise<void>>();
+          const tunnel = await open({ brokerOpen: brokerOpen() });
+          registerPidSpawnResourceCleanup({ pid, label: 'provider_broker.binding.open', spawnResourceCleanupByPid: cleanups,
+            isCurrentPidOwner: () => sessions.get(pid) === tracked, cleanup: tunnel.retire });
+          const retainedCleanup = cleanups.get(pid)!;
+          const onExit = createOnChildExited({ pidToTrackedSession: sessions, spawnResourceCleanupByPid: cleanups,
+            sessionAttachCleanupByPid: new Map(), removeSessionMarkerFn: async () => {},
+            getApiMachineForSessions: () => ({ captureMachineSessionTerminal: async () => {
+              return { v: 1, status: 'already_inactive', sessionId: 'session-1' };
+            }, finalizeMachineSessionTerminal: async () => { throw new Error('Already-inactive fixture needs no finalization'); },
+              enqueueDaemonTerminalExactTurnEnd: async () => { throw new Error('Fixture has no active turn'); },
+            }) });
+          const stop = createStopSession({ pidToTrackedSession: sessions,
+            readHostAttachmentState: async () => ({ status: 'absent' }), readTerminalAttachmentInfo: async () => null,
+            areTrackedRunnersExited: async () => child.exitCode !== null || child.signalCode !== null,
+            retireUpstreamAuthorityBeforeProcessStop: pid => retireUpstreamAuthorityBeforeProcessStop({ pid, spawnResourceCleanupByPid: cleanups }),
+            waitForTrackedRunnersExit: async () => {
+              const [code, signal] = await exited;
+              await onExit(pid, { reason: 'process-exited', code, signal });
+              return !sessions.has(pid);
+            },
+          });
+          if (surface === 'session') {
+            // The real refusal gate must settle before signalling this live child.
+            expect(await stop('session-1')).toEqual({ status: 'stopped' });
+          } else {
+            // Reproduce retained cleanup after a runner already exited: an
+            // earlier release must settle and never redial during daemon stop.
+            child.kill('SIGTERM');
+            await exited;
+            await retainedCleanup();
+            const shutdown = new Promise<void>(resolve => {
+              app = createDaemonControlApp({ getChildren: () => [...sessions.values()], machineId: 'machine-worker',
+                stopSession: sessionId => stop(sessionId), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+                requestShutdown: resolve, onHappySessionWebhook: () => {}, controlToken: 'fixture-control' });
+            });
+            const response = await app!.inject({ method: 'POST', url: '/stop', payload: { stopSessions: true },
+              headers: { 'x-happier-daemon-token': 'fixture-control' } });
+            expect(response.json()).toEqual({ status: 'stopping' });
+            await shutdown;
+          }
+          expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+          expect(cleanups.size).toBe(0);
+          const terminal = diagnostics.mock.calls.filter(([label, record]) => label === '[provider-broker-release]'
+            && record && typeof record === 'object' && 'outcome' in record);
+          expect(terminal).toEqual([['[provider-broker-release]', expect.objectContaining({ outcome,
+            targetMachineId: 'machine-broker', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u), reasonCode: expect.any(String) })]]);
+          expect(sessions.size).toBe(0);
+          await Promise.all([tunnel.retire(), tunnel.retire(), retainedCleanup()]);
+          expect(opens).toBe(2); // Later stop/cleanup attempts perform no new dial.
+          expect(deletes).toBe(outcome === 'released' ? 1 : 0);
+        } finally {
+          await app?.close();
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          await exited;
+          diagnostics.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { failure: { ok: false as const, reasonCode: 'resource_forbidden' as const }, nativeRefusal: 'socket_close' },
+    { failure: { ok: false as const, reasonCode: 'resource_forbidden' as const }, nativeRefusal: 'http_403' },
+    { failure: { ok: false as const, reasonCode: 'broker_unavailable' as const }, nativeRefusal: 'http_403' },
+    { failure: { ok: false as const, reasonCode: 'team_credential_usage_limit' as const,
+      usageLimit: { metric: 'total_tokens' as const, remaining: '0', resetsAtUtc: '2026-10-24T00:00:00.000Z' } }, nativeRefusal: 'http_403' },
+  ])('carries a later Home refusal through native admission into the existing Session denial surface ($failure.reasonCode, $nativeRefusal)', async ({ failure, nativeRefusal }) => {
+    let request: IrohNodeStartMachineHttpTunnelRequest | undefined;
+    // The native addon's c149 boundary either closes the socket (older builds)
+    // or frames the callback's refusal as HTTP 403. Host evidence owns both.
+    const listener = createServer(async (incoming, response) => {
+      if (!request?.handshakeProvider) throw new Error('Missing native admission callback');
+      const handshake = JSON.parse(await request.handshakeProvider());
+      if (nativeRefusal === 'socket_close') incoming.socket.destroy();
+      else response.writeHead(403).end(handshake.responseBody);
+    });
+    await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+    onTestFinished(() => new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve())));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('Missing native listener');
+    const runtime = await createDaemonMachineIrohRuntime({
+      happyHomeDir: '/daemon-home', relayConfig: { relayPolicy: 'disabled', relayUrls: [] },
+      // The native addon is the OS/transport boundary; both carrier owners remain real.
+      native: {
+        createEndpoint: async () => ({ endpointHandle: 'endpoint-1', endpointId: initiatorEndpoint }),
+        getEndpointStatus: async () => ({ endpointHandle: 'endpoint-1', endpointId: initiatorEndpoint,
+          directAddresses: [], relayUrls: [], capProfile: 'machineBulk', active: true }),
+        startMachineHttpTunnel: async (input: IrohNodeStartMachineHttpTunnelRequest) => {
+          request = input;
+          return { machineTunnelId: 'tunnel-1', endpointHandle: 'endpoint-1', localPort: address.port,
+            localCapability: 'c'.repeat(64), connectionActive: true, remoteEndpointId: targetEndpoint,
+            observedPath: 'direct', startedAtMs: 1, lastErrorCode: null };
+        },
+        stopMachineTunnel: async () => {}, shutdownEndpoint: async () => {},
+      } as never,
+    });
+    if (!runtime.available) throw new Error('Expected native endpoint');
+    let refreshes = 0;
+    let refused = false;
+    let boundaryFailure: Error | undefined;
+    let activeTurnId: string | null = 'refused-turn';
+    const evidence = createSessionBrokerApplicationEvidence({ sessionId: 'session-1', pid: process.pid,
+      readActiveTurnId: () => activeTurnId, isCurrent: () => true });
+    const mutations: SessionTurnMutationV1[] = [];
+    let evidenceReads = 0;
+    const lifecycle = createSessionTurnLifecycle({
+      session: { sessionId: 'session-1', enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+      readTeamCredentialDenial: async turnId => { evidenceReads++; return evidence.readDenial(turnId); },
+    });
+    let sequence = 0;
+    const fail = async (turnId: string, cancelled = false) => {
+      activeTurnId = turnId;
+      lifecycle.observeRuntimeEvent({ sequence: sequence++, sessionId: 'session-1', emittedAtMs: 200,
+        kind: 'turn-start', turnId, startedBy: 'host' });
+      lifecycle.observeRuntimeEvent(cancelled
+        ? { sequence: sequence++, sessionId: 'session-1', emittedAtMs: 201, kind: 'turn-cancelled', turnId, cause: 'user' }
+        : { sequence: sequence++, sessionId: 'session-1', emittedAtMs: 201, kind: 'turn-failed', turnId,
+          diagnostic: { code: 'codex_app_server_turn_failed', severity: 'error', message: 'Codex app-server turn failed.',
+            details: { v: 1, source: 'agent_session_error' } } });
+      await lifecycle.drainAcceptedLifecycle();
+    };
+    const open = createProviderBrokerMachineCarrierTunnelOpen({
+      accountId: 'account-worker', localMachineId: 'machine-worker', runtime,
+      resolveTrustRoots: () => [root], nowMs: () => 200,
+      beginSessionApplicationRequest: () => evidence.beginRequest(),
+    });
+    const tunnel = await open({ brokerOpen: brokerOpen(), refreshBrokerOpen: async () => {
+      refreshes++;
+      if (boundaryFailure) throw boundaryFailure;
+      return refused ? failure : brokerOpen();
+    } });
+    try {
+      if (!request?.handshakeProvider) throw new Error('Expected native admission callback');
+      expect(JSON.parse(await request.handshakeProvider())).toMatchObject({ kind: 'provider_broker' });
+      refused = true;
+      const nativeResponse = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const connection = requestHttp(`http://127.0.0.1:${address.port}`, { agent: false }, response => {
+          const chunks: Buffer[] = [];
+          response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+          response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+          response.on('error', reject);
+        });
+        connection.on('error', reject);
+        connection.end();
+      }).catch((error: unknown) => {
+        expect(error).toMatchObject({ code: 'ECONNRESET' });
+        return null;
+      });
+      if (nativeRefusal === 'socket_close') expect(nativeResponse).toBeNull();
+      else {
+        expect(nativeResponse?.status).toBe(403);
+        expect(JSON.parse(nativeResponse!.body).error).toMatchObject({ type: 'permission_error',
+          code: failure.reasonCode, resourceId: 'resource-1' });
+      }
+      // The host retains its own admitted evidence. The native Agent may discard
+      // every byte of the Provider body and emit only its generic diagnostic.
+      await fail('refused-turn');
+      const failed = mutations.find(mutation => mutation.action === 'fail');
+      expect(failed).toMatchObject({ issue: { source: 'team_credential',
+        teamCredential: { reasonCode: failure.reasonCode, resourceId: 'resource-1',
+          ...('usageLimit' in failure ? { usageLimit: failure.usageLimit } : {}) } } });
+      if (failed?.action !== 'fail') throw new Error('Expected failed turn');
+      expect(presentSessionTeamCredentialDenial({ issue: failed.issue,
+        resolveResourceDisplayName: () => 'Acme OpenAI' })).toMatchObject({ resourceId: 'resource-1', action: 'choose-model',
+          body: expect.stringContaining('Acme OpenAI') });
+      expect(JSON.stringify(failed.issue)).not.toMatch(/permission_error|valueBase64Url|private-capability/u);
+      await fail('cancelled-turn', true);
+      expect(mutations.at(-1)?.action).toBe('cancel');
+      expect(evidenceReads).toBe(1); // Cancellation performs no broker evidence request.
+      refused = false;
+      expect(JSON.parse(await request.handshakeProvider())).toMatchObject({ kind: 'provider_broker' });
+      await fail('ordinary-failure');
+      expect(mutations.at(-1)).toMatchObject({ action: 'fail', issue: { source: 'agent_session_error' } });
+      expect(evidenceReads).toBe(2); // One exact read per failure, never per runtime arrival.
+      boundaryFailure = new Error('private boundary failure');
+      await expect(request.handshakeProvider()).rejects.toBe(boundaryFailure);
+      expect(refreshes).toBe(4); // One Home read per demand; no refusal retries/probes.
+    } finally {
+      await tunnel.close();
+      await runtime.shutdown();
+    }
+  });
+
   it('records fresh-stream admission and a later closed refusal without disclosing authority or errors', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     let transport: Parameters<DaemonMachineIrohRuntime['openHttpTunnel']>[0] | undefined;
@@ -110,6 +382,11 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
         stage: 'carrier_admission', outcome: 'refused', code: 'session_not_active', consumerId: 'session-1',
       })]);
+      expect(diagnostics.mock.calls.filter(([, record]) => record && typeof record === 'object'
+        && 'stage' in record && record.stage === 'evidence_capture')).toEqual([
+        ['[provider-broker-application]', { stage: 'evidence_capture', sessionId: 'session-1',
+          turnId: null, pid: process.pid, outcome: 'skipped', reason: 'session_not_bound' }],
+      ]);
       refreshFailure = Object.assign(new Error('private error sentinel'), { code: 'private code sentinel' });
       await expect(transport?.handshakeProvider?.()).rejects.toBe(refreshFailure);
       expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
@@ -124,6 +401,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
 
   it.each(['public_listener_withdrawal', 'private_control_dial', 'delete_dispatched', 'response_received'] as const)(
     'retains %s attribution and the original failure through registered Session cleanup', async phase => {
+      const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
       const original = new Error('native or HTTP boundary failure');
       let opens = 0;
       let sentRequestId: string | null = null;
@@ -150,13 +428,20 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       registerPidSpawnResourceCleanup({ pid: 42, label: 'provider_broker.binding.open',
         spawnResourceCleanupByPid: cleanups, isCurrentPidOwner: () => true, cleanup: tunnel.retire });
       const failure = await Promise.resolve(cleanups.get(42)!()).then(() => null, (error: unknown) => error);
-      expect(failure).toMatchObject({ cause: { cause: {
+      // Local withdrawal still refuses stop; remote failure settles and retains
+      // N3's structured original exception in the file diagnostic instead.
+      const releaseFailure = phase === 'public_listener_withdrawal'
+        ? failure && typeof failure === 'object' && 'cause' in failure ? failure.cause : undefined
+        : diagnostics.mock.calls.find(([label]) => label === '[provider-broker-release] Boundary failure')?.[1];
+      expect(failure === null).toBe(phase !== 'public_listener_withdrawal');
+      expect(releaseFailure).toMatchObject({ cause: {
         phase, targetMachineId: 'machine-broker', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
         error: phase === 'response_received' ? expect.objectContaining({ code: 'broker_close_rejected' }) : original,
-      } } });
+      } });
       if (phase === 'delete_dispatched' || phase === 'response_received') {
-        expect(failure).toMatchObject({ cause: { cause: { requestId: sentRequestId } } });
+        expect(releaseFailure).toMatchObject({ cause: { requestId: sentRequestId } });
       }
+      diagnostics.mockRestore();
     },
   );
 
@@ -342,11 +627,10 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     ended = true;
     binding.abort();
 
-    await expect(tunnel.retire()).rejects.toThrow();
-    // The public transport stays withdrawn; a new private control channel
-    // retries only the same signed claim at the exact target.
     await expect(tunnel.retire()).resolves.toBeUndefined();
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // A remote refusal is terminal; retained cleanup cannot redial or resend.
+    await expect(tunnel.retire()).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(refreshBrokerOpen).toHaveBeenCalledOnce();
     await expect(openHttpTunnel.mock.calls[0]?.[0].handshakeProvider?.()).rejects.toMatchObject({ code: 'broker_consumer_closed' });
   });
@@ -374,7 +658,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     await expect(transport?.handshakeProvider?.()).rejects.toMatchObject({ code: 'broker_binding_changed' });
   });
 
-  it('retries a failed private control close without repeating acknowledged retirement', async () => {
+  it('settles acknowledged retirement even if private control close fails', async () => {
     let opened = 0;
     let controlClosed = false;
     let closeFailed = false;
@@ -393,11 +677,15 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       resolveTrustRoots: () => [root], nowMs: () => 200,
       fetchImpl: async () => { releases++; return new Response(null, { status: 204 }); } });
     const tunnel = await open({ brokerOpen: brokerOpen() });
-    await expect(tunnel.retire()).rejects.toMatchObject({ cause: {
-      phase: 'private_control_close', error: { message: 'native release failed' },
-    } });
+    const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
     await expect(tunnel.retire()).resolves.toBeUndefined();
-    expect(controlClosed).toBe(true);
+    expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-release] Boundary failure', expect.objectContaining({ cause: {
+      phase: 'private_control_close', error: expect.objectContaining({ message: 'native release failed' }),
+      targetMachineId: 'machine-broker', requestId: expect.any(String),
+    } })]);
+    diagnostics.mockRestore();
+    await expect(tunnel.retire()).resolves.toBeUndefined();
+    expect(controlClosed).toBe(false);
     expect(releases).toBe(1);
     expect(opened).toBe(2);
   });
@@ -470,7 +758,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     });
     if (phase === 'control') {
       const tunnel = await open({ brokerOpen: brokerOpen() });
-      await expect(tunnel.retire()).rejects.toMatchObject({ code: 'transport_identity_mismatch' });
+      await expect(tunnel.retire()).resolves.toBeUndefined();
     } else await expect(open({ brokerOpen: brokerOpen() })).rejects.toMatchObject({ code: 'transport_identity_mismatch' });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(phase === 'control' ? 2 : 1);

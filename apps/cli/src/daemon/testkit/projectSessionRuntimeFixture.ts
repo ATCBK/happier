@@ -70,6 +70,9 @@ export async function createProjectSessionRuntimeFixture(options: Readonly<{
       verifyMachineAdmissionCurrent: async () => current });
     if (!prepared) throw new Error('Session admission failed');
     onTestFinished(prepared.cleanupOnFailure);
+    // Cold synchronous host setup shares this test's event loop with Home.
+    // Finish both ends of the real upgrade before that work can exhaust Engine.IO's upgrade window.
+    await channel.settleTransport();
     currentBootstrap = prepared;
     return prepared.admitted;
   };

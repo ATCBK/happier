@@ -519,9 +519,10 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             if (!candidate.ok) throw new Error('Expected the registered candidate RPC to complete');
             expect(DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema.parse(candidate.result))
                 .toMatchObject({ status: 'success' });
-            await expect(runtime.resolveTeamCredentialRequestPolicySupport({ machineId, source,
-                refreshPolicy: 'current_only',
-            })).resolves.toMatchObject({ status: 'success' });
+            await expect(forward({ userId: accountId,
+                method: `${machineId}:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT}`,
+                params: { machineId, source, refreshPolicy: 'current_only' },
+            })).resolves.toMatchObject({ ok: true, result: { status: 'success' } });
             await expect(resolveTeamCredentialSourceModelCatalog({ machineId,
                 teamId: input.teamId, resourceId: input.resourceId, resourceRevision: 1,
                 source, application, projectModels: request => runtime.projectModels({ ...request, refreshPolicy: 'current_only' }),
