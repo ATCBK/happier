@@ -102,6 +102,16 @@ export type DesktopWebViewNativeAvailability = Readonly<{
     disabledReasons: readonly DesktopWebViewNativeDisabledReason[];
 }>;
 
+/** Native DevTools belong to the mounted desktop engine, not the host's other Browser views. */
+export function canOpenDesktopBrowserDevtools(
+    view: Readonly<{ engineKind: BrowserRenderEngineKindV1 }> | null | undefined,
+    availability: DesktopWebViewNativeAvailability | null | undefined,
+): boolean {
+    return view?.engineKind === 'desktopWebView'
+        && desktopWebViewAvailabilitySupportsBrowsing(availability)
+        && availability.supports.nativeDevtools === true;
+}
+
 export function unavailableDesktopWebViewNativeAvailability(
     reason: DesktopWebViewNativeDisabledReason,
     input: Partial<Pick<DesktopWebViewNativeAvailability, 'platform' | 'primitive'>> = {},
