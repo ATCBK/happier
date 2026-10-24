@@ -12,7 +12,7 @@ import { type UsageNoticeArtifactHeaderV1,
 
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createResourceDataKey, openResourceDataKey, ResourceDataKeyUnavailableError } from '@/api/encryption/resourceDataKey';
-import { ArtifactAccessErrorCodeV1Schema, ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessErrorCodeV1Schema, ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema, ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { completeArtifactAccessMutationPreparationV1, runArtifactRecipientKeyPreparationV1, prepareArtifactRecipientKeyEnvelopesV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
 import type { ArtifactCallerAccessV1, ArtifactAccessGrantSetInputV1, ArtifactAccessGrantRemoveInputV1, ArtifactPublicLinkActionIdV1, ArtifactPublicLinkIssuedV1, ArtifactSavedByV1, ArtifactWorkspaceSourceV1, ArtifactRevisionProvenanceV1, ArtifactBodyV1, ArtifactBlobWriteV1, ArtifactListSelectionOptionsV1 } from '@happier-dev/protocol';
 import { ArtifactHeaderMetadataV1Schema, ArtifactPublicAudienceV1ReadSchema, type ArtifactPublicAudienceV1, ArtifactQuotaExceededV1Schema, ArtifactRevisionListResponseV1Schema, ArtifactStorageUsageV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -345,9 +345,11 @@ export function createAccountArtifactStore(params: Readonly<{
   async function findRetainedNotice(accountId: string, occurrence: string, signal?: AbortSignal): Promise<AccountArtifact | null> {
     const indexed = await supportsQueryHints();
     let cursor: string | undefined;
+    let sawUnreadable = false;
     do {
       const page = indexed ? await list({ limit: 500, kinds: ['account_notice.v1', 'usage_notice.v1'], ownerAccountId: accountId, cursor, signal })
         : await store.list({ limit: 500, cursor, signal });
+      sawUnreadable ||= page.coverage !== 'complete';
       for (const item of page.items) {
         if (item.ownerAccountId !== accountId || item.access !== 'owner' || item.publicAudience === 'retained') continue;
         const notice = readAccountNoticeArtifactHeaderV1(item.header);
@@ -363,29 +365,48 @@ export function createAccountArtifactStore(params: Readonly<{
         }
         return current;
       }
-      // An unresolved private header cannot establish that this occurrence is absent.
-      if (page.coverage !== 'complete' && !page.nextCursor) throw unavailableBinary();
       cursor = page.nextCursor;
     } while (cursor);
+    // An unresolved private header on any page cannot prove this occurrence absent.
+    if (sawUnreadable) throw unavailableBinary();
     return null;
   }
   // Axios chooses the media type from actual request data. Bodyless GET/DELETE
   // requests must not advertise JSON; binary uploads set their own media type.
   const headers = () => ({ Authorization: `Bearer ${params.credentials.token}` });
-  const fetchStoredResponse = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders): Promise<Readonly<{ data: unknown }> | null> => {
+  const fetchStoredResponse = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders,
+    projection?: 'headers'): Promise<Readonly<{ data: unknown }> | null> => {
     signal?.throwIfAborted();
-    const path = `/v1/artifacts/${encodeURIComponent(artifactId)}`;
-    const response = await axios.get<unknown>(`${resolveServerHttpBaseUrl()}${path}`, {
-      headers: authorizationHeaders ? await authorizationHeaders({ method: 'GET', path }) : headers(), ...(signal ? { signal } : {}), validateStatus: () => true,
-    });
+    const path = projection ? '/v1/artifacts/read' : `/v1/artifacts/${encodeURIComponent(artifactId)}`;
+    const body = projection ? ArtifactReadHeadersBatchInputV1Schema.parse({ artifactIds: [artifactId], projection }) : undefined;
+    const config = { headers: authorizationHeaders ? await authorizationHeaders({ method: body ? 'POST' : 'GET', path,
+      ...(body ? { body } : {}) }) : headers(), ...(signal ? { signal } : {}), validateStatus: () => true };
+    const response = body ? await axios.post<unknown>(`${resolveServerHttpBaseUrl()}${path}`, body, config)
+      : await axios.get<unknown>(`${resolveServerHttpBaseUrl()}${path}`, config);
     signal?.throwIfAborted();
-    if (response.status === 404) return null;
+    // A missing batch endpoint is not evidence that the selected Artifact is absent.
+    if (!projection && response.status === 404) return null;
     if (response.data && typeof response.data === 'object' && Reflect.get(response.data, 'error') === 'artifact_content_unavailable') {
       throw new ArtifactEncryptionMaterialUnavailableError();
     }
     if (response.status < 200 || response.status >= 300) throw Object.assign(new HttpStatusError(response.status, 'artifact_read_unavailable'), {
       code: 'artifact_read_unavailable', status: response.status,
     });
+    if (projection) {
+      const parsed = ArtifactReadHeadersBatchResponseV1Schema.safeParse(response.data);
+      if (!parsed.success || parsed.data.items.length !== 1 || parsed.data.items[0]?.artifactId !== artifactId) {
+        throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
+      }
+      const item = parsed.data.items[0]!;
+      if (!item.ok) {
+        if (item.error === 'artifact_not_found') return null;
+        if (item.error === 'artifact_content_unavailable' && !item.retryable) throw new ArtifactEncryptionMaterialUnavailableError();
+        throw Object.assign(new HttpStatusError(item.status, 'artifact_read_unavailable'), {
+          code: 'artifact_read_unavailable', status: item.status,
+        });
+      }
+      return { data: item.artifact };
+    }
     if (!response.data || typeof response.data !== 'object' || Reflect.get(response.data, 'id') !== artifactId) {
       throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
     }
@@ -643,10 +664,10 @@ export function createAccountArtifactStore(params: Readonly<{
       ...(kindCoverage ? { kindCoverage } : {}),
       ...(typeof hasUnclassified === 'boolean' ? { hasUnclassified } : {}) };
   };
-  /** Selected headers are fresh exact reads; their body envelopes remain unopened. */
+  /** Selected headers use the admitted narrow transport, never a body read or inventory walk. */
   const createHeaderReader = (options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => {
     return async (artifactId: string): Promise<AccountArtifactHeader | null> => {
-      const response = await fetchStoredResponse(artifactId, options?.signal);
+      const response = await fetchStoredResponse(artifactId, options?.signal, undefined, 'headers');
       if (!response) return null;
       const stored = parseStoredArtifactHeader(response.data);
       if (!stored) throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
@@ -979,12 +1000,13 @@ export function createAccountArtifactStore(params: Readonly<{
         signal?.throwIfAborted();
         const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: stored.bodyVersion + 1,
           savedBy: input.savedBy, source: retained.provenance?.source, restoredFromBodyVersion: input.bodyVersion, signal }, stored, codec);
+        const kind = await writeKind(nextHeader);
         await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal });
         signal?.throwIfAborted();
         const response = await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`,
           { expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             header: codec.encode(withArtifactExcerptV1(nextHeader, retained.body)),
-            ...await writeKind(nextHeader).then(kind => kind === undefined ? {} : { kind }),
+            ...(kind === undefined ? {} : { kind }),
             ...provenance.wire }, accessConfig(signal));
         const quota = readQuotaFailure(response);
         if (quota) return quota;

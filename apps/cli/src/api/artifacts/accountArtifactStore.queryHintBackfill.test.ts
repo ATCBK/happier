@@ -8,31 +8,36 @@ import { fetchServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { encodeBase64, encryptWithDataKey } from '@/api/encryption';
-import { createAccountArtifactStore } from './accountArtifactStore';
+import { createAccountArtifactStore, createCredentialedAccountArtifactStore } from './accountArtifactStore';
 import type { StoredCredentials } from '@/persistence';
 
 const source = { kind: 'plugin' as const, pluginId: 'acme.tasks', itemId: 'retained' };
 const noticeBody = AccountNoticeArtifactBodyV1Schema.parse({ v: 1, source, type: 'update', resolved: false });
 const noticeHeader = AccountNoticeArtifactHeaderV1Schema.parse({ ...noticeBody, kind: 'account_notice.v1', title: 'Retained', status: 'dismissed' });
 
-async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: boolean; refused?: boolean; unreadable?: boolean; oversizedKind?: boolean }>,
+async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: boolean; refused?: boolean; unreadable?: boolean; oversizedKind?: boolean;
+  unreadableIndex?: number; omitNotice?: boolean; classifiedNoticeInventory?: boolean; onFeaturesRequest?(): Promise<void> }>,
   run: (home: Readonly<{ store: ReturnType<typeof createAccountArtifactStore>; requests: string[]; batches: string[][];
-    bodyReads: string[]; credentials: StoredCredentials; serverUrl: string; remaining(): number }>) => Promise<void>) {
+    bodyReads: string[]; credentials: StoredCredentials; serverUrl: string; remaining(): number; setAccountMode(mode: 'plain' | 'e2ee'): void }>) => Promise<void>) {
   const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
   const credentials = { token, encryption: mode === 'plain' ? null : { type: 'legacy' as const, secret: new Uint8Array(32).fill(21) } };
   const resource = await createResourceDataKey({ credentials, mode });
   const encode = (value: unknown) => resource.mode === 'plain' ? encodePlainArtifactStoredContent(value)
     : encodeBase64(encryptWithDataKey(value, resource.dataKey));
   const rows = Array.from({ length: 1001 }, (_, index) => ({
-    id: index === 700 ? 'retained-notice-700' : `legacy-${index}`, kind: index % 2 === 0 ? null as string | null : 'other',
+    id: index === 700 ? 'retained-notice-700' : `legacy-${index}`,
+    kind: options.classifiedNoticeInventory ? 'v1:other:account_notice.v1' : index % 2 === 0 ? null as string | null : 'other',
     ownerAccountId: 'owner', access: 'owner', publicAudience: 'none', encryptionMode: mode,
-    header: options.unreadable && index === 1000 ? 'unreadable' : encode(index === 700 ? noticeHeader
-      : { kind: options.oversizedKind && index === 1000 ? 'x'.repeat(192) : index % 3 === 0 ? 'prompt_doc.v2' : 'ordinary.v1' }),
+    header: (options.unreadable && index === 1000) || options.unreadableIndex === index ? 'unreadable'
+      : encode(index === 700 && !options.omitNotice ? noticeHeader
+        : options.classifiedNoticeInventory ? { ...noticeHeader, source: { ...source, itemId: `unrelated-${index}` } }
+          : { kind: options.oversizedKind && index === 1000 ? 'x'.repeat(192) : index % 3 === 0 ? 'prompt_doc.v2' : 'ordinary.v1' }),
     body: encode({ body: index === 700 ? JSON.stringify(noticeBody) : 'Private unrelated content' }),
     dataEncryptionKey: resource.mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER : resource.dataEncryptionKey,
     headerVersion: 1, bodyVersion: 1, seq: 1001 - index, createdAt: 1001 - index, updatedAt: 1001 - index,
   }));
   const requests: string[] = [];
+  let accountMode = mode;
   const batches: string[][] = [];
   const bodyReads: string[] = [];
   const remaining = () => rows.filter(row => !decodeArtifactKindV1(row.kind).classified).length;
@@ -46,9 +51,12 @@ async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: 
     const url = new URL(request.url ?? '/', 'http://localhost');
     requests.push(`${request.method} ${url.pathname}${url.search}`);
     const send = (value: unknown, status = 200) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
-    if (url.pathname === '/v1/features') return send({ features: options.supported === false ? {} : { artifacts: { queryHints: { enabled: true } } }, capabilities: {} });
-    if (url.pathname === '/v1/account/encryption') return send({ mode, updatedAt: 0 });
-    if (url.pathname === '/v1/account/encryption/currentness') return send({ mode, version: 1,
+    if (url.pathname === '/v1/features') {
+      await options.onFeaturesRequest?.();
+      return send({ features: options.supported === false ? {} : { artifacts: { queryHints: { enabled: true } } }, capabilities: {} });
+    }
+    if (url.pathname === '/v1/account/encryption') return send({ mode: accountMode, updatedAt: 0 });
+    if (url.pathname === '/v1/account/encryption/currentness') return send({ mode: accountMode, version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
     if (url.pathname === '/v1/artifacts/query-hints/batch' && request.method === 'POST') {
       let body = '';
@@ -81,6 +89,21 @@ async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: 
         encryptionMode: mode, dataEncryptionKey: row.dataEncryptionKey, callerDataEncryptionKey: row.dataEncryptionKey, recipients: [] }))
         : send({ error: 'not_found' }, 404);
     }
+    if (request.method === 'GET' && url.pathname.endsWith('/revisions')) {
+      const row = rows.find(row => row.id === decodeURIComponent(url.pathname.split('/')[3]!));
+      return row ? send({ revisions: [{ bodyVersion: 1, body: row.body, createdAt: 1, sizeBytes: 8 }], retentionCount: 10 })
+        : send({ error: 'not_found' }, 404);
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/artifacts') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const input: unknown = JSON.parse(body);
+      return send({ id: input && typeof input === 'object' ? Reflect.get(input, 'id') : undefined,
+        success: true, headerVersion: 1, bodyVersion: 1 });
+    }
+    if (request.method === 'POST' && url.pathname.endsWith('/restore')) {
+      return send({ success: true, headerVersion: 2, bodyVersion: 2 });
+    }
     if (request.method === 'GET' && url.pathname.startsWith('/v1/artifacts/')) {
       const row = rows.find(row => row.id === decodeURIComponent(url.pathname.slice('/v1/artifacts/'.length)));
       if (row) bodyReads.push(row.id);
@@ -96,7 +119,8 @@ async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: 
     await runWithServerHttpBaseUrl(serverUrl, async () => {
       const input = { credentials, getAccountEncryptionMode: async () => mode,
         resolveServerFeaturesSnapshot: () => fetchServerFeaturesSnapshot({ serverUrl }) };
-      await run({ store: createAccountArtifactStore(input), requests, batches, bodyReads, credentials, serverUrl, remaining });
+      await run({ store: createAccountArtifactStore(input), requests, batches, bodyReads, credentials, serverUrl, remaining,
+        setAccountMode: value => { accountMode = value; } });
     });
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }
@@ -146,6 +170,41 @@ describe('explicit daemon Account Artifact query-hint backfill', () => {
       expect(queries.some(url => url.searchParams.has('kinds'))).toBe(supported);
       expect(queries.some(url => url.searchParams.has('unclassified'))).toBe(supported);
       if (!supported) expect(queries.every(url => !url.searchParams.has('ownerAccountId'))).toBe(true);
+    });
+  });
+  it.each([false, true])('does not infer retained-notice absence after an earlier unreadable page (supported=%s)', async supported => {
+    await withHome('plain', { supported, unreadableIndex: 0, omitNotice: true, classifiedNoticeInventory: supported }, async home => {
+      await expect(home.store.create({ noticeAccountId: 'owner', header: { ...noticeHeader, status: 'open' }, body: JSON.stringify(noticeBody) }))
+        .rejects.toMatchObject({ code: 'artifact_content_unavailable' });
+      expect(home.requests.some(path => path.includes('cursor='))).toBe(true);
+      expect(home.requests.filter(path => path.startsWith('POST '))).toEqual([]);
+      expect(home.bodyReads).toEqual([]);
+    });
+  });
+  it.each([false, true])('preserves a positive retained-notice match beyond an unreadable page (supported=%s)', async supported => {
+    await withHome('plain', { supported, unreadableIndex: 0, classifiedNoticeInventory: supported }, async home => {
+      await expect(home.store.create({ noticeAccountId: 'owner', header: { ...noticeHeader, status: 'open' }, body: JSON.stringify(noticeBody) }))
+        .rejects.toMatchObject({ code: 'conflict' });
+      expect(home.requests.some(path => path.includes('cursor='))).toBe(true);
+      expect(home.requests.filter(path => path.startsWith('POST '))).toEqual([]);
+      expect(home.bodyReads).toEqual(['retained-notice-700']);
+    });
+  });
+  it('rechecks Account mode after a pending restore feature request before admitting its write', async () => {
+    let releaseFeature!: () => void;
+    let markFeatureRequested!: () => void;
+    const heldFeature = new Promise<void>(resolve => { releaseFeature = resolve; });
+    const featureRequested = new Promise<void>(resolve => { markFeatureRequested = resolve; });
+    await withHome('plain', { onFeaturesRequest: async () => { markFeatureRequested(); await heldFeature; } }, async home => {
+      const store = createCredentialedAccountArtifactStore(home.credentials);
+      const restore = store.revisions.restore({ artifactId: 'legacy-0', bodyVersion: 1, expectedRevision: { headerVersion: 1, bodyVersion: 1 } })
+        .then(result => ({ result }), error => ({ error }));
+      try {
+        await Promise.race([featureRequested, restore.then(outcome => { throw new Error('restore completed before feature admission', { cause: outcome }); })]);
+        home.setAccountMode('e2ee');
+      } finally { releaseFeature(); }
+      expect(await restore).toMatchObject({ error: { code: 'artifact_account_mode_mismatch' } });
+      expect(home.requests.filter(path => path.startsWith('POST '))).toEqual([]);
     });
   });
   it('retains unreadable legacy membership as typed partial instead of labeling guessed content', async () => {

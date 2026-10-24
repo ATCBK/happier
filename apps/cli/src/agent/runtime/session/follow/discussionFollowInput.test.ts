@@ -18,6 +18,7 @@ import { projectWorkflowDiscussionProducerV1, projectWorkflowDiscussionResultCon
 import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
 import type { DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only the HTTP and authenticated Machine socket are replaced; resource opening,
@@ -563,6 +564,17 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   const stored = { id: 'doc', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 3, bodyVersion: 4, seq: 1, createdAt: 1, updatedAt: 2,
     header: encodePlainArtifactStoredContent({ kind: 'doc.v1', ...(title === null ? {} : { title }) }), body: encodePlainArtifactStoredContent({ body }) };
+  const sessionPost = http.post.getMockImplementation()!;
+  http.post.mockImplementation(async (url: string, input: unknown, ...options: unknown[]) => {
+    const parsed = new URL(url);
+    if (parsed.pathname !== '/v1/artifacts/read') return sessionPost(url, input, ...options);
+    expect(parsed.origin).toBe(binding.serverUrl);
+    expect(ArtifactReadHeadersBatchInputV1Schema.parse(input)).toEqual({ artifactIds: ['doc'], projection: 'headers' });
+    const { body: _body, ...artifact } = stored;
+    return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: [
+      { artifactId: 'doc', ok: true, artifact },
+    ] }) };
+  });
   http.get.mockImplementation(async (url: string, ...options: unknown[]) => {
     const parsed = new URL(url);
     if (parsed.pathname === '/v1/artifacts') {
@@ -619,7 +631,8 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   expect(pending).not.toHaveProperty('reply.sourceSession');
   // The Artifact header owner now selects the exact resource rather than paging
   // inventory. Its body envelope stays unopened; none enters Pending above.
-  expect(http.get.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/doc')).toHaveLength(1);
+  expect(http.post.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/read')).toHaveLength(1);
+  expect(http.get.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/doc')).toBe(false);
   expect(http.get.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts')).toBe(false);
   expect(countQueries).toEqual(['?state=active&anchorDocArtifactId=doc']);
   // Explicit doc.read keeps the existing Action, grant/mode and Artifact codec path;
@@ -642,19 +655,25 @@ it.each(['denied', 'unavailable', 'malformed'] as const)('does not admit Doc sou
   const ref = { kind: 'doc', serverId: session.getServerBinding().serverId, artifactId: 'doc' };
   const revision = { headerVersion: 1, bodyVersion: 1 };
   const resourceTransport = http.request.getMockImplementation()!;
-  const sessionTransport = http.get.getMockImplementation()!;
+  const sessionTransport = http.post.getMockImplementation()!;
   http.request.mockImplementation(async (request: { url: string }) => new URL(request.url).pathname.endsWith('/messages')
     ? { status: 200, data: { messages: [{ ...message, replyTarget: { kind: 'doc_passage', doc: { ref, revision } },
       content: { t: 'plain', v: { kind: 'doc_passage_comment', passage: { ref, revision, range: { start: 0, end: 7 }, quote: 'PRIVATE' },
         content: message.content.v } } }], hasMoreOlder: false, messageSeq: 2 } } : resourceTransport(request));
-  http.get.mockImplementation(async (url: string, ...options: unknown[]) => new URL(url).pathname === '/v1/artifacts'
-    ? state === 'denied' ? { status: 200, data: [] } : state === 'unavailable' ? { status: 503, data: { error: 'source_unavailable' } }
-      : { status: 200, data: [{ id: 'doc', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-        header: encodePlainArtifactStoredContent({ kind: 'doc.v1', title: 17 }) }] }
-    : sessionTransport(url, ...options));
+  http.post.mockImplementation(async (url: string, input: unknown, ...options: unknown[]) => {
+    if (new URL(url).pathname !== '/v1/artifacts/read') return sessionTransport(url, input, ...options);
+    expect(ArtifactReadHeadersBatchInputV1Schema.parse(input)).toEqual({ artifactIds: ['doc'], projection: 'headers' });
+    return state === 'unavailable' ? { status: 503, data: { error: 'source_unavailable' } }
+      : { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: [state === 'denied'
+        ? { artifactId: 'doc', ok: false, error: 'artifact_access_forbidden', status: 403, retryable: false }
+        : { artifactId: 'doc', ok: true, artifact: { id: 'doc', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+          header: encodePlainArtifactStoredContent({ kind: 'doc.v1', title: 17 }) } },
+      ] }) };
+  });
   expect(await createDiscussionFollowInputIntake({ session, credentials: { token: 'token', encryption: null } })({ observation: {
     source: { kind: 'discussion', discussionId: addressing.discussionId }, destinationSessionId: sessionId, addressing, ...route,
   }, signal: new AbortController().signal })).toBe(false);
   expect(admission).not.toHaveBeenCalled();
+  expect(http.post.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/read')).toHaveLength(1);
 });

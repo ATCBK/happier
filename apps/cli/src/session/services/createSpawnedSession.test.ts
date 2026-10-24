@@ -15,6 +15,7 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { configuration } from '@/configuration';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 
@@ -202,8 +203,9 @@ describe('createSpawnedSession settlement', () => {
     const memory = { id: 'session.memory', ref: { kind: 'doc' as const, artifactId: 'lead-memory',
       ...(path === 'target_home' ? { serverId } : {}) }, enabled: true, placement: 'system_append' as const };
     const instruction = { ...memory, id: 'session.instructions', ref: { kind: 'doc' as const, artifactId: 'lead-instructions' } };
-    const lead = createCurrentSessionProjectionRecordFixture({ id: 'context-lead', encryptionMode: 'plain',
+    const lead = createCurrentSessionProjectionRecordFixture({ id: 'context-lead', encryptionMode: 'plain', workDepth: 0,
       metadata: JSON.stringify({ path: '/repo', machineId: 'machine-1', bot: { kind: 'bot' }, createdAsBot: true,
+        ...(path === 'workflow_producer' ? { flavor: 'codex' } : {}),
         work: { memoryEnabled: parentMemoryEnabled, promptStack: [instruction, memory] } }),
       effectiveAccess: { v: 1, level: path === 'recipient' ? 'edit' : 'owner', sources: path === 'recipient'
         ? [{ kind: 'direct', shareId: 'lead-share' }] : [{ kind: 'owner' }],
@@ -213,14 +215,30 @@ describe('createSpawnedSession settlement', () => {
     setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(plainCredentials),
       settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
       promptLibraryCatalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [] } } }], tombstones: [], diagnostics: [] } });
+    const artifactHeaders = [['lead-memory', 'memory_doc.v1'], ['lead-instructions', 'prompt_doc.v2']].map(([id, kind]) => ({
+      id, ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+      header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+    }));
+    // Real header preparation stays above the HTTP boundary; a narrow read has no body or recipient census.
+    const headerRead = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/artifacts/read');
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers',
+        items: input.artifactIds.map(artifactId => {
+          const artifact = artifactHeaders.find(row => row.id === artifactId);
+          return artifact ? { artifactId, ok: true, artifact }
+            : { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+        }) }) };
+    });
     const read = vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (String(url).includes('/v1/machines/')) return { status: 200, data: { machine: { id: 'machine-1', revokedAt: null,
         replacedByMachineId: null, operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: { sessionSpawn: { protocolVersions: [1, 2] } } } } };
-      if (new URL(String(url)).pathname === '/v1/artifacts') return { status: 200, data: [
-        ['lead-memory', 'memory_doc.v1'], ['lead-instructions', 'prompt_doc.v2'],
-      ].map(([id, kind]) => ({ id, ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body: null,
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 })) };
+      if (new URL(String(url)).pathname === '/v1/artifacts' && new URL(String(url)).searchParams.has('kinds')) {
+        return { status: 200, data: { items: [], hasUnclassified: false } };
+      }
+      if (new URL(String(url)).pathname === '/v1/artifacts') return { status: 200, data: artifactHeaders };
       throw new Error(`Unexpected inheritance read: ${url}`);
     });
     const spawn = vi.fn(async (request: SpawnSessionOptions) => {
@@ -286,6 +304,7 @@ describe('createSpawnedSession settlement', () => {
       if (path === 'recipient') {
         expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty('memoryEnabled');
         expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty('promptStack');
+        expect(headerRead).not.toHaveBeenCalled();
         return;
       }
       expect(spawn.mock.calls[0]?.[0]).toMatchObject({ memoryEnabled: path !== 'explicit_off' && parentMemoryEnabled,
@@ -293,8 +312,12 @@ describe('createSpawnedSession settlement', () => {
       expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty('identity');
       if (hasCreationRecipe) expect(spawn.mock.calls[0]?.[0]).toMatchObject({ sessionCreationCorrespondence });
       expect(JSON.stringify(spawn.mock.calls[0]?.[0])).not.toContain('lead-instructions');
-      if (path === 'target_home') expect(read.mock.calls.some(([url]) => String(url).startsWith('https://context-home.example/v1/artifacts'))).toBe(true);
-    } finally { settingsExists?.mockReset(); settingsRead?.mockReset(); access?.mockRestore(); read.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
+      expect(headerRead.mock.calls.map(([, body]) => ArtifactReadHeadersBatchInputV1Schema.parse(body).artifactIds)).toEqual([['lead-memory']]);
+      expect(read.mock.calls.some(([url]) => new URL(String(url)).pathname.startsWith('/v1/artifacts/'))).toBe(false);
+      expect(read.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts'
+        && !new URL(String(url)).searchParams.has('kinds'))).toBe(false);
+      if (path === 'target_home') expect(headerRead.mock.calls.some(([url]) => String(url).startsWith('https://context-home.example/v1/artifacts/read'))).toBe(true);
+    } finally { settingsExists?.mockReset(); settingsRead?.mockReset(); access?.mockRestore(); read.mockRestore(); headerRead.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
   });
 
   it.each([undefined, { sessionSpawn: { protocolVersions: [1] } }])(

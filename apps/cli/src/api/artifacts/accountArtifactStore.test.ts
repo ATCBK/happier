@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
@@ -45,6 +45,7 @@ import { configuration } from '@/configuration';
 import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 
 // The ordinary-Artifact Home fixtures below expose Account "owner" with no legacy Role settings.
 // Keep the real Role deletion policy even when a scenario only reads or restores an Artifact.
@@ -160,7 +161,9 @@ describe('createAccountArtifactStore', () => {
     mockGet.mockReset();
     mockPost.mockReset();
     mockPut.mockReset();
+    resetServerFeaturesClientForTests();
   });
+  afterEach(() => { vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); });
 
   it('retains the typed storage failure after the existing revision update retry budget is exhausted', async () => {
     const store = createAccountArtifactStore({ credentials: { token: 'synthetic-token', encryption: null }, getAccountEncryptionMode: async () => 'plain' });
@@ -623,6 +626,9 @@ describe('createAccountArtifactStore', () => {
   ] as const)('keeps an HTTP 500 %s outage retryable instead of reporting locked encryption material', async (operation, error) => {
     const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null }, getAccountEncryptionMode: async () => 'plain' });
     mockGet.mockResolvedValue({ status: 500, data: { error } });
+    mockPost.mockResolvedValue({ status: 200, data: { projection: 'headers', items: [
+      { artifactId: 'required-doc', ok: false, error: 'artifact_content_unavailable', status: 500, retryable: true },
+    ] } });
 
     const request = operation === 'read' ? store.read('required-doc') : store.readHeader('required-doc');
 
@@ -675,7 +681,7 @@ describe('createAccountArtifactStore', () => {
     let currentMode: 'plain' | 'e2ee' = 'e2ee';
     const store = createAccountArtifactStore({ credentials,
       getAccountEncryptionMode: async options => options?.usage === 'fresh-authority' ? currentMode : 'e2ee' });
-    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee',
+    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee', publicAudience: 'none',
       header: encodeBase64(encryptWithDataKey({ kind: 'memory_doc.v1', title: 'Private memory' }, dataKey)),
       body: 'unreadable-body-envelope', dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({
         dataKey, recipientPublicKey: credentials.encryption.publicKey, randomBytes })),
@@ -688,6 +694,12 @@ describe('createAccountArtifactStore', () => {
           callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } };
       }
       return { status: 200, data: new URL(url).pathname === '/v1/artifacts' ? [stored] : stored };
+    });
+    mockPost.mockImplementation(async (url: string, input: unknown) => {
+      expect(new URL(url).pathname).toBe('/v1/artifacts/read');
+      expect(input).toEqual({ artifactIds: ['selected'], projection: 'headers' });
+      const { body: _body, ...artifact } = stored;
+      return { status: 200, data: { projection: 'headers', items: [{ artifactId: 'selected', ok: true, artifact }] } };
     });
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
   });
@@ -703,7 +715,7 @@ describe('createAccountArtifactStore', () => {
       // The subscribed identity stays held; only final authority sees a mode change.
       getAccountEncryptionMode: async options => options?.usage === 'fresh-authority' ? accountMode : mode });
     const header = { v: 1, kind: 'memory_doc.v1', title: 'Selected memory' };
-    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, publicAudience: 'none',
       header: mode === 'plain' ? encodePlainArtifactStoredContent(header) : encodeBase64(encryptWithDataKey(header, dataKey)),
       body: 'unreadable-body-envelope', dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
         : encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey, recipientPublicKey: credentials.encryption!.publicKey, randomBytes })),
@@ -722,12 +734,22 @@ describe('createAccountArtifactStore', () => {
       }
       return { status: 200, data: { ...stored, body: storedBody, bodyVersion: storedBodyVersion } };
     });
+    const headerResponse = () => {
+      const { body: _body, ...artifact } = stored;
+      return { status: 200, data: { projection: 'headers', items: [{ artifactId: 'selected', ok: true, artifact }] } };
+    };
+    mockPost.mockImplementation(async (url: string, input: unknown) => {
+      expect(new URL(url).pathname).toBe('/v1/artifacts/read');
+      expect(input).toEqual({ artifactIds: ['selected'], projection: 'headers' });
+      return headerResponse();
+    });
     expect(await store.readHeader('selected', { prepareRecipients: false })).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
     expect(mockGet.mock.calls.some(([url]) => String(url).endsWith('/recipients'))).toBe(false);
-    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockPost).toHaveBeenCalledTimes(1);
     const readHeader = store.createHeaderReader();
     expect(await readHeader('selected')).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
-    expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/selected')).toHaveLength(2);
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/selected')).toEqual([]);
     expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts')).toEqual([]);
     const currentHeader = { ...header, title: 'Current memory' };
     stored.header = mode === 'plain' ? encodePlainArtifactStoredContent(currentHeader) : encodeBase64(encryptWithDataKey(currentHeader, dataKey));
@@ -737,12 +759,17 @@ describe('createAccountArtifactStore', () => {
     storedBody = { invalid: 'body envelope' };
     storedBodyVersion = undefined;
     const headerWithoutBody = await readHeader('selected');
-    expect(headerWithoutBody).toMatchObject({ artifactId: 'selected', header });
-    expect(headerWithoutBody).not.toHaveProperty('bodyVersion');
+    expect(headerWithoutBody).toMatchObject({ artifactId: 'selected', header, bodyVersion: 3 });
     await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
-    mockGet.mockResolvedValueOnce({ status: 200, data: null });
+    const missingVersionResponse = headerResponse();
+    Reflect.deleteProperty(missingVersionResponse.data.items[0]!.artifact, 'bodyVersion');
+    mockPost.mockResolvedValueOnce(missingVersionResponse);
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
-    mockGet.mockResolvedValueOnce({ status: 200, data: { ...stored, id: 'other' } });
+    mockPost.mockResolvedValueOnce({ status: 200, data: null });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
+    const otherHeaderResponse = headerResponse();
+    otherHeaderResponse.data.items[0]!.artifact.id = 'other';
+    mockPost.mockResolvedValueOnce(otherHeaderResponse);
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
     const body = { body: 'Other private content' };
     mockGet.mockResolvedValueOnce({ status: 200, data: { ...stored, id: 'other',
@@ -763,14 +790,18 @@ describe('createAccountArtifactStore', () => {
     controller.abort(new Error('cancelled'));
     await expect(store.readHeader('selected', { signal: controller.signal })).rejects.toThrow('cancelled');
     const duringRead = new AbortController();
-    mockGet.mockImplementationOnce(async () => {
+    mockPost.mockImplementationOnce(async () => {
       duringRead.abort(new Error('cancelled'));
-      return { status: 200, data: stored };
+      return headerResponse();
     });
     await expect(store.readHeader('selected', { signal: duringRead.signal })).rejects.toThrow('cancelled');
-    mockGet.mockResolvedValueOnce({ status: 404, data: { error: 'not_found' } });
+    mockPost.mockResolvedValueOnce({ status: 200, data: { projection: 'headers', items: [
+      { artifactId: 'selected', ok: false, error: 'artifact_not_found', status: 404, retryable: false },
+    ] } });
     expect(await store.readHeader('selected')).toBeNull();
-    mockGet.mockResolvedValueOnce({ status: 503, data: { error: 'unavailable' } });
+    mockPost.mockResolvedValueOnce({ status: 404, data: { error: 'route_not_found' } });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 404 });
+    mockPost.mockResolvedValueOnce({ status: 503, data: { error: 'unavailable' } });
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 503 });
     stored.header = 'unreadable-header-envelope';
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
@@ -1738,7 +1769,10 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     const encode = (value: unknown) => mode === 'plain' ? encodePlainArtifactStoredContent(value)
       : encodeBase64(encryptWithDataKey(value, dataKey));
     const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: mode === 'plain' ? null
-      : { type: 'dataKey', publicKey, machineKey: secret } }, getAccountEncryptionMode: async () => mode });
+      : { type: 'dataKey', publicKey, machineKey: secret } }, getAccountEncryptionMode: async () => mode,
+      resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+        features: { artifacts: { queryHints: { enabled: true } } }, capabilities: {},
+      }) }) });
     const provenance = { savedBy: { kind: 'agent' as const, accountId: 'owner', sessionId: 'old-session' } };
     const retainedBody = encode({ body: 'prior', provenance });
     let stored = { id: 'shared', ownerAccountId: 'owner', access: 'edit', encryptionMode: mode,
@@ -1755,7 +1789,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     // it selects retained bytes while the real CLI owner prepares the header and CAS.
     mockPost.mockImplementationOnce(async (url: string, wire: unknown) => {
       expect(url).toContain('/shared/revisions/2/restore');
-      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string(), kind: z.literal('other') }).parse(wire);
+      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string(), kind: z.literal('v1:other:') }).parse(wire);
       stored = { ...stored, header: request.header, body: retainedBody, headerVersion: 4, bodyVersion: 5 };
       return { status: 200, data: { success: true, headerVersion: 4, bodyVersion: 5 } };
     });
@@ -1960,6 +1994,13 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     { priorPolicy: { networkOrigins: ['https://assets.example.test'] },
       expectedPolicy: { network: 'origins', networkOrigins: ['https://assets.example.test'] } },
   ])('restores saved HTML widget bytes, discovery and captured egress through the public Action (%j)', async ({ priorPolicy, expectedPolicy }) => {
+      // The credentialed public Action negotiates through the real feature reader;
+      // only its HTTP transport is synthetic, like the Artifact HTTP boundary below.
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
+        expect(new URL(input instanceof Request ? input.url : String(input)).pathname).toBe('/v1/features');
+        return new Response(JSON.stringify({ features: { artifacts: { queryHints: { enabled: true } } }, capabilities: {} }),
+          { status: 200, headers: { 'content-type': 'application/json' } });
+      }));
       const artifactId = '11111111-1111-4111-8111-111111111111';
       const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
       const credentials = { token, encryption: null };
@@ -2001,7 +2042,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       mockPost.mockImplementationOnce(async (rawUrl: string, wire: unknown) => {
         expect(new URL(rawUrl).pathname).toBe(`/v1/artifacts/${artifactId}/revisions/2/restore`);
         const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4),
-          header: z.string(), provenance: z.string(), kind: z.literal('widget_definition') }).parse(wire);
+          header: z.string(), provenance: z.string(), kind: z.literal('v1:widget_definition:widget-definition.v1') }).parse(wire);
         expect(decodePlainArtifactStoredContent(request.provenance)).toMatchObject({ artifactId, bodyVersion: 5,
           provenance: { savedBy: { kind: 'person', accountId: 'owner' }, restoredFromBodyVersion: 2 } });
         stored = { ...stored, header: request.header, body: retainedBody, provenance: request.provenance, headerVersion: 4, bodyVersion: 5 };

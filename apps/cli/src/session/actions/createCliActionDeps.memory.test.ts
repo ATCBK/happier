@@ -16,6 +16,7 @@ import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataOwnerPatchV1S
 import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountOrganizationV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { z } from 'zod/mini';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 const { callMachineRpc, callExactMachineRpc, fetchSessionById, patchSessionMetadataEnvelopeTuple } = vi.hoisted(() => ({
   callMachineRpc: vi.fn(),
@@ -165,6 +166,112 @@ describe('createCliActionDeps memory bindings', () => {
     patchSessionMetadataEnvelopeTuple.mockReset();
   });
 
+  it('keeps Session-target Memory owner-only before private Project discovery across current and legacy HTTP roles', async () => {
+    const serverId = 'memory-owner-home';
+    const serverHttpBaseUrl = 'https://memory-owner-home.test';
+    const sessionId = 'cmemorysession000000000001';
+    const accountId = 'memory-account';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null, requesterSessionCredentialScope: { serverId, serverHttpBaseUrl } };
+    const artifactId = '74a91a24-de24-424e-831c-2ffd6aff956a';
+    const text = 'Keep the private quartz owner notebook';
+    const fact = { id: 'e5b7472e-ff36-441e-96a1-8dcff5a0c022', createdAtMs: 1, sourceSessionRef: null, text };
+    const stored = { id: artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Owner Memory' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [fact], topics: [] }) }) };
+    // Predecessor 413054f: v2SessionListRows projects share:null for owners and
+    // {accessLevel,canApprovePermissions} for recipients, without ownerAccountId.
+    const legacy = { id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+      encryptionMode: 'plain', metadata: JSON.stringify({ path: '/repo', host: 'host', machineId: 'machine',
+        workspaceId: 'checkout', projectId: 'project', work: { memoryEnabled: true } }),
+      metadataVersion: 3, dataEncryptionKey: null, agentState: null, agentStateVersion: 1 };
+    let projection: Record<string, unknown> = { share: null };
+    const reads: string[] = [];
+    const actualSessionHttp = await vi.importActual<typeof import('@/session/transport/http/sessionsHttp')>('@/session/transport/http/sessionsHttp');
+    fetchSessionById.mockImplementation(actualSessionHttp.fetchSessionById);
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
+      const path = new URL(String(url)).pathname;
+      reads.push(path);
+      if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: { ...legacy, ...projection } } };
+      if (path.endsWith('/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === `/v1/artifacts/${artifactId}`) return { status: 200, data: stored };
+      if (path === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200, data: {
+        artifactId, ownerAccountId: accountId, access: 'owner', grants: [],
+      } };
+      if (path === '/v1/public-shares') return { status: 200, data: { publicShares: [] } };
+      throw new Error(`Unexpected owner boundary read: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
+      const path = new URL(String(url)).pathname;
+      reads.push(path);
+      if (path === '/v1/account/project-rows/list') {
+        const key = { kind: 'project-organization', serverId, projectKey: 'project' };
+        const refKey = { kind: 'workspace-ref', serverId, id: 'checkout' };
+        return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+          { key: refKey, revision: 1, content: { t: 'plain', v: { key: refKey, value: {
+            id: 'checkout', serverId, machineId: 'machine', rootPath: '/repo', projectKey: 'project', createdAtMs: 1,
+          } } } },
+          { key, revision: 1, content: { t: 'plain', v: { key, value: { promptStack: [{ id: 'project.memory',
+            ref: { kind: 'doc', artifactId }, enabled: true, placement: 'system_append' }] } } } },
+        ] } };
+      }
+      if (path === '/v1/artifacts/read') {
+        const request = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+        expect(request.artifactIds).toEqual([artifactId]);
+        const { body: _body, ...header } = stored;
+        return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers',
+          items: [{ artifactId, ok: true, artifact: header }] }) };
+      }
+      throw new Error(`Unexpected owner boundary mutation: ${path}`);
+    });
+    const ownerAccess = SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+      capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) });
+    const deps = createCliActionDeps({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null, serverId, serverHttpBaseUrl });
+    const executor = createActionExecutor(deps);
+    for (const current of [false, true]) {
+      projection = { share: null, ...(current ? { effectiveAccess: ownerAccess, ownerAccountId: accountId } : {}) };
+      reads.length = 0;
+      const result = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => executor.execute('memory.remember', { sessionRef: { serverId, sessionId },
+        expectedMetadataRevision: 3, text }, { surface: 'cli', authority: 'present_user', serverId }));
+      expect(result, JSON.stringify({ result, reads })).toMatchObject({ ok: true, result: { ok: false,
+        errorCode: 'memory_duplicate_choice_required', candidates: [{ factId: fact.id }] } });
+      expect(reads).toContain('/v1/account/project-rows/list');
+      expect(reads).toContain(`/v1/artifacts/${artifactId}`);
+    }
+    for (const role of [
+      { share: { accessLevel: 'view', canApprovePermissions: false } },
+      { share: { accessLevel: 'view', canApprovePermissions: false }, projectKey: 'project' },
+      { share: null, effectiveAccess: ownerAccess, ownerAccountId: 'another-account' },
+      { owner: { id: accountId } },
+    ]) {
+      projection = role;
+      reads.length = 0;
+      expect(await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => executor.execute('memory.remember', { sessionRef: { serverId, sessionId },
+        expectedMetadataRevision: 3, text }, { surface: 'cli', authority: 'present_user', serverId })))
+        .toMatchObject({ ok: false, errorCode: 'session_target_unavailable' });
+      expect(reads).toContain(`/v2/sessions/${sessionId}`);
+      expect(reads.filter(path => path !== `/v2/sessions/${sessionId}` && path !== '/v1/account/encryption/currentness')).toEqual([]);
+    }
+    projection = { share: null, effectiveAccess: ownerAccess, ownerAccountId: accountId };
+    reads.length = 0;
+    expect(await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => executor.execute('memory.remember', {
+      sessionRef: { serverId, sessionId }, expectedMetadataRevision: 3, text,
+    }, { surface: 'cli', authority: 'present_user', serverId, runtimeAccountId: 'another-account' })))
+      .toMatchObject({ ok: false, errorCode: 'session_target_unavailable' });
+    expect(reads).toEqual([]);
+    for (const [targetServerId, contextServerId] of [['foreign-home', serverId], [serverId, 'foreign-home']] as const) {
+      await expect(deps.memoryLibrary!.readSession!({ serverId: targetServerId, sessionId },
+        { surface: 'cli', serverId: contextServerId })).rejects.toMatchObject({ code: 'session_target_unavailable' });
+      expect(reads).toEqual([]);
+    }
+  });
+
   it.each(['srv_memory_home', 'memory-profile'])('creates and attaches Bot memory addressed by %s with portable Home provenance', async requestedServerId => {
     const serverId = 'memory-profile';
     const serverIdentityId = 'srv_memory_home';
@@ -201,6 +308,16 @@ describe('createCliActionDeps memory bindings', () => {
       throw new Error(`Unexpected read: ${path}`);
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (new URL(String(url)).pathname === '/v1/artifacts/read') {
+        const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+        return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: input.artifactIds.map(artifactId => {
+          const stored = artifacts.find(artifact => artifact.id === artifactId);
+          if (!stored) throw new Error('Unexpected selected Artifact');
+          const { body: _body, ...artifact } = stored;
+          return { artifactId, ok: true, artifact: { ...artifact, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } };
+        }) }) };
+      }
       expect(String(url)).toBe(`${serverHttpBaseUrl}/v1/artifacts`);
       // HTTP boundary: retain the actual producer's encoded Artifact for its real header/body readers.
       artifacts.push(body as typeof artifacts[number]);
@@ -420,25 +537,35 @@ describe('createCliActionDeps memory bindings', () => {
     const workspaceKey = { kind: 'workspace-ref', serverId, id: 'checkout' };
     const organizationKey = { kind: 'project-organization', serverId, projectKey: 'project' };
     const reads: string[] = [];
+    const headerReads: string[] = [];
     setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
       settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       reads.push(String(url));
-      if (new URL(String(url)).pathname === '/v1/artifacts') return { status: 200, data: entries.map(value => ({
-        id: value.ref.artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
-        header: encodePlainArtifactStoredContent({ v: 1, kind: value.id === 'project.memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: value.id }),
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-      })) };
+      if (new URL(String(url)).pathname.startsWith('/v1/artifacts')) throw new Error('Unexpected Artifact GET');
       return String(url).endsWith('/prompt-library') ? { status: 403, data: { error: 'forbidden' } }
         : { status: 200, data: String(url).endsWith('/encryption/currentness') ? { mode: 'plain', version: 1,
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
           recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } : { mode: 'plain', updatedAt: 0 } };
     });
-    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (new URL(String(url)).pathname === '/v1/artifacts/read') {
+        const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+        headerReads.push(...input.artifactIds);
+        return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: input.artifactIds.map(artifactId => {
+          const value = entries.find(entry => entry.ref.artifactId === artifactId);
+          if (!value) throw new Error('Unexpected selected Artifact');
+          return { artifactId, ok: true, artifact: { id: artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+            header: encodePlainArtifactStoredContent({ v: 1, kind: value.id === 'project.memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: value.id }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } };
+        }) }) };
+      }
+      return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [
       { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: { id: 'checkout', serverId,
         machineId: 'actual-machine', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 } } } },
       { key: organizationKey, revision: 1, content: { t: 'plain', v: { key: organizationKey, value: { promptStack: entries } } } },
-    ] } });
+      ] } };
+    });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'session', mode: 'plain', ctx: null,
       serverId: serverProfileId, serverIdentityId: serverId, serverHttpBaseUrl });
     const inherited = await deps.memoryLibrary!.readInheritedContext!({ revision: 1, machineId: 'actual-machine',
@@ -447,34 +574,47 @@ describe('createCliActionDeps memory bindings', () => {
     await expect(deps.memoryLibrary!.readArtifactHeaders!(inherited.projectEntries.map(value => ({ ...value.ref, kind: 'doc' as const })),
       { surface: 'cli' })).resolves.toMatchObject([{ kind: 'prompt_doc.v2' }, { kind: 'prompt_doc.v2' }, { kind: 'memory_doc.v1' }]);
     expect(reads.some(url => url.includes('/prompt-library'))).toBe(false);
-    expect(reads.filter(url => new URL(url).pathname === '/v1/artifacts')).toHaveLength(1);
+    expect(headerReads).toEqual(entries.map(entry => entry.ref.artifactId));
+    expect(reads.filter(url => new URL(url).pathname === '/v1/artifacts')).toHaveLength(0);
     expect(reads.some(url => new URL(url).pathname.startsWith('/v1/artifacts/'))).toBe(false);
   });
 
-  it('batches memory target header reads without loading instruction bodies', async () => {
+  it('reads exact memory target headers without loading instruction bodies', async () => {
     const serverId = 'header-home';
     const serverHttpBaseUrl = 'https://header-home.test';
     const credentials = { token: 'header-token', encryption: null,
       requesterSessionCredentialScope: { serverId, serverHttpBaseUrl } };
     const refs = ['instruction-1', 'instruction-2', 'memory'].map(artifactId => ({ kind: 'doc' as const, artifactId, serverId }));
     const reads: string[] = [];
+    const headerReads: string[] = [];
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       reads.push(path);
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (path !== '/v1/artifacts') throw new Error(`Unexpected body read: ${path}`);
-      return { status: 200, data: refs.map(ref => ({ id: ref.artifactId, ownerAccountId: 'owner', access: 'owner',
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error(`Unexpected body read: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/artifacts/read');
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+      headerReads.push(...input.artifactIds);
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: input.artifactIds.map(artifactId => {
+        expect(refs.some(ref => ref.artifactId === artifactId)).toBe(true);
+        return { artifactId, ok: true, artifact: { id: artifactId, ownerAccountId: 'owner', access: 'owner', publicAudience: 'none',
         encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1,
-          kind: ref.artifactId === 'memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: ref.artifactId }),
+          kind: artifactId === 'memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: artifactId }),
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-      })) };
+        } };
+      }) }) };
     });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'session', mode: 'plain', ctx: null,
       serverId, serverHttpBaseUrl });
     await expect(deps.memoryLibrary!.readArtifactHeaders!(refs, { surface: 'cli' })).resolves.toMatchObject([
       { kind: 'prompt_doc.v2' }, { kind: 'prompt_doc.v2' }, { kind: 'memory_doc.v1' },
     ]);
-    expect(reads.filter(path => path === '/v1/artifacts')).toHaveLength(1);
+    expect(headerReads).toEqual(refs.map(ref => ref.artifactId));
+    expect(reads.filter(path => path === '/v1/artifacts')).toHaveLength(0);
     expect(reads.some(path => path.startsWith('/v1/artifacts/'))).toBe(false);
   });
 
@@ -485,7 +625,8 @@ describe('createCliActionDeps memory bindings', () => {
     const serverId = 'stale-session-home';
     const serverHttpBaseUrl = 'https://stale-session-home.test';
     const sessionId = 'cmemorysession000000000001';
-    const credentials = { token: 'stale-session-token', encryption: null,
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'stale-session-owner' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null,
       requesterSessionCredentialScope: { serverId, serverHttpBaseUrl } };
     const workspaceKey = { kind: 'workspace-ref' as const, serverId, id: 'checkout' };
     const organizationKey = { kind: 'project-organization' as const, serverId, projectKey: 'project' };
@@ -493,7 +634,8 @@ describe('createCliActionDeps memory bindings', () => {
       ref: { kind: 'doc' as const, artifactId: 'stale-machine-memory' } };
     fetchSessionById.mockResolvedValue(V2SessionRecordSchema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1,
       active: false, activeAt: 1, encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
-      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, workspace: { workspaceId: 'checkout', projectId: 'project',
+      // No accepted checkout id: only authoritative locality may select this Project.
+      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, workspace: { projectId: 'project',
         path: '/agent', ...(machineId ? { machineId } : {}), sessionWorkspaceLocationV1: {
           v: 1, machineId: 'stale-machine', agentPath: '/agent', machinePath: '/stale-repo',
         } }, work: { memoryEnabled: true } }),

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
@@ -204,20 +205,34 @@ describe('headless registered Session field Actions', () => {
       memoryEnabled: false, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Keep notes' },
       promptStack: [{ id: 'neighbor', ref: { kind: 'doc', artifactId: 'neighbor-doc' }, enabled: true, placement: 'composer_insert' }],
     } }) };
-    const inventory = ['instructions', 'dashboard'].map(id => ({
+    const headers = ['instructions', 'dashboard'].map(id => ({
       id, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
       header: encodePlainArtifactStoredContent(id === 'instructions'
         ? { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' }
         : { v: 1, kind: 'prompt_bundle.v2', title: 'Dashboard', bundleSchemaId: 'dashboard.v1' }),
-      body: encodePlainArtifactStoredContent({ body: '' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
       headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
     }));
     // The same Account Artifact store used by prompt Actions sees genuine HTTP-shaped data.
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+      const request = new URL(String(url));
+      expect(request.origin).toBe('https://home.example.test');
+      expect(request.pathname).toBe('/v1/artifacts/read');
+      expect(options?.headers?.Authorization).toBe('Bearer token');
+      const { artifactIds } = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+      expect(artifactIds).toHaveLength(1);
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({
+        projection: 'headers', items: artifactIds.map(artifactId => {
+          const artifact = headers.find(header => header.id === artifactId);
+          if (!artifact) throw new Error(`Unexpected selected Artifact: ${artifactId}`);
+          return { artifactId, ok: true, artifact };
+        }),
+      }) };
+    });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const request = new URL(url);
       expect(request.origin).toBe('https://home.example.test');
       if (request.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (request.pathname === '/v1/artifacts') return { status: 200, data: inventory };
       throw new Error(`Unexpected Artifact HTTP read: ${url}`);
     });
     const owner = createActionExecutor(createCliActionDeps({

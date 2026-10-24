@@ -26,6 +26,7 @@ import { createSessionProviderInputConsumerSessionAdapter } from '@/agent/runtim
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { createRuntimeOverrideSynchronizers } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 const serverId = 'context-home';
 const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'context-account' })).toString('base64url')}.signature`, encryption: null };
@@ -55,7 +56,7 @@ function entry(id: string): PromptStackEntryV1 {
 }
 
 function storedDocument(id: string, markdown = `CONTEXT_${id.toUpperCase()}`, revision = 1) {
-  return { id, ownerAccountId: 'context-account', access: 'owner', encryptionMode: 'plain',
+  return { id, ownerAccountId: 'context-account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
     header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: id }),
     body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown, createdAtMs: 1, updatedAtMs: 1 }) }),
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: revision, bodyVersion: revision, seq: revision, createdAt: 1, updatedAt: revision,
@@ -128,6 +129,23 @@ beforeEach(async () => {
     else if (path === '/v1/projects/sources/source') {
       status = sourceAvailable ? 200 : 503;
       data = sourceAvailable ? { ok: true, source, canManage: false } : { ok: false, error: 'source_backend_unavailable' };
+    } else if (path === '/v1/artifacts/read' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(JSON.parse(body));
+      const items = await Promise.all(input.artifactIds.map(async artifactId => {
+        onArtifactRead?.();
+        response.once('finish', () => afterArtifactResponse?.(artifactId));
+        await beforeArtifactResponse?.(artifactId);
+        if ((!artifactReadAvailable || artifactId === unavailableArtifactId) && !admitted) {
+          return { artifactId, ok: false, error: 'artifact_access_unavailable', status: 500, retryable: true };
+        }
+        const stored = documents.find(document => document.id === artifactId);
+        if (!stored) return { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+        const { body: _body, ...artifact } = stored;
+        return { artifactId, ok: true, artifact };
+      }));
+      data = ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items });
     } else if (path === '/v1/artifacts') data = documents;
     else if (path.startsWith('/v1/artifacts/')) {
       onArtifactRead?.();

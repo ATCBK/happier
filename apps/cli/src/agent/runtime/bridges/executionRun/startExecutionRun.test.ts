@@ -39,6 +39,7 @@ import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
 import { finishExecutionRun } from './finishExecutionRun';
 import axios from 'axios';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ExecutionRunErrorSchema, ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -363,12 +364,18 @@ describe('startExecutionRun', () => {
     const voiceAgentManager = new VoiceAgentManager({ createRuntime });
     const selection = roleId ? resolveRoleSelectionV1({ roleId, defaultEngine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }) : null;
     if (selection && !selection.ok) throw new Error('Fixture role must resolve');
+    const readHeader = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/artifacts/read');
+      expect(ArtifactReadHeadersBatchInputV1Schema.parse(body)).toEqual({ artifactIds: ['lead-memory'], projection: 'headers' });
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: [{
+        artifactId: 'lead-memory', ok: true, artifact: { id: 'lead-memory', ownerAccountId: 'context-owner', access: 'owner',
+          encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
+          publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+          headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 },
+      }] }) };
+    });
     const read = vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (new URL(String(url)).pathname === '/v1/artifacts') return { status: 200, data: [
-        ['lead-memory', 'memory_doc.v1'], ['lead-instructions', 'prompt_doc.v2'],
-      ].map(([id, kind]) => ({ id, ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body: null,
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 })) };
       if (String(url).endsWith('/v1/artifacts/lead-memory')) return { status: 200, data: {
         id: 'lead-memory', ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
         body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [{ id: 'fact', text: 'Use the canonical Context owner.', createdAtMs: 1, sourceSessionRef: null }], topics: [] }) }),
@@ -397,7 +404,7 @@ describe('startExecutionRun', () => {
       expect(runs.get(started.runId)?.instructions).toContain('Use the canonical Context owner.');
       expect(runs.get(started.runId)?.instructions).not.toContain('lead-instructions');
     } finally {
-      read.mockRestore();
+      read.mockRestore(); readHeader.mockRestore();
       await Promise.all([...controllers.values()].flatMap(controller => controller.kind === 'backend' ? [controller.backend.dispose()] : []));
       await voiceAgentManager.dispose();
     }
@@ -432,17 +439,26 @@ describe('startExecutionRun', () => {
         if (path !== '/execution-run/admission') throw new Error(`Unexpected daemon effect: ${path}`);
         return { admitted: true };
       });
+      const document = (id: string, kind: string, body: string | null) => ({ id, ownerAccountId: 'context-owner', access: 'owner',
+        encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body,
+        publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+      const readHeader = vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+        const address = new URL(String(url));
+        expect(address.origin).toBe(new URL(ownerUrl).origin);
+        expect(address.pathname).toBe('/v1/artifacts/read');
+        expect(options?.headers?.Authorization).toBe(`Bearer ${ownerToken}`);
+        expect(ArtifactReadHeadersBatchInputV1Schema.parse(body)).toEqual({ artifactIds: ['lead-memory'], projection: 'headers' });
+        const { body: _body, ...header } = document('lead-memory', 'memory_doc.v1', null);
+        return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({
+          projection: 'headers', items: [{ artifactId: header.id, ok: true, artifact: header }],
+        }) };
+      });
       const read = vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
         const address = new URL(String(url));
         expect(address.origin).toBe(new URL(ownerUrl).origin);
         expect(options?.headers?.Authorization).toBe(`Bearer ${ownerToken}`);
-        const document = (id: string, kind: string, body: string | null) => ({ id, ownerAccountId: 'context-owner', access: 'owner',
-          encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body,
-          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
         if (address.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-        if (address.pathname === '/v1/artifacts') return { status: 200, data: [
-          document('lead-memory', 'memory_doc.v1', null), document('lead-instructions', 'prompt_doc.v2', null),
-        ] };
         if (address.pathname === '/v1/artifacts/lead-memory') return { status: 200, data: document('lead-memory', 'memory_doc.v1',
           encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [
             { id: 'fact', text: 'Use the canonical Context owner.', createdAtMs: 1, sourceSessionRef: null },
@@ -474,6 +490,7 @@ describe('startExecutionRun', () => {
           { signal: new AbortController().signal, callerAuthority: 'present_user' });
         if (ownerUnavailable) {
           expect(read.mock.calls).toEqual([]);
+          expect(readHeader.mock.calls).toEqual([]);
           expect(response).toMatchObject({ ok: false, error: 'context_source_unavailable', details: { executionRunStart: { runCreation: 'noRunCreated' } } });
           expect(captured.manager.listPublic()).toEqual([]);
           await expect(prepareSessionMemoryInheritance({ metadata })).rejects.toMatchObject({ code: 'context_source_unavailable' });
@@ -493,7 +510,7 @@ describe('startExecutionRun', () => {
           .resolves.toEqual({ memoryEnabled: false, promptStack: [] });
       } finally {
         await captured.manager?.dispose();
-        read.mockRestore(); admission.mockRestore();
+        read.mockRestore(); readHeader.mockRestore(); admission.mockRestore();
         vi.unstubAllEnvs(); reloadConfiguration();
         await removeTempDir(taskHome);
       }

@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 // Load/transform the substantial real Action owner before timed hooks, under
 // an isolated OS Home. Each test still resets modules and admits its own Home.
@@ -63,6 +64,7 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
       ownerAccountId: id,
       access: 'owner',
       encryptionMode: 'plain',
+      publicAudience: 'none',
       header: encodePlainArtifactStoredContent({
         v: 1,
         kind,
@@ -89,7 +91,8 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
   const authenticatedRequests: string[] = [];
   let responseBytes = 0;
   let status = 200;
-  const peer = createServer((request, response) => {
+  let headerEndpointStatus: number | null = null;
+  const peer = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     requests.push(url.pathname);
     if (request.headers.authorization) authenticatedRequests.push(url.pathname);
@@ -108,6 +111,18 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
     else if (url.pathname === '/v2/sessions/lookup-by-tags') data = { sessions: [] };
     else if (url.pathname === '/v1/account/encryption')
       data = { mode: 'plain', updatedAt: 0 };
+    else if (url.pathname === '/v1/artifacts/read' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(JSON.parse(body));
+      code = headerEndpointStatus ?? (status === 404 ? 200 : status);
+      data = code === 200 ? ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: input.artifactIds.map(artifactId => {
+        const found = status === 404 ? undefined : rows.get(artifactId);
+        if (!found) return { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+        const { body: _body, ...artifact } = accountMarkdown === undefined ? found : row(found.id, accountMarkdown);
+        return { artifactId, ok: true, artifact };
+      }) }) : { error: 'unavailable' };
+    }
     else if (url.pathname === '/v1/artifacts') {
       code = status === 404 ? 200 : status;
       const sorted = [...rows.values()].sort(
@@ -165,6 +180,9 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
     },
     fail: (code: number) => {
       status = code;
+    },
+    rejectHeaderEndpoint: (code: number | null) => {
+      headerEndpointStatus = code;
     },
   };
 }
@@ -268,6 +286,24 @@ async function dispatchWithPromptPreparation(prepare: () => Promise<string>) {
 }
 
 describe('CLI qualified current Artifact prompt preparation', () => {
+  it.each([400, 404])('refuses an unsupported header endpoint without omitting optional context or reading bodies (HTTP %s)', async status => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('doc', 'Optional instructions');
+    a.rejectHeaderEndpoint(status);
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const args = { surface: 'coding' as const, memoryEnabled: false,
+      accountEntries: [{ ...entry('doc'), required: false }] };
+    await expect(resolve(args)).rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'malformed',
+      cause: { classification: { statusCode: status, retryable: false } } });
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts'))).toEqual(['/v1/artifacts/read']);
+    a.rejectHeaderEndpoint(null);
+    expect(await resolve(args)).toMatchObject({ blocks: ['Optional instructions'], admittedEntries: [{ outcome: 'ready' }] });
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts'))).toEqual([
+      '/v1/artifacts/read', '/v1/artifacts/read', '/v1/artifacts/doc',
+    ]);
+  });
+
   it.each([503, 403])('retains Home read classification through header and body preparation (HTTP %s)', async status => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
@@ -493,7 +529,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       expect(await resolve({ surface: 'coding', memoryEnabled: false, accountEntries: [entry('doc', a.id)] }))
         .toMatchObject({ blocks: ['Admitted route instructions'], admittedEntries: [{ outcome: 'ready' }] });
       expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
-      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(2);
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(1);
+      expect(a.requests.filter(path => path === '/v1/artifacts/read')).toHaveLength(1);
     } finally { release(); }
   });
   it('ignores the retired settings-root stack while composing explicit canonical entries', async () => {
@@ -700,7 +737,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       a.set('doc', 'second');
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
-      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(6);
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(3);
+      expect(a.requests.filter(path => path === '/v1/artifacts/read')).toHaveLength(6);
       expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
     });
   });
@@ -875,14 +913,14 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       }),
     ).toEqual({ blocks: [], admittedEntries: [] });
     expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
-    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/memory']);
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/read']);
     const priorRequests = a.requests.length;
     a.set('memory', 'Current instructions');
     expect((await resolve({ surface: 'coding', accountEntries: [entry('memory')], memoryEnabled: false })).blocks)
       .toEqual(['Current instructions']);
     expect(a.requests.slice(priorRequests).filter(path => path === '/v1/artifacts')).toEqual([]);
     expect(a.requests.slice(priorRequests).filter(path => path.startsWith('/v1/artifacts/')))
-      .toEqual(['/v1/artifacts/memory', '/v1/artifacts/memory']);
+      .toEqual(['/v1/artifacts/read', '/v1/artifacts/memory']);
   });
   it('skips disabled inherited selections before Account HTTP', async () => {
     const a = await home('alpha', 'active-token');
@@ -906,6 +944,6 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     await expect(resolve({ surface: 'coding', accountEntries: [entry('doc')], memoryEnabled: false }))
       .rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'locked' });
     expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
-    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual(['/v1/artifacts/doc']);
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/read']);
   });
 });

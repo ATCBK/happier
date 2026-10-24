@@ -3,6 +3,7 @@ import axios from 'axios';
 import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { BUILT_IN_ROLES_V1, accountSettingsParse } from '@happier-dev/protocol';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
 
 import { createSessionPromptPlanResolver } from './sessionPromptPlan';
@@ -41,6 +42,22 @@ function plainPromptDocument(id: string, markdown: string) {
     body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown, createdAtMs: 1, updatedAtMs: 1 }) }),
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
   };
+}
+
+function installPromptDocumentHeaderHttpBoundary(readDocument: (artifactId: string) => ReturnType<typeof plainPromptDocument>) {
+  const projectRowsPost = vi.mocked(axios.post).getMockImplementation();
+  if (!projectRowsPost) throw new Error('Missing Project Account rows HTTP boundary');
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+    if (new URL(String(url)).pathname !== '/v1/artifacts/read') return projectRowsPost(url, body, options);
+    const { artifactIds } = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+    expect(artifactIds).toHaveLength(1);
+    return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({
+      projection: 'headers', items: artifactIds.map(artifactId => {
+        const { body: _body, ...header } = readDocument(artifactId);
+        return { artifactId, ok: true, artifact: { ...header, publicAudience: 'none' } };
+      }),
+    }) };
+  });
 }
 
 function createProjectedIdentityTestMetadata(params: Parameters<typeof projectSessionOwnerCompatibilityViewV1>[0]) {
@@ -194,6 +211,10 @@ describe('session prompt-plan producer', () => {
     if (!snapshot) throw new Error('Missing initial Account snapshot');
     const operationContext = source === 'none' ? createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
       serverHttpBaseUrl: 'http://localhost:3005', isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey }) : undefined;
+    installPromptDocumentHeaderHttpBoundary(artifactId => {
+      expect(artifactId).toBe('first');
+      return plainPromptDocument(artifactId, 'First admitted Account context');
+    });
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -206,7 +227,6 @@ describe('session prompt-plan producer', () => {
             ref: { kind: 'doc', artifactId: 'first' }, enabled: true, placement: 'system_append' }] } }
             : emptyPromptLibraryRecordV1(key) } })) } };
       const row = plainPromptDocument('first', 'First admitted Account context');
-      if (path === '/v1/artifacts') return { status: 200, data: [row] };
       if (path === '/v1/artifacts/first') return { status: 200, data: row };
       throw new Error(`Unexpected first preparation HTTP path: ${path}`);
     });
@@ -278,6 +298,10 @@ describe('session prompt-plan producer', () => {
     const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl: 'http://localhost:3005',
       isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey });
     let changedDuringRead = false;
+    installPromptDocumentHeaderHttpBoundary(artifactId => {
+      expect(artifactId).toBe('current');
+      return plainPromptDocument(artifactId, 'Prepared current instructions');
+    });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
@@ -287,8 +311,8 @@ describe('session prompt-plan producer', () => {
         expect(settings).not.toEqual(snapshot.settings);
         setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settings, settingsVersion: 2 });
       }
-      const document = plainPromptDocument('current', 'Prepared current instructions');
-      return { status: 200, data: path === '/v1/artifacts' ? [document] : document };
+      if (path === '/v1/artifacts/current') return { status: 200, data: plainPromptDocument('current', 'Prepared current instructions') };
+      throw new Error(`Unexpected current preparation HTTP path: ${path}`);
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { ...snapshot, whenRefreshed: null } },
@@ -661,11 +685,14 @@ describe('session prompt-plan producer', () => {
   it('retains a prepared instruction snapshot during an edit and reads current text at the next preparation and resume', async () => {
     let markdown = 'QA_PERSONA_ALPHA';
     let bodyVersion = 1;
+    installPromptDocumentHeaderHttpBoundary(artifactId => {
+      expect(artifactId).toBe('turn-instructions');
+      return { ...plainPromptDocument(artifactId, markdown), bodyVersion };
+    });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       const document = { ...plainPromptDocument('turn-instructions', markdown), bodyVersion };
-      if (path === '/v1/artifacts') return { status: 200, data: [document] };
       if (path === '/v1/artifacts/turn-instructions') return { status: 200, data: document };
       throw new Error(`Unexpected instruction-turn HTTP path: ${path}`);
     });

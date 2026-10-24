@@ -5,6 +5,11 @@ import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/e
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
 import type { MemoryDocumentSearchScope } from './syncMemoryDocuments';
+import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+
+type LegacySessionProjection = Readonly<Pick<RawSessionRecord, 'metadata' | 'share'>
+  & Partial<Pick<RawSessionRecord, 'projectKey' | 'ownerAccountId' | 'encryptionMode'>>>;
 
 // Transform the API graph during collection; per-test resets reload it below.
 await import('@/api/api');
@@ -52,6 +57,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   setSessionCount: (count: number) => void;
   setSessionProject: (index: number, projectKey: string) => void;
   setSessionSharedContentUnavailable: (unavailable: boolean) => void;
+  setLegacySessionProjection: (projection: LegacySessionProjection) => void;
 }>) => Promise<void>, machineId = 'session-machine', memory = false, qualifiedHome = false): Promise<void> {
   admissionPhase = 'fixture_schemas';
   const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
@@ -65,6 +71,8 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   const { buildSessionMetadataEnvelopeFields } = await import('@/session/metadata/buildSessionMetadataEnvelopeCreateFields');
   const { sealSessionOwnerMetadataEnvelopeV1 } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1');
   const { configuration } = await import('@/configuration');
+  const { logger } = await import('@/ui/logger');
+  const diagnostics = vi.spyOn(logger, 'infoFile');
   admissionPhase = 'fixture_http';
   let serverId = configuration.activeServerId;
   if (qualifiedHome) {
@@ -88,7 +96,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
     ...(memory ? { maxChars: '- Key preference [id: key; added: 1970-01-01]'.length } : {}) };
   const workspaceKey = { kind: 'workspace-ref', serverId, id: 'checkout' };
   const organizationKey = { kind: 'project-organization', serverId, projectKey: 'project' };
-  const artifact = { id: entry.ref.artifactId, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
+  const artifact = { id: entry.ref.artifactId, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
     header: encodePlainArtifactStoredContent({ v: 1, kind: memory ? 'memory_doc.v1' : 'prompt_doc.v2', title: 'Remote Project' }),
     body: encodePlainArtifactStoredContent({ body: JSON.stringify(memory ? { v: 1, index: [
       { id: 'key', text: 'Key preference', createdAtMs: 0, sourceSessionRef: null },
@@ -108,7 +116,9 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   let sessionCount = 1;
   const sessionProjects = new Map<number, string>();
   let sessionSharedContentUnavailable = false;
+  let legacySessionProjection: LegacySessionProjection | undefined;
   let sessionWork: Record<string, unknown> | undefined = memory ? { memoryEnabled: true } : undefined;
+  const httpPaths: string[] = [];
   const sessionWorks = new Map<number, Record<string, unknown>>();
   const sessionArtifact = (index: number) => ({ ...artifact, id: `session-context-${index}`,
     header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: `Session context ${index}` }),
@@ -128,7 +138,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
       workspaceId: sessionProjects.has(index) ? `checkout-${sessionProjects.get(index)}` : 'checkout',
       projectId: sessionProjects.get(index) ?? 'project',
       ...((sessionWorks.get(index) ?? sessionWork) ? { work: sessionWorks.get(index) ?? sessionWork } : {}) } });
-    return { id: 'remote-session', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 0,
+    const record = { id: 'remote-session', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 0,
       encryptionMode: sessionSharedContentUnavailable ? 'e2ee' as const : 'plain' as const,
       metadataVersion: 1, dataEncryptionKey: null, share: null,
       metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext,
@@ -136,9 +146,13 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
         material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(7) },
         ownerMetadata: fields.ownerMetadataValue, randomBytes: length => new Uint8Array(length).fill(3),
       }) : fields.ownerMetadata, agentState: fields.agentState, agentStateVersion: 0 };
+    if (!legacySessionProjection) return record;
+    const { ownerMetadata: _ownerMetadata, metadataLayoutVersion: _metadataLayoutVersion, ...legacyRecord } = record;
+    return { ...legacyRecord, ...legacySessionProjection };
   };
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
+    httpPaths.push(`GET ${path}`);
     if (path === '/v2/sessions' || path === '/v2/sessions/archived') {
       if (inventoryState === 'archived' && path === '/v2/sessions') {
         return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
@@ -180,7 +194,22 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   });
   // Account rows and Session HTTP are transport boundaries; Project association,
   // four-layer admission, document decoding and SQLite remain real.
-  vi.spyOn(axios, 'post').mockImplementation(async () => ({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    const path = new URL(String(url)).pathname;
+    httpPaths.push(`POST ${path}`);
+    if (path === '/v1/artifacts/read') {
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: input.artifactIds.map(artifactId => {
+        if (artifactId === artifact.id && artifactState === 'unavailable') throw new Error('Artifact Home unavailable');
+        const stored = artifactId === artifact.id && artifactState === 'missing' ? undefined : [artifact,
+          ...[...new Set(sessionProjects.values())].map(projectArtifact),
+          ...[...sessionWorks.keys()].map(sessionArtifact)].find(row => row.id === artifactId);
+        if (!stored) return { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+        const { body: _body, ...header } = stored;
+        return { artifactId, ok: true, artifact: header };
+      }) }) };
+    }
+    return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [
     { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: {
       id: 'checkout', serverId, machineId: 'session-machine', rootPath: '/remote/repo', createdAtMs: 1, projectKey: 'project',
     } } } },
@@ -194,7 +223,8 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
         key: organization, value: { promptStack: [{ ...entry, ref: { ...entry.ref, artifactId: projectArtifact(projectKey).id } }] },
       } } }])];
     }),
-  ] } }));
+  ] } };
+  });
   admissionPhase = 'fixture_sqlite_and_admission_imports';
   const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
   const { syncMemoryDocuments } = await import('./syncMemoryDocuments');
@@ -208,7 +238,8 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   try {
     admissionPhase = 'initial_document_admission';
     const scope = await prepare();
-    expect(scope.state).toBe('ready');
+    expect(scope.state, JSON.stringify({ httpPaths, diagnostics: diagnostics.mock.calls.filter(([message]) =>
+      !String(message).includes('Admission phase')) })).toBe('ready');
     admissionPhase = 'fixture_callback';
     await run({ scope, db, dbPath, prepare, serverId, artifactId: artifact.id, credentials,
       setArtifactState: state => { artifactState = state; },
@@ -218,6 +249,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
       setSessionCount: count => { sessionCount = count; },
       setSessionProject: (index, projectKey) => { sessionProjects.set(index, projectKey); },
       setSessionSharedContentUnavailable: unavailable => { sessionSharedContentUnavailable = unavailable; },
+      setLegacySessionProjection: projection => { legacySessionProjection = projection; },
       setSessionWork: (work, index) => { if (index === undefined) sessionWork = work; else sessionWorks.set(index, work); }, replaceAccount: () => {
       const replacement = { token: `header.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature`, encryption: null };
       setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
@@ -263,6 +295,53 @@ it('admits only matching Project Sessions and reports unreadable Project members
     expect(await prepare({ scope })).toMatchObject({ state: 'partial', eligibleSessionIds: [],
       eligibleDocuments: [{ ref: { serverId, artifactId: 'project-context' } }] });
   }, 'daemon-machine');
+});
+
+it('keeps private Project tuple inference owner-only while honoring published recipient Project keys without metadata', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, serverId, setLegacySessionProjection }) => {
+    const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'project' } };
+    const metadata = JSON.stringify({ machineId: 'session-machine', path: '/container/checkout',
+      sessionWorkspaceLocationV1: { v: 1, machineId: 'session-machine', agentPath: '/container/checkout', machinePath: '/remote/repo' } });
+    // Actual predecessor 413054f V2 owner/direct markers; no ownerAccountId was published.
+    setLegacySessionProjection({ metadata, share: null });
+    expect(await prepare({ scope })).toMatchObject({ state: 'ready', eligibleSessionIds: ['remote-session'] });
+    setLegacySessionProjection({ metadata, share: { accessLevel: 'view', canApprovePermissions: false } });
+    expect(await prepare({ scope })).toMatchObject({ state: 'partial', eligibleSessionIds: [] });
+    setLegacySessionProjection({ metadata, share: null, ownerAccountId: 'another-account' });
+    expect(await prepare({ scope })).toMatchObject({ state: 'partial', eligibleSessionIds: [] });
+    // A plain Account cannot open this historical encrypted recipient's metadata.
+    // The Home's accepted Project key still proves membership without a private tuple.
+    setLegacySessionProjection({ metadata: 'unavailable-ciphertext', encryptionMode: 'e2ee',
+      share: { accessLevel: 'view', canApprovePermissions: false }, projectKey: 'project' });
+    expect(await prepare({ scope })).toMatchObject({ state: 'ready', eligibleSessionIds: ['remote-session'] });
+    setLegacySessionProjection({ metadata: 'unavailable-ciphertext', encryptionMode: 'e2ee',
+      share: { accessLevel: 'view', canApprovePermissions: false }, projectKey: 'another-project' });
+    expect(await prepare({ scope })).toMatchObject({ state: 'ready', eligibleSessionIds: [] });
+  }, 'daemon-machine', true);
+});
+
+it('withholds private Project inference from recipient global and Session preparations without dropping shared attachments', async () => {
+  await withCurrentDocumentFixture(async ({ scope: ownerScope, prepare, db, setSessionWork, setLegacySessionProjection }) => {
+    expect(ownerScope.eligibleDocuments.map(document => document.ref.artifactId)).toContain('project-context');
+    const projectReads = () => vi.mocked(axios.post).mock.calls.filter(([url]) =>
+      new URL(String(url)).pathname === '/v1/account/project-rows/list').length;
+    const work = { memoryEnabled: true, promptStack: [{ id: 'session.context', enabled: true,
+      placement: 'system_append', ref: { kind: 'doc', artifactId: 'session-context-0' } }] };
+    setSessionWork(work, 0);
+    setLegacySessionProjection({ share: { accessLevel: 'view', canApprovePermissions: false },
+      metadata: JSON.stringify({ machineId: 'session-machine', path: '/container/checkout', work,
+        sessionWorkspaceLocationV1: { v: 1, machineId: 'session-machine', agentPath: '/container/checkout', machinePath: '/remote/repo' } }) });
+    for (const scope of [{ type: 'session', sessionId: 'remote-session' }, { type: 'global' }] as const) {
+      const beforeProjectReads = projectReads();
+      const admitted = await prepare({ scope });
+      expect(admitted).toMatchObject({ state: 'ready' });
+      expect(admitted.eligibleDocuments.map(document => document.ref.artifactId)).toContain('session-context-0');
+      expect(projectReads() - beforeProjectReads).toBe(0);
+      expect(admitted.eligibleDocuments).toHaveLength(1);
+      expect(db.searchDocuments({ query: 'quartz', eligibleDocuments: admitted.eligibleDocuments, maxResults: 10 }))
+        .toEqual([expect.objectContaining({ text: 'quartz session-context-0' })]);
+    }
+  }, 'daemon-machine', true);
 });
 
 it('applies current Project eligibility before deep and hints paging and rechecks revocation after embedding', async () => {

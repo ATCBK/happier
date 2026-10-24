@@ -50,6 +50,7 @@ import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, PROJECT_DEFINITION_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ProjectWorkerActionInputSchemasV1, ProjectWorkerActionOutputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { executeActionOperationActionV1 } from '@happier-dev/protocol/actions/executor/actionOperationActions';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { updatePersonalProjectContextV1 } from '@happier-dev/protocol/projects/projectContextV1';
@@ -1008,8 +1009,8 @@ export function createCliActionDeps(params: Readonly<{
     identifier === projectHomeId || identifier === params.serverIdentityId ? params.serverIdentityId : undefined);
   const projectHomeAdmission = async (serverId?: string, context?: ActionExecutorContext) => {
     const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
-    if ((serverId !== undefined && !await isServerProfileHomeIdentity(projectHomeId, serverId.trim()))
-      || (context?.serverId && !await isServerProfileHomeIdentity(projectHomeId, context.serverId))
+    if ((serverId !== undefined && !isSameActionHomeId(serverId) && !await isServerProfileHomeIdentity(projectHomeId, serverId.trim()))
+      || (context?.serverId && !isSameActionHomeId(context.serverId) && !await isServerProfileHomeIdentity(projectHomeId, context.serverId))
       || (params.serverId === undefined && configuration.activeServerId !== projectHomeId)) {
       return executionRunActionFailure('server_scope_mismatch');
     }
@@ -3886,11 +3887,23 @@ export function createCliActionDeps(params: Readonly<{
       },
       readSession: async (ref, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+        if (!homeAccountId || await projectAccountAdmission(ref.serverId, context)
+          || context.externalActionExecutionAuthorization && context.externalActionExecutionAuthorization.binding.accountId !== homeAccountId) {
+          throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
+        }
         const read = async () => {
           const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
           const target = await resolveSessionTransportContext({ credentials: params.credentials!, idOrPrefix: ref.sessionId,
             signal: context.signal, resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'memory.remember', request) });
           if (!target.ok || target.sessionId !== ref.sessionId) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
+          // Legacy metadata is readable by recipients too. Only an explicit
+          // canonical owner role can authorize this captured Account's private context.
+          const raw = target.rawSession;
+          if (raw.effectiveAccess === undefined && raw.share === undefined
+            || readSessionAccessProjectionRoleV1(raw) !== 'owner'
+            || raw.ownerAccountId !== undefined && raw.ownerAccountId !== homeAccountId) {
+            throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
+          }
           const metadata = readTransportSessionOwnerMetadata(target);
           if (!metadata) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
           const machineId = readSessionOwnerLocality({ metadata, rawSession: target.rawSession })?.machineId;

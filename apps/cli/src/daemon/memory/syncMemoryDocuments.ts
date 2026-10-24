@@ -20,6 +20,7 @@ import { getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsS
 import { logger } from '@/ui/logger';
 import type { DeepIndexDbHandle, DeepIndexDocumentEntry, DeepIndexDocumentIdentity } from './deepIndex/deepIndexDb';
 import { matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { createSessionProjectKeyResolverV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
@@ -140,12 +141,23 @@ export async function syncMemoryDocuments(params: Readonly<{
       let profileCatalogRefreshed = false;
       const admit = async (session?: RawSessionRecord) => {
         const sessionId = session?.id;
+        const ownsSession = !!session && readSessionAccessProjectionRoleV1(session) === 'owner'
+          && (session.ownerAccountId === undefined || session.ownerAccountId === home.accountId);
         nextPhase('session_metadata');
         currentSessionId = sessionId;
         let metadata: Record<string, unknown> | null = null;
         let machineId = params.machineId;
         if (session) {
           if (!params.includeArchivedSessions && session.archivedAt != null) return;
+          if (project) {
+            // The Home's accepted key is independent of owner metadata availability.
+            const published = matchSessionProjectFilterV1(null, project.serverId, project, undefined,
+              { projectKey: session.projectKey });
+            if (published !== 'unavailable') {
+              if (published === 'match') eligibleSessionIds.push(session.id);
+              return;
+            }
+          }
           const input = { credentials: params.credentials, accountEncryptionMode: accountMode, rawSession: session };
           if (session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1) {
             // Context and locality are Account-owned. A historical Session's
@@ -160,8 +172,9 @@ export async function syncMemoryDocuments(params: Readonly<{
               ? 'session_owner_metadata_unavailable' : 'session_metadata_unavailable',
           });
           if (project) {
-            const match = matchSessionProjectFilterV1(metadata, project.serverId, project, projectContext?.workspaceRefs,
-              { projectKey: session.projectKey, sessionProjectKeyResolver });
+            const match = matchSessionProjectFilterV1(metadata, project.serverId, project,
+              ownsSession ? projectContext?.workspaceRefs : undefined,
+              { projectKey: session.projectKey, sessionProjectKeyResolver: ownsSession ? sessionProjectKeyResolver : undefined });
             if (match === 'unavailable') partial = true;
             if (match !== 'match') return;
             eligibleSessionIds.push(session.id);
@@ -179,6 +192,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         const prepared = project ? null : await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
           machineId, directory: typeof metadata?.path === 'string' ? metadata.path : undefined,
           serverId: home.serverId, signal: params.signal, accountContext, projectPreparation,
+          ...(!ownsSession ? { projectEntries: [] } : {}),
           refreshCatalogs: !accountCatalogRefreshed || (typeof metadata?.profileId === 'string' && !profileCatalogRefreshed) });
         // Currentness assertions and invalidation still run for every Session;
         // a finite admission shares the fresh Account/Profile catalog reads.
