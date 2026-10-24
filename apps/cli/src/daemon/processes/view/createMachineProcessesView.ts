@@ -7,7 +7,7 @@ import type { MachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSa
 import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
-import type { ProcessCensusField, ProcessStartIdentity } from '@/processes/census/processCensus';
+import type { ProcessCensusField, ProcessCensusRow, ProcessStartIdentity } from '@/processes/census/processCensus';
 import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
@@ -38,6 +38,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
     let bootTimeMs = options.bootTimeMs;
     let latestRead: ProcessOwnershipRead | undefined;
     let latestMetricAtMs: number | undefined;
+    let previousMetricRows: readonly ProcessCensusRow[] | undefined;
     const listeners = new Set<() => void>();
     const allProcessListeners = new Set<() => void>();
     let releaseLive: (() => void) | undefined;
@@ -50,7 +51,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
     const watches = new Set<AbortController>();
     // Native daemon handles support unref; shared UI ambient types also expose numeric handles.
     let metricExpiry: (ReturnType<typeof setTimeout> & Readonly<{ unref?: () => void }>) | undefined;
-    const clearMetrics = () => { metrics.reset(); currentMetrics = new Map(); };
+    const clearMetrics = () => { metrics.reset(); currentMetrics = new Map(); previousMetricRows = undefined; };
     const prepare = async () => {
         if (options.platform === 'linux' && bootTimeMs === undefined) bootTimeMs = await readProcessOwnershipBootTimeMs(options.platform);
     };
@@ -60,7 +61,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         // CPU samples have their own visible-demand metrics owner below.
         const fields: readonly ProcessCensusField[] = ['argv', 'cwd', 'ownershipEnvironment', 'cgroup', 'memory',
             ...(options.platform === 'darwin' ? ['executablePath' as const] : [])];
-        const read = await options.processOwnershipRuntime.readOwners({ freshness, fields });
+        const read = await options.processOwnershipRuntime.readOwners({ freshness, fields,
+            ...(freshness === 'shared' && latestRead?.status === 'ok' ? { previousRows: latestRead.snapshot.rows } : {}) });
         const identities = await options.readRequesterIdentities?.().catch(() => undefined);
         options.leftBehind.observe(read);
         return { read, identities };
@@ -139,9 +141,10 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 if (ticking || ownership?.status !== 'ok') return;
                 ticking = (async () => {
                     const metricPids = ownership.rows.flatMap(row => row.owner || allProcessListeners.size > 0 ? [row.pid] : []);
-                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids);
+                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids, previousMetricRows ?? ownership.snapshot.rows);
                     if (disposed || controller.signal.aborted || !listeners.size) return;
                     if (snapshot.status === 'ok') {
+                        previousMetricRows = snapshot.rows;
                         const sampled = new Set(metricPids);
                         const observed = new Map(snapshot.rows.map(row => [row.pid, row]));
                         const partial = new Set(snapshot.partial?.filter(item => !observed.has(item.pid) || item.missing.includes('start')).map(item => item.pid));
@@ -181,7 +184,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                             && ![...currentMetrics.values()].some(metric => metric.cpuPercent !== undefined);
                         if (needsCpuBaseline) return;
                     }
-                    else { metrics.reset(); currentMetrics = new Map(); }
+                    else clearMetrics();
                     firstMetricObservation = false;
                     notify();
                 })().finally(() => { ticking = undefined; discover(); });
@@ -197,6 +200,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             listeners.delete(listener);
             allProcessListeners.delete(listener);
             if (!listeners.size) {
+                // Raw decode reuse follows demand, not the retained CPU/history window.
+                previousMetricRows = undefined;
                 unsubscribeVitals?.(); unsubscribeVitals = undefined;
                 releaseLive?.(); releaseLive = undefined;
                 portsController?.abort(); portsController = undefined;

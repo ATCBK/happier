@@ -32,6 +32,54 @@ vi.mock('@/processes/census/processCensus', async importOriginal => ({
     ...await importOriginal<typeof import('@/processes/census/processCensus')>(), readProcessCensus: boundary.read,
 }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+it('shares one demanded Overview process stream across viewers without enumerating on metric-only samples', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    let nativeEnumerations = 0;
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc',
+        censusDependencies: { platform: 'darwin', selfPid: 100, helperExecutablePath: '/fixture/helper',
+            execFile: async (_file, args) => {
+                if (!args.some(arg => arg.startsWith('--pids='))) nativeEnumerations++;
+                return { stdout: JSON.stringify({ v: 1, capturedAtMs: Date.now(), logicalCpus: 2,
+                    rows: Array.from({ length: 1001 }, (_, index) => ({ pid: 100 + index, ppid: index ? 100 : 1,
+                        start: { startTimeMs: 100 + index }, principal: { kind: 'uid', value: '1000' }, name: 'fixture',
+                        memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: Date.now() * 100 })) }) };
+            } },
+        listRoots: () => [{ owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true }],
+    });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async input => ({ state: 'reporting',
+        host: { logicalCores: 2, memoryTotalBytes: 2000, bootedAt: 0 },
+        sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu: { reported: false, reason: 'unavailable' },
+            memory: { reported: false, reason: 'unavailable' }, disk: { reported: false, reason: 'unavailable' },
+            network: { reported: false, reason: 'unavailable' } },
+        minuteCounters: { monotonicMs: input.monotonicMs, cpu: null, network: null },
+    }) }, historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+        appendAlert: async () => undefined, minutes: () => [], alerts: () => [] }, monotonicMs: () => Date.now() });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'a' }) });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const request = { machineId: 'm', scope: 'happier' as const, view: 'owners' as const };
+    const controller = new AbortController();
+    let releaseOverview: (() => void) | undefined;
+    try {
+        await sampler.start();
+        releaseOverview = sampler.demandOverview();
+        let answers = await Promise.all(Array.from({ length: 8 }, () => view.watch(request, requester)));
+        expect(nativeEnumerations).toBe(1);
+        for (let period = 0; period < 20; period++) {
+            const pending = answers.map(answer => view.watch({ ...request,
+                since: answer.changed ? answer.answer.capturedAtMs : Date.now() }, requester, controller.signal));
+            await vi.advanceTimersByTimeAsync(period === 0 ? 4000 : 2000);
+            answers = await Promise.all(pending);
+            expect(answers.every(answer => answer.changed && answer.answer.totals.happier.processCount === 1001)).toBe(true);
+        }
+        // One discovery on open, then the approved 25 s ownership backstop.
+        // Eight viewers and twenty real sample periods do not multiply discovery.
+        expect(nativeEnumerations).toBe(2);
+    } finally {
+        controller.abort(); releaseOverview?.(); view.dispose(); pass.dispose(); await sampler.stop();
+    }
+});
 it('projects no process rows while an unchanged watch parks and projects each changed row once', async () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     const processCount = 1501;
