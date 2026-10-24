@@ -1,12 +1,34 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ToolCall } from '@happier-dev/session-core/messages';
+import { t } from '@/text';
 
 import {
   isQuestionRoutedToManager,
   resolveAskUserQuestionFooterHint,
   resolveAskUserQuestionLead,
+  resolveAskUserQuestionAnsweredByLabel,
 } from './askUserQuestionCardState';
+
+describe('resolveAskUserQuestionAnsweredByLabel', () => {
+  const profile = { name: null, firstName: null, lastName: null, username: null, avatarUrl: null };
+  it.each([
+    { serverId: 'home', accountId: 'other', profile, nameKey: 'message.accountActorUnnamedMember' },
+    { serverId: 'home', accountId: 'other', profile: null, nameKey: 'message.accountActorFormerMember' },
+    { serverId: 'other-home', accountId: 'self', profile, nameKey: 'message.accountActorUnnamedMember' },
+    { serverId: 'home', accountId: 'self', profile: null, nameKey: 'message.accountActorFormerMember' },
+  ] as const)('uses the shared Account name for $serverId / $accountId / $nameKey', actor => {
+    expect(resolveAskUserQuestionAnsweredByLabel({ answeredBy: { kind: 'person', accountId: actor.accountId },
+      serverId: actor.serverId, viewerScope: { serverId: 'home', accountId: 'self' },
+      answeringAccountActor: { ...actor, v: 1 } })).toBe(t('workflows.run.answeredBy', { name: t(actor.nameKey) }));
+  });
+  it('retains the self sentence and keeps an unknown person distinct from a known unnamed Account', () => {
+    expect(resolveAskUserQuestionAnsweredByLabel({ answeredBy: { kind: 'person', accountId: 'self' }, serverId: 'home',
+      viewerScope: { serverId: 'home', accountId: 'self' }, answeringAccountActor: { v: 1, serverId: 'home', accountId: 'self', profile } }))
+      .toBe(t('workflows.run.answeredByYou'));
+    expect(resolveAskUserQuestionAnsweredByLabel({ answeredBy: { kind: 'person' } })).toBe(t('workflows.run.answeredByPerson'));
+  });
+});
 
 describe('resolveAskUserQuestionLead', () => {
   it('says a non-blocking question keeps going on its stated assumption', () => {

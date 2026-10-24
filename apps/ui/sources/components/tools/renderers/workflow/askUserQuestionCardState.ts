@@ -5,7 +5,7 @@ import type { AgentState } from '@happier-dev/session-core/state';
 
 import { t } from '@/text';
 import { resolvePermissionRequestId } from '@/components/tools/renderers/core/resolvePermissionRequestId';
-import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 /** Answer identity is a separate, host-stamped actor, never the worker's requester. */
@@ -24,10 +24,14 @@ export function resolveAskUserQuestionAnsweredByLabel(input: Readonly<{
   if (answeredBy?.kind !== 'person') return null;
   const scope = answeredBy.accountId && input.serverId ? { serverId: input.serverId, accountId: answeredBy.accountId } : null;
   const actor = areServerAccountScopesEqual(scope, input.answeringAccountActor) ? input.answeringAccountActor : null;
-  if (actor && actor.profile === null) return t('workflows.run.answeredBy', { name: t('message.accountActorFormerMember') });
+  if (actor) {
+    const presentation = resolveAccountActorPresentation(actor, input.viewerScope ?? null);
+    return presentation.isSelf && actor.profile !== null
+      ? t('workflows.run.answeredByYou')
+      : t('workflows.run.answeredBy', { name: presentation.name });
+  }
   if (areServerAccountScopesEqual(scope, input.viewerScope)) return t('workflows.run.answeredByYou');
-  const name = actor?.profile ? formatAccountDisplayName(actor.profile) : null;
-  return name ? t('workflows.run.answeredBy', { name }) : t('workflows.run.answeredByPerson');
+  return t('workflows.run.answeredByPerson');
 }
 
 /** The handling manager as the card may show it: a display name and its current reachability. */
