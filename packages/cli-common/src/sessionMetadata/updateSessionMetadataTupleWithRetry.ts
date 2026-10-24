@@ -980,6 +980,14 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
 
     params.assertCurrent?.();
     if (attempt >= maxAttempts) break;
+    // Read the retry snapshot after contention backoff. Waiting after the read
+    // makes each retry stale again while the runner keeps publishing.
+    await params.waitBeforeRetry?.({
+      attempt,
+      nextAttempt: attempt + 1,
+      maxAttempts,
+    });
+    params.assertCurrent?.();
     const next: SessionMetadataTupleMutationSnapshotV1<M, A> | undefined =
       result.currentSnapshot
       ?? await (async (): Promise<
@@ -1000,12 +1008,6 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
       );
     }
     current = next;
-    params.assertCurrent?.();
-    await params.waitBeforeRetry?.({
-      attempt,
-      nextAttempt: attempt + 1,
-      maxAttempts,
-    });
     params.assertCurrent?.();
   }
 
