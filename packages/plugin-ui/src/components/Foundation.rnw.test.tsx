@@ -309,6 +309,44 @@ describe('foundation presentation families', () => {
     mount.unmount();
   });
 
+  it('draws metadata as facts read label-then-value: the label at the start, the value at the end of one row', () => {
+    const mount = mountFoundation(
+      <Metadata testID="facts" entries={[{ label: 'Location', value: 'Falkenstein' }, { label: 'Image', value: 'Ubuntu 24.04' }]} />,
+    );
+
+    const facts = mount.container.querySelector<HTMLElement>('[data-testid="facts"]')!;
+    const rows = [...facts.children] as HTMLElement[];
+    expect(rows.map((row) => row.textContent)).toEqual(['LocationFalkenstein', 'ImageUbuntu 24.04']);
+    for (const row of rows) {
+      expect(getComputedStyle(row).justifyContent).toBe('space-between');
+      const value = row.lastElementChild!.lastElementChild as HTMLElement;
+      expect(getComputedStyle(value).textAlign).toBe('right');
+    }
+    // The value carries the weight; the label is the quiet half.
+    const [label, value] = [rows[0]!.firstElementChild as HTMLElement, rows[0]!.lastElementChild!.lastElementChild as HTMLElement];
+    const weight = (node: HTMLElement) => Number(node.style.fontWeight) || 400;
+    expect(weight(value)).toBeGreaterThan(weight(label));
+
+    mount.unmount();
+  });
+
+  it('keeps a banner action under the text when the author asks for it, and beside the text otherwise', () => {
+    const mount = mountFoundation(
+      <>
+        <Banner testID="beside" title="Provider unavailable" action={<button data-testid="beside-action">Retry</button>} />
+        <Banner testID="below" actionPlacement="below" title="Provider unavailable" action={<button data-testid="below-action">Retry</button>} />
+      </>,
+    );
+
+    const textColumn = (id: string) => [...mount.container.querySelectorAll<HTMLElement>(`[data-testid="${id}"] *`)]
+      .find((node) => node.textContent === 'Provider unavailable' && node.children.length === 0)!.parentElement!;
+    // Below, the action is inside the column that holds the words; beside, it is the column's sibling.
+    expect(textColumn('below').contains(mount.container.querySelector('[data-testid="below-action"]'))).toBe(true);
+    expect(textColumn('beside').contains(mount.container.querySelector('[data-testid="beside-action"]'))).toBe(false);
+
+    mount.unmount();
+  });
+
   it('draws a strip banner as one band sentence whose title leads only when a description finishes it', () => {
     const mount = mountFoundation(
       <>

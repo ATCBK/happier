@@ -19,8 +19,12 @@ import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../semantics.js';
 import { HappierText } from '../text/Text.js';
 import { resolveHappierTypeRoleStyle } from '../text/typeRole.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
-import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
-import { resolveHappierPageTextStyle } from '../layout/pageText.js';
+import { HAPPIER_PAGE_METRICS, readHappierVisibleLayoutWidth } from '../layout/pageMetrics.js';
+import {
+  HAPPIER_PAGE_TEXT,
+  resolveHappierPageTextStyle,
+  resolveHappierTextStepStyle,
+} from '../layout/pageText.js';
 import { HappierDataHatch } from './Hatch.js';
 import { HAPPIER_FRESHNESS_LINE_METRICS } from '../state/InfoState.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
@@ -31,6 +35,11 @@ export type HappierMetadataEntry = Readonly<{
   /** Decorated glyphs; strings continue to own the metadata's semantic identity. */
   labelContent?: ReactNode;
   valueContent?: ReactNode;
+  /**
+   * A mark beside the value: a flag, a machine's mark, or a pending bar for a value still being read
+   * (leave `value` empty then; the bar holds the value's place).
+   */
+  leading?: ReactNode;
   tone?: HappierTone;
   accessibilityLabel?: string;
   testID?: string;
@@ -218,6 +227,11 @@ export function HappierBadge(
   );
 }
 
+/**
+ * Facts read label-then-value: the quiet label at the start of its row, the value at the end carrying
+ * the weight, wrapping whole when it is long. Rows keep the control-height measure so a short list of
+ * facts reads as one block, in a card, a receipt or a row opened in place.
+ */
 export function HappierMetadata(
   props: Readonly<{
     title?: string;
@@ -227,17 +241,37 @@ export function HappierMetadata(
     testID?: string;
   }>,
 ) {
+  const typography = useOptionalHappierUiTypography();
+  const labelStyle = {
+    ...resolveHappierPageTextStyle('rowDescription', typography),
+    color: props.theme.colors.secondaryText,
+  };
+  const valueStyle = {
+    ...resolveHappierTextStepStyle({ ...HAPPIER_PAGE_TEXT.rowDescription, weight: 'medium' }, typography),
+    textAlign: 'right' as const,
+    flexShrink: 1,
+  };
+  const valueCellStyle = {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'flex-end' as const,
+    gap: props.theme.spacing.xsmall,
+    flexShrink: 1,
+    // A long label wraps before it squeezes the value into a sliver.
+    maxWidth: '65%' as const,
+  };
   return (
     <View
       role="group"
       accessibilityLabel={props.title}
       testID={props.testID}
-      style={{ gap: props.theme.spacing.small }}
     >
       {props.title ? (
-        <HappierLabel theme={props.theme}>
-          {props.titleContent ?? props.title}
-        </HappierLabel>
+        <View style={{ paddingBottom: props.theme.spacing.xsmall }}>
+          <HappierLabel theme={props.theme}>
+            {props.titleContent ?? props.title}
+          </HappierLabel>
+        </View>
       ) : null}
       {props.entries.map((entry, index) => (
         <View
@@ -246,24 +280,34 @@ export function HappierMetadata(
           accessibilityLabel={entry.accessibilityLabel}
           style={{
             flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: props.theme.spacing.small,
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: props.theme.spacing.medium,
+            minHeight: HAPPIER_PAGE_METRICS.controlHeightPx,
+            // Ink hairlines between facts, never above the first.
+            ...(index === 0 ? {} : { borderTopWidth: 1, borderTopColor: props.theme.colors.divider }),
           }}
         >
-          <HappierText style={{ color: props.theme.colors.secondaryText }}>
+          <HappierText style={{ ...labelStyle, flexShrink: 1 }}>
             {entry.labelContent ?? entry.label}
           </HappierText>
-          <HappierText
-            selectable
-            style={{
-              color:
-                props.theme.colors[
-                  HAPPIER_TONE_COLOR_TOKEN[entry.tone ?? 'neutral']
-                ],
-            }}
-          >
-            {entry.valueContent ?? entry.value}
-          </HappierText>
+          <View style={valueCellStyle}>
+            {entry.leading}
+            {entry.value === '' && entry.valueContent === undefined ? null : (
+              <HappierText
+                selectable
+                style={{
+                  ...valueStyle,
+                  color:
+                    props.theme.colors[
+                      HAPPIER_TONE_COLOR_TOKEN[entry.tone ?? 'neutral']
+                    ],
+                }}
+              >
+                {entry.valueContent ?? entry.value}
+              </HappierText>
+            )}
+          </View>
         </View>
       ))}
     </View>
@@ -574,9 +618,8 @@ export function HappierBanner(
       }
       testID={props.testID}
       onLayout={(event) => {
-        const width = event.nativeEvent.layout.width;
-        if (Number.isFinite(width) && width > 0)
-          setNarrow(width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx);
+        const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+        if (width !== null) setNarrow(width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx);
         props.onLayout?.(event);
       }}
       style={[
@@ -727,8 +770,8 @@ function HappierBannerStrip(props: Parameters<typeof HappierBanner>[0]) {
       }
       testID={props.testID}
       onLayout={(event) => {
-        const width = event.nativeEvent.layout.width;
-        if (Number.isFinite(width) && width > 0) setNarrow(width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx);
+        const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+        if (width !== null) setNarrow(width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx);
         props.onLayout?.(event);
       }}
       style={[

@@ -231,6 +231,17 @@ export type BannerProps = Readonly<{
   points?: readonly HappierBannerPoint[];
   action?: ReactNode;
   /**
+   * `trailing` (default) keeps the action beside the text while it fits; `below` keeps it under the
+   * text at every width: several buttons, or a notice whose text is a list of steps, would otherwise
+   * squeeze the words into a narrow column beside them. A banner with `points` always puts it below.
+   */
+  actionPlacement?: 'trailing' | 'below';
+  /**
+   * On a narrow pane, `full-width` draws the action across the whole banner, under the mark as well as
+   * the text, instead of inside the text column.
+   */
+  compactActionPlacement?: 'full-width';
+  /**
    * `card` (default) takes a section's place in a page. `strip` is the compact band across the top of a
    * pane or reading surface: the title leads, the description finishes the sentence on the same line.
    */
