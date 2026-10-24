@@ -3,6 +3,7 @@ import type { TracedMessage } from '../reducerTracer';
 import type { ReducerMessage, ReducerState } from '../reducer';
 import { getSidechainThinkingMergeCursor, setSidechainThinkingMergeCursor } from '../helpers/mergeCursors';
 import { applyToolResultUpdateToReducerMessage } from '../helpers/applyToolResultUpdateToReducerMessage';
+import { selectToolResultSessionMediaMeta } from '@/sync/domains/sessionMedia/sessionMediaMessageMeta';
 import { normalizeThinkingChunk, unwrapThinkingText } from '../helpers/thinkingText';
 import { readStreamSegmentMetaV1 } from '../helpers/streamSegmentMeta';
 import { upsertStreamSegmentSnapshotMessage } from '../helpers/upsertStreamSegmentSnapshotMessage';
@@ -265,6 +266,7 @@ export function runSidechainsPhase(params: Readonly<{
                     // Map sidechain tool separately to avoid overwriting permission mapping
                     state.sidechainToolIdToMessageId.set(c.id, mid);
                 } else if (c.type === 'tool-result') {
+                    const resultMeta = selectToolResultSessionMediaMeta(msg, c.tool_use_id);
                     // Process tool result in sidechain - update BOTH messages
                     const toolResult = {
                         tool_use_id: c.tool_use_id,
@@ -283,7 +285,7 @@ export function runSidechainsPhase(params: Readonly<{
                                 messageId: sidechainMessageId,
                                 toolResult,
                                 resultCreatedAt: msg.createdAt,
-                                meta: msg.meta,
+                                meta: resultMeta,
                                 changed,
                             });
                         }
@@ -299,7 +301,7 @@ export function runSidechainsPhase(params: Readonly<{
                                 messageId: permissionMessageId,
                                 toolResult,
                                 resultCreatedAt: msg.createdAt,
-                                meta: msg.meta,
+                                meta: resultMeta,
                                 changed,
                             });
                         }

@@ -7,6 +7,22 @@ import { persistClaudeToolResultMedia } from './persistClaudeToolResultMedia';
 import type { RawJSONLines } from '../types';
 
 describe('Claude tool-result media', () => {
+    it('removes unsupported image payloads and their native metadata copies before transcript storage', async () => {
+        const data = Buffer.from('unrecognized image encoding').toString('base64');
+        const body: RawJSONLines = {
+            type: 'user', uuid: 'unsupported-image',
+            message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: [
+                { type: 'text', text: 'comparison' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ` ${data}\n` } },
+            ] }] },
+            toolUseResult: { type: 'image', file: { base64: data } },
+        };
+        const result = await persistClaudeToolResultMedia({ body, workingDirectory: tmpdir(), sessionId: 's1' });
+        expect(JSON.stringify(result)).not.toContain(data);
+        expect(result.body).toMatchObject({ message: { content: [{ tool_use_id: 'read-1', content: [{ type: 'text', text: 'comparison' }, expect.anything()] }] } });
+        expect(JSON.stringify(body)).toContain(data);
+    });
+
     it('retains tool text and status with an unavailable item when media storage fails', async () => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-claude-media-failure-'));
         try {

@@ -1630,8 +1630,8 @@ function ToolCallBlock(props: {
   const structuredPinHost = useRowActionHoverHost();
   const router = useRouter();
   const sessionMedia = React.useMemo(
-    () => parseSessionMediaMessageMeta(props.message.meta, props.message.tool?.id),
-    [props.message.meta, props.message.tool?.id],
+    () => parseSessionMediaMessageMeta(props.message.meta),
+    [props.message.meta],
   );
   const handleOpenMediaPath = React.useCallback((filePath: string) => {
     pushSessionFileDeepLink(router, { sessionId: props.sessionId, filePath });

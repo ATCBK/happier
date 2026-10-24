@@ -150,15 +150,10 @@ describe('MessageView (tool timeline chrome mode)', () => {
                 id: 'media-1', role: 'output', category: 'tool-artifact', mediaKind: 'image',
                 mimeType: 'image/png', name: 'comparison.png', path: '.happier/uploads/comparison.png', sizeBytes: 80,
                 origin: { source: 'tool-output', toolCallId: 'read-1' },
-            }, {
-                id: 'media-2', role: 'output', category: 'tool-artifact', mediaKind: 'image',
-                mimeType: 'image/png', name: 'other.png', path: '.happier/uploads/other.png', sizeBytes: 80,
-                origin: { source: 'tool-output', toolCallId: 'read-2' },
             }] } } },
         };
         const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" interaction={deriveTranscriptInteraction({ kind: 'public' })} />);
         expect(screen.findByTestId('message-session-media-inline-image:.happier/uploads/comparison.png')).toBeTruthy();
-        expect(screen.findByTestId('message-session-media-inline-image:.happier/uploads/other.png')).toBeNull();
     });
 
     it('passes a stable server route id to ToolTimelineRow when the message is already persisted', async () => {

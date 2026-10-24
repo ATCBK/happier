@@ -1,4 +1,7 @@
 import { AttachmentsMessageMetaV1Schema, type AttachmentsMessageMetaV1 } from '@/sync/domains/attachments/attachmentsMessageMeta';
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
+import type { MessageMeta } from '@/sync/domains/messages/messageMetaTypes';
 import {
     SessionMediaItemV1Schema,
     SessionMediaMessageMetaEnvelopeV1Schema,
@@ -66,21 +69,41 @@ function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSumma
     };
 }
 
-function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null, toolCallId?: string): Readonly<{
+export function selectToolResultSessionMediaMeta(
+    message: Readonly<{ meta?: MessageMeta; content: readonly Readonly<{ type: string }>[] }>,
+    toolCallId: string,
+): MessageMeta | undefined {
+    // Only a bundled result needs splitting. A single result already owns its
+    // metadata, including ACP sidechains whose display call id is namespaced.
+    if (!message.meta || message.content.filter(part => part.type === 'tool-result').length < 2) return message.meta;
+    let selected = message.meta;
+    let toolCallIdHash: string | undefined;
+    for (const key of ['happier', 'happierMedia'] as const) {
+        const parsed = SessionMediaMessageMetaEnvelopeV1Schema.safeParse(readEnvelope(message.meta, key));
+        if (!parsed.success) continue;
+        const payload = parsed.data.payload;
+        const media = payload.media.filter(item => !item.origin.toolCallId || item.origin.toolCallId === toolCallId);
+        const unavailable = payload.unavailable?.filter(item => {
+            if (!item.origin.toolCallIdHash) return true;
+            toolCallIdHash ??= bytesToHex(sha256(utf8ToBytes(toolCallId)));
+            return item.origin.toolCallIdHash === toolCallIdHash;
+        });
+        selected = { ...selected, [key]: { ...parsed.data, payload: {
+            ...payload, media, ...(unavailable ? { unavailable } : {}),
+        } } };
+    }
+    return selected;
+}
+
+function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null): Readonly<{
     inlineImages: readonly SessionMediaInlineImageSummary[];
     unavailableMedia: readonly SessionMediaUnavailableSummary[];
 }> {
     if (envelope === null) return { inlineImages: [], unavailableMedia: [] };
     const parsed = SessionMediaMessageMetaEnvelopeV1Schema.safeParse(envelope);
     if (!parsed.success) return { inlineImages: [], unavailableMedia: [] };
-    // Single-result envelopes already belong to their row, including transports
-    // that namespace the displayed tool id. Bundled results need per-tool selection.
-    const bundledToolResults = toolCallId !== undefined && new Set(
-        parsed.data.payload.media.flatMap(item => item.origin.toolCallId ? [item.origin.toolCallId] : []),
-    ).size > 1;
     return {
         inlineImages: parsed.data.payload.media.flatMap((item) => {
-            if (bundledToolResults && item.origin.toolCallId && item.origin.toolCallId !== toolCallId) return [];
             const normalized = normalizeSessionMediaItem(item);
             return normalized ? [normalized] : [];
         }),
@@ -117,9 +140,9 @@ function parseLegacyAttachmentsMeta(meta: unknown): AttachmentsMessageMetaV1 | n
     return parsed.data;
 }
 
-export function parseSessionMediaMessageMeta(meta: unknown, toolCallId?: string): ParsedSessionMediaMessageMeta {
-    const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'), toolCallId);
-    const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'), toolCallId);
+export function parseSessionMediaMessageMeta(meta: unknown): ParsedSessionMediaMessageMeta {
+    const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'));
+    const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'));
     const legacyAttachments = parseLegacyAttachmentsMeta(meta);
     const legacyMedia = legacyAttachments ? normalizeAttachmentMetaToSessionMedia(legacyAttachments.attachments) : [];
 

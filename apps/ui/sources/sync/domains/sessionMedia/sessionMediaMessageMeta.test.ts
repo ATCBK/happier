@@ -26,15 +26,6 @@ function buildSessionMediaMeta(path: string): unknown {
 }
 
 describe('parseSessionMediaMessageMeta', () => {
-    it('keeps a single tool result envelope on its row when the display call id is namespaced', () => {
-        const meta = { happier: { kind: 'session_media.v1', payload: { media: [{
-            id: 'media-1', role: 'output', category: 'tool-artifact', mediaKind: 'image',
-            name: 'comparison.png', path: '.happier/uploads/comparison.png', mimeType: 'image/png', sizeBytes: 80,
-            origin: { source: 'tool-output', toolCallId: 'read-1' },
-        }] } } };
-        expect(parseSessionMediaMessageMeta(meta, 'sc:task-1:read-1').inlineImages).toHaveLength(1);
-    });
-
     it('treats absent media envelopes as an empty projection', () => {
         for (const meta of [undefined, null, {}, { happier: null }, { happierMedia: null }]) {
             expect(parseSessionMediaMessageMeta(meta)).toEqual({

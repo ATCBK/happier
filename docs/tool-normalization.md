@@ -103,13 +103,22 @@ pass through `ApiSessionClient.prepareClaudeSessionMessage`. Its Claude-owned me
 adapter reuses the existing content-block extractor and `createAgentSessionMediaPersister`
 before serialization. Image bytes become workspace media files; the tool result keeps
 its identity, text, permissions and sidechain, with the existing `session_media.v1`
-metadata. Duplicate native image bytes are replaced in the transcript copy only.
+metadata. Recognized inline image payloads, including rejected encodings and duplicate
+native Read bytes, are redacted from the transcript copy only.
 Persistence failures use the shared unavailable-media result. The protocol envelope
 owns the per-row entry budget; overflow is reported in the normal file log.
 
-The shared tool transcript row renders that metadata with the same preview and
-unavailable-item components as text rows. Images with a tool-call origin are shown
-only on their matching tool, including bundled parallel results. This requires both
+The default destination is `.happier/uploads/artifacts/...` under the session working
+directory on the Agent machine. The server retains transcript references, not an
+uploaded image blob. Previews read the file through the existing daemon transfer
+path, which can traverse the relay; they require the Agent machine to be reachable.
+
+The reducer splits media metadata when one transcript row contains several tool
+results, using the actual tool origins (and hashed failure origins) before updating
+each tool or buffering an orphan result. Single-result metadata stays on its owning
+row, including ACP sidechains with namespaced display ids. The shared tool row
+renders the selected metadata with the existing preview and unavailable-item
+components. This requires both
 the corrected CLI writer and UI renderer; it introduces no new server wire format.
 
 ### 3) App rendering normalization (fallback)
