@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
 import { recordCachedMachineRpcDirectRouteViable } from '@/sync/domains/transfers/runtime/transferRouteCache';
-import { installTransferProjection, resetTransferFixture, transferMachine } from './sessionFileTransferTestkit';
+import { disposeTransferFixture, installTransferProjection, resetTransferFixture, transferMachine } from './sessionFileTransferTestkit';
 
 vi.mock('react-native', async () => {
     // The mock factory, not the testkit index: the index's graph imports react-native, so loading it here
@@ -16,7 +16,7 @@ describe('useSessionFileDownloadAvailability', () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
         await resetTransferFixture();
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(async () => { await disposeTransferFixture(); vi.unstubAllGlobals(); });
 
     it('keeps browser downloads available through Home RPC when the current Iroh endpoint is unknown', async () => {
         installTransferProjection({ machine: transferMachine({ operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } } }) });

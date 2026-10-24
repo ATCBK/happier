@@ -4,8 +4,8 @@ import { act } from 'react-test-renderer';
 import { createDeferred, createSessionFixture, renderHook } from '@/dev/testkit';
 import { deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { recordCachedMachineRpcDirectRouteUnavailable, recordCachedMachineRpcDirectRouteViable } from '@/sync/domains/transfers/runtime/transferRouteCache';
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { installTransferProjection, resetTransferFixture, transferMachine } from './sessionFileTransferTestkit';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { disposeTransferFixture, installTransferProjection, resetTransferFixture, transferMachine } from './sessionFileTransferTestkit';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -17,7 +17,7 @@ describe('useSessionFileDownloadAvailability', () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
         await resetTransferFixture();
     });
-    afterEach(() => { resetRuntimeFetch(); vi.unstubAllGlobals(); });
+    afterEach(async () => { await disposeTransferFixture(); vi.unstubAllGlobals(); });
 
     it('selects the current browser carrier without trusting cached legacy direct-route viability', async () => {
         const machine = transferMachine({ operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } } });

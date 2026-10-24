@@ -1,12 +1,17 @@
 import { FeaturesResponseSchema, type FeaturesResponse } from '@happier-dev/protocol';
 import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
-import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
-import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 import { setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { invalidateCachedTransferRoutesForServer } from '@/sync/domains/transfers/runtime/transferRouteCache';
+import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
+
+const homes = createHomeGovernanceHarness();
 
 export const TRANSFER_ENDPOINT = { endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test'] };
 
@@ -21,7 +26,7 @@ export function transferFeatures(overrides: Partial<FeaturesResponse['features']
 
 export function transferMachine(overrides: Partial<Machine> = {}): Machine {
     return createMachineFixture({
-        kind: 'persistent', revokedAt: null,
+        kind: 'persistent', revokedAt: null, activeAt: Date.now(),
         operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] }, irohMachineEndpoint: { protocolVersions: [1], ...TRANSFER_ENDPOINT } },
         operationProtocolCapabilitiesRevision: 1,
         daemonState: MachinePublishedDaemonStateV1Schema.parse({ status: 'running', transfer: {
@@ -40,12 +45,16 @@ export function transferMachine(overrides: Partial<Machine> = {}): Machine {
 
 /** Real server/store/projection owners; callers substitute only host and transport boundaries. */
 export async function resetTransferFixture(): Promise<void> {
+    await homes.reset();
+    clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
     for (const serverId of ['server-1', 'server-a', 'server-b', 'server-explicit']) {
         // A profile's id is derived from its host, so `https://server-1` is the profile `server-1` that the
         // sessions, machine lists and active selection below name. (A stable identity must be `srv_…`, so
         // it cannot stand in for these ids.)
-        await upsertServerProfile({ serverUrl: `https://${serverId}` });
+        // Reachability resolves the exact Home's real credential Account, not
+        // the display-only profileScope seeded below.
+        await homes.addHome({ name: serverId, serverUrl: `https://${serverId}`, accountId: 'alice', active: false });
         invalidateCachedTransferRoutesForServer({ serverId });
         primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: transferFeatures() } });
     }
@@ -55,6 +64,13 @@ export async function resetTransferFixture(): Promise<void> {
         ordinarySessionListMembershipByServerId: {}, concurrentSessionListCacheByServerId: {}, sessionListIndexByServerId: {},
         profileScope: { serverId: 'server-1', accountId: 'alice' },
     });
+}
+
+export async function disposeTransferFixture(): Promise<void> {
+    standardCleanup();
+    clearMachineRequestReachabilityForTest();
+    await homes.reset();
+    resetRuntimeFetch();
 }
 
 export function installTransferProjection(input: Readonly<{
@@ -80,4 +96,5 @@ export function installTransferProjection(input: Readonly<{
         machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'idle' },
         profileScope: { serverId, accountId: 'alice' },
     }));
+    observeMachinePresenceForTest({ serverId, accountId: 'alice' }, machine ? [machine.id] : []);
 }

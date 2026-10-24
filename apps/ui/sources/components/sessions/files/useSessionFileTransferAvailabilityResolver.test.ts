@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { createDeferred, createSessionFixture, renderHook } from '@/dev/testkit';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 import { setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { recordCachedMachineRpcDirectRouteViable } from '@/sync/domains/transfers/runtime/transferRouteCache';
 import { probeIrohMachineTransferLifecycleAvailability } from '@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle';
-import { installTransferProjection, resetTransferFixture, transferFeatures, transferMachine } from './sessionFileTransferTestkit';
+import { disposeTransferFixture, installTransferProjection, resetTransferFixture, transferFeatures, transferMachine } from './sessionFileTransferTestkit';
 import { useSessionFileTransferAvailabilityResolver, useSessionFileTransferAvailabilityState } from './useSessionFileTransferAvailability';
 
 vi.mock('react-native', async () => {
@@ -14,12 +15,22 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+// Recognizing a desktop host also routes credential custody through its OS
+// command bridge. Keep that boundary stateful while the real storage migrates.
+function desktopInvokeBoundary(iroh: (command: string) => Promise<{ available: boolean }>) {
+    const secureStorage = createDesktopSecureStorageBoundary();
+    return async (command: string, args?: Record<string, unknown>) => {
+        if (command === 'iroh_get_availability') return iroh(command);
+        return secureStorage.invoke(command, args);
+    };
+}
+
 describe('useSessionFileTransferAvailabilityResolver', () => {
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
         await resetTransferFixture();
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(async () => { await disposeTransferFixture(); vi.unstubAllGlobals(); });
 
     it('reactively enables an Iroh-only native transfer after the host lifecycle probe succeeds', async () => {
         const availability = createDeferred<{ available: boolean }>();
@@ -28,7 +39,7 @@ describe('useSessionFileTransferAvailabilityResolver', () => {
             return availability.promise;
         });
         // The physical desktop command bridge is the availability boundary.
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: desktopInvokeBoundary(invoke) });
         installTransferProjection();
         const hook = await renderHook(() => useSessionFileTransferAvailabilityResolver('s1'));
         expect(hook.getCurrent()(null)).toBe(false);
@@ -61,10 +72,10 @@ describe('useSessionFileTransferAvailabilityResolver', () => {
     });
 
     it('keeps a native Runner unavailable without its current Iroh endpoint', async () => {
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string) => {
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: desktopInvokeBoundary(async (command: string) => {
             expect(command).toBe('iroh_get_availability');
             return { available: true };
-        } });
+        }) });
         installTransferProjection({ machine: transferMachine({
             id: 'runner-1', kind: 'ephemeral_session_runner', daemonState: null,
             operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } },
