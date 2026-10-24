@@ -226,8 +226,11 @@ describe('voiceAgentPrompt', () => {
     const prompt = buildLocalVoiceAgentSystemPrompt({
       actionsTag: 'voice_actions',
       sessionId: 's1',
-      disabledActionIds: ['review.start'],
-    } as any);
+      disabledActionIds: ['review.start', 'settings.list'],
+    });
+
+    expect(prompt).not.toContain('- settings_list:');
+    expect(prompt).toContain('- settings_get:');
 
     const review = listVoiceActionBlockSpecs().find((s) => s.id === 'review.start');
     const toolName = review?.bindings?.voiceClientToolName;

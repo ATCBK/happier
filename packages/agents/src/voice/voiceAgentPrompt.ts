@@ -1,4 +1,5 @@
 import { listVoiceActionBlockSpecs, listVoiceSdkSafeToolActionSpecs, listVoiceToolActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { isActionDirectToolExposedOn } from '@happier-dev/protocol/actions/actionToolExposure';
 import { buildMemoryRecallGuidanceBlockV1 } from '@happier-dev/protocol/prompts/memoryRecallGuidanceV1';
 import { buildPromptPlanV1, renderPromptPlanV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
 import { VOICE_ACTIONS_TAG } from '@happier-dev/protocol/voice/actions';
@@ -331,19 +332,23 @@ export function buildLocalVoiceAgentSystemPrompt(params?: Readonly<{
 }>): string {
   const tag = params?.actionsTag?.trim() || VOICE_ACTIONS_TAG;
   const sessionId = params?.sessionId?.trim() || '';
-  const discoveryLines = buildVoiceDiscoveryChecklistLines(listVoiceActionBlockSpecs(), {
+  const actionSpecs = listVoiceActionBlockSpecs();
+  const discoveryLines = buildVoiceDiscoveryChecklistLines(actionSpecs, {
     disabledActionIds: params?.disabledActionIds,
   });
-  const actionLines = buildVoiceToolDocumentationLines(listVoiceActionBlockSpecs(), {
+  // The native Agent and its action-block instructions share direct-exposure
+  // policy. A hot-path-only prompt otherwise hides tools the Agent receives.
+  const actionLines = buildVoiceToolDocumentationLines(actionSpecs, {
     disabledActionIds: params?.disabledActionIds,
     invocationLabel: 'Args:',
+    requiredDirectActionIds: actionSpecs.filter(spec => isActionDirectToolExposedOn(spec, 'agent')).map(spec => spec.id),
   });
 
   return renderPromptPlanV1(buildPromptPlanV1({
     modality: 'voice',
     blocks: buildVoiceBlocks({
       idPrefix: 'voice.local',
-      base: params ?? {},
+      base: { ...(params ?? {}), actionSpecs },
       extraSystemAppendBlocks: params?.extraSystemAppendBlocks,
       bodyBlocks: [
         {
