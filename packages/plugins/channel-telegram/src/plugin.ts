@@ -37,6 +37,7 @@ import {
   setupTelegramChannels,
   testTelegramConnection,
   TELEGRAM_SETUP_INPUT_PROTOCOL_SCHEMA,
+  TELEGRAM_SETUP_GUIDANCE,
 } from './channelActions.js';
 import { TELEGRAM_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
@@ -321,7 +322,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
     [CONVERSATION_CORE_PLUGIN_ID_V1]: {
       providers: {
         [TELEGRAM_CHANNEL_PROVIDER_CONTRIBUTION_ID]: providers.contribute({
-          descriptor: { v: 1, displayName: 'Telegram' },
+          descriptor: { v: 1, displayName: 'Telegram', setupGuidance: TELEGRAM_SETUP_GUIDANCE },
           operations: {
             setup: providers.operations.setup.bind(TELEGRAM_CHANNEL_ACTION_IDS.setup),
             setupRemediation: providers.operations.setupRemediation.bind(

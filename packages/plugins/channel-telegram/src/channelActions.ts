@@ -35,6 +35,7 @@ import {
   type ConversationProviderConnectionInputV1,
   type ConversationProviderFailureV1,
   type ConversationProviderSetupOutcomeV1,
+  type ConversationProviderSetupResultV1,
   type ConversationProviderSetupRemediationResultV1,
   type ConversationBindingInputModeV1,
   type ConversationResolvedEndpointV1,
@@ -544,6 +545,19 @@ function telegramSharedEndpointInputModes(
     : ['directMentionsOnly', 'addressedMessages'];
 }
 
+/** Static provider-authored guide shared by cold setup presentation and verified preparation. */
+export const TELEGRAM_SETUP_GUIDANCE: NonNullable<ConversationProviderSetupResultV1['setupGuidance']> = {
+  externalUrl: 'https://t.me/BotFather',
+  requiredPermissionsLabel: 'Create a bot with BotFather and store its token in a Telegram Bot Connected Account.',
+  steps: [
+    { title: 'Open the verified BotFather in Telegram', externalUrl: 'https://t.me/BotFather' },
+    { title: 'Create your bot and follow BotFather’s name and username prompts',
+      externalUrl: 'https://core.telegram.org/bots/tutorial#obtain-your-bot-token',
+      copyableValues: [{ label: 'BotFather command', value: '/newbot' }] },
+    { title: 'Paste the bot token into a Telegram Bot Connected Account, then select it and test the connection' },
+  ],
+};
+
 export async function setupTelegramChannels(
   input: unknown,
   context: PluginInvocationContext,
@@ -596,17 +610,7 @@ export async function setupTelegramChannels(
     // The authenticated delivery truth travels with the connection instead of
     // being discarded into the opaque provider configuration.
     sharedEndpointInputModes: telegramSharedEndpointInputModes(identity),
-    setupGuidance: {
-      externalUrl: 'https://t.me/BotFather',
-      requiredPermissionsLabel: 'Create a bot with BotFather and store its token in a Telegram Bot Connected Account.',
-      steps: [
-        { title: 'Open the verified BotFather in Telegram', externalUrl: 'https://t.me/BotFather' },
-        { title: 'Create your bot and follow BotFather’s name and username prompts',
-          externalUrl: 'https://core.telegram.org/bots/tutorial#obtain-your-bot-token',
-          copyableValues: [{ label: 'BotFather command', value: '/newbot' }] },
-        { title: 'Paste the bot token into a Telegram Bot Connected Account, then select it and test the connection' },
-      ],
-    },
+    setupGuidance: TELEGRAM_SETUP_GUIDANCE,
     pairingDeepLinkTemplate: `https://t.me/${identity.username}?start={{token}}`,
   });
 }

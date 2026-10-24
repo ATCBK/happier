@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ConversationProviderDescriptorV1Schema } from './descriptor.js';
 
 import {
     ConversationProviderSetupOutcomeV1Schema,
@@ -19,6 +20,8 @@ describe('Channels V1 provider setup outcomes', () => {
             ],
         };
         expect(ConversationProviderSetupGuidanceV1ProtocolSchema.parse(guidance)).toEqual(guidance);
+        expect(ConversationProviderDescriptorV1Schema.parse({ v: 1, displayName: 'Provider', setupGuidance: guidance }))
+            .toEqual({ v: 1, displayName: 'Provider', setupGuidance: guidance });
         for (const step of [
             { title: '' },
             { title: 'Open setup', externalUrl: 'javascript:alert(1)' },
@@ -26,6 +29,8 @@ describe('Channels V1 provider setup outcomes', () => {
             { title: 'Configure', copyableValues: [{ label: 'Scope', value: 'read', secret: true }] },
         ]) {
             expect(ConversationProviderSetupGuidanceV1ProtocolSchema.safeParse({ ...guidance, steps: [step] }).success).toBe(false);
+            expect(ConversationProviderDescriptorV1Schema.safeParse({ v: 1, displayName: 'Provider',
+                setupGuidance: { ...guidance, steps: [step] } }).success).toBe(false);
         }
         expect(ConversationProviderSetupGuidanceV1ProtocolSchema.jsonSchema).toMatchObject({
             additionalProperties: false,

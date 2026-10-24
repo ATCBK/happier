@@ -1,4 +1,4 @@
-import { ConversationProvidersContributionProtocolV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationProvidersContributionProtocolV1, ConversationProviderDescriptorV1Schema } from '@happier-dev/channels-protocol/v1';
 import { assertConversationProviderContributionV1 } from '@happier-dev/channels-protocol/testing/v1';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { QualifiedConnectedAccountRefJsonSchema } from '@happier-dev/plugin-sdk/connected-accounts';
@@ -83,6 +83,21 @@ function coreContext(services: Readonly<{
 }
 
 describe('Telegram Channel plugin activation', () => {
+  it('publishes the BotFather guide before setup or Connected Account materialization', () => {
+    const declaration = PLUGIN_MANIFEST.contributes.targetedPluginContributions?.find(entry => entry.target.pointId === 'providers');
+    const descriptor = ConversationProviderDescriptorV1Schema.parse(declaration?.descriptor);
+    expect(descriptor).toMatchObject({ setupGuidance: {
+      externalUrl: 'https://t.me/BotFather',
+      steps: [
+        { externalUrl: 'https://t.me/BotFather' },
+        { externalUrl: 'https://core.telegram.org/bots/tutorial#obtain-your-bot-token',
+          copyableValues: [{ value: '/newbot' }] },
+        { title: expect.any(String) },
+      ],
+    } });
+    expect(JSON.stringify(descriptor)).not.toMatch(/credentialRef|providerConfig|integrationPrincipal|pairingDeepLinkTemplate/);
+  });
+
   it('declares the Event after Channels durably owns its shared-offset obligation', () => {
     expect(PLUGIN_MANIFEST.contributes.events).toEqual([expect.objectContaining({
       id: TELEGRAM_AUTOMATION_MESSAGE_EVENT_ID,
@@ -138,7 +153,7 @@ describe('Telegram Channel plugin activation', () => {
     try {
       expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
         id: 'telegram-provider',
-        descriptor: { v: 1, displayName: 'Telegram' },
+        descriptor: expect.objectContaining({ v: 1, displayName: 'Telegram', setupGuidance: expect.any(Object) }),
         target: { pluginId: 'happier.channels', pointId: 'providers' },
         protocol: { id: 'happier.channels/providers', version: 1 },
         operations: TELEGRAM_CHANNEL_PROVIDER_OPERATIONS,
