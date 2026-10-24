@@ -108,6 +108,11 @@ the selected Voice computer. Choose an Agent and its model configuration through
 same Agent/Provider selection used for sessions. A configured model provider is a
 model source for that Agent, not a second Voice-owned chat-completions runtime.
 
+Following a session's model requires an exact current model selection. In 0.3
+development, a dedicated Voice agent cannot inherit a Team credential model and
+reports a setup error before starting. Choose an explicit supported model for
+Voice, or use **Direct to session** to speak into the Team-backed session.
+
 Older direct-chat settings are retained inputs to the existing compatibility path;
 they are not an additional backend choice in the current interface.
 
