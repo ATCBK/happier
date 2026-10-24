@@ -363,9 +363,12 @@ Absent or malformed markers retain ordinary path-session behavior, including
 released 0.2 session data. The marker never establishes filesystem ownership;
 only the daemon's local owner record can do that.
 
-Session organization adds `{ t: 'managedSessions', serverId, machineId }` to
-`SessionFolderWorkspaceRefV1`. It represents one machine's Chats scope, so private
-per-session paths do not become folder scopes, Projects or recent paths.
+Retained folder data can use `{ t: 'managedSessions', serverId, machineId }` in
+`SessionFolderWorkspaceRefV1` for one machine's Chats scope. Current 0.3 Account
+sections use the existing folder records without a workspace restriction; private
+per-session paths still do not become Projects or recent paths. The
+[section Action contract](actions.md) preserves these historical identities and
+assignments while keeping the released folder HTTP DTO vocabulary.
 
 A missing or unproven managed directory produces `SESSION_DIRECTORY_MISSING`
 without silent recreation. Explicit user consent reuses the resume request's
