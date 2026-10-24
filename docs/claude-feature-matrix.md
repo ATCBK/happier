@@ -70,7 +70,9 @@ In development source, remote model confirmation reads genuine main-session assi
 messages before presentation normalization. Startup announcements, historical replay,
 sidechains, provider errors and synthesized presentation messages cannot confirm a
 requested model. Launch effort is paired with the first genuine assistant observation
-only; later model observations do not reapply the old launch effort.
+only; later model observations do not reapply the old launch effort. Native control
+verification also clears effort observed for a different model, so an effort request
+for the new model must be verified again.
 Claude still owns inbound delivery
 policy: its [non-interactive messaging contract](https://code.claude.com/docs/en/cross-session-messaging#non-interactive-sessions)
 does not expose the terminal approval dialog in `-p` sessions. Happier does not

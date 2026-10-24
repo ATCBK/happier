@@ -156,16 +156,31 @@ export function createClaudeUnifiedTuiControlController(
     ))?.dialogId ?? null;
   }
 
+  function recordVerifiedConfig(update: Readonly<{
+    model?: string | null | undefined;
+    reasoningEffort?: string | null | undefined;
+    modeMarker?: ClaudeTuiModeMarker | null | undefined;
+  }>): void {
+    const model = update.model ?? lastVerified.model;
+    lastVerified = {
+      model,
+      reasoningEffort: update.reasoningEffort
+        ?? (model === lastVerified.model ? lastVerified.reasoningEffort : null),
+      modeMarker: update.modeMarker ?? lastVerified.modeMarker,
+      verifiedAtMs: nowMs(),
+    };
+  }
+
   function recordVerified(key: RuntimeConfigOutcomeChangeKeyV1, change: RuntimeConfigChangeOutcome): void {
     if (change.status !== 'applied') return;
     const effective = typeof change.effective === 'string' ? change.effective : null;
     if (key === 'model') {
-      lastVerified = { ...lastVerified, model: effective ?? lastVerified.model, verifiedAtMs: nowMs() };
+      recordVerifiedConfig({ model: effective });
     } else if (key === 'reasoningEffort') {
-      lastVerified = { ...lastVerified, reasoningEffort: effective ?? lastVerified.reasoningEffort, verifiedAtMs: nowMs() };
+      recordVerifiedConfig({ reasoningEffort: effective });
     } else if (key === 'permissionMode' || key === 'sessionMode') {
       const marker = effective as ClaudeTuiModeMarker | null;
-      lastVerified = { ...lastVerified, modeMarker: marker ?? lastVerified.modeMarker, verifiedAtMs: nowMs() };
+      recordVerifiedConfig({ modeMarker: marker });
     }
   }
 
@@ -506,15 +521,10 @@ export function createClaudeUnifiedTuiControlController(
 
     reconcileFromStatusline(metadata: ClaudeStatuslineRuntimeMetadata): void {
       // Effective-truth feed only (lane Y): updates lastVerified, never desired/pending state and
-      // never the TUI. Absent fields are ignored (haiku statuslines omit effort); a fully-empty
-      // update must not even bump verifiedAtMs.
+      // never the TUI. A model change invalidates effort observed for the previous model;
+      // a fully-empty update must not even bump verifiedAtMs.
       if (metadata.model === undefined && metadata.reasoningEffort === undefined) return;
-      lastVerified = {
-        ...lastVerified,
-        model: metadata.model ?? lastVerified.model,
-        reasoningEffort: metadata.reasoningEffort ?? lastVerified.reasoningEffort,
-        verifiedAtMs: nowMs(),
-      };
+      recordVerifiedConfig(metadata);
     },
 
     reconcileAfterProviderPromptSubmit(metadata: ClaudePromptSubmitMetadata): void {
@@ -522,12 +532,11 @@ export function createClaudeUnifiedTuiControlController(
       const modeMarker = typeof metadata.permissionMode === 'string'
         ? permissionModeToMarker(metadata.permissionMode)
         : lastVerified.modeMarker;
-      lastVerified = {
+      recordVerifiedConfig({
         model: metadata.model ?? lastVerified.model,
-        reasoningEffort: effort ?? lastVerified.reasoningEffort,
+        reasoningEffort: effort,
         modeMarker: modeMarker ?? lastVerified.modeMarker,
-        verifiedAtMs: nowMs(),
-      };
+      });
     },
 
     getLastVerifiedRuntimeConfig(): ClaudeUnifiedVerifiedRuntimeConfig {
