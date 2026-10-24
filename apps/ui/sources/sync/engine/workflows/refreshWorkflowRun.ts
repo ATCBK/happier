@@ -7,11 +7,13 @@ import type { WorkflowRunGetResultV1, WorkflowRunListResultV1 } from '@happier-d
 import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { supportsWorkflowAnotherRoundV1 } from '@happier-dev/protocol/workflows';
+import { readWorkflowRunDisplayMetadataV1 } from '@happier-dev/protocol/workflows/workflowRunDisplayMetadataV1';
 
 /** Opened detail uses the same Account body owner as the exact Run screen. Callers fence the read before publication. */
 export function publishOpenedWorkflowRunDetail(detail: WorkflowRunGetResultV1, scope?: ServerAccountScope | null): void {
+    const metadata = readWorkflowRunDisplayMetadataV1(detail.acceptedContext);
     storage.getState().upsertWorkflowRuns([{ ...workflowRunRowFromSummary(detail.run,
-        detail.acceptedContext.metadata ? { kind: 'available', value: detail.acceptedContext.metadata } : null,
+        metadata ? { kind: 'available', value: metadata } : null,
         supportsWorkflowAnotherRoundV1(detail.definition), detail.callerAccess), detail }], scope);
 }
 

@@ -1,4 +1,5 @@
 import { deriveWorkflowReplacementId } from '../../workflows/workflowInvocationIdentityV1.js';
+import { readWorkflowRunDisplayMetadataV1 } from '../../workflows/workflowRunDisplayMetadataV1.js';
 import { z as zodMiniCore0 } from 'zod/mini';
 
 import { WorkflowAcceptedSnapshotV1Schema, type WorkflowDefinitionSavedByV1 } from '../../workflows/workflowDefinitionV1.js';
@@ -2363,12 +2364,11 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               const project = accepted.workspaceTarget.project;
               where = { machineId: project.machineId, directory: project.directory,
                 ...(project.workspaceRefId ? { workspaceRefId: project.workspaceRefId } : {}) };
-              // An opened snapshot with no authored metadata is an untitled
-              // Run, not unreadable private content. The sidecar omits its
-              // key so the consumer keeps its ordinary unknown-name state
-              // instead of reporting a content-unavailable Run.
-              projected = accepted.metadata
-                ? { kind: 'available', value: accepted.metadata }
+              // Names come from this already-opened snapshot, never a mutable
+              // definition lookup. Anonymous inline Runs remain untitled.
+              const displayMetadata = readWorkflowRunDisplayMetadataV1(accepted);
+              projected = displayMetadata
+                ? { kind: 'available', value: displayMetadata }
                 : null;
             } catch (error) {
               // The public row remains useful even when this Account cannot

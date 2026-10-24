@@ -1,4 +1,5 @@
 import type { WorkflowOperationErrorCodeV1, WorkflowRunPrivateMetadataV1 } from '@happier-dev/protocol';
+import { readWorkflowRunDisplayMetadataV1 } from '@happier-dev/protocol/workflows/workflowRunDisplayMetadataV1';
 import { describeWorkflowOperationProblem } from './workflowProblemPresentation';
 
 import { t } from '@/text';
@@ -23,9 +24,12 @@ export type WorkflowRunDisplayName =
 
 export function resolveWorkflowRunDisplayName(
     metadata: WorkflowRunPrivateMetadataV1 | null | undefined,
+    acceptedContext?: Parameters<typeof readWorkflowRunDisplayMetadataV1>[0],
 ): WorkflowRunDisplayName {
     if (metadata?.kind === 'available') return { kind: 'name', value: metadata.value.title };
-    return metadata?.kind === 'unavailable' ? { kind: 'unavailable', reason: metadata.reason } : { kind: 'unknown' };
+    if (metadata?.kind === 'unavailable') return { kind: 'unavailable', reason: metadata.reason };
+    const displayMetadata = acceptedContext ? readWorkflowRunDisplayMetadataV1(acceptedContext) : null;
+    return displayMetadata ? { kind: 'name', value: displayMetadata.title } : { kind: 'unknown' };
 }
 
 /** The one localized label for each resolved name. */

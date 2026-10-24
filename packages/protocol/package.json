@@ -2715,6 +2715,11 @@
       "types": "./dist/workflows/builtins/catalog.d.ts",
       "default": "./dist/workflows/builtins/catalog.js"
     },
+    "./workflows/workflowRunDisplayMetadataV1": {
+      "happier-source": "./src/workflows/workflowRunDisplayMetadataV1.ts",
+      "types": "./dist/workflows/workflowRunDisplayMetadataV1.d.ts",
+      "default": "./dist/workflows/workflowRunDisplayMetadataV1.js"
+    },
     "./workflows/builtins/examples": {
       "happier-source": "./src/workflows/builtins/examples.ts",
       "types": "./dist/workflows/builtins/examples.d.ts",

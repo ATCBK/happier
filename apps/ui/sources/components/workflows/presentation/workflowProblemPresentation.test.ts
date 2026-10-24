@@ -104,6 +104,17 @@ describe('workflowProblemPresentation', () => {
         expect(formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName({ kind: 'available', value: { title: 'My known run' } })))
             .toBe('My known run');
     });
+    it('names opened built-ins without overriding explicit names or unreadable state', () => {
+        const accepted = { source: { kind: 'catalog', ref: 'builtin:fresh-opinions', version: 1 } } as const;
+        expect(resolveWorkflowRunDisplayName(null, accepted)).toEqual({ kind: 'name', value: 'Fresh opinions' });
+        expect(resolveWorkflowRunDisplayName(null, { ...accepted, metadata: { title: 'Named at acceptance' } }))
+            .toEqual({ kind: 'name', value: 'Named at acceptance' });
+        expect(resolveWorkflowRunDisplayName({ kind: 'unavailable', reason: 'waiting_for_keys' }, accepted))
+            .toEqual({ kind: 'unavailable', reason: 'waiting_for_keys' });
+        expect(resolveWorkflowRunDisplayName(null, { source: { kind: 'inline' } })).toEqual({ kind: 'unknown' });
+        expect(resolveWorkflowRunDisplayName(null, { source: { kind: 'catalog', ref: 'builtin:unknown', version: 1 } }))
+            .toEqual({ kind: 'unknown' });
+    });
     it('explains unavailable header content from the typed owner reason', () => {
         const error = new WorkflowActionError({ rawCode: 'content_unavailable', message: 'private implementation text',
             failure: { ok: false, errorCode: 'content_unavailable', error: 'workflow_definition_content_unavailable',
