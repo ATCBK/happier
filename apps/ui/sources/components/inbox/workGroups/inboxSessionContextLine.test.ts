@@ -71,7 +71,7 @@ describe('Inbox session row line', () => {
   it('says what the session needs first, as the start of a sentence, before where it runs', () => {
     const line =
       buildInboxSessionContextLine(readyCandidate(), { showHome: true }) ?? '';
-    const need = t('workStatus.finished');
+    const need = t('workStatus.buckets.finished');
     expect(line.startsWith(need.charAt(0).toLocaleUpperCase() + need.slice(1))).toBe(true);
     expect(line).toContain('0.3');
   });
