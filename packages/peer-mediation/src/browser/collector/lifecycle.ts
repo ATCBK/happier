@@ -28,6 +28,7 @@ export const INJECTED_LIFECYCLE_BOOTSTRAP = `
   window.__happierBrowserRuntime = runtime;
 
   var restored = false;
+  var presentationActive = config.presentationActive !== false;
   var originalConsole = {};
   var eventSeq = 0;
 
@@ -70,6 +71,7 @@ export const INJECTED_LIFECYCLE_BOOTSTRAP = `
   }
 
   function postEvents(events) {
+    if (!presentationActive) return;
     if (!events.length) return;
     var batch = {
       v: 1,
@@ -142,6 +144,7 @@ export const INJECTED_LIFECYCLE_COMMANDS = `
   }
 
   function handleLoad() {
+    if (!presentationActive) return;
     emitPageInfo();
     emitResourceSnapshot();
     emitElementsSnapshot();
@@ -373,6 +376,17 @@ export const INJECTED_LIFECYCLE_FOOTER = `
   runtime.modules.automation = automationModule;
 
   var diagnosticsModule = {
+    setPresentationActive: function (active) {
+      if (presentationActive === active) return;
+      presentationActive = active === true;
+      if (presentationActive) {
+        installPerformanceObservers();
+        handleLoad();
+      } else {
+        teardownPerformanceObservers();
+        teardownElementPicker();
+      }
+    },
     teardown: function () {
       if (restored) return;
       restored = true;
@@ -421,13 +435,15 @@ export const INJECTED_LIFECYCLE_FOOTER = `
   runtime.modules.diagnostics = diagnosticsModule;
   window.__happierBrowserDiagnostics = diagnosticsModule;
 
-  installPerformanceObservers();
+  if (presentationActive) installPerformanceObservers();
 
-  emitPageInfo();
-  emitElementsSnapshot();
-  emitStorageAvailability();
-  emitStorageKeyInventory();
-  emitDomSnapshot();
-  emitPageCapabilities();
+  if (presentationActive) {
+    emitPageInfo();
+    emitElementsSnapshot();
+    emitStorageAvailability();
+    emitStorageKeyInventory();
+    emitDomSnapshot();
+    emitPageCapabilities();
+  }
   if (config.cooperativePreview) emitCooperativeCollectorLifecycle('browser.collector.ready');
 `;

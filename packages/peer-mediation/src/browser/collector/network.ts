@@ -1,6 +1,6 @@
 export const INJECTED_NETWORK_HELPERS = `
 	  function ownerValueCaptureEnabled() {
-	    return config.ownerDiagnosticsValueCapture === true;
+	    return presentationActive && config.ownerDiagnosticsValueCapture === true;
 	  }
 
 	  function capOwnerValue(value) {
@@ -123,6 +123,10 @@ export const INJECTED_NETWORK_HELPERS = `
 	        }
 	      }
 	      function readNext() {
+	        if (!presentationActive) {
+	          cancelReader();
+	          return Promise.resolve(undefined);
+	        }
 	        if (truncated || text.length >= cap) {
 	          truncated = true;
 	          cancelReader();
@@ -173,6 +177,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
 	      var requestBody;
 
       function postRequestStarted() {
+        if (!presentationActive) return;
         if (requestStarted) return;
         requestStarted = true;
         requestEventId = eventId('network.requestStarted');
@@ -184,6 +189,8 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
       }
 
 	      function postFinished() {
+	        if (!presentationActive) return;
+	        postRequestStarted();
 	        if (settled) return;
 	        settled = true;
 	        if (ownerValueCaptureEnabled()) {
@@ -216,6 +223,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
 	      }
 
       function postFailed() {
+        if (!presentationActive) return;
         if (settled) return;
         settled = true;
         var failedEvent = baseEvent('network', 'network.failed', {
@@ -236,7 +244,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
 	      if (typeof originalSetRequestHeader === 'function') {
 	        xhr.setRequestHeader = function (name, value) {
 	          try {
-	            requestHeaders[String(name || '')] = String(value || '');
+	            if (ownerValueCaptureEnabled()) requestHeaders[String(name || '')] = String(value || '');
 	          } catch (_error) {
 	            // Ignore page-owned header coercion failures.
 	          }
@@ -290,6 +298,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
 
   if (originalFetch) {
     window.fetch = function (input, init) {
+      if (!presentationActive) return originalFetch.apply(this, arguments);
       var url = typeof input === 'string' ? input : String(input && input.url || '');
       var method = String(init && init.method || input && input.method || 'GET');
       var requestEventId = eventId('network.requestStarted');
@@ -306,6 +315,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
       }), { eventId: requestEventId })]);
       return originalFetch.apply(this, arguments).then(function (response) {
         function postFinished(responseBody) {
+          if (!presentationActive) return;
           if (ownerValueCaptureEnabled()) {
             var responseEvent = baseEvent('network', 'network.response', ownerNetworkResponseData({
               requestId: requestEventId,
@@ -386,13 +396,14 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
       var protocolCount = typeof protocols === 'string'
         ? (protocols ? 1 : 0)
         : (Array.isArray(protocols) ? protocols.length : 0);
-      postEvents([baseEvent('network', 'network.websocketOpened', {
+      if (presentationActive) postEvents([baseEvent('network', 'network.websocketOpened', {
         socketId: socketId,
         url: sanitizeUrl(typeof url === 'string' ? url : String(url || '')),
         ...(protocolCount > 0 ? { hasProtocol: true, protocolCount: protocolCount } : {})
       })]);
 
       function postSummary(state) {
+        if (!presentationActive) return;
         postEvents([baseEvent('network', 'network.websocketSummary', {
           socketId: socketId,
           state: state,
@@ -410,6 +421,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
           postSummary('open');
         });
         socket.addEventListener('message', function (messageEvent) {
+          if (!presentationActive) return;
           framesReceived += 1;
           messageCount += 1;
           bytesReceived += byteLengthOf(messageEvent && messageEvent.data);
@@ -419,6 +431,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
           postSummary('open');
         });
         socket.addEventListener('close', function (closeEvent) {
+          if (!presentationActive) return;
           postEvents([baseEvent('network', 'network.websocketClosed', {
             socketId: socketId,
             code: Number(closeEvent && closeEvent.code || 0),
@@ -435,6 +448,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
       var originalSend = socket.send;
       if (typeof originalSend === 'function') {
         socket.send = function (data) {
+          if (!presentationActive) return originalSend.apply(socket, arguments);
           framesSent += 1;
           bytesSent += byteLengthOf(data);
           return originalSend.apply(socket, arguments);
@@ -471,13 +485,14 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
       var messageCount = 0;
       var bytesReceived = 0;
 
-      postEvents([baseEvent('network', 'network.eventSourceOpened', {
+      if (presentationActive) postEvents([baseEvent('network', 'network.eventSourceOpened', {
         sourceId: sourceId,
         url: sanitizeUrl(typeof url === 'string' ? url : String(url || ''))
       })]);
 
       try {
         source.addEventListener('open', function () {
+          if (!presentationActive) return;
           postEvents([baseEvent('network', 'network.eventSourceSummary', {
             sourceId: sourceId,
             state: 'open',
@@ -486,6 +501,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
           })]);
         });
         source.addEventListener('message', function (messageEvent) {
+          if (!presentationActive) return;
           messageCount += 1;
           bytesReceived += byteLengthOf(messageEvent && messageEvent.data);
           postEvents([baseEvent('network', 'network.eventSourceSummary', {
@@ -496,6 +512,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
           })]);
         });
         source.addEventListener('error', function () {
+          if (!presentationActive) return;
           var readyState = Number(source && source.readyState);
           postEvents([baseEvent('network', 'network.eventSourceClosed', {
             sourceId: sourceId,
@@ -538,6 +555,7 @@ export const INJECTED_NETWORK_INTERCEPTORS = `
   var beaconSeq = 0;
   if (originalSendBeacon) {
     beaconNavigator.sendBeacon = function (beaconUrl, data) {
+      if (!presentationActive) return originalSendBeacon.apply(beaconNavigator, arguments);
       beaconSeq += 1;
       var requestId = config.viewId + ':' + config.navigationGeneration + ':beacon:' + beaconSeq;
       var accepted = true;

@@ -31,6 +31,7 @@ export const INJECTED_CONSOLE_RUNTIME = `
   ['debug', 'error', 'info', 'log', 'warn'].forEach(function (level) {
     originalConsole[level] = console[level];
     console[level] = function () {
+      if (!presentationActive) return originalConsole[level].apply(console, arguments);
       var args = Array.prototype.slice.call(arguments);
       var data = {
         level: level,
@@ -58,6 +59,7 @@ export const INJECTED_CONSOLE_RUNTIME = `
   });
 
   function handleError(event) {
+    if (!presentationActive) return;
     var errorEvent = baseEvent('pageError', 'pageError.thrown', {
       textAvailable: Boolean(event.error || event.message)
     });
