@@ -1253,6 +1253,7 @@ function isDirectProtocolValueReexport(sourceFile, exportName) {
   return sourceFile.statements.some((statement) => {
     if (
       !ts.isExportDeclaration(statement)
+      || statement.exportClause === undefined
       || !ts.isNamedExports(statement.exportClause)
       || statement.moduleSpecifier === undefined
       || !ts.isStringLiteral(statement.moduleSpecifier)
@@ -1271,6 +1272,7 @@ function isDirectProtocolTypeReexport(sourceFile, exportName) {
   return sourceFile.statements.some((statement) => {
     if (
       !ts.isExportDeclaration(statement)
+      || statement.exportClause === undefined
       || !ts.isNamedExports(statement.exportClause)
       || statement.moduleSpecifier === undefined
       || !ts.isStringLiteral(statement.moduleSpecifier)

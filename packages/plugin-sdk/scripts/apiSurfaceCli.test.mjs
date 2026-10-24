@@ -3555,7 +3555,7 @@ test('CLI rejects package-local types named by public class and inferred object 
   }
 });
 
-test('CLI terminates on explicitly annotated recursive values without hiding named annotation types', async () => {
+test('CLI terminates on explicitly annotated recursive values beside star reexports without hiding named annotation types', async () => {
   const root = await createPackageFixture();
   try {
     await publishFixtureSymbols(root, [
@@ -3576,9 +3576,11 @@ test('CLI terminates on explicitly annotated recursive values without hiding nam
         realm: 'any',
       },
     ]);
+    await writeFile(join(root, 'src/actions/extra.ts'), 'export const unrelated = true;\n', 'utf8');
     await writeFile(
       join(root, 'src/actions/service.ts'),
       [
+        "export * from './extra.js';",
         'type HiddenMember = Readonly<{ id: string }>;',
         'export interface ActionsService {}',
         'export interface RecursiveSchema<TValue> {',
@@ -3611,6 +3613,7 @@ test('CLI terminates on explicitly annotated recursive values without hiding nam
     await writeFile(
       join(root, 'src/actions/service.ts'),
       [
+        "export * from './extra.js';",
         'export type HiddenMember = Readonly<{ id: string }>;',
         'export interface ActionsService {}',
         'export interface RecursiveSchema<TValue> {',
