@@ -55,8 +55,7 @@ import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurfac
 import { SessionPaneErrorBoundary, SessionPaneLazyLoader } from './SessionPaneLazyLoader';
 import { SessionWorkView } from '@/components/sessions/work/SessionWorkView';
 import { useSessionWorkSources } from '@/components/sessions/work/sessionWorkSources';
-import { readWorkWorkingCount } from '@/components/sessions/work/workProjection';
-import { readSessionManagedSessionsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readWorkSummaryPresentation } from '@/components/sessions/work/workProjection';
 import { SessionBoardPane } from '@/components/sessions/board/SessionBoardPane';
 import { SessionTranscriptNavigationPane } from '@/components/sessions/panes/SessionTranscriptNavigationPane';
 import { getPreferredLanguage, t } from '@/text';
@@ -773,11 +772,7 @@ export const SessionActionRail = React.memo(() => {
     // header strip shows, read from the one owner the Session host mounted — never a second count.
     const workProjection = useSessionWorkSources()?.projection;
     const outstandingCount = workProjection?.summary.outstanding ?? 0;
-    const workStatus = workProjection ? readSessionManagedSessionsPresentationV1({
-        working: readWorkWorkingCount(workProjection.summary),
-        needsYou: workProjection.summary.needsYou,
-        stalled: workProjection.summary.stalled,
-    }) : null;
+    const workStatus = workProjection ? readWorkSummaryPresentation(workProjection.summary) : null;
     const workLabel = workStatus && workStatus.count > 0 ? t('sessionWork.strip.a11y', { summary:
         workStatus.bucket === 'needs_you' ? t('sessionWork.strip.needsYou', { count: workStatus.count })
             : workStatus.bucket === 'working' ? t('sessionWork.strip.stillWorking', { count: workStatus.count })

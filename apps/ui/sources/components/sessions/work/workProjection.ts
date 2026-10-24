@@ -174,6 +174,15 @@ export function readWorkWorkingCount(summary: WorkSummary): number {
     return Math.max(0, summary.outstanding - summary.needsYou - summary.stalled);
 }
 
+/** Compact Work chrome reads this summary, independently of direct Session-report projections. */
+export function readWorkSummaryPresentation(summary: WorkSummary): Readonly<{ bucket: WorkBucket; count: number }> {
+    if (summary.needsYou > 0) return { bucket: 'needs_you', count: summary.needsYou };
+    const working = readWorkWorkingCount(summary);
+    if (working > 0) return { bucket: 'working', count: working };
+    if (summary.stalled > 0) return { bucket: 'offline', count: summary.stalled };
+    return { bucket: 'idle', count: 0 };
+}
+
 export type WorkProjection = Readonly<{
     sessions: readonly WorkItem[];
     workflows: readonly WorkItem[];
