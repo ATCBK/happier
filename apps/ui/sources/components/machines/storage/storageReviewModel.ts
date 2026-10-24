@@ -8,6 +8,7 @@ import type {
 } from '@happier-dev/protocol/storage/storageV1';
 
 import { storagePathContains } from './storagePileModel';
+import { storageVerdictStartsTicked } from '@/sync/domains/machines/storage/storageVerdictSelection';
 
 /**
  * The review sheet (plan 40 STO-12/13, R24, lab `rs` R / Rp / PM 9–10): every item checked again on the
@@ -107,6 +108,7 @@ export function buildStorageReview(
     review.trashVolumes.map((entry) => [entry.volumeId, entry.trashAvailable]),
   );
   const going = review.items
+    .filter((check) => check.verdict !== 'forbidden')
     .map((check): StorageReviewRow => {
       const volumeId = volumeOf(check.ref.path, volumes);
       return {
@@ -128,7 +130,8 @@ export function buildStorageReview(
     .sort((a, b) => b.freesBytes - a.freesBytes);
   return {
     going,
-    staying: review.staying.map((entry) => ({
+    staying: [...review.staying, ...review.items.filter((check) => check.verdict === 'forbidden')
+      .map((check) => ({ item: { ...check.ref, title: check.title ?? check.ref.title }, reason: check.reason }))].map((entry) => ({
       itemId: entry.item.itemId,
       path: entry.item.path,
       title: entry.item.title ?? legacyTitle(entry.item.path),
@@ -141,6 +144,19 @@ export function buildStorageReview(
     ),
     totalFreesBytes: review.totalFreesBytes,
   };
+}
+
+/** Unchanged verdicts retain the person's choice; new/changed verdicts take the shared default. */
+export function selectStorageReviewTicks(
+  review: StorageReview,
+  previous?: Readonly<{ review: StorageReview; selected: ReadonlySet<string> }>,
+): ReadonlySet<string> {
+  const before = new Map(previous?.review.going.map((row) => [row.itemId, row.verdict]));
+  return new Set(review.going.filter((row) =>
+    previous && before.get(row.itemId) === row.verdict
+      ? previous.selected.has(row.itemId)
+      : storageVerdictStartsTicked(row.verdict),
+  ).map((row) => row.itemId));
 }
 
 export function selectStorageReviewApply(

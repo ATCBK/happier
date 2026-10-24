@@ -151,9 +151,8 @@ async function checkStorage(
           ? item.size.allocatedBytes
           : null,
       loses: item.loses ?? [],
-      changed:
-        item.expect !== claim.operand.expect ||
-        (model.storageMode !== 'delete' && item.verdict !== claim.claimedVerdict),
+      // Verdict is current guidance; only changed review facts require another check (R41).
+      changed: item.expect !== claim.operand.expect,
     });
   }
   for (const staying of result.value.staying) {
@@ -403,10 +402,10 @@ export function useResourceProposalCheck(
             // A changed item keeps its tick only while it is still something the person can approve.
             setSelection(
               (current) => {
-                // Permanent requests carry no claimed verdict. Only the first current check
-                // establishes Safe defaults; explicit rechecks preserve the person's choices.
-                const selected = model.storageMode === 'delete' && !acknowledged
-                  ? model.items.filter(item => facts.get(item.key)?.verdict === 'safe').map(item => item.key)
+                // Current facts own the first defaults, including when an agent's Safe
+                // claim became Caution. Explicit rechecks preserve the person's choices.
+                const selected = !acknowledged
+                  ? [...initialResourceProposalSelection(model, facts)]
                   : [...current];
                 return new Set(
                   selected.filter((key) => {

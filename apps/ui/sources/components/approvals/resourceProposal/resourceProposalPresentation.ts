@@ -12,6 +12,7 @@ import {
   type StorageReasonV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import type { MachineGuardActivityRowV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import { storageVerdictStartsTicked } from '@/sync/domains/machines/storage/storageVerdictSelection';
 
 import type {
   ResourceProposalItem,
@@ -34,7 +35,7 @@ export type ResourceProposalItemFacts = Readonly<{
   loses: readonly StorageReasonV1[];
   /** The canonical planner's reason this proposed session is kept, not a proposal-side heuristic. */
   keptByGuard?: MachineGuardLadderV1['excluded'][number];
-  /** Any fact differs from what the agent claimed when it proposed. */
+  /** Reviewed identity/ownership facts changed, or the item is gone/refused; verdict alone is guidance. */
   changed: boolean;
 }>;
 
@@ -73,10 +74,15 @@ function selectableVerdict(verdict: ResourceProposalVerdict): boolean {
 /** Safe items start ticked, Caution and Keep unticked: a default selection, the person's to change. */
 export function initialResourceProposalSelection(
   model: ResourceProposalModel,
+  facts?: ReadonlyMap<string, ResourceProposalItemFacts>,
 ): ResourceProposalSelection {
   return new Set(
     model.items
-      .filter((item) => item.claimedVerdict === 'safe')
+      .filter((item) => {
+        const current = facts?.get(item.key);
+        return (facts === undefined || current?.status === 'present')
+          && storageVerdictStartsTicked(current?.verdict ?? item.claimedVerdict);
+      })
       .map((item) => item.key),
   );
 }
@@ -140,7 +146,7 @@ export function selectAllSafeResourceProposal(
 ): ResourceProposalSelection {
   return new Set(
     rows
-      .filter((row) => row.selectable && row.verdict === 'safe')
+      .filter((row) => row.selectable && storageVerdictStartsTicked(row.verdict))
       .map((row) => row.item.key),
   );
 }

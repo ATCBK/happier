@@ -33,6 +33,21 @@ describe('correlated Trash receipts', () => {
 });
 
 describe('permanent storage proposals', () => {
+    it('takes initial ticks from current check verdicts instead of stale Safe claims', () => {
+        const verdicts = ['safe', 'caution', 'keep', 'check', 'forbidden'] as const;
+        const actionArgs = getActionSpec('machines.storage.trash.move').inputSchema.parse({ machineId: 'machine-1',
+            items: verdicts.map(itemId => ({ ref: { itemId, path: `/cache/${itemId}`,
+                identity: { dev: '1', ino: itemId, kind: 'directory' }, collectedAt: 1,
+                collectedBy: { accountId: 'account', kind: 'agent' } }, expect: 'claimed', claimedVerdict: 'safe' })) });
+        const model = readResourceProposalApproval({ actionId: 'machines.storage.trash.move', actionArgs });
+        if (!model) throw new Error('Missing storage proposal');
+        const facts = new Map(verdicts.map(verdict => [verdict, {
+            key: verdict, status: 'present' as const, verdict, reason: null, expect: 'claimed',
+            bytes: 10, onDiskBytes: null, loses: [], changed: false,
+        }]));
+        expect([...initialResourceProposalSelection(model, facts)]).toEqual(['safe']);
+    });
+
     it('reviews a strict Delete-now request, narrows only refreshed expectations and settles measured permanent results', () => {
         const actionArgs = getActionSpec('machines.storage.deleteNow').inputSchema.parse({ machineId: 'machine-1',
             items: ['cache-a', 'cache-b'].map(itemId => ({ ref: { itemId, path: `/cache/${itemId}`,

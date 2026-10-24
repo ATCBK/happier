@@ -94,6 +94,7 @@ describe('collecting a row into the pile (the pile is the one authority, ruling 
     expect(
       describeStorageCollect(item('home', '/Users/l', 'forbidden'), pile),
     ).toBe('none');
+    expect(describeStorageCollect(item('dir', '/Users/l/Library', 'forbidden'), pile)).toBe('none');
     expect(
       describeStorageCollect(
         item('wt-3', '/repo/.dev/worktree/c', 'check'),
@@ -130,6 +131,7 @@ describe('collecting a row into the pile (the pile is the one authority, ruling 
     expect(
       resolveStorageCollectToggle(item('home', '/Users/l', 'forbidden'), pile),
     ).toBeNull();
+    expect(resolveStorageCollectToggle(item('wt-1', '/repo/.dev/worktree/a', 'forbidden'), pile)).toBeNull();
   });
 
   it('collects by served reference only: id and path travel, the machine reads identity and records who collected it', () => {
@@ -141,10 +143,11 @@ describe('collecting a row into the pile (the pile is the one authority, ruling 
     });
   });
 
-  it('ticks a group header for what can go only: mixed while part of it is collected, never sweeping Keep, Check or Forbidden rows', () => {
+  it('ticks a group header for Safe only: mixed while part is collected, never sweeping Caution, Keep, Check or Forbidden', () => {
     const rows = [
       item('a', '/r/a', 'safe'),
       item('b', '/r/b', 'safe'),
+      item('warn', '/r/warn', 'caution'),
       item('k', '/r/k', 'keep'),
       item('f', '/r/f', 'forbidden'),
       item('c', '/r/c', 'check'),
@@ -254,14 +257,14 @@ describe('the pile bar states (lab rs PM)', () => {
 
 describe('collecting a range (Shift, through the Collection range resolver)', () => {
   const rows = [item('a', '/r/a', 'safe'), item('b', '/r/b', 'safe'), item('k', '/r/k', 'keep'), item('f', '/r/f', 'forbidden'), item('c', '/r/c', 'caution'), item('d', '/r/d', 'safe')];
-  it('adds every row between the last tick and this one that can go, never a Keep or Forbidden row', () => {
-    const delta = resolveStorageCollectRange({ rows, pile: [ref('a', '/r/a')], anchorKey: 'a', targetKey: 'c' });
-    expect(delta?.add?.map((entry) => entry.itemId)).toEqual(['b', 'c']);
+  it('adds Safe rows between the last tick and this one, leaving Caution for an explicit tick', () => {
+    const delta = resolveStorageCollectRange({ rows, pile: [ref('a', '/r/a')], anchorKey: 'a', targetKey: 'd' });
+    expect(delta?.add?.map((entry) => entry.itemId)).toEqual(['b', 'd']);
     expect(delta?.remove).toBeUndefined();
   });
   it('takes the range out when the target is already collected, and is one plain tick without an anchor', () => {
     const pile = [ref('a', '/r/a'), ref('b', '/r/b'), ref('c', '/r/c')];
-    expect(resolveStorageCollectRange({ rows, pile, anchorKey: 'd', targetKey: 'b' })).toEqual({ remove: ['b', 'c'] });
+    expect(resolveStorageCollectRange({ rows, pile, anchorKey: 'd', targetKey: 'b' })).toEqual({ remove: ['b'] });
     expect(resolveStorageCollectRange({ rows, pile: [], anchorKey: null, targetKey: 'd' })?.add?.map((entry) => entry.itemId)).toEqual(['d']);
     expect(resolveStorageCollectRange({ rows, pile: [], anchorKey: 'a', targetKey: 'k' })).toBeNull();
   });

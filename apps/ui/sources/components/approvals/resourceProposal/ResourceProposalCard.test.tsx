@@ -25,7 +25,7 @@ import type {
   PileApplyResultV1,
   PileReviewV1,
 } from '@happier-dev/protocol/storage/storageV1';
-import { MachineStorageCategoryListResultV1Schema, PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageCategoryListResultV1Schema, PileApplyResultV1Schema, PileReviewV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { MachineStorageDeleteNowInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { resolveApprovalRequestExecutionInput } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
@@ -98,6 +98,7 @@ vi.mock('@/modal', async () => {
 
 await loadSyncSingletonForTests();
 const { Modal } = await import('@/modal');
+const { t } = await import('@/text');
 const { ApprovalPromptCard } =
   await import('@/components/tools/shell/approvals/ApprovalPromptCard');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -470,6 +471,28 @@ describe('resource proposal card', () => {
     expect(receipt.findByTestId('machine-storage-pile-empty')).toBeNull();
     expect(calls(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST)).toHaveLength(0);
     await receipt.unmount();
+  });
+
+  it('starts refreshed Caution unticked and permits an explicit tick without another acknowledgement or check', async () => {
+    const previousRpc = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => {
+      const result = await previousRpc(call);
+      if (call.method !== RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK) return result;
+      const review = PileReviewV1Schema.parse(result);
+      return { ...review, items: review.items.map(item => ({ ...item, verdict: 'caution' as const })) };
+    });
+    const screen = await render(proposal());
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('machineStorage.verdicts.caution')));
+    expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(true);
+    await screen.pressByTestIdAsync('resource-proposal-item-wt-merged');
+    expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(false);
+    expect(screen.findByTestId('resource-proposal-stale')).toBeNull();
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    await screen.pressByTestIdAsync('approval-prompt-approve');
+    await vi.waitFor(() => expect(readApproval()).toMatchObject({ status: 'approved', decision: { kind: 'approve' } }));
+    // Approval needs no second read or separate verdict acknowledgement (R41).
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    await screen.unmount();
   });
 
   it('approves 5 of 6 with refreshed expectations, then remembers the sixth as declined', async () => {

@@ -10,6 +10,7 @@ import {
   buildStorageReview,
   describeStorageApplyResult,
   selectStorageReviewApply,
+  selectStorageReviewTicks,
 } from './storageReviewModel';
 
 const size = (frees: number) => ({
@@ -203,6 +204,42 @@ describe('the review sheet model (plan 40 STO-12, lab rs R)', () => {
     expect(selectStorageReviewApply(model, ticked, 'trash').holders).toEqual(['s-1', 's-2']);
     expect(selectStorageReviewApply(model, ticked, 'delete').holders).toEqual(['s-1', 's-2']);
     expect(selectStorageReviewApply(model, new Set(['tmp']), 'trash').holders).toEqual([]);
+  });
+
+  it('starts with the verdict default (only Safe ticked) and carries a tick across a re-check only while its verdict holds', () => {
+    const first = buildStorageReview(
+      {
+        ...review(),
+        items: [
+          check('safe', '/Users/l/cache/a', 30),
+          check('caution', '/Users/l/Dropbox/x', 20, 'caution'),
+          check('held', '/tmp/held', 10, 'keep', { reason: { code: 'in_use' } }),
+          check('root', '/', 10, 'forbidden', { title: 'System disk' }),
+          check('unknown', '/Users/l/x', 10, 'check'),
+        ],
+      },
+      volumes,
+    );
+    expect([...selectStorageReviewTicks(first)].sort()).toEqual(['safe']);
+    expect(first.staying.find((row) => row.itemId === 'root')).toMatchObject({ title: 'System disk' });
+    expect(selectStorageReviewApply(first, new Set(['root']), 'delete').count).toBe(0);
+    // The person unticks Safe and explicitly ticks the Keep row (its loss text is on the row).
+    const chosen = new Set(['caution', 'held']);
+    const again = buildStorageReview(
+      {
+        ...review(),
+        items: [
+          check('safe', '/Users/l/cache/a', 30),
+          // Came into use since the first check: back to the Keep default, never carried over ticked.
+          check('caution', '/Users/l/Dropbox/x', 20, 'keep', { reason: { code: 'in_use' } }),
+          // Its holder stopped: the Safe default.
+          check('held', '/tmp/held', 10),
+        ],
+      },
+      volumes,
+    );
+    expect([...selectStorageReviewTicks(again, { review: first, selected: chosen })].sort()).toEqual(['held']);
+    expect([...selectStorageReviewTicks(first, { review: first, selected: chosen })].sort()).toEqual(['caution', 'held']);
   });
 
   it('never claims more than the counted-once total frees', () => {

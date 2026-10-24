@@ -46,6 +46,7 @@ import { StorageVerdictPill } from './StorageItemRow';
 import {
   buildStorageReview,
   selectStorageReviewApply,
+  selectStorageReviewTicks,
   type StorageReview,
   type StorageReviewMode,
   type StorageReviewRow,
@@ -147,7 +148,7 @@ function StorageReviewBody(props: ReviewProps) {
       }
       const model = buildStorageReview(result.value, props.summary.volumes);
       setReview(model);
-      setSelected(new Set(model.going.map((row) => row.itemId)));
+      setSelected(selectStorageReviewTicks(model));
     });
   }, [
     check,
@@ -176,7 +177,7 @@ function StorageReviewBody(props: ReviewProps) {
       return next;
     });
   const run = async () => {
-    if (!plan || plan.count === 0) return;
+    if (!review || !plan || plan.count === 0) return;
     setApplying(true);
     setApplyFailed(null);
     if (plan.holders.length > 0) {
@@ -196,7 +197,7 @@ function StorageReviewBody(props: ReviewProps) {
       }
       const nextReview = buildStorageReview(refreshed.value, props.summary.volumes);
       setReview(nextReview);
-      setSelected((current) => new Set(nextReview.going.filter(row => current.has(row.itemId)).map(row => row.itemId)));
+      setSelected((current) => selectStorageReviewTicks(nextReview, { review, selected: current }));
       return;
     }
     const result = await props.apply(mode, plan.items);

@@ -5,6 +5,7 @@ import type {
   StorageItemV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import { toStorageItemRef } from '@/sync/domains/machines/storage/pileRef';
+import { storageVerdictStartsTicked } from '@/sync/domains/machines/storage/storageVerdictSelection';
 import { resolveHappierListMultiSelectionRange } from '@happier-dev/plugin-ui/presentation';
 
 /**
@@ -92,12 +93,12 @@ export function describeStorageCollect(
   item: StorageCollectable,
   pile: StoragePileMembership,
 ): StorageCollectState {
+  if (item.verdict === 'forbidden') return 'none';
   if (pileEntryFor(item, pile)) return 'collected';
   if (pile.some((entry) => storagePathContains(entry.path, item.path)))
     return 'inside';
   if (
     !item.collectable ||
-    item.verdict === 'forbidden' ||
     item.verdict === 'check'
   )
     return 'none';
@@ -109,23 +110,21 @@ export function resolveStorageCollectToggle(
   item: StorageCollectable,
   pile: StoragePileMembership,
 ): StoragePileDelta | null {
-  const entry = pileEntryFor(item, pile);
-  if (entry) return { remove: [entry.itemId] };
   const state = describeStorageCollect(item, pile);
+  if (state === 'collected') return { remove: [pileEntryFor(item, pile)!.itemId] };
   return state === 'available' || state === 'confirm'
     ? { add: [toStorageItemRef(item)] }
     : null;
 }
 
-/** Rows a group header collects at once: what can go, never a Keep row (that asks per row). */
+/** Group and range sweeps take the verdict default; Caution and Keep require an explicit row choice. */
 function sweepable(
   item: StorageCollectable,
   pile: StoragePileMembership,
 ): boolean {
+  if (!storageVerdictStartsTicked(item.verdict)) return false;
   const state = describeStorageCollect(item, pile);
-  return state === 'collected'
-    ? item.verdict !== 'keep'
-    : state === 'available';
+  return state === 'collected' || state === 'available';
 }
 
 export function describeStorageGroupCollect(
@@ -203,7 +202,7 @@ export function describeStoragePileBar(
 
 /**
  * Shift-collect (lab PM, plan 40 §7(g)): the rows between the last tick and this one, through the
- * Collection's own range resolver, counting only rows a sweep may take (never Keep, Check or Forbidden).
+ * Collection's own range resolver, counting only rows selected by the shared Safe default.
  * A collected target takes the range out; otherwise the range goes in. One `pile.set` delta.
  */
 export function resolveStorageCollectRange(input: Readonly<{ rows: readonly StorageCollectable[]; pile: StoragePileMembership;
