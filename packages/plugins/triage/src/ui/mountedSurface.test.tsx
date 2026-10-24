@@ -499,6 +499,17 @@ describe('the mounted PRs & Issues surface', () => {
         await expect(shell.queryByRole('button', { name: 'Refresh' })).resolves.toBeUndefined();
     });
 
+    it('opens Tasks with one row-producing list pass, without an initial default-lens pass', async () => {
+        const harness = createHarness({ tasks: true });
+        const tasksSurface = defineUiSurface(() => <TriageListShell tasksPage />);
+        await mountSurface(tasksSurface, harness, 'triage-tasks');
+        // The two configured lanes need three provider pages in ONE pass.
+        // Binding the initial lens is not another page-view producer.
+        expect(harness.scanCalls.count).toBe(3);
+        expect(harness.actionCalls.filter(action => action === TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1)).toHaveLength(0);
+        expect(harness.actionCalls.filter(action => action === TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1)).toHaveLength(2);
+    });
+
     it('renders one window assembled from every configured source', async () => {
         const harness = createHarness();
         const shell = await mountSurface(renderShellSurface, harness, 'triage-list');

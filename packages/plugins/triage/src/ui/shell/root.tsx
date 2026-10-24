@@ -480,6 +480,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const personalTaskOrder = usePersonalTaskOrder(taskAudience !== undefined, window.snapshot.passes);
   const [doneOpen, setDoneOpen] = React.useState(false);
   const windowLens = readTriageWindowLensV1(surface);
+  useTriageWindowLensBinding(window.setLens, windowLens);
   const completedSinceMs = windowLens.tasks?.completedSinceMs;
   // Agents membership needs relationship truth even when no live Session has answered.
   const sessionActivityUnavailable = sessionActivity.unavailable
@@ -522,7 +523,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   // Composer picker — which is not a producer — reaches nothing merely by
   // opening (`REQ-14`). The adapter emits only `view` demand; the mounted store
   // remains the one owner of coalescing, pacing and provider work.
-  useTriageListWindowViewDemand(surfaceActivity.active, window.refresh, window.readiness);
+  useTriageListWindowViewDemand(surfaceActivity.active, window.refresh, window.readiness, window.readOwner);
   const pinHandlers = React.useMemo(() => ({
     busyKey: marks.busyKey,
     unavailableReason: marks.unavailableReason,
@@ -1694,7 +1695,6 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     },
   }), [itemAnatomy, routeLens]);
 
-  useTriageWindowLensBinding(window.setLens, windowLens);
   useTriageRouteBinding({
     queue: routeQueue,
     surface,
@@ -3143,6 +3143,8 @@ function useTriageWindowLensBinding(
   const { filters, limit, order, query, smartPolicy } = lens;
   const completedSinceMs = lens.tasks?.completedSinceMs;
 
+  // Called before the page-view demand and after the window subscription.
+  // Binding a cold window is not itself a materialization producer.
   React.useEffect(() => {
     setLens({ filters, limit, order, query, smartPolicy,
       ...(completedSinceMs === undefined ? {} : { tasks: { completedSinceMs } }) });

@@ -59,7 +59,7 @@ export function TriageLatestWidget({ tasksOnly = false }: Readonly<{ tasksOnly?:
   const window = useTriageListWindow();
   const activity = usePluginSurfaceActivity();
   const mountId = React.useId();
-  useTriageListWindowViewDemand(true, window.refresh, window.readiness);
+  useTriageListWindowViewDemand(true, window.refresh, window.readiness, window.readOwner);
   const snapshot = window.snapshot;
   const refresh = React.useCallback(() => window.refresh('manual'), [window.refresh]);
   const runMountedOperation = React.useCallback(async (operation: TriageMountedUiOperationV1, signal: AbortSignal): Promise<TriageMountedUiResultV1> => {

@@ -303,6 +303,12 @@ export function readTriageMountedWindowReadState(host: TriageListWindowHostV1,
   return mountedFor(host, scope)?.shared.readState() ?? UNMOUNTED_READ_STATE;
 }
 
+/** The existing store also identifies windows created by older artifact realms. */
+export function readTriageListWindowReadOwner(host: TriageListWindowHostV1,
+  scope: PluginUiEphemeralSharedScope | null): object | null {
+  return mountedFor(host, scope)?.shared.store ?? null;
+}
+
 export function readTriageListWindowSnapshot(
   host: TriageListWindowHostV1,
   scope: PluginUiEphemeralSharedScope | null,

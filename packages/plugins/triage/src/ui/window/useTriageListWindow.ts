@@ -9,6 +9,7 @@ import {
   acquireTriageListWindow,
   loadMoreTriageListWindow,
   readTriageMountedWindowReadState,
+  readTriageListWindowReadOwner,
   setTriageListWindowReadiness,
   refreshTriageListWindow,
   setTriageListWindowLens,
@@ -38,6 +39,8 @@ import {
  * There is no timer and no poller here, and none anywhere beneath it.
  */
 export type TriageMountedListWindowV1 = Readonly<{
+  /** Existing Account/plugin/generation-shared window identity. */
+  readOwner: object | null;
   /** Includes completedAtMs from the freshness owner for the shell's read-age display. */
   snapshot: TriageListWindowSnapshotV1;
   readiness: PluginUiHostReadiness;
@@ -80,6 +83,7 @@ export function useTriageListWindow(): TriageMountedListWindowV1 {
     [hostApi, sharedScope],
   );
   const { snapshot: acquired, readiness: readClientReadiness } = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  const readOwner = readTriageListWindowReadOwner(hostApi, sharedScope);
   // Before subscription commits there is no transport client. Use this mount's
   // shared host fact rather than inventing an admitted initial observation.
   const readiness = readClientReadiness ?? hostReadiness;
@@ -105,10 +109,11 @@ export function useTriageListWindow(): TriageMountedListWindowV1 {
   }, [acquired, readiness.pending]);
 
   return useMemo(() => Object.freeze({
+    readOwner,
     snapshot,
     readiness,
     refresh,
     loadMore,
     setLens,
-  }), [snapshot, readiness, refresh, loadMore, setLens]);
+  }), [readOwner, snapshot, readiness, refresh, loadMore, setLens]);
 }

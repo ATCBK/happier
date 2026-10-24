@@ -1086,7 +1086,7 @@ describe('opening a row into the source detail', () => {
         const calls: string[] = [];
         const surface = defineUiSurface(() => {
             const window = useTriageListWindow();
-            useTriageListWindowViewDemand(true, window.refresh, window.readiness);
+            useTriageListWindowViewDemand(true, window.refresh, window.readiness, window.readOwner);
             return <><Text value={window.snapshot.window?.rows[0]?.content?.outcome.snapshot.title ?? 'reading'} />
                 <Button title="manual-window-refresh" onPress={() => window.refresh('manual')} /></>;
         });
@@ -1113,7 +1113,7 @@ describe('opening a row into the source detail', () => {
         const harness = createHarness();
         const surface = defineUiSurface(() => {
             const window = useTriageListWindow();
-            useTriageListWindowViewDemand(true, window.refresh, window.readiness);
+            useTriageListWindowViewDemand(true, window.refresh, window.readiness, window.readOwner);
             return <Text value={window.snapshot.window?.rows[0]?.content?.outcome.snapshot.title ?? 'reading'} />;
         });
         const shell = await createPluginUiTestkit({ identity: { instanceId: 'account-list-read', mountNonce: 'account-list-read' },

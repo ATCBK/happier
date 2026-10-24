@@ -19,27 +19,32 @@ type RefreshTriageListWindowV1 = (trigger: TriageRefreshTriggerV1) => Promise<vo
 export function useTriageListWindowViewDemand(
   active: boolean,
   refresh: RefreshTriageListWindowV1,
-  readClientReadiness?: PluginUiHostReadiness,
+  readClientReadiness: PluginUiHostReadiness | undefined,
+  readOwner: object | null,
 ): void {
   const ownReadiness = usePluginHostReadiness(Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const readiness = readClientReadiness ?? ownReadiness;
   const previous = useRef<Readonly<{
     active: boolean;
-    refresh: RefreshTriageListWindowV1;
+    readOwner: object | null;
     readiness: PluginUiHostReadiness;
   }> | null>(null);
 
   useEffect(() => {
+    // A replacement facade has no owner until its subscription acquires the
+    // shared window. Absence is not a new owner/admission observation.
+    if (readOwner === null) return;
     const preceding = previous.current;
-    previous.current = Object.freeze({ active, refresh, readiness });
+    previous.current = Object.freeze({ active, readOwner, readiness });
 
-    // A new refresh callback is a new host-scoped mounted window. It receives
-    // its own initial demand even when the preceding surface was active. For a
-    // retained window, an inactive -> active edge is a new view demand;
-    // the shared read owner can also require re-acquisition after admission.
-    const mountOrScopeChanged = preceding === null || preceding.refresh !== refresh;
+    // Host facades/callbacks may change without replacing the shared window.
+    // Only its actual owner, activity, or admission facts produce new demand.
+    const mountOrScopeChanged = preceding === null || preceding.readOwner !== readOwner;
     const regainedActivity = preceding !== null && !preceding.active && active;
-    const reacquire = preceding !== null && preceding.readiness !== readiness;
+    const reacquire = preceding !== null && (
+      readiness.revision > preceding.readiness.revision
+      || preceding.readiness.pending || preceding.readiness.ready === false
+    );
     // A retained inactive surface must stay demand-silent. The host's active
     // fact gates both view demand and the shared owner's re-acquisition.
     // Readiness is supplied by the host, independently from public activity.
@@ -48,5 +53,5 @@ export function useTriageListWindowViewDemand(
     if (!active || readiness.pending || readiness.ready === false || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
 
     void refresh(reacquire ? 'manual' : 'view');
-  }, [active, refresh, readiness]);
+  }, [active, refresh, readOwner, readiness]);
 }

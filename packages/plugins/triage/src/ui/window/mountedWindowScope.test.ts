@@ -159,6 +159,25 @@ function createHostStub(
 
 const createSharedScope = createTriageEphemeralSharedScopeFixture;
 
+it('binds the initial Tasks lens without producing work before the page view demands its one pass', async () => {
+  const scope = createSharedScope();
+  const h = createHostStub(INSTANCE_A, { paged: true });
+  const lease = acquireTriageListWindow(h.host, scope);
+  try {
+    setTriageListWindowLens({ ...TRIAGE_LIST_DEFAULT_LENS_V1,
+      filters: { ...TRIAGE_LIST_DEFAULT_LENS_V1.filters, tasks: 'mine' },
+      tasks: { completedSinceMs: 100 },
+    }, h.host, scope);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.inputs).toHaveLength(0);
+    await refreshTriageListWindow('view', h.host, scope);
+    expect(h.inputs.filter(input => input.limit > 0)).toHaveLength(1);
+    expect(h.inputs).toHaveLength(2);
+    expect(h.inputs.every(input => input.tasks?.completedSinceMs === 100)).toBe(true);
+  } finally { lease.release(); }
+});
+
 /**
  * A surface that joined another scope's window also inherits that scope's
  * single-flight pass, so its own refresh never settles while the other is held
