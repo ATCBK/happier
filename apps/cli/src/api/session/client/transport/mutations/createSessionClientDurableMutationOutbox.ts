@@ -459,6 +459,7 @@ type DurableMutationDeliveryOutcome = Readonly<{
     committedSequence?: number;
     ignoredLossy?: boolean;
     unsupportedCapability?: boolean;
+    terminalFailureDiagnostic?: Record<string, unknown>;
     terminalFailureReason?:
         | 'session_turn_mutation_rejected'
         | 'metadata_tuple_conflict'
@@ -1902,6 +1903,18 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             if (!result.delivered && result.reason === 'session_turn_mutation_rejected') {
                 return { delivered: false, terminalFailureReason: 'session_turn_mutation_rejected' };
             }
+            if (!result.delivered && result.reason === 'exact_session_turn_mutation_not_delivered'
+                && 'diagnostic' in result && 'classification' in result.diagnostic
+                && result.diagnostic.classification === 'semantic_non_positive') {
+                // Home has committed this exact mutation's final decision and
+                // replays it by mutation id. Retrying cannot change that refusal;
+                // retain its evidence as a rejection, never a positive delivery.
+                return {
+                    delivered: false,
+                    terminalFailureReason: 'session_turn_mutation_rejected',
+                    terminalFailureDiagnostic: result.diagnostic,
+                };
+            }
             return { delivered: result.delivered };
         }
         if (mutation.kind === 'transcript_message_append') {
@@ -2381,6 +2394,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                         sessionId: params.sessionId,
                         mutation: failedMutation,
                         reason: outcome.terminalFailureReason,
+                        ...(outcome.terminalFailureDiagnostic ? { diagnostic: outcome.terminalFailureDiagnostic } : {}),
                     }));
                     failedMutationReasons.set(mutation.mutationId, outcome.terminalFailureReason);
                     durableFailedMutationReasons.set(mutation.mutationId, outcome.terminalFailureReason);
