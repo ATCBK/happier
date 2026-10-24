@@ -30,7 +30,9 @@ function normalizeScope(input: WorkspaceScopeBase | null): WorkspaceScopeBase | 
     });
 }
 
-export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | null): UseWorkspaceScmSnapshotControllerResult {
+export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | null,
+    options?: Readonly<{ refreshOnMount?: boolean }>): UseWorkspaceScmSnapshotControllerResult {
+    const refreshOnMount = options?.refreshOnMount !== false;
     const normalizedScope = React.useMemo(() => normalizeScope(scope), [scope?.machineId, scope?.rootPath, scope?.serverId]);
     const snapshot = useWorkspaceScmSnapshot(normalizedScope);
     const snapshotError = useWorkspaceScmSnapshotError(normalizedScope);
@@ -104,6 +106,7 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
         : '';
     const didInitKeyRef = React.useRef<string>('');
     React.useEffect(() => {
+        if (!refreshOnMount) return;
         if (unreachable) {
             didInitKeyRef.current = '';
             return;
@@ -112,7 +115,7 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
         if (didInitKeyRef.current === initKey) return;
         didInitKeyRef.current = initKey;
         void refresh();
-    }, [initKey, normalizedScope, refresh, unreachable]);
+    }, [initKey, normalizedScope, refresh, refreshOnMount, unreachable]);
 
     return {
         snapshot,

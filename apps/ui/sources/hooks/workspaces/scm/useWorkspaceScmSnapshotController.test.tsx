@@ -31,6 +31,15 @@ describe('useWorkspaceScmSnapshotController', () => {
         storage.setState(storage.getInitialState(), true);
         rpc.mockReset().mockResolvedValue({ success: true, snapshot });
     });
+    it('reads accepted repository facts without a mount probe, while retaining explicit refresh', async () => {
+        storage.getState().updateWorkspaceScmSnapshot(scope, snapshot);
+        const hook = await renderHook(() => useWorkspaceScmSnapshotController(scope, { refreshOnMount: false }));
+        expect(hook.getCurrent().snapshot).toBe(snapshot);
+        expect(rpc).not.toHaveBeenCalled();
+        await hook.getCurrent().refresh();
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ method: RPC_METHODS.SCM_STATUS_SNAPSHOT }));
+        await hook.unmount();
+    });
     it('refreshes the addressed workspace, publishes status and prunes only its obsolete selections', async () => {
         const state = storage.getState();
         const other = { ...scope, serverId: 'other-home' };

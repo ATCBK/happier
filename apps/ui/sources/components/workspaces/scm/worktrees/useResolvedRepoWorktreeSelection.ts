@@ -10,6 +10,7 @@ export function useResolvedRepoWorktreeSelection(params: Readonly<{
     defaultRootPath: string;
     requestedRootPath: string | null | undefined;
     requestedWorktreeId?: string | null | undefined;
+    refreshOnMount?: boolean;
 }>): RepoWorktreeSelectionResolution & Readonly<{
     availableWorktrees: ReadonlyArray<Readonly<{ id?: string; path: string; isPrunable?: boolean }>> | null;
 }> {
@@ -23,7 +24,7 @@ export function useResolvedRepoWorktreeSelection(params: Readonly<{
             rootPath: params.defaultRootPath,
         };
     }, [params.defaultRootPath, params.machineId, params.serverId]);
-    const { snapshot } = useWorkspaceScmSnapshotController(workspaceScope);
+    const { snapshot } = useWorkspaceScmSnapshotController(workspaceScope, { refreshOnMount: params.refreshOnMount });
     const availableWorktrees = snapshot?.repo?.isRepo === true
         ? (snapshot.repo.worktrees ?? [])
         : null;
