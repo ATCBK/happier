@@ -146,7 +146,7 @@ describe('plugin page anatomy through the shared page owners', () => {
     } finally { mount.unmount(); }
   });
 
-  it('starts each row seam at its text and stops it at the trailing row inset (P7-R2)', () => {
+  it('starts each row seam at its text and runs it to the sheet trailing edge (P7-R2)', () => {
     const mount = mountPage(
       <ItemGroup title="Devices">
         <Item title="Laptop" icon={<View style={{ width: 16, height: 16 }} />} />
@@ -161,7 +161,7 @@ describe('plugin page anatomy through the shared page owners', () => {
       });
       const inset = HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;
       const text = inset + HAPPIER_PAGE_METRICS.rowLeadingColumnPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx;
-      expect(seams).toEqual([[`${text}px`, `${inset}px`], [`${inset}px`, `${inset}px`]]);
+      expect(seams).toEqual([[`${text}px`, '0px'], [`${inset}px`, '0px']]);
     } finally { mount.unmount(); }
   });
 
