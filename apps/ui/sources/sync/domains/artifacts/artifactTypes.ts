@@ -135,6 +135,7 @@ export type DecryptedArtifact =
  * Request to create a new artifact
  */
 export interface ArtifactCreateRequest {
+    /** Stored write hint (legacy coarse or tagged exact), not the served Artifact.kind projection. */
     kind?: string;
     memoryDecisionSource?: CoordinationMessageRefV1;
     id: string;  // UUID generated client-side
@@ -150,6 +151,7 @@ export interface ArtifactCreateRequest {
  * Request to update an existing artifact
  */
 export interface ArtifactUpdateRequest {
+    /** Stored write hint; served rows project coarse kind and separate kindHint. */
     kind?: string;
     memoryDecisionSource?: CoordinationMessageRefV1;
     provenance?: string | null;
