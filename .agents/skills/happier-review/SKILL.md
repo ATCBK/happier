@@ -74,6 +74,7 @@ Always review:
 - functional correctness and completeness;
 - regression and blast radius;
 - canonical ownership, split-brains, and bypasses;
+- user-facing mutations through the Action executor at construction time; treat direct transport or settings writes from UI components as findings under [happier-implement §4](../happier-implement/SKILL.md#4-select-the-smallest-coherent-systemic-change), using the canonical `scripts/testing/lib/uiActionParity.ts` walker;
 - error/failure behavior;
 - test value and validation sufficiency;
 - intent/plan alignment and unjustified scope drift;
@@ -140,6 +141,7 @@ For every candidate finding:
 
 1. reproduce or re-derive it from primary evidence;
 2. trace the real runtime/ownership path;
+   - **2b.** re-derive the author's writer/reader sweep for the changed fact under [happier-implement §4](../happier-implement/SKILL.md#4-select-the-smallest-coherent-systemic-change) and name any missed sibling;
 3. distinguish root cause from symptom and classify where the failure entered: intent/approved contract, plan design/integration, canonical implementation, test/harness, runtime/environment/external contract, or unrelated system;
 4. identify concrete impact and provenance;
 5. reject style preference, theoretical edge cases, and unsupported rewrites;

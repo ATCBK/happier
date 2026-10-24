@@ -16,6 +16,10 @@ Remote compute is an execution transport over the repository's canonical Mutagen
 - Route potentially broad read-only repository work (`rg`, `find`, inventories/counts), tests, typechecks, lint/static analysis, and builds that write only ignored dependencies, caches, bundles, coverage, or test artifacts. Keep tiny targeted reads local when transport would dominate. Never edit or generate tracked source, run formatters/autofixers/codemods, mutate Git, touch databases/Stack lifecycle/devices/simulators, or use unowned local secrets remotely.
 - Never weaken host-key checking or put passwords in argv, chat, or environment. Provisioning may prompt in the user's terminal.
 
+### Shared live tooling changes
+
+Edits to typecheck, executor, dependency-refresh, stack or generator scripts are live for the whole fleet once saved. Develop them in a worktree outside the checkout (`/home/…/workspace/<name>` or `/tmp`), carrying the current relevant uncommitted inputs rather than assuming bare HEAD is the live basis. Land once by atomic rename, smoke immediately, and reverse only the landed tooling delta on the first fleet failure, preserving concurrent edits under root Git safety. Apply the same deletion test to tooling machinery as to product code: count the failure modes each guard added against the incidents it prevented. This is the narrow exception to `.claude/CLAUDE.md` "Delegation shape"; ordinary product lanes still share the primary checkout.
+
 ## Ordinary automatic execution
 
 Ordinary workspace scripts route automatically through the checkout-local launcher:

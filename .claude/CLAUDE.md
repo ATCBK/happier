@@ -54,7 +54,11 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   redundant status narration.
 - **Lane reports live in per-lane files; ONLY the orchestrator writes the shared TRACKING.md.**
   Lanes write `subagents/<lane>.md` (or `lanes/<lane>.md`); the orchestrator merges one-line
-  statuses into the ledger. (Proven: ~20 lanes, zero ledger injection churn.)
+  statuses into the ledger. (Proven: ~20 lanes, zero ledger injection churn.) A lane report's first
+  lines are its current verdict block, replaced in place, never prepended. `STATUS: DONE` means
+  the lane's deciding checks ran green under root **Validation**. Otherwise write
+  `IMPLEMENTED_NOT_VERIFIED` plus the owed check, or `BLOCKED` plus the prerequisite. Only the
+  final handoff writes DONE or BLOCKED; interim lines say `IN PROGRESS`.
 - **Subagent final messages ≤ 20 lines.** The final message is for the orchestrator, not the user;
   everything else belongs in the lane report file. Long final messages are pure orchestrator-context
   burn.
@@ -141,7 +145,8 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   QA stack).
 - **Fewer wakes:** watchers cap at 45–60 min and fire on finished/blocked lines; batch decisions per wake. Orchestrator
   sessions run at medium effort while monitoring and raise effort only for synthesis or rulings.
-- **Board replies ≤ 15 lines** with pointers to lane reports.
+  Match addressed posts only, exclude your own and your lanes' posts, diff before rebaseline, never detach, and check `execution_run_get` on each wake.
+- **Board replies ≤ 15 lines** with pointers to lane reports; cause claims follow the evidence-basis rules in `docs/agent-craft.md` §4–§5.
 - **Capture vs judgement (design quality is not traded away).** Sol may *capture* (seed data, sign in, take
   same-state whole-page lab|live pairs at the required widths/themes, record motion frames, measure computed styles)
   into a contact sheet. Only Claude UI lanes *judge and change* how a surface looks; Sol never edits render
@@ -191,7 +196,9 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   files — does not travel to it. An isolated lane would start at bare HEAD, seeing none of the
   program's in-flight work, which is the same failure a stray `git stash` causes and would break the
   moving-bytes model outright (a downstream lane must be able to read the upstream lane's just-landed
-  bytes without a commit/merge cycle). Isolation is only coherent for committed work. Enforcement
+  bytes without a commit/merge cycle). Shared live tooling follows the narrow out-of-tree exception in
+  [happier-remote-work](../.agents/skills/happier-remote-work/SKILL.md#shared-live-tooling-changes).
+  Enforcement
   belongs in `.claude/hooks/prevent-destructive-git.sh`, which matches the whole command string and
   therefore catches every clause of a compound command.
 - **Record material transitions, not every thought.** Update the lane report and orchestrator
