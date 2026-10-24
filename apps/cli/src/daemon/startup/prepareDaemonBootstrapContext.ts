@@ -99,6 +99,11 @@ export async function prepareDaemonBootstrapContext(
         process.exit(0);
     }
 
+    // Session creation uses this daemon-wide client before the child has a
+    // Session socket. Publish the final (including recovered) machine identity
+    // so getOrCreateSession can establish its AccessKey binding before launch.
+    api.setLocalMachineId(machineId);
+
     const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({
         path: configuration.deviceLocalSecretKeyFile,
     });

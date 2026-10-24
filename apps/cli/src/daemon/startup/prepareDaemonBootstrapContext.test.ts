@@ -69,7 +69,7 @@ describe('prepareDaemonBootstrapContext', () => {
       token: 'persisted-token',
       encryption: { key: 'persisted-enc' },
     });
-    mocks.createApiClient.mockResolvedValue({ api: true });
+    mocks.createApiClient.mockResolvedValue({ api: true, setLocalMachineId: vi.fn() });
     mocks.ensureMachineRegistered.mockResolvedValue({
       machineId: 'machine-1',
       didRotateMachineId: false,
@@ -107,6 +107,7 @@ describe('prepareDaemonBootstrapContext', () => {
       expect(mocks.ensureMachineRegistered).not.toHaveBeenCalled();
       expect(mocks.stopDaemon).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
+      expect(result.api.setLocalMachineId).toHaveBeenCalledWith('machine-1');
     } finally {
       await lockHandle.close().catch(() => undefined);
       await rm(tempDir, { recursive: true, force: true });
@@ -125,7 +126,7 @@ describe('prepareDaemonBootstrapContext', () => {
     });
     mocks.createApiClient.mockImplementation(async () => {
       order.push('api');
-      return { api: true };
+      return { api: true, setLocalMachineId: vi.fn() };
     });
     mocks.isDaemonRunningCurrentlyInstalledHappyVersion.mockResolvedValue(false);
     mocks.acquireDaemonLock.mockResolvedValue({ kind: 'acquired-lock' });
@@ -158,7 +159,7 @@ describe('prepareDaemonBootstrapContext', () => {
     });
     mocks.createApiClient.mockImplementation(async () => {
       order.push('api');
-      return { api: true };
+      return { api: true, setLocalMachineId: vi.fn() };
     });
 
     await prepareDaemonBootstrapContext({
@@ -237,6 +238,7 @@ describe('prepareDaemonBootstrapContext', () => {
     });
 
     expect(result.machineId).toBe('machine-recovered');
+    expect(result.api.setLocalMachineId).toHaveBeenCalledWith('machine-recovered');
     expect(mocks.stopDaemon).toHaveBeenCalledOnce();
     expect(result.daemonLockHandle).toBe(acquiredLock);
     expect(result.preflightMachineRegistration).toBeNull();
