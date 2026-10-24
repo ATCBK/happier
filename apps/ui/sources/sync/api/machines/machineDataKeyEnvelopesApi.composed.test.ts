@@ -26,6 +26,61 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 await loadSyncSingletonForTests();
 
 describe('captured Machine recipient preparation transport', () => {
+    it('does no recipient work for fleet-wide content revisions and re-prepares only the Machine with recipient demand', async () => {
+        const secret = new Uint8Array(32).fill(61);
+        const author = await Encryption.create(secret);
+        author.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const ids = Array.from({ length: 128 }, (_, index) => `recipient-scale-${index}`);
+        const keys = new Map(ids.map((id, index) => [id, new Uint8Array(32).fill((index % 200) + 1)]));
+        await author.initializeMachines(keys);
+        const access = { custodian: { accountId: 'carol', displayName: 'Carol' }, role: 'manage' as const,
+            resourceMode: 'e2ee' as const, accessState: 'ready' as const };
+        let revision = 1;
+        let machines = await Promise.all(ids.map(async id => {
+            const machine = createMachineFixture({ id, access, storageMode: 'e2ee' });
+            const envelope = encodeBase64(await author.encryptEncryptionKey(keys.get(id)!));
+            return { ...machine, kind: 'persistent' as const, revokedAt: null, replacedByMachineId: null,
+                metadata: await author.getMachineEncryption(id)!.encryptMetadata(machine.metadata!),
+                metadataVersion: revision, daemonState: null, daemonStateVersion: revision,
+                keyBasis: { dataEncryptionKey: envelope, metadataVersion: revision, daemonStateVersion: revision },
+                dataEncryptionKey: envelope } satisfies FetchedMachineRow;
+        }));
+        const rowsById = () => new Map(machines.map(machine => [machine.id, machine]));
+        const home = await serveAccountHomes({ homes: [{ key: 'resource', serverUrl: 'https://recipient-scale.test',
+            accountId: 'alice', accountMode: 'e2ee', credentials: { token: createAccountTokenForTests('alice'), secret: encodeBase64(secret) } }],
+            route: request => {
+                if (!request.path.endsWith('/data-key-envelopes')) return undefined;
+                const machine = rowsById().get(request.path.split('/')[3]!);
+                if (!machine?.dataEncryptionKey) return Response.json({ kind: 'refused', code: 'machine_unavailable' });
+                return Response.json({ machineId: machine.id, custodianAccountId: 'carol', encryptionMode: 'e2ee',
+                    machineOwnerEnvelopeFingerprint: computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(machine.keyBasis!.dataEncryptionKey!)),
+                    callerDataEncryptionKey: machine.dataEncryptionKey, nextCursor: null,
+                    content: { metadata: machine.metadata, metadataVersion: machine.metadataVersion,
+                        daemonState: machine.daemonState, daemonStateVersion: machine.daemonStateVersion }, recipients: [] });
+            } });
+        const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
+        const recipientChangeCursors = new Map<string, number>();
+        const reads = () => home.requests.filter(request => request.path.endsWith('/data-key-envelopes'));
+        const refresh = () => prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows: machines,
+            recipientChangeCursors, isCurrent: () => true });
+        try {
+            await refresh();
+            expect(reads()).toHaveLength(ids.length);
+            for (revision = 2; revision <= 5; revision++) {
+                machines = machines.map(machine => ({ ...machine, daemonStateVersion: revision,
+                    keyBasis: { ...machine.keyBasis!, daemonStateVersion: revision } }));
+                const before = reads().length;
+                await refresh();
+                expect(reads().length - before).toBe(0);
+            }
+            const changedId = ids[73]!;
+            const beforeRecipientChange = reads().length;
+            recipientChangeCursors.set(changedId, 1);
+            await refresh();
+            expect(reads().slice(beforeRecipientChange).map(request => request.path.split('/')[3])).toEqual([changedId]);
+        } finally { await home.dispose(); }
+    });
+
     it('keeps pending recipient work once per real Sync census across warm and hydrated publications, then retries a new census', async () => {
         const secret = new Uint8Array(32).fill(39);
         const author = await Encryption.create(secret);

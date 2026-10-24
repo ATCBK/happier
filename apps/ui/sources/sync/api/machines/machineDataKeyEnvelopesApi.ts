@@ -158,15 +158,12 @@ export function prepareMachineDataKeyEnvelopesDetachedForScope(
     );
 }
 
-type MachineRecipientPreparationInput = Pick<Machine, 'id' | 'dataEncryptionKey' | 'keyBasis' | 'metadataVersion'
-    | 'access' | 'storageMode' | 'revokedAt' | 'replacedByMachineId'> & Readonly<{ daemonStateVersion?: number }>;
+type MachineRecipientPreparationInput = Pick<Machine, 'id' | 'dataEncryptionKey' | 'keyBasis'
+    | 'access' | 'storageMode' | 'revokedAt' | 'replacedByMachineId'>;
 
 function recipientPreparationInputs(machine: MachineRecipientPreparationInput, recipientChangeCursor: number | undefined) {
-    return { dataEncryptionKey: machine.dataEncryptionKey, keyBasis: machine.keyBasis,
-        // Warm projections can retain older decrypted display versions. Recipient
-        // preparation follows the published authority, not that hydration progress.
-        metadataVersion: machine.keyBasis?.metadataVersion ?? machine.metadataVersion,
-        daemonStateVersion: machine.keyBasis?.daemonStateVersion ?? machine.daemonStateVersion,
+    return { callerDataEncryptionKey: machine.dataEncryptionKey,
+        ownerDataEncryptionKey: machine.keyBasis?.dataEncryptionKey ?? machine.dataEncryptionKey,
         custodianAccountId: machine.access?.custodian.accountId, role: machine.access?.role,
         accessState: machine.access?.accessState, resourceMode: machine.access?.resourceMode,
         storageMode: machine.storageMode, revokedAt: machine.revokedAt,
@@ -179,7 +176,7 @@ const machineRecipientPreparations = new Map<string, Readonly<{
     result: Promise<void>;
 }> & { invalidated: boolean; unprepared: boolean }>();
 
-/** Refresh admission is keyed by content/key/access inputs and canonical Machine change cursors,
+/** Refresh admission is keyed by owner-envelope/access/mode inputs and recipient-access change cursors,
  * not presence or row sequence. Only successful preparation is retained across reads; failed/pending
  * work remains retryable by the next admitted census (a recipient's missing Account binding can be
  * repaired without a Machine edit). Display/hydration publication is not new recipient demand.
