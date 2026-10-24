@@ -45,7 +45,8 @@ export { readPluginExecutionOriginAutomaticHints } from './pluginExecutionOrigin
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { readCurrentPluginMachineExecutionTargetPreference, readPluginMachineExecutionTargetPreference,
-    readPluginMachineExecutionLastUsedTarget, rememberPluginMachineExecutionOriginUse } from './selectionPreferences';
+    rememberPluginMachineExecutionOriginUse } from './selectionPreferences';
+import { useMachineAdministrationTargetObservation } from '@/sync/domains/state/machineAdministrationUiState';
 import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
 import { readLocalDaemonSharedState, subscribeLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
@@ -308,9 +309,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
         (left, right) => left?.serverIdentityId === right?.serverIdentityId && left?.machineId === right?.machineId);
     const expectedSettingsScope = useAccountSettingsScope();
     const expectedAccountLifetime = captureActiveServerAccountScopeLifetime();
-    const lastUsedTarget = useStoreWithEqualityFn(storage,
-        state => readPluginMachineExecutionLastUsedTarget(state.settings.machineAdministrationTargetsLocalV1, params.pluginId),
-        (left, right) => left?.serverIdentityId === right?.serverIdentityId && left?.machineId === right?.machineId);
+    const lastUsedTarget = useMachineAdministrationTargetObservation(enabled ? expectedSettingsScope : null, `plugin.lastRunOn:${params.pluginId}`);
     const localRunner = getSystemTasksRunner();
     const localStatus = React.useSyncExternalStore(
         React.useCallback(listener => enabled ? subscribeLocalDaemonSharedState(localRunner, listener) : () => {}, [enabled, localRunner]),

@@ -6,8 +6,10 @@ import { getServerProfileById, areServerProfileIdentifiersEquivalent, captureSer
 import { loadMachineDisplayWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import { readRegisteredStorageState, subscribeRegisteredStorageState, subscribeRegisteredStorageMachineUpdates } from '@/sync/domains/state/storageStateReaderBridge';
 import type { storage } from '@/sync/domains/state/storageStore';
-import { createServerAccountScope, serverAccountScopeListKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { createServerAccountScope, serverAccountScopeListKey, serverAccountScopedResourceKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { machineAdministrationTargetObservationsState } from '@/sync/domains/state/machineAdministrationUiState';
 import { resolveAllProfileMachineInventorySnapshots, type ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
+import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { readMachineRequestReachabilityRevision, subscribeMachineRequestReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { sessionListRuntimeClock, type SessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
@@ -95,6 +97,8 @@ type InventoryPublication = Readonly<{
 type InventoryMachineFact = ReturnType<PluginExecutionOriginMachineFactReader>;
 type InventoryRow = Readonly<{
     machine: ServerMachineInventorySnapshotV1['machines'][number];
+    displayIndex: number;
+    sourceIndex: number | null;
     eligible: boolean;
     presence: string;
     fact: InventoryMachineFact;
@@ -103,6 +107,7 @@ type InventoryRow = Readonly<{
 type InventoryHome = Readonly<{
     snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }>;
     rows: ReadonlyMap<string, InventoryRow>;
+    sourceMachines: readonly StorageState['machines'][string][] | null;
 }>;
 type Demand = {
     inputs: ExecutionOriginMachineSnapshotInputs;
@@ -113,8 +118,7 @@ type Demand = {
     factsInventory: InventoryPublication | null;
     current: ExecutionOriginMachineSnapshotSelection;
     snapshot: ExecutionOriginMachineSnapshotSelection;
-    listener: () => void;
-    retirements: Array<Readonly<{ dispose(): void }>>;
+    listeners: Set<() => void>;
     description: Readonly<{
         inputs: ExecutionOriginMachineSnapshotInputs;
         key: string;
@@ -190,6 +194,12 @@ function sameCandidateRows(left: readonly PluginExecutionOriginCandidateV1[], ri
     return left.length === right.length && left.every((candidate, index) => candidate === right[index]);
 }
 
+function readInventoryMachineFact(homes: ReadonlyMap<string, InventoryHome>, target: PluginExecutionOriginContextualTarget): InventoryMachineFact {
+    const home = homes.get(target.serverIdentityId);
+    return home?.rows.get(target.machineId)?.fact ?? { activeAt: 0, eligible: false,
+        rejection: resolveFleetSnapshotMachineRejection({ snapshot: home?.snapshot, machine: undefined }) };
+}
+
 /** A changed classifier must run, but equal descriptive results must not republish themselves. */
 function retainDescriptiveCandidates(previous: readonly PluginExecutionOriginCandidateV1[] | undefined,
     proposed: readonly PluginExecutionOriginCandidateV1[]) {
@@ -226,11 +236,71 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
     const contexts = new Map<string, Context>();
     const clockToken = {};
     let stops: Array<() => void> = [];
+    let publishing = false;
+    type AutomaticOriginEntry = { current: Demand | null; remaining: Demand[]; next: number };
+    let automaticOriginView: Readonly<{
+        order: ReadonlyMap<Demand, number>;
+        plugins: ReadonlyMap<string, Map<ServerAccountScopeLifetime | null | undefined, AutomaticOriginEntry>>;
+    }> | null = null;
+
+    function selectedAutomaticOrigin(demand: Demand) {
+        const state = demand.current.selection?.state;
+        return demand.inputs.selection?.contextualTarget === undefined && state?.kind === 'selected' && state.selectionSource === 'auto'
+            ? state.origin : null;
+    }
+
+    // One ordered view for this synchronous publication. It is discarded after
+    // the pass; it never substitutes for currentness or persists selected facts.
+    function prepareAutomaticOriginView() {
+        if (!publishing || automaticOriginView) return;
+        const order = new Map<Demand, number>();
+        const plugins = new Map<string, Map<ServerAccountScopeLifetime | null | undefined, AutomaticOriginEntry>>();
+        for (const context of contexts.values()) for (const demand of context.demands) {
+            order.set(demand, order.size);
+            let lifetimes = plugins.get(demand.inputs.pluginId);
+            if (!lifetimes) { lifetimes = new Map(); plugins.set(demand.inputs.pluginId, lifetimes); }
+            let entry = lifetimes.get(demand.inputs.accountLifetime);
+            if (!entry) { entry = { current: null, remaining: [], next: 0 }; lifetimes.set(demand.inputs.accountLifetime, entry); }
+            if (selectedAutomaticOrigin(demand)) {
+                entry.current ??= demand;
+                entry.remaining.push(demand);
+            }
+        }
+        automaticOriginView = { order, plugins };
+    }
+
+    function withAutomaticOriginView(publish: () => void) {
+        if (publishing) { publish(); return; }
+        publishing = true;
+        try { publish(); } finally { publishing = false; automaticOriginView = null; }
+    }
+
+    function publishAutomaticOrigin(demand: Demand) {
+        const view = automaticOriginView;
+        const entry = view?.plugins.get(demand.inputs.pluginId)?.get(demand.inputs.accountLifetime);
+        if (!view || !entry) return;
+        if (selectedAutomaticOrigin(demand)) {
+            if (!entry.current || (view.order.get(demand) ?? Infinity) < (view.order.get(entry.current) ?? Infinity)) entry.current = demand;
+        } else if (entry.current === demand) {
+            entry.current = null;
+            // Publication follows the same demand order as the initial view.
+            // Each incumbent is visited at most once when earlier choices retire.
+            while (entry.next < entry.remaining.length) {
+                const candidate = entry.remaining[entry.next++]!;
+                if (selectedAutomaticOrigin(candidate)) { entry.current = candidate; break; }
+            }
+        }
+    }
 
     // Reuse the mounted selection, including for fresh invocation and Action
     // reads. This is a descriptive hint; the policy still admits current facts.
     function readAutomaticOrigin(pluginId: string, accountLifetime: ServerAccountScopeLifetime | null | undefined) {
         if (accountLifetime === null || accountLifetime?.isCurrent() === false) return null;
+        prepareAutomaticOriginView();
+        if (automaticOriginView) {
+            const demand = automaticOriginView.plugins.get(pluginId)?.get(accountLifetime)?.current;
+            return demand ? selectedAutomaticOrigin(demand) : null;
+        }
         for (const context of contexts.values()) for (const demand of context.demands) {
             if (demand.inputs.pluginId !== pluginId || demand.inputs.accountLifetime !== accountLifetime
                 || demand.inputs.selection?.contextualTarget !== undefined) continue;
@@ -245,7 +315,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
         if (!spec) return null;
         const targets = inventory.state.settings.machineAdministrationTargetsLocalV1;
         const storedTarget = spec.contextualTarget !== undefined ? null : readPluginMachineExecutionTargetPreference(targets, demand.inputs.pluginId);
-        const lastUsedTarget = readPluginMachineExecutionLastUsedTarget(targets, demand.inputs.pluginId);
+        const lastUsedTarget = readPluginMachineExecutionLastUsedTarget(demand.inputs.accountLifetime?.scope ?? null, demand.inputs.pluginId);
         const rememberedTarget = storedTarget ?? (spec.storedOrigin && {
             serverIdentityId: spec.storedOrigin.serverIdentityId,
             machineId: getPluginMachineExecutionOriginRef(spec.storedOrigin).machineId,
@@ -270,8 +340,6 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             && sameTarget(description.lastUsedTarget, lastUsedTarget)
             && description.value.loading === readLoading(description.value.state);
         if (demand.description && matches(demand.description)) return demand.description.value;
-        const sibling = [...demand.context.demands].find(other => other !== demand && other.description && matches(other.description));
-        if (sibling?.description) { demand.description = sibling.description; return sibling.description.value; }
         const previous = demand.description;
         const candidates = previous && previous.eligibilityKey === eligibilityKey && sameCandidateInputs(previous.inputs, demand.inputs)
             ? previous.value.candidates : retainDescriptiveCandidates(previous?.value.candidates, combinePluginMachineExecutionOriginCandidates(buildPluginMachineExecutionOriginCandidates({
@@ -290,6 +358,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             declaredDefaultOrigins: spec.declaredDefaultOrigins, contextualTarget: spec.contextualTarget,
             storedOriginMachinePresence: presence, autoPick: spec.autoPick, renderedVersion: spec.renderedVersion,
             ...readPluginExecutionOriginAutomaticHints(demand.inputs.pluginId, candidates, inventory.snapshots),
+            lastUsedTarget,
             inventoryPending: inventory.pendingHomes.has(rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId ?? ''),
         });
         const state = retainDescriptiveState(previous?.value.state, resolved);
@@ -317,19 +386,14 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             demand.current = EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION;
         } else {
             if (demand.factsInventory !== inventory) {
-                const sibling = [...context.demands].find(other => other !== demand && other.inputs.pluginId === inputs.pluginId
-                    && other.factsInventory === inventory && sameTargets(other.targets, demand.targets));
-                if (sibling) {
-                    demand.facts = sibling.facts;
-                    demand.factProjection = sibling.factProjection;
-                } else {
-                    const facts = { machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact };
-                    if (!demand.factProjection) demand.factProjection = createPluginMachineExecutionOriginMachineFacts({
-                        ...facts, targets: demand.targets,
-                    });
-                    else demand.factProjection.update(facts, inventory.fullRefresh ? undefined : inventory.changedTargets);
-                    demand.facts = demand.factProjection.getSnapshot();
+                const facts = { machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact };
+                if (!demand.factProjection) demand.factProjection = createPluginMachineExecutionOriginMachineFacts({
+                    ...facts, targets: demand.targets,
+                });
+                else if (inventory.fullRefresh || inventory.changedTargets.length > 0) {
+                    demand.factProjection.update(facts, inventory.fullRefresh ? undefined : inventory.changedTargets);
                 }
+                demand.facts = demand.factProjection.getSnapshot();
                 demand.factsInventory = inventory;
             }
             const readinessHome = inputs.readinessServerIdentityId
@@ -342,16 +406,15 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             const key = inputs.selection ? eligibilityKey : `${prefix}${demand.facts!.activityKey}`;
             const selection = describe(demand, inventory, key, eligibilityKey);
             if (demand.current.key !== key || demand.current.snapshots !== inventory.snapshots || demand.current.selection !== selection) {
-                const sibling = [...context.demands].find(other => other !== demand && other.current.key === key
-                    && other.current.snapshots === inventory.snapshots && other.current.selection === selection);
-                demand.current = sibling?.current ?? Object.freeze({ key, eligibilityKey, selection,
+                demand.current = Object.freeze({ key, eligibilityKey, selection,
                     snapshots: inventory.snapshots, nextRefreshAtMs: inventory.nextRefreshAtMs, readMachineFact: inventory.readMachineFact });
             }
         }
+        publishAutomaticOrigin(demand);
         // Raw presentation can advance without waking a semantic consumer.
         if (demand.snapshot.key !== demand.current.key || demand.snapshot.selection !== demand.current.selection) {
             demand.snapshot = demand.current;
-            demand.listener();
+            for (const listener of demand.listeners) listener();
         }
     }
 
@@ -367,8 +430,9 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             && previous.reachabilityRevision === revision && nowMs >= previous.observedAtMs
             && (previous.nextRefreshAtMs === null || nowMs < previous.nextRefreshAtMs);
         if (!unchanged) {
+            const activeMachines = Object.values(state.machines);
             const snapshots = resolveAllProfileMachineInventorySnapshots({ profiles: context.inputs.profiles,
-                activeServerId: context.inputs.activeServerId, activeMachines: Object.values(state.machines),
+                activeServerId: context.inputs.activeServerId, activeMachines,
                 machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId,
                 accountScopesByServerId: context.scopes, nowMs, loadWarmEntries: loadMachineDisplayWarmCacheEntries });
             let nextRefreshAtMs: number | null = null;
@@ -379,6 +443,13 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             for (const snapshot of snapshots) {
                 if ('serverIdentityId' in snapshot && isMachineInventoryPending(snapshot)) pendingHomes.add(snapshot.serverIdentityId);
                 if (snapshot.kind !== 'resolved') continue;
+                const profile = context.inputs.profiles.find(entry => entry.id === snapshot.profileId);
+                const sourceMachines = resolveServerScopedMachineInventory({
+                    serverId: snapshot.serverIdentityId, serverIdAliases: [snapshot.profileId, ...(profile?.legacyServerIds ?? [])],
+                    activeServerId: context.inputs.activeServerId, activeMachines,
+                    machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId,
+                }, resolveScopeId).machines;
+                const sourceIndices = new Map(sourceMachines?.map((machine, index) => [machine.id, index] as const));
                 const old = previous?.homes.get(snapshot.serverIdentityId);
                 const sameAdmission = old !== undefined && old.snapshot.accountId === snapshot.accountId
                     && old.snapshot.observation === snapshot.observation && old.snapshot.settled === snapshot.settled
@@ -391,7 +462,8 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 const eligible = new Set(snapshot.executionEligibleMachineIds);
                 const rows = new Map<string, InventoryRow>();
                 const scope = createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId);
-                for (const machine of snapshot.machines) {
+                for (const [displayIndex, machine] of snapshot.machines.entries()) {
+                    const sourceIndex = sourceIndices.get(machine.id) ?? null;
                     const before = old?.rows.get(machine.id);
                     const executionEligible = eligible.has(machine.id);
                     const sameRow = sameAdmission && before?.machine === machine
@@ -407,7 +479,10 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                             rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine, executionEligible }) };
                         const fact = before && before.fact.activeAt === proposed.activeAt && before.fact.eligible === proposed.eligible
                             && before.fact.rejection === proposed.rejection ? before.fact : proposed;
-                        row = { machine, eligible: executionEligible, presence, fact, nextRefreshAtMs: readMachineStatusNextRefreshAtMs(machine, nowMs) };
+                        row = { machine, displayIndex, sourceIndex, eligible: executionEligible, presence, fact,
+                            nextRefreshAtMs: readMachineStatusNextRefreshAtMs(machine, nowMs) };
+                    } else if (row!.displayIndex !== displayIndex || row!.sourceIndex !== sourceIndex) {
+                        row = { ...row!, displayIndex, sourceIndex };
                     }
                     rows.set(machine.id, row!);
                     if (before?.fact !== row!.fact) changedTargets.push({ serverIdentityId: snapshot.serverIdentityId, machineId: machine.id });
@@ -417,7 +492,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 for (const machineId of old?.rows.keys() ?? []) if (!rows.has(machineId)) {
                     changedTargets.push({ serverIdentityId: snapshot.serverIdentityId, machineId });
                 }
-                homes.set(snapshot.serverIdentityId, { snapshot, rows });
+                homes.set(snapshot.serverIdentityId, { snapshot, rows, sourceMachines });
             }
             for (const [serverIdentityId, old] of previous?.homes ?? []) if (!homes.has(serverIdentityId)) {
                 for (const machineId of old.rows.keys()) changedTargets.push({ serverIdentityId, machineId });
@@ -428,11 +503,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             context.inventory = { snapshots, nextRefreshAtMs, pendingHomes, state, observedAtMs: nowMs, homes, changedTargets, fullRefresh: !previous,
                 activeServerIdentityId: getServerProfileById(context.inputs.activeServerId)?.serverIdentityId ?? '',
                 reachabilityRevision: revision,
-                readMachineFact: target => {
-                    const home = homes.get(target.serverIdentityId);
-                    return home?.rows.get(target.machineId)?.fact ?? { activeAt: 0, eligible: false,
-                        rejection: resolveFleetSnapshotMachineRejection({ snapshot: home?.snapshot, machine: undefined }) };
-                } };
+                readMachineFact: target => readInventoryMachineFact(homes, target) };
         } else {
             if (previous.state.settings.machineAdministrationTargetsLocalV1 === state.settings.machineAdministrationTargetsLocalV1) return;
             context.inventory = { ...previous, state, changedTargets: [], fullRefresh: false };
@@ -440,8 +511,73 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
         for (const demand of context.demands) publishDemand(demand);
     }
 
+    function publishMachineUpdates(context: Context, state: StorageState, serverId: string, machineIds: readonly string[]) {
+        const previous = context.inventory;
+        if (!previous) { publishContext(context); return; }
+        const resolveScopeId = captureServerProfileScopeResolver();
+        const snapshotIndex = previous.snapshots.findIndex(entry => areServerProfileIdentifiersEquivalent(entry.profileId, serverId, resolveScopeId));
+        const snapshot = previous.snapshots[snapshotIndex];
+        if (snapshot?.kind !== 'resolved') return;
+        const home = previous.homes.get(snapshot.serverIdentityId)!;
+        const nowMs = Date.now();
+        // Semantic/root, scope, reachability and expiry transitions still use
+        // the canonical census. Exact receipts with retained roots change only
+        // liveness; their row coordinates were established by that census.
+        if (previous.state.machines !== state.machines || previous.state.machineListByServerId !== state.machineListByServerId
+            || previous.state.machineListStatusByServerId !== state.machineListStatusByServerId
+            || previous.reachabilityRevision !== readMachineRequestReachabilityRevision()
+            || nowMs < previous.observedAtMs || (previous.nextRefreshAtMs !== null && nowMs >= previous.nextRefreshAtMs)) {
+            publishContext(context);
+            return;
+        }
+        let rows: Map<string, InventoryRow> | null = null;
+        let machines: Array<InventoryRow['machine']> | null = null;
+        const changedTargets: PluginExecutionOriginContextualTarget[] = [];
+        let earliestChanged = false;
+        let nextRefreshAtMs = previous.nextRefreshAtMs;
+        const scope = createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId);
+        for (const machineId of new Set(machineIds)) {
+            const before = home.rows.get(machineId);
+            const source = before?.sourceIndex != null ? home.sourceMachines?.[before.sourceIndex] : undefined;
+            if (!before || !source || source.id !== machineId) { publishContext(context, true); return; }
+            if (before.fact.activeAt === source.activeAt && before.machine.updatedAt === source.updatedAt) continue;
+            const livePresence = resolveMachinePickerPresence(source, nowMs, scope, resolveScopeId);
+            const presence = livePresence.status === 'offline' ? livePresence.reason : livePresence.status;
+            if (presence !== before.presence) { publishContext(context, true); return; }
+            const machine = { ...before.machine, activeAt: source.activeAt, updatedAt: source.updatedAt };
+            const fact = before.fact.activeAt === source.activeAt ? before.fact : { ...before.fact, activeAt: source.activeAt };
+            const row: InventoryRow = { ...before, machine, fact, nextRefreshAtMs: readMachineStatusNextRefreshAtMs(source, nowMs) };
+            rows ??= new Map(home.rows);
+            machines ??= [...snapshot.machines];
+            rows.set(machineId, row);
+            machines[before.displayIndex] = machine;
+            if (fact !== before.fact) changedTargets.push({ serverIdentityId: snapshot.serverIdentityId, machineId });
+            if (before.nextRefreshAtMs === previous.nextRefreshAtMs && row.nextRefreshAtMs !== before.nextRefreshAtMs) earliestChanged = true;
+            if (row.nextRefreshAtMs !== null && (nextRefreshAtMs === null || row.nextRefreshAtMs < nextRefreshAtMs)) nextRefreshAtMs = row.nextRefreshAtMs;
+        }
+        if (!rows || !machines) return;
+        const nextSnapshot = { ...snapshot, machines: Object.freeze(machines) };
+        const homes = new Map(previous.homes);
+        homes.set(snapshot.serverIdentityId, { ...home, rows, snapshot: nextSnapshot });
+        // Only the scalar deadline minimum needs a scan when its old owner
+        // moves. No unaffected row is re-admitted or re-projected.
+        if (earliestChanged) {
+            nextRefreshAtMs = null;
+            for (const currentHome of homes.values()) for (const row of currentHome.rows.values()) {
+                const deadline = row.nextRefreshAtMs;
+                if (deadline !== null && (nextRefreshAtMs === null || deadline < nextRefreshAtMs)) nextRefreshAtMs = deadline;
+            }
+        }
+        const snapshots = [...previous.snapshots];
+        snapshots[snapshotIndex] = nextSnapshot;
+        context.inventory = { ...previous, snapshots: Object.freeze(snapshots), homes, state, observedAtMs: nowMs,
+            changedTargets, fullRefresh: false, nextRefreshAtMs,
+            readMachineFact: target => readInventoryMachineFact(homes, target) };
+        for (const demand of context.demands) publishDemand(demand);
+    }
+
     function publish() {
-        for (const context of contexts.values()) publishContext(context);
+        withAutomaticOriginView(() => { for (const context of contexts.values()) publishContext(context); });
         armClock();
     }
 
@@ -451,16 +587,9 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             dependencies.clock.subscribe(publish), dependencies.subscribeMachineUpdates((serverId, machineIds) => {
                 const state = dependencies.readState();
                 if (!state) return;
-                for (const context of contexts.values()) {
-                    const snapshot = context.inventory?.snapshots.find(entry => areServerProfileIdentifiersEquivalent(entry.profileId, serverId));
-                    const rows = state.machineListByServerId[serverId]
-                        ?? (areServerProfileIdentifiersEquivalent(context.inputs.activeServerId, serverId) ? Object.values(state.machines) : []);
-                    // Changed-root updates already published. This receipt adds the
-                    // heartbeat-only path that deliberately preserves the store root.
-                    const home = snapshot?.kind === 'resolved' ? context.inventory?.homes.get(snapshot.serverIdentityId) : undefined;
-                    if (machineIds.some(id => rows?.find(row => row.id === id)?.activeAt
-                        !== home?.rows.get(id)?.fact.activeAt)) publishContext(context, true);
-                }
+                withAutomaticOriginView(() => {
+                    for (const context of contexts.values()) publishMachineUpdates(context, state, serverId, machineIds);
+                });
                 armClock();
             })].filter((stop): stop is () => void => stop !== null);
     }
@@ -470,9 +599,12 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
         connect(inputs: ExecutionOriginMachineSnapshotInputs, listener: () => void): ExecutionOriginMachineSnapshotConnection {
             let disposed = false;
             let demand: Demand;
+            let retirements: Array<Readonly<{ dispose(): void }>> = [];
+            const notify = () => listener();
             function bind(next: ExecutionOriginMachineSnapshotInputs) {
                 if (disposed) return;
-                for (const retirement of demand?.retirements ?? []) retirement.dispose();
+                for (const retirement of retirements) retirement.dispose();
+                retirements = [];
                 const scopes = new Map([...next.accountScopesByServerId].filter(([serverId, scope]) => {
                     const binding = next.bindings?.find(entry => entry.scope.accountId === scope.accountId
                         && areServerProfileIdentifiersEquivalent(entry.scope.serverId, serverId));
@@ -490,28 +622,44 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                     context.inventory = null;
                 }
                 const previous = demand;
+                const previousSnapshot = previous?.snapshot ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION;
                 const targets = previous && previous.inputs.materializations === next.materializations && previous.inputs.sources === next.sources
                     && previous.inputs.pluginId === next.pluginId ? previous.targets : readPluginExecutionOriginMachineTargets(next);
                 if (previous) {
-                    previous.context.demands.delete(previous);
+                    previous.listeners.delete(notify);
+                    if (previous.listeners.size === 0) previous.context.demands.delete(previous);
                     if (previous.context !== context && previous.context.demands.size === 0) contexts.delete(previous.context.key);
                 }
-                const reuse = previous?.context === context && sameTargets(previous.targets, targets);
-                demand = { inputs: next, targets: reuse ? previous.targets : targets, context,
+                const reuse = previous?.context === context && previous.listeners.size === 0 && sameTargets(previous.targets, targets);
+                // Equivalent connections consume one demand. Match only when a
+                // connection binds, never by searching siblings per arrival.
+                const equivalent = [...context.demands].find(other => other.inputs.readinessServerIdentityId === next.readinessServerIdentityId
+                    && sameTargets(other.targets, targets) && sameSelectionInputs(other.inputs, next));
+                demand = equivalent ?? { inputs: next, targets: reuse ? previous.targets : targets, context,
                     facts: reuse ? previous.facts : null, factsInventory: reuse ? previous.factsInventory : null,
                     factProjection: reuse ? previous.factProjection : null,
                     current: previous?.current ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION,
-                    snapshot: previous?.snapshot ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION, listener, retirements: [],
+                    snapshot: previousSnapshot, listeners: new Set(),
                     description: previous?.description ?? null };
                 context.demands.add(demand);
-                publishContext(context);
-                publishDemand(demand);
+                withAutomaticOriginView(() => {
+                    publishContext(context);
+                    publishDemand(demand);
+                });
+                demand.listeners.add(notify);
+                if (next.accountLifetime?.isCurrent()) {
+                    const observationKey = serverAccountScopedResourceKey(next.accountLifetime.scope, `plugin.lastRunOn:${next.pluginId}`);
+                    retirements.push({ dispose: machineAdministrationTargetObservationsState.subscribeKey(observationKey, () => {
+                        withAutomaticOriginView(() => publishDemand(demand));
+                    }) });
+                }
                 for (const lifetime of [next.accountLifetime, ...next.bindings ?? []]) {
-                    if (lifetime?.isCurrent()) demand.retirements.push(lifetime.onRetire(() => {
-                        if (!disposed) bind(demand.inputs);
+                    if (lifetime?.isCurrent()) retirements.push(lifetime.onRetire(() => {
+                        if (!disposed) bind(next);
                     }));
                 }
                 armClock();
+                if (previousSnapshot.key !== demand.snapshot.key || previousSnapshot.selection !== demand.snapshot.selection) notify();
             }
             start();
             bind(inputs);
@@ -522,8 +670,9 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 dispose() {
                     if (disposed) return;
                     disposed = true;
-                    for (const retirement of demand.retirements) retirement.dispose();
-                    demand.context.demands.delete(demand);
+                    for (const retirement of retirements) retirement.dispose();
+                    demand.listeners.delete(notify);
+                    if (demand.listeners.size === 0) demand.context.demands.delete(demand);
                     if (demand.context.demands.size === 0) contexts.delete(demand.context.key);
                     if (contexts.size === 0) {
                         for (const stop of stops) stop();

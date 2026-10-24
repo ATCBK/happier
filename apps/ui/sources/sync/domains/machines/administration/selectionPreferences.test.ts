@@ -9,24 +9,12 @@ import {
     readPluginMachineExecutionTargetPreference,
     setMachineAdministrationTargetPreference,
     setPluginMachineExecutionOriginPreference,
-    readPluginMachineExecutionLastUsedTarget,
-    setPluginMachineExecutionLastUsedTarget,
 } from './selectionPreferences';
 
 describe('machine administration selection preferences', () => {
     const pluginId = 'acme.plugin';
     const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId,
         sourceCustody: { kind: 'development' as const, registeredRootId: '/registered/source' } } };
-    it('retains last use separately from an explicit pin in the same local Administration owner', () => {
-        const pinned = setPluginMachineExecutionOriginPreference({}, pluginId, origin);
-        const target = { serverIdentityId: 'srv_one', machineId: 'machine-b' };
-        const used = setPluginMachineExecutionLastUsedTarget(pinned, pluginId, target);
-        expect(readPluginMachineExecutionTargetPreference(used, pluginId)).toEqual({ serverIdentityId: 'srv_one', machineId: 'machine-a' });
-        expect(readPluginMachineExecutionLastUsedTarget(used, pluginId)).toEqual(target);
-        expect(readPluginMachineExecutionLastUsedTarget(clearPluginMachineExecutionOriginPreference(used, pluginId), pluginId)).toEqual(target);
-        expect(stripLocalOnlyAccountSettings({ machineAdministrationTargetsLocalV1: used })).toEqual({});
-        expect(setPluginMachineExecutionLastUsedTarget(used, pluginId, target)).toBe(used);
-    });
     it('accepts a canonical maximum-length plugin id as a named local target', () => {
         const longId = `${'a'.repeat(250)}.tools`;
         const next = setPluginMachineExecutionOriginPreference({}, longId, { ...origin, sourceRef: { ...origin.sourceRef, pluginId: longId } });

@@ -5,6 +5,7 @@ import * as React from 'react';
 import { getPluginMachineExecutionOriginRef, type PluginMachineMaterializationV1 } from '@happier-dev/protocol';
 
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { countStoreNotifications } from '@/dev/testkit/performance/counts';
 import { installSessionOpsNetworkBoundary, type SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
@@ -161,7 +162,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             await act(async () => { publishLocalDaemonStatus(runner, previousLocalStatus); });
         }
         await act(async () => { expect(hook.getCurrent().resolveExecutionOrigin()?.origin).toEqual(sources[0]!.source.origin); });
-        expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
+        expect(readPluginMachineExecutionLastUsedTarget(scope, pluginId))
             .toEqual({ serverIdentityId, machineId: a.id });
         const offline = { ...b, active: false, activeAt: 0 };
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, offline] } }); });
@@ -592,8 +593,13 @@ describe('execution-origin plugin identity with real Account and machine owners'
             expect.objectContaining({ target: { serverIdentityId, machineId: machine.id }, availability: 'online' }),
         ]));
         expect(storage.getState().settings).toBe(settingsBeforeMount);
-        expect(hook.getCurrent().resolveExecutionOrigin()?.source).toEqual(source);
+        const notifications = countStoreNotifications(storage);
+        try {
+            expect(hook.getCurrent().resolveExecutionOrigin()?.source).toEqual(source);
+        } finally { notifications.stop(); }
+        expect(notifications.read().filter(keys => keys.includes('settings'))).toHaveLength(0);
         const settingsAfterUse = storage.getState().settings;
+        expect(settingsAfterUse).toBe(settingsBeforeMount);
         // An opened row stays executable while unrelated census work continues.
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'loading' } }); });
         expect(hook.getCurrent().canExecute).toBe(true);
@@ -726,6 +732,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             await act(async () => { storage.setState({ settingsVersion: version }); });
         }
         const redundantSerializations = createFacts.mock.calls.length - initialSerializations;
+        console.info('execution-origin unchanged inventory: 100 settings-version updates, fact projection creations =', redundantSerializations);
         expect(redundantSerializations).toBe(0);
         expect(hook.getCurrent().candidates).toBe(initial.candidates);
         expect(hook.getCurrent().canExecute).toBe(true);

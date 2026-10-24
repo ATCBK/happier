@@ -5,6 +5,7 @@ import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { storage } from '@/sync/domains/state/storageStore';
+import { readMachineAdministrationTargetObservation, rememberMachineAdministrationTargetObservation } from '@/sync/domains/state/machineAdministrationUiState';
 
 /** Admit fresh operation custody, but remember only the answering device's Machine. */
 export async function persistPluginMachineExecutionOriginSelection(params: Readonly<{
@@ -104,29 +105,17 @@ export function readCurrentPluginMachineExecutionTargetPreference(pluginId: stri
     return readPluginMachineExecutionTargetPreference(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId);
 }
 
-/** A hint in the existing device/Account/Home map, never explicit placement intent. */
+/** A device/Account/Home navigation observation, never explicit placement intent. */
 export function readPluginMachineExecutionLastUsedTarget(
-    targets: MachineAdministrationTargetsV1,
+    scope: AccountSettingsScope | null,
     pluginId: string,
 ): MachineAdministrationTargetV1 | null {
-    return targets[`plugin.lastRunOn:${pluginId}`] ?? null;
-}
-
-export function setPluginMachineExecutionLastUsedTarget(
-    targets: MachineAdministrationTargetsV1,
-    pluginId: string,
-    target: MachineAdministrationTargetV1,
-): MachineAdministrationTargetsV1 {
-    const previous = readPluginMachineExecutionLastUsedTarget(targets, pluginId);
-    return previous?.serverIdentityId === target.serverIdentityId && previous.machineId === target.machineId
-        ? targets : setMachineAdministrationTargetPreference(targets, `plugin.lastRunOn:${pluginId}`, target);
+    return readMachineAdministrationTargetObservation(scope, `plugin.lastRunOn:${pluginId}`);
 }
 
 export function rememberPluginMachineExecutionOriginUse(pluginId: string, origin: PluginMachineExecutionOriginV1, scope: AccountSettingsScope): void {
     const state = storage.getState();
     if (!areAccountSettingsScopesEqual(scope, state.settingsScope)) return;
-    const current = state.settings.machineAdministrationTargetsLocalV1;
-    const next = setPluginMachineExecutionLastUsedTarget(current, pluginId, { serverIdentityId: origin.serverIdentityId,
+    rememberMachineAdministrationTargetObservation(scope, `plugin.lastRunOn:${pluginId}`, { serverIdentityId: origin.serverIdentityId,
         machineId: getPluginMachineExecutionOriginRef(origin).machineId });
-    if (next !== current) getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: next }, { expectedSettingsScope: scope });
 }

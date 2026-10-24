@@ -31,7 +31,8 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
-import { clearMachineAdministrationTargetPreference, readPluginMachineExecutionLastUsedTarget, setPluginMachineExecutionOriginPreference } from '@/sync/domains/machines/administration/selectionPreferences';
+import { readPluginMachineExecutionLastUsedTarget, setPluginMachineExecutionOriginPreference } from '@/sync/domains/machines/administration/selectionPreferences';
+import { clearMachineAdministrationTargetObservation } from '@/sync/domains/state/machineAdministrationUiState';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -305,9 +306,9 @@ describe('plugin surface execution requirement', () => {
             // Currentness is read during controller construction in render.
             // Inspecting authority must not persist a last-use hint or notify
             // other mounted Settings consumers. An actual invocation still does.
-            expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId)).toBeNull();
+            expect(readPluginMachineExecutionLastUsedTarget(scope, pluginId)).toBeNull();
             await act(async () => { expect(mounted.selection.resolveExecutionOrigin()?.origin).toEqual(executionOrigin); });
-            expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
+            expect(readPluginMachineExecutionLastUsedTarget(scope, pluginId))
                 .toEqual({ serverIdentityId: executionOrigin.serverIdentityId, machineId });
             // The composer replaced and restored the committed source above,
             // and this invocation deliberately wrote the last-use input. Take
@@ -464,10 +465,11 @@ describe('plugin surface execution requirement', () => {
             await contextual.unmount();
             expect(await invoke('plugins.execution_origin.set', { pluginId, contextualTarget, origin: savedOtherOrigin })).toEqual({ status: 'unavailable' });
             actionAccount.dispose();
-            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
-                machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
-                    storage.getState().settings.machineAdministrationTargetsLocalV1, `plugin.lastRunOn:${pluginId}`),
-                machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } }));
+            await act(async () => {
+                clearMachineAdministrationTargetObservation(scope, `plugin.lastRunOn:${pluginId}`);
+                storage.setState({ settings: { ...storage.getState().settings,
+                    machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } });
+            });
             committedProjection = initialProjection;
             await hook.rerender();
             const supply = mounted.selectedSupply;
@@ -483,9 +485,9 @@ describe('plugin surface execution requirement', () => {
                 resolveContributedAction: createPluginUiProjectedActionResolver({ [`${pluginId}/refresh`]: action }),
             }, binding: { executeContributedAction: execute, isExecutionOriginCurrent: mounted.isExecutionOriginCurrent } });
             expect(controller.hostApi.installedMethods).toContain('executeAction');
-            expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId)).toBeNull();
+            expect(readPluginMachineExecutionLastUsedTarget(scope, pluginId)).toBeNull();
             await act(async () => { await expect(controller.dispatchAction({ pluginId, localId: 'refresh' })).resolves.toEqual({ refreshed: true }); });
-            expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
+            expect(readPluginMachineExecutionLastUsedTarget(scope, pluginId))
                 .toEqual({ serverIdentityId: executionOrigin.serverIdentityId, machineId });
             expect(execute).toHaveBeenCalledWith(machineId, expect.objectContaining({ serverId: connection.home.id,
                 expectedContributorOccurrenceId: 'occurrence-a', qualifiedActionId: `${pluginId}/refresh`, isCurrent: expect.any(Function),

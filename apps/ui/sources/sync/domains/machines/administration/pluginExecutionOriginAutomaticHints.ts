@@ -1,6 +1,5 @@
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { storage } from '@/sync/domains/state/storageStore';
 import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
 import { readLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
@@ -28,6 +27,6 @@ export function readPluginExecutionOriginAutomaticHints(pluginId: string, candid
             const fresh = resolveFreshMachineAdministrationExecutionTarget(target);
             return fresh ? [{ ...target, activeAt: fresh.machine.activeAt }] : [];
         });
-    return { lastUsedTarget: readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId),
+    return { lastUsedTarget: readPluginMachineExecutionLastUsedTarget(scope, pluginId),
         localMachineTarget, machineActivity };
 }

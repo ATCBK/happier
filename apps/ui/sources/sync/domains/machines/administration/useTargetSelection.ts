@@ -30,6 +30,8 @@ import {
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { clearMachineAdministrationTargetObservation, readMachineAdministrationTargetObservation,
+    rememberMachineAdministrationTargetObservation, useMachineAdministrationTargetObservation } from '@/sync/domains/state/machineAdministrationUiState';
 
 import {
     clearMachineAdministrationTargetPreference,
@@ -206,6 +208,7 @@ export function useMachineAdministrationTargetSelection(
     const explicitSelection = options.explicitSelection ?? 'live';
     const selections = useSetting('machineAdministrationTargetsLocalV1');
     const expectedSettingsScope = useAccountSettingsScope();
+    const automaticTarget = useMachineAdministrationTargetObservation(expectedSettingsScope, selectionKey);
     const activeAccountScope = useActiveServerAccountScope();
     const initialTarget = options.initialTarget ?? null;
     const initialTargetKey = options.initialTarget === undefined ? undefined : JSON.stringify(initialTarget);
@@ -226,7 +229,7 @@ export function useMachineAdministrationTargetSelection(
         setInitialTargetIntentState(released);
     }, [initialTargetKey]);
     const initialTargetPending = initialTargetKey !== undefined && !initialTargetIntent.current.applied;
-    const storedTarget = initialTargetPending ? initialTarget : selections[selectionKey] ?? null;
+    const storedTarget = initialTargetPending ? initialTarget : selections[selectionKey] ?? automaticTarget;
     const selectionRevisionRef = React.useRef<MachineAdministrationSelectionRevisionState>({
         selectionKey,
         target: storedTarget,
@@ -286,10 +289,7 @@ export function useMachineAdministrationTargetSelection(
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         if (current.settings.machineAdministrationTargetsLocalV1[selectionKey]) return;
-        // Initial-target memory is local; mounting a route never mutates Account policy.
-        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
-            current.settings.machineAdministrationTargetsLocalV1, selectionKey, targetState.target,
-        ) }, { expectedSettingsScope, source: 'ui' });
+        rememberMachineAdministrationTargetObservation(expectedSettingsScope, selectionKey, targetState.target);
     }, [allowSoleCandidate, expectedSettingsScope, selectionKey, storedTarget, targetState]);
 
     const selectTarget = React.useCallback((target: MachineAdministrationTargetV1) => {
@@ -310,6 +310,7 @@ export function useMachineAdministrationTargetSelection(
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         releaseInitialTarget();
+        clearMachineAdministrationTargetObservation(expectedSettingsScope, selectionKey);
         getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey,
         ) }, { expectedSettingsScope, source: 'ui' });
@@ -319,7 +320,8 @@ export function useMachineAdministrationTargetSelection(
         if (!enabled) return null;
         if (initialTargetIntent.current.key !== initialTargetKey) return null;
         const target = initialTargetKey !== undefined && !initialTargetIntent.current.applied
-            ? initialTarget : storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null;
+            ? initialTarget : storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey]
+                ?? readMachineAdministrationTargetObservation(expectedSettingsScope, selectionKey);
         selectionRevisionRef.current = advanceMachineAdministrationSelectionRevision(
             selectionRevisionRef.current,
             selectionKey,
@@ -332,7 +334,7 @@ export function useMachineAdministrationTargetSelection(
                 ...resolved,
                 selectionRevision: selectionRevisionRef.current.revision,
             });
-    }, [enabled, initialTarget, initialTargetKey, selectionKey, resolveScopedTarget]);
+    }, [enabled, expectedSettingsScope, initialTarget, initialTargetKey, selectionKey, resolveScopedTarget]);
 
     return React.useMemo(() => ({
         candidates,
