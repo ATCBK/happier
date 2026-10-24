@@ -28,6 +28,7 @@ import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useArtifacts, useArtifactsLoaded, useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { sync } from '@/sync/sync';
+import { useArtifactInventoryRead } from './useArtifactInventoryRead';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
@@ -99,14 +100,11 @@ export function ArtifactsBrowserScreen(): React.ReactElement {
     const loaded = useArtifactsLoaded();
     const usage = useArtifactStorageUsage();
     const { value: folders } = usePromptLibraryCatalogValue('folders');
-    const [loadFailed, setLoadFailed] = React.useState(false);
-    const refresh = React.useCallback(() => {
-        void sync.fetchArtifactsList().then(() => setLoadFailed(false), () => setLoadFailed(true));
-    }, []);
-    // The browser opening is the intent to read the list; the sync owner keeps it fresh after that.
+    // Provenance is observed before the read starts, so the opening read already carries it.
     React.useEffect(() => sync.observeArtifactProvenance(), []);
-    React.useEffect(refresh, [refresh]);
-    return <ArtifactsBrowser artifacts={artifacts} folders={folders} loaded={loaded} loadFailed={loadFailed} onRetry={refresh} usage={usage} />;
+    // The browser opening is the intent to read the list; the sync owner keeps it fresh after that.
+    const { failed: loadFailed, retry } = useArtifactInventoryRead(true);
+    return <ArtifactsBrowser artifacts={artifacts} folders={folders} loaded={loaded} loadFailed={loadFailed} onRetry={retry} usage={usage} />;
 }
 
 /** The browser itself, over the artifacts and budget it is given (the screen binds the store; `/dev/artifacts` binds fixtures). */
