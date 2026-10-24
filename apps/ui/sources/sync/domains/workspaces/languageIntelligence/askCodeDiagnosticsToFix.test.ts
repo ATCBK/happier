@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { storage } from '@/sync/domains/state/storage';
 import { registerComposerPresentationTarget } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { askCodeDiagnosticsToFix } from './askCodeDiagnosticsToFix';
-import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics } from './codeDiagnostics';
+import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics, selectCodeDiagnostics } from './codeDiagnostics';
 
 describe('Ask to fix diagnostic ranges', () => {
     it('creates no partial batch when any diagnostic file no longer has saved text', async () => {
@@ -32,8 +32,8 @@ describe('Ask to fix diagnostic ranges', () => {
         } finally { dispose(); storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: previous }); }
     });
 
-    it('saves buffer-only problems before creating saved-text drafts and focuses once', async () => {
-        const projection = mergeCodeDiagnostics(EMPTY_CODE_DIAGNOSTICS, { status: 'ok', revision: 1,
+    it.each(['open', 'project'] as const)('saves %s problems before creating saved-text drafts and focuses once', async (scope) => {
+        const openProjection = mergeCodeDiagnostics(EMPTY_CODE_DIAGNOSTICS, { status: 'ok', revision: 1,
             servers: [{ serverId: 'ts', label: 'TS', state: 'ready', loading: false, generation: 'g' }],
             diagnostics: { 'a.ts': { ts: { state: 'ready', version: 1, generation: 'g', items: [{
                 serverId: 'ts', path: 'a.ts', severity: 'error', message: 'Unknown name',
@@ -43,6 +43,7 @@ describe('Ask to fix diagnostic ranges', () => {
                 range: { start: { line: 0, character: 19 }, end: { line: 0, character: 25 } },
             }] } } },
         }, { documentVersions: new Map([['a.ts', 1]]), serverGenerations: new Map([['ts', 'g']]) });
+        const projection = scope === 'project' ? selectCodeDiagnostics(openProjection) : openProjection;
         const workspaceScope = { serverId: 'ask-save-home', machineId: 'machine', rootPath: '/repo' };
         const previous = storage.getState().reviewCommentsDraftsByWorkspaceCacheKey;
         storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: {} });

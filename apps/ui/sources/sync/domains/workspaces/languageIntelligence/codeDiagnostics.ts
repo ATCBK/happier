@@ -36,6 +36,12 @@ function diagnosticKey(item: LanguageIntelligenceDiagnostic): string {
         item.severity, item.code ?? null, item.message]);
 }
 
+/** The same diagnostic identity governs open-document and explicitly checked project results. */
+export function selectCodeDiagnosticItems(items: readonly LanguageIntelligenceDiagnostic[], state: 'idle' | 'ready' | 'checking' | 'unavailable') {
+    const unique = [...new Map(items.map(item => [diagnosticKey(item), item])).values()];
+    return { state, items: unique, count: state === 'ready' ? unique.length : null };
+}
+
 export function selectCodeDiagnostics(projection: CodeDiagnosticsProjection, path?: string): Readonly<{
     state: 'idle' | 'ready' | 'checking' | 'unavailable'; items: readonly LanguageIntelligenceDiagnostic[]; count: number | null;
 }> {
@@ -43,8 +49,7 @@ export function selectCodeDiagnostics(projection: CodeDiagnosticsProjection, pat
         .flatMap((filePath) => Object.entries(projection.entries[filePath] ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([, entry]) => entry));
     const state = !entries.length ? 'idle' : entries.some((entry) => entry.state === 'checking') ? 'checking'
         : entries.some((entry) => entry.state === 'unavailable') ? 'unavailable' : 'ready';
-    const items = [...new Map(entries.flatMap((entry) => entry.items).map((item) => [diagnosticKey(item), item])).values()];
-    return { state, items, count: state === 'ready' ? items.length : null };
+    return selectCodeDiagnosticItems(entries.flatMap((entry) => entry.items), state);
 }
 
 export function projectCodeDiagnosticDecorations(projection: CodeDiagnosticsProjection, path: string): readonly EditorDecoration[] {

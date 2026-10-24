@@ -2,7 +2,7 @@ import { askAboutRanges, type AskAboutFileRanges } from '@/components/ui/code/se
 import { selectCodeDiagnostics, type CodeDiagnosticsProjection } from './codeDiagnostics';
 
 export type AskCodeDiagnosticsToFixInput = Readonly<{
-    projection: CodeDiagnosticsProjection;
+    projection: CodeDiagnosticsProjection | ReturnType<typeof selectCodeDiagnostics>;
     workspaceScope: Parameters<typeof askAboutRanges>[0]['workspaceScope'];
     sessionTarget: Parameters<typeof askAboutRanges>[0]['sessionTarget'];
     targetContext?: Parameters<typeof askAboutRanges>[0]['targetContext'];
@@ -12,7 +12,7 @@ export type AskCodeDiagnosticsToFixInput = Readonly<{
     saveFileEdits(path: string): Promise<boolean>;
 }>;
 export async function askCodeDiagnosticsToFix(input: AskCodeDiagnosticsToFixInput): ReturnType<typeof askAboutRanges> {
-    const diagnostics = selectCodeDiagnostics(input.projection);
+    const diagnostics = 'entries' in input.projection ? selectCodeDiagnostics(input.projection) : input.projection;
     if (!input.isCurrent() || diagnostics.state !== 'ready' || !diagnostics.count) return { created: 0, drafts: [] };
     const groups = new Map<string, typeof diagnostics.items[number][]>();
     for (const item of diagnostics.items) {
