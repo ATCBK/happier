@@ -1,5 +1,5 @@
 import { GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1 } from './contribution.js';
-import type { GithubRepositoryReadV1 } from './repositories.js';
+import type { GithubRepositoryMergeSettingsV1, GithubRepositoryReadV1 } from './repositories.js';
 
 export type GithubCapabilityAvailabilityV1 =
   | Readonly<{ kind: 'available' }>
@@ -9,6 +9,8 @@ export type GithubCapabilityAvailabilityV1 =
 export type GithubRepositoryCapabilitiesV1 = Readonly<{
   operations: Readonly<Record<keyof typeof GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1, GithubCapabilityAvailabilityV1>>;
   mergeMethods: Readonly<Record<'merge' | 'squash' | 'rebase', GithubCapabilityAvailabilityV1>>;
+  /** Native settings; absent on an older result, null when GitHub did not state one. */
+  mergeSettings?: GithubRepositoryMergeSettingsV1;
 }>;
 
 const available = Object.freeze({ kind: 'available' as const });
@@ -52,6 +54,7 @@ export function projectGithubRepositoryCapabilities(
   };
   return Object.freeze({
     operations,
+    mergeSettings: repository.mergeSettings,
     mergeMethods: Object.freeze({
       merge: mergeMethod(repository.mergeSettings.merge),
       squash: mergeMethod(repository.mergeSettings.squash),

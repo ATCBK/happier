@@ -19,6 +19,7 @@ describe('GitHub repository capability projection', () => {
       squash: { kind: 'unavailable', code: 'repository_unsupported' },
       rebase: { kind: 'available' },
     });
+    expect(result).toHaveProperty('mergeSettings', { merge: true, squash: false, rebase: null });
   });
 
   it('denies every write when GitHub says the repository is archived', () => {

@@ -156,6 +156,7 @@ describe('GitHub capability plane', () => {
       }));
       expect(result.kind).toBe('capabilities');
       if (result.kind !== 'capabilities') return;
+      expect(result).toHaveProperty('mergeSettings', { merge: true, squash: false, rebase: true });
       expect(result.mergeMethods.squash).toEqual({ kind: 'unavailable', code: 'repository_unsupported' });
       expect(result.operations.pullRequestSubmitReview).toEqual({ kind: 'available' });
       expect(result.operations.pullRequestReviewCommentCreate).toEqual({ kind: 'available' });
@@ -222,12 +223,90 @@ describe('GitHub overview plane', () => {
         deletions: 88,
         changedFiles: 12,
         branchUpdateEligibility: 'behind',
+        mergeable: true,
+        mergeableState: 'behind',
+        requiredChecks: { state: 'unknown', failingCount: null, pendingCount: null },
+        reviewDecision: null,
       });
       expect(stub.requests.filter((request) => new URL(request.url).pathname.endsWith('/pulls/1284')))
         .toHaveLength(1);
     } finally {
       now.mockRestore();
     }
+  });
+
+  it.each([
+    { draft: true, mergeable: true, nativeState: 'blocked', requiredConclusion: 'FAILURE', requiredStatus: 'COMPLETED', state: 'failed', failingCount: 1, pendingCount: 0 },
+    { draft: false, mergeable: false, nativeState: 'dirty', requiredConclusion: null, requiredStatus: 'IN_PROGRESS', state: 'pending', failingCount: 0, pendingCount: 1 },
+    { draft: false, mergeable: null, nativeState: 'unknown', requiredConclusion: 'SUCCESS', requiredStatus: 'COMPLETED', state: 'passed', failingCount: 0, pendingCount: 0 },
+  ])('exposes native merge facts and only required check outcomes ($state) through the registered overview Action', async (shape) => {
+    const stub = createStubGithubTransport({ respond: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith('/pulls/1284')) return jsonResponse({
+        ...GITHUB_PULL_REQUEST_RESPONSE, draft: shape.draft, mergeable: shape.mergeable,
+        mergeable_state: shape.nativeState,
+      });
+      if (path === '/graphql') return jsonResponse({ data: { repository: { pullRequest: {
+        headRefOid: HEAD_SHA, reviewDecision: 'CHANGES_REQUESTED',
+        commits: { nodes: [{ commit: { oid: HEAD_SHA, statusCheckRollup: { contexts: {
+          nodes: [
+            { __typename: 'CheckRun', id: 'required', name: 'Required check', isRequired: true,
+              status: shape.requiredStatus, conclusion: shape.requiredConclusion,
+              startedAt: '2026-08-31T10:00:00Z', completedAt: null },
+            { __typename: 'CheckRun', id: 'optional', name: 'Optional failure', isRequired: false,
+              status: 'COMPLETED', conclusion: 'FAILURE',
+              startedAt: '2026-08-31T10:00:00Z', completedAt: null },
+          ], pageInfo: { hasNextPage: false },
+        } } } }] },
+      } } } });
+      return undefined;
+    } });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: stub.context.services.http, connectedAccounts: stub.context.services.connectedAccounts,
+    } });
+    try {
+      const result = GithubOverviewResultV1Schema.parse(await plugin.invokeAction(
+        GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readOverview,
+        { v: 1, instance: configuredInstance(), localRef: PULL_REQUEST_REF, routingToken: REPOSITORY_KEY },
+      ));
+      expect(result).toMatchObject({ kind: 'overview', kindId: 'pull-request',
+        draft: shape.draft, mergeable: shape.mergeable, mergeableState: shape.nativeState,
+        requiredChecks: { state: shape.state, failingCount: shape.failingCount, pendingCount: shape.pendingCount },
+        reviewDecision: 'changes-requested',
+      });
+      // Header facts reuse one exact PR read and the existing body-free check-condition query;
+      // no Feedback-body, check-log or closed-tab REST inventory fanout.
+      expect(stub.requests.map((r) => new URL(r.url).pathname).sort()).toEqual([
+        '/graphql',
+        `/repos/${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}/pulls/1284`,
+      ].sort());
+      const query = readRecordedJsonBody(stub.requests.find((r) => new URL(r.url).pathname === '/graphql')!);
+      expect(query).toMatchObject({ query: expect.stringContaining('isRequired'), variables: expect.objectContaining({ number: 1284 }) });
+      expect(query).toMatchObject({ query: expect.stringContaining('reviewDecision') });
+    } finally { await plugin.dispose(); }
+  });
+
+  it.each([
+    { scenario: 'permission denial', status: 403, head: HEAD_SHA, expected: 'unknown' },
+    { scenario: 'head advancement', status: 200, head: 'b'.repeat(40), expected: 'superseded' },
+    { scenario: 'no returned check contexts', status: 200, head: HEAD_SHA, expected: 'none' },
+  ])('keeps native overview facts when required-check evidence reports $scenario', async ({ status, head, expected }) => {
+    const stub = createStubGithubTransport({ respond: (request) => {
+      if (new URL(request.url).pathname.endsWith('/pulls/1284')) return jsonResponse(GITHUB_PULL_REQUEST_RESPONSE);
+      if (new URL(request.url).pathname !== '/graphql') return undefined;
+      return { status, body: status !== 200 ? { message: 'Resource not accessible' } : {
+        data: { repository: { pullRequest: { headRefOid: head, reviewDecision: null,
+          commits: { nodes: [{ commit: { oid: head, statusCheckRollup: null } }] },
+        } } },
+      } };
+    } });
+    const result = GithubOverviewResultV1Schema.parse(await readGithubOverview({
+      v: 1, instance: configuredInstance(), localRef: PULL_REQUEST_REF, routingToken: REPOSITORY_KEY,
+    }, stub.context));
+    expect(result).toMatchObject({ kind: 'overview', kindId: 'pull-request', draft: false,
+      mergeable: true, mergeableState: 'clean', headRevision: HEAD_SHA,
+      requiredChecks: { state: expected, failingCount: null, pendingCount: null }, reviewDecision: null,
+    });
   });
 
   it('states an independent provider permission denial instead of rendering an empty overview', async () => {

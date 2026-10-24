@@ -185,6 +185,12 @@ export const GithubCapabilitiesResultV1Schema = defineProtocolUnion([
       squash: GithubCapabilityAvailabilitySchema,
       rebase: GithubCapabilityAvailabilitySchema,
     }, { policy: 'closed' }),
+    /** Explicit repository settings, distinct from permission to attempt a write. */
+    mergeSettings: defineProtocolObject({
+      merge: GithubBooleanSchema.nullable(),
+      squash: GithubBooleanSchema.nullable(),
+      rebase: GithubBooleanSchema.nullable(),
+    }, { policy: 'closed' }).optional(),
   }, { policy: 'closed' }),
   GithubDetailUnavailableSchema,
 ]);
@@ -234,6 +240,23 @@ export const GithubOverviewResultV1Schema = defineProtocolUnion([
     kindId: defineProtocolLiteral('pull-request'),
     draft: GithubBooleanSchema.optional(),
     merged: GithubBooleanSchema.optional(),
+    /** Native conflict test, not authorization to merge. Null means unknown/computing. */
+    mergeable: GithubBooleanSchema.nullable().optional(),
+    mergeableState: LabelSchema.nullable().optional(),
+    requiredChecks: defineProtocolObject({
+      state: defineProtocolUnion([
+        defineProtocolLiteral('passed'),
+        defineProtocolLiteral('failed'),
+        defineProtocolLiteral('pending'),
+        defineProtocolLiteral('neutral'),
+        defineProtocolLiteral('none'),
+        defineProtocolLiteral('unknown'),
+        defineProtocolLiteral('superseded'),
+      ]),
+      failingCount: CountSchema.nullable(),
+      pendingCount: CountSchema.nullable(),
+    }, { policy: 'closed' }).optional(),
+    reviewDecision: ReviewDecisionSchema.nullable().optional(),
     headBranch: LabelSchema.optional(),
     baseBranch: LabelSchema.optional(),
     requestedReviewers: defineProtocolArray(GithubRequestedReviewerV1Schema).optional(),

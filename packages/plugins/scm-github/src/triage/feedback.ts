@@ -389,7 +389,7 @@ function decodeReviews(connection: unknown): readonly GithubFeedbackReviewV1[] |
   }));
 }
 
-function decodeReviewDecision(
+export function decodeGithubReviewDecision(
   value: unknown,
 ): 'approved' | 'changes-requested' | 'review-required' | null | undefined {
   if (value === null) return null;
@@ -546,7 +546,7 @@ export async function readGithubFeedbackConnection(
     const previousCursor = isRecord(connection)
       ? nullableCursor(connection.pageInfo, 'previous')
       : undefined;
-    const reviewDecision = decodeReviewDecision(subject.reviewDecision);
+    const reviewDecision = decodeGithubReviewDecision(subject.reviewDecision);
     return rows === null || previousCursor === undefined || reviewDecision === undefined
       ? unavailable(INVALID_RESPONSE)
       : Object.freeze({ kind: 'reviews' as const, rows, previousCursor, reviewDecision });

@@ -127,6 +127,8 @@ export function projectGithubPullRequestOverview(
     ...projectCommon(raw),
     ...(typeof raw.draft === 'boolean' ? { draft: raw.draft } : {}),
     ...(merged === undefined ? {} : { merged }),
+    mergeable: typeof raw.mergeable === 'boolean' ? raw.mergeable : null,
+    mergeableState,
     ...(headBranch === null ? {} : { headBranch }),
     ...(baseBranch === null ? {} : { baseBranch }),
     ...(requestedReviewers === null ? {} : { requestedReviewers }),

@@ -219,11 +219,27 @@ export async function readGithubOverview(
     if (read.observation.kind !== 'present' || read.overview === null) {
       return unavailable(ENTRY_NOT_OBSERVED_FAILURE);
     }
+    // Reuse the required-only condition owner, not historical REST rows or
+    // Feedback bodies. Its head pin prevents a moved PR's green checks from
+    // describing the exact overview above. Missing summary never erases it.
+    const surface = read.facts?.headRevision == null ? null : await readGithubPullRequestChecks({
+      route: admitted.route,
+      headSha: read.facts.headRevision,
+      observation: { pullRequestNumber: read.facts.number, selection: 'required' },
+    }, dependencies);
+    const condition = surface?.observation;
+    const countsKnown = condition !== undefined && condition.state !== 'unknown' && condition.state !== 'superseded';
     return Object.freeze({
       kind: 'overview' as const,
       kindId: 'pull-request' as const,
       observedAtMs: Date.now(),
       ...read.overview,
+      requiredChecks: {
+        state: condition?.state ?? 'unknown',
+        failingCount: countsKnown ? surface?.failingCount ?? null : null,
+        pendingCount: countsKnown ? surface?.runningCount ?? null : null,
+      },
+      reviewDecision: surface?.reviewDecision ?? null,
     });
   }
 

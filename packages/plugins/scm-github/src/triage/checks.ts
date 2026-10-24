@@ -9,7 +9,7 @@ import {
   isGithubSuccessStatus,
 } from './errors.js';
 import { buildGithubApiUrl, type GithubRepositoryRouteV1 } from './locator.js';
-import type { GithubChecksRowStateV1 } from './mapping/facts.js';
+import type { GithubChecksRowStateV1, GithubReviewDecisionV1 } from './mapping/facts.js';
 import { readValidatedGithubFollowUpPage } from './scan/link.js';
 import { readGithubCheckOutcomeV1 } from './checkOutcome.js';
 import { readGithubChecksConditionSurface, type GithubChecksConditionSnapshotV1 } from './checksCondition.js';
@@ -72,6 +72,8 @@ type GithubChecksReadFailureV1 = GithubTriageFailureV1 & Readonly<{ omittedRowCo
 
 export type GithubChecksSurfaceV1 = Readonly<{
   observation?: GithubChecksConditionSnapshotV1;
+  /** Scalar from the same head-qualified GraphQL read, never inferred from review rows. */
+  reviewDecision?: GithubReviewDecisionV1 | null;
   state: GithubChecksStateV1;
   observations: readonly GithubCheckObservationV1[];
   /** `null`, never `0`, wherever a per-job breakdown is unavailable. */

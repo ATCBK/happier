@@ -5,6 +5,8 @@ import { readGithubCheckOutcomeV1 } from './checkOutcome.js';
 import { projectGithubChecksSurface, type GithubCheckObservationV1, type GithubChecksDependenciesV1, type GithubChecksSurfaceV1 } from './checks.js';
 import type { GithubRepositoryRouteV1 } from './locator.js';
 import type { GithubResponseFailureV1 } from '../observations/githubResponseFailure.js';
+import { decodeGithubReviewDecision } from './feedback.js';
+import type { GithubReviewDecisionV1 } from './mapping/facts.js';
 
 export type GithubChecksConditionSnapshotV1 = Readonly<{
   pullRequestNumber: number;
@@ -22,7 +24,7 @@ export type GithubChecksConditionSnapshotV1 = Readonly<{
 // maximum, not a suite-size cap; traverse the entire connection.
 const query = `query Checks($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    headRefOid commits(last: 1) { nodes { commit { oid statusCheckRollup {
+    headRefOid reviewDecision commits(last: 1) { nodes { commit { oid statusCheckRollup {
       contexts(first: 100, after: $cursor) { nodes {
         __typename
         ... on CheckRun { id name status conclusion detailsUrl startedAt completedAt checkSuite { createdAt } isRequired(pullRequestNumber: $number) }
@@ -80,6 +82,7 @@ export async function readGithubChecksConditionSurface(
 ): Promise<GithubChecksSurfaceV1> {
   const rows: GithubCheckObservationV1[] = [];
   let currentHeadSha: string | null = null;
+  let reviewDecision: GithubReviewDecisionV1 | null = null;
   const finish = (state?: GithubChecksConditionSnapshotV1['state'], failure: GithubChecksSurfaceV1['checkRunsFailure'] = null) => {
     const surface = projectGithubChecksSurface({
       checkRuns: { observations: rows, totalCount: rows.length, truncated: false, failure },
@@ -90,7 +93,7 @@ export async function readGithubChecksConditionSurface(
       : outcomes.includes('failed') ? 'failed' : outcomes.includes('pending') ? 'pending'
         : outcomes.every((outcome) => outcome === 'passed') ? 'passed' : 'neutral');
     const complete = !['none', 'unknown', 'superseded'].includes(selectedState) && !outcomes.includes('pending');
-    return { ...surface, observation: {
+    return { ...surface, reviewDecision: selectedState === 'superseded' ? null : reviewDecision, observation: {
       ...input.observation, headSha: input.headSha, currentHeadSha,
       state: selectedState, complete, passed: selectedState === 'passed',
       ...(failure ? { failure } : {}),
@@ -121,6 +124,7 @@ export async function readGithubChecksConditionSurface(
     if (!pr || typeof pr.headRefOid !== 'string') return finish('unknown');
     currentHeadSha = pr.headRefOid;
     if (currentHeadSha !== input.headSha) return finish('superseded');
+    reviewDecision = decodeGithubReviewDecision(pr.reviewDecision) ?? null;
     const commits = record(pr.commits);
     const commit = record(record(Array.isArray(commits?.nodes) ? commits.nodes[0] : null)?.commit);
     if (!commit || commit.oid !== input.headSha) return finish('unknown');
