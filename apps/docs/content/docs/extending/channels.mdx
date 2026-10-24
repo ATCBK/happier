@@ -19,6 +19,12 @@ providers. Providers are a contribution point
 rather than a fixed list, so a trusted installed plugin receives the same public
 contract and can add another.
 
+In unreleased 0.3 development source, a provider declares its Channels name in
+the public `happier.channels/providers` V1 contribution's
+`descriptor: { v: 1, displayName: 'My service' }`. Channels uses that admitted
+name in setup, connections and conversation lists, including for installed
+plugins. The plugin's brand name is the fallback when no descriptor is available.
+
 [Email setup](/extending/email-channel) uses an authenticated IMAP + SMTP mailbox
 and exact sender addresses. It has its own trust checks rather than a pairing
 challenge.
@@ -244,6 +250,16 @@ growing a chunk beyond that limit. GitHub's API still decides whether to accept
 each comment. GitHub has no webhook delivery in this preview: inbound
 messages arrive through checkpointed polling, so a connected machine needs to
 wake up for the poll to advance.
+
+In the 0.3 development source, feedback for an explicitly Session-linked pull
+request is delivered as external evidence. Unmarked feedback from your connected
+GitHub account can arrive when repository-write access is verified; posts carrying
+Happier's canonical review-publication marker are suppressed to prevent a reply
+loop. PR text cannot approve an Action, answer a Session question, stop the
+Session or create another Session. These restrictions also apply when retained
+input is retried. Ordinary issue-conversation bindings retain their configured
+command policy. This source change does not make the planned PR watch modes
+available in an installed release.
 
 ### The history baseline
 
@@ -482,9 +498,13 @@ generic body-size or chunk-count cap.
 
 Connection setup, testing, transfer, recovery and deletion, plus binding/router
 creation, editing, pause, deletion and delivery resolution, use the same Actions
-from UI, CLI, Agent and MCP. Writes and external effects retain their confirmation
-defaults and revision checks. An owner-authored workflow can call the start
-Action through an `action` step; Agent requests follow ordinary approval.
+from UI, CLI, Agent and MCP. In 0.3 development, creating or editing a connection,
+retrying a poll or blocked input, and pausing a binding run directly from your
+own UI action. Enabling a binding, transfers, deletion, accepting possible loss
+and outward sends retain their confirmation. Explicit Ask-first settings and
+automated callers keep their approval policy, and every write retains its
+revision checks. An owner-authored workflow can call the start Action through
+an `action` step; Agent requests follow ordinary approval.
 Pairing still requires the external person's proof where that integration uses
 it. See [Actions and tools](/extending/happier-tools) for discovery.
 

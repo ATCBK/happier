@@ -54,7 +54,10 @@ Only the configured inbox is polled. IMAP IDLE wakes the receiver for new mail;
 the saved checkpoint combines UIDVALIDITY and the last UID. A changed UIDVALIDITY
 reports a history gap instead of claiming that no messages were missed.
 Submission checks Sent for the deterministic Message-ID and appends a copy
-when the server has not saved one.
+when the server has not saved one. SMTP acceptance determines the delivery
+result. Saving the Sent copy is best effort: a failed lookup or append is
+logged without changing an accepted delivery or sending the message again.
+Failed Sent copies are not retained for later retry.
 
 If a received message can't be read because of a temporary problem on the
 machine, such as the mail parser failing to load during an update, the poll
