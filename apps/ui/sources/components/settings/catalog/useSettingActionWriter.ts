@@ -3,7 +3,8 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import type { SettingsDeclarationTargetV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 import { readBuiltInSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
@@ -18,7 +19,9 @@ export function useSettingActionWriter(options: Readonly<{ serverId?: string; be
     executorOptions?: NonNullable<Parameters<typeof useMountedActionExecution>[1]>['executorOptions'];
 }> = {}) {
     const scope = getStorage()(state => state.settingsScope);
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [scope]);
+    // The same Account can become available after this control mounts, or reconnect after
+    // retiring its previous runtime. Scope identity alone does not identify that lifetime.
+    const lifetime = useActiveServerAccountScopeLifetime();
     const beforeLocalCommit = options.beforeLocalCommit;
     const suppliedExecutorOptions = options.executorOptions;
     const executorOptions = React.useMemo(() => ({ ...suppliedExecutorOptions, beforeLocalSettingCommit: beforeLocalCommit }), [beforeLocalCommit, suppliedExecutorOptions]);

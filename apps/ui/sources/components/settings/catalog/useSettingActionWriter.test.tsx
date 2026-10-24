@@ -32,6 +32,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { Modal } from '@/modal';
 import { readDirectConnectionsEnabled } from '@happier-dev/protocol/account/settings/peerMediationPreferencesV1';
 import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
+import { publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 const routerPush = vi.hoisted(() => vi.fn());
 const routeParams = vi.hoisted(() => ({ current: {} as Record<string, string> }));
@@ -65,6 +66,28 @@ beforeEach(() => { previousAuth = getCurrentAuth(); });
 afterEach(() => { standardCleanup(); setCurrentAuth(previousAuth); storage.setState(originalState, true); routeParams.current = {}; });
 
 describe('declared setting Action writer', () => {
+    it('admits pane arrangement after the same Account runtime becomes available', async () => {
+        const account = await createSecretSettingsTestHarness();
+        const scope = storage.getState().settingsScope;
+        storage.setState({ localSettings: { ...storage.getState().localSettings, paneArrangement: 'session' } });
+        publishAppliedActiveServerRuntimeAvailability(false);
+        const probe = await renderHook(usePaneArrangement);
+        try {
+            await act(async () => { probe.getCurrent().toggle(); });
+            expect(storage.getState().localSettings.paneArrangement).toBe('session');
+            await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
+            expect(storage.getState().settingsScope).toBe(scope);
+            await act(async () => { probe.getCurrent().toggle(); });
+            await vi.waitFor(() => expect(storage.getState().localSettings.paneArrangement).toBe('editor'));
+            await act(async () => { publishAppliedActiveServerRuntimeAvailability(false); });
+            await act(async () => { probe.getCurrent().toggle(); });
+            expect(storage.getState().localSettings.paneArrangement).toBe('editor');
+        } finally {
+            standardCleanup();
+            publishAppliedActiveServerRuntimeAvailability(true);
+            await account.dispose();
+        }
+    });
     it('admits pane arrangement through the declared Settings Action before changing local layout', async () => {
         const account = await createSecretSettingsTestHarness({ settings: settingsParse({
             actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
