@@ -35,3 +35,31 @@ test('source UI preparation captures its declaration projector and invalidates c
   await writeFile(fixture.path(owner), 'export const declaration = false;\n');
   assert.notEqual(await readBuildInputIdentity({ sourceDir: fixture.root, files: compiler }), identity);
 });
+
+test('source plugin UI inputs admit shipped author Resources and exclude their generated publication outputs', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-ui-resource-inputs-' });
+  const root = fixture.path('packages/plugins/fixture');
+  const manifest = { name: '@happier-dev/plugins-fixture', files: ['assets', 'dist', '.happier-plugin', 'package.json'] };
+  const paths = ['src/index.ts', 'assets/i18n/en.json', 'dist/happier-plugin-ui/locale.json.bundle',
+    '.happier-plugin/plugin.json', '.happier-plugin/ui/generated.json', '.happier-plugin/ui/hosted-web/source.html'];
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify(manifest));
+  for (const path of paths) { await mkdir(dirname(join(root, path)), { recursive: true }); await writeFile(join(root, path), '{}'); }
+  const options = { repoDir: fixture.root, pluginDirectory: 'fixture', packages: new Map([[manifest.name, { root, manifest }]]) };
+  const files = await readSourcePluginUiBuildInputs(options);
+  const locale = 'packages/plugins/fixture/assets/i18n/en.json';
+  assert.ok(files.includes(locale));
+  const watchInputs = await readSourcePluginUiBuildInputs({ ...options, includeDirectories: true });
+  assert.ok(watchInputs.includes('packages/plugins/fixture/assets/i18n'));
+  assert.ok(files.includes('packages/plugins/fixture/.happier-plugin/ui/hosted-web/source.html'));
+  assert.ok(watchInputs.every(path => path !== 'packages/plugins/fixture'
+    && !path.startsWith('packages/plugins/fixture/dist')
+    && (!path.startsWith('packages/plugins/fixture/.happier-plugin') || path.startsWith('packages/plugins/fixture/.happier-plugin/ui/hosted-web'))));
+  const initial = await readBuildInputIdentity({ sourceDir: fixture.root, files });
+  await writeFile(join(root, 'assets/i18n/en.json'), '{"label":"changed"}');
+  const changed = await readBuildInputIdentity({ sourceDir: fixture.root, files });
+  assert.notEqual(changed, initial);
+  await writeFile(join(root, 'dist/happier-plugin-ui/locale.json.bundle'), 'generated-output-changed');
+  await writeFile(join(root, '.happier-plugin/plugin.json'), 'generated-output-changed');
+  assert.equal(await readBuildInputIdentity({ sourceDir: fixture.root, files }), changed);
+});

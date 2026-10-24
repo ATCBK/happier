@@ -67,7 +67,8 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
   const files = new Set();
   for (const name of closure) {
     const { root } = packages.get(name);
-    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true, includeDirectories })) {
+    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true, includeDirectories,
+      includeShippedFiles: !compiler && name === roots[0] })) {
       files.add(relative(repoDir, join(root, path)).split(sep).join('/'));
     }
   }
@@ -78,7 +79,9 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
     'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
     'apps/cli/scripts/build-owned/bundledPlugins/uiDeclarations.mjs',
+    'apps/stack/scripts/build/build_source_web_ui.mjs',
     'apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs',
+    'packages/cli-common/registerSourceRuntime.mjs',
     'packages/cli-common/sourceRuntimeEntries.mjs',
     'scripts/workspaces/buildInputConvergence.mjs',
   ]) files.add(path);
