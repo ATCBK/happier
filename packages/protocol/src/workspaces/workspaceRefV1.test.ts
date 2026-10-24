@@ -26,6 +26,16 @@ describe('workspaceRefV1', () => {
     expect(resolveSessionProjectKeyV1(metadata, 'a', [ref, { ...ref, projectKey: 'other' }])).toEqual({ kind: 'unavailable' });
   });
 
+  it('keeps keyless managed Chats outside private path inference while honoring an accepted public Project key', () => {
+    const ref = { id: 'checkout', serverId: 'home', projectKey: 'anchor', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+    const metadata = { workspaceId: 'checkout', machineId: 'machine', path: '/repo', sessionDirectoryV1: { v: 1, kind: 'managed' } };
+    const resolve = createSessionProjectKeyResolverV1([ref]);
+    expect(resolveSessionProjectKeyV1(metadata, 'home', [ref])).toEqual({ kind: 'none' });
+    expect(resolve(metadata, 'home')).toEqual({ kind: 'none' });
+    expect(resolve(metadata, 'home', 'published')).toEqual({ kind: 'resolved', projectKey: { serverId: 'home', projectKey: 'published' } });
+    expect(matchSessionProjectFilterV1(metadata, 'home', { serverId: 'home', projectKey: 'anchor' }, [ref])).toBe('miss');
+  });
+
   it('uses exact normalized host machinePath, never container paths or containment, for unmarked Sessions', () => {
     const ref = { id: 'checkout', serverId: 'a', projectKey: 'anchor', machineId: 'machine', rootPath: 'C:\\Work\\Repo', createdAtMs: 1 };
     const metadata = { machineId: 'machine', path: '/sandbox/repo', sessionWorkspaceLocationV1: {

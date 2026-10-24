@@ -1,6 +1,7 @@
 import type { ProjectKeyV1, QualifiedProjectKeyV1, WorkspaceAddressV1, WorkspaceProjectFactsV1, WorkspaceRefV1 } from './workspaceRefV1.js';
 import { normalizeScmHostingRepositoryIdentity, sameScmHostingRepositoryIdentity } from '../scm/hostingRepositoryIdentity.js';
 import { resolveSessionWorkspaceRootForMachine } from '../sessions/metadata/sessionWorkspaceLocationV1.js';
+import { readSessionDirectoryKind } from '../sessions/metadata/sessionDirectoryV1.js';
 
 export type WorkspaceRefResolutionV1<T extends WorkspaceRefV1 = WorkspaceRefV1> =
   | Readonly<{ kind: 'resolved'; ref: T }>
@@ -155,6 +156,7 @@ function resolveSessionProjectKeyUsingV1<T extends WorkspaceRefV1>(
       ? { kind: 'resolved', projectKey: { serverId: qualifiedHome, projectKey: context.projectKey } }
       : { kind: 'unavailable' };
   }
+  if (readSessionDirectoryKind(metadata) === 'managed') return { kind: 'none' };
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || refs === undefined || context.censusComplete === false) {
     return { kind: 'unavailable' };
   }
