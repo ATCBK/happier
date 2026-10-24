@@ -14,6 +14,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
 const externalAuthBoundary = vi.hoisted(() => ({
   capture: vi.fn(),
@@ -151,14 +152,34 @@ describe('trusted interactive CLI Account Security vertical', () => {
     await removeTempDir(home);
   });
 
-  it('reads Account security through the shared present_user Action without exposing credential material', async () => {
+  it.each(['supported', 'unsupported', 'disabled', 'revoked'] as const)(
+    'demands only the HTTP reads needed for shared Account security admission (%s)', async scenario => {
+    env.patch({ HAPPIER_ACCOUNT_SETTINGS_MODE: 'auto' });
     const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
     const release = publishServerHttpRuntimeOrigin('http://runtime.account.test', 'iroh');
     const app = fastify();
-    app.get('/v1/account/security', async (request) => {
+    const requests: string[] = [];
+    app.addHook('onRequest', async request => {
+      expect(request.method).toBe('GET');
       expect(request.headers.authorization).toBe('Bearer interactive');
-      return { v: 1, terminalPresentUserPolicy: 'allowed', encryptionMode: 'plain', nativeEmail: 'ada@example.test', password: { status: 'enrolled', revision: 3 } };
+      requests.push(new URL(request.url, 'http://runtime.account.test').pathname);
     });
+    let securityReads = 0;
+    app.get('/v1/account/security', async (_request, reply) => {
+      securityReads += 1;
+      // The final selected read must still authenticate after policy/bootstrap
+      // awaits; the initial policy observation cannot supply its result.
+      if (scenario === 'revoked' && securityReads === 2) return reply.code(401).send({ error: 'not_authenticated' });
+      return { v: 1, terminalPresentUserPolicy: 'allowed', encryptionMode: 'plain',
+        nativeEmail: securityReads === 1 ? 'previous@example.test' : 'ada@example.test',
+        password: { status: 'enrolled', revision: securityReads === 1 ? 2 : 3 } };
+    });
+    app.get('/v2/account/settings', async (_request, reply) => {
+      if (scenario === 'unsupported') return reply.code(404).send({ error: 'not_found' });
+      return AccountSettingsV2GetResponseSchema.parse({ version: 1, content: { t: 'plain', v:
+        scenario === 'disabled' ? { actionsSettingsV1: { v: 1, actions: { 'account.security.get': { enabled: false } } } } : {} } });
+    });
+    app.get('/v1/account/settings', async (_request, reply) => reply.code(404).send({ error: 'not_found' }));
     const restore = installAxiosFastifyAdapter({ app, origin: 'http://runtime.account.test' });
     const output = captureConsoleText();
     try {
@@ -167,8 +188,20 @@ describe('trusted interactive CLI Account Security vertical', () => {
       const { handleAuthSecurityGet } = await import('./auth/accountSecurity');
       await handleAuthSecurityGet(['get', '--json']);
       const envelope = JSON.parse(output.text());
-      expect(envelope.ok).toBe(true);
-      expect(envelope.data.nativeEmail).toBe('ada@example.test');
+      const featureRequests = vi.mocked(fetch).mock.calls;
+      // No approval/external origin is built for these invocations. Home
+      // identity discovery belongs to that consumer rather than every read.
+      expect(featureRequests).toHaveLength(0);
+      expect(requests.filter(path => path === '/v2/account/settings')).toHaveLength(1);
+      expect(requests.filter(path => path === '/v1/account/settings')).toHaveLength(scenario === 'unsupported' ? 1 : 0);
+      expect(securityReads).toBe(scenario === 'disabled' ? 1 : 2);
+      expect(requests.length + featureRequests.length).toBe(scenario === 'unsupported' ? 4 : scenario === 'disabled' ? 2 : 3);
+      if (scenario === 'disabled' || scenario === 'revoked') {
+        expect(envelope).toMatchObject({ ok: false, error: { code: scenario === 'disabled' ? 'action_disabled' : 'not_authenticated' } });
+        expect(envelope.data).toBeUndefined();
+      } else {
+        expect(envelope).toMatchObject({ ok: true, data: { nativeEmail: 'ada@example.test', password: { revision: 3 } } });
+      }
       expect(JSON.stringify(envelope)).not.toContain('hash');
       expect(JSON.stringify(envelope)).not.toContain('envelope');
     } finally {

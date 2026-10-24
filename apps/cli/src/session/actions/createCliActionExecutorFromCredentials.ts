@@ -662,13 +662,24 @@ function createApprovalRoutingContext(
     fixedServerId,
     resolveServerFeaturesSnapshot: () => resolveServerFeaturesSnapshotForCredentials(credentials),
   });
-  const resolveInvocationRoutingContext = async (context: ActionExecutorContext | undefined, credentials: StoredCredentials) => {
+  const resolveInvocationRoutingContext = async (context: ActionExecutorContext | undefined, credentials: StoredCredentials,
+    actionId?: string) => {
     // Resolve dependency Home identity without caller fields, then reuse that
     // exact observation for context enrichment and factory binding. Nothing is
     // retained across invocations; caller-provided identity remains descriptive.
-    const runtimeContext = await enrichApprovalRoutingContext(undefined, credentials);
+    // Ordinary original-host Account reads do not consume cryptographic Home
+    // identity. Approval-origin construction owns that demand if policy asks.
+    const deferHomeIdentity = actionId === 'account.security.get' && isOriginalCliActionContext(context ?? {});
+    const runtimeContext = deferHomeIdentity
+      ? await enrichCliActionApprovalContext({ serverIdentityId: params.serverIdentityId,
+          machineId: params.machineId, fixedServerId, resolveServerFeaturesSnapshot: async () => undefined })
+      : await enrichApprovalRoutingContext(undefined, credentials);
     return {
       serverIdentityId: runtimeContext.serverIdentityId,
+      ...(deferHomeIdentity ? { prepareApprovalExecutionOriginContext: async () => ({
+        serverIdentityId: runtimeContext.serverIdentityId
+          ?? (await enrichApprovalRoutingContext(undefined, credentials)).serverIdentityId,
+      }) } : {}),
       context: await enrichCliActionApprovalContext({
         context, serverIdentityId: runtimeContext.serverIdentityId,
         machineId: runtimeContext.defaultSessionMachineId, fixedServerId,
@@ -862,6 +873,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     readAdmittedInputTypeOptions?: ActionExecutorDeps['readAdmittedInputTypeOptions'],
     approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'],
     routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'],
+    prepareApprovalExecutionOriginContext?: ActionExecutorDeps['prepareApprovalExecutionOriginContext'],
   ): ReturnType<typeof createCliActionExecutor> => {
     const resolveServerFeaturesSnapshot = params.resolveServerFeaturesSnapshot
       ?? (async () => await resolveServerFeaturesSnapshotForCredentials(credentials));
@@ -1049,6 +1061,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       accountServerActionDeps,
       token: credentials.token,
       credentials,
+      ...(prepareApprovalExecutionOriginContext ? { prepareApprovalExecutionOriginContext } : {}),
       isCredentialCurrent: async () => sameStoredCredentials(credentials, await readCurrentCredentials()),
       ...(params.onRequesterSessionCredentialDisclosure
         ? { onRequesterSessionCredentialDisclosure: params.onRequesterSessionCredentialDisclosure } : {}),
@@ -1350,11 +1363,17 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         : createExecutor(params.credentials, transcriptFollowLeaseRegistry, undefined, params.serverIdentityId, readInputTypeOptions(params.credentials), approvalLifetime, routeHostChildAction(params.credentials));
     let fixedExecutorServerIdentityId = params.serverIdentityId;
     const resolveExecutor = async (credentials: StoredCredentials, sessionMemoryEnabled?: boolean,
-      routing?: Pick<ActionExecutorContext, 'serverIdentityId'>) => {
+      routing?: Pick<ActionExecutorContext, 'serverIdentityId'> & Pick<ActionExecutorDeps, 'prepareApprovalExecutionOriginContext'>) => {
       // Resolve at the invocation boundary, not during synchronous composition.
       // Caller context never supplies dependency Home authority.
       const serverIdentityId = routing ? routing.serverIdentityId : params.serverIdentityId
         ?? (await enrichApprovalRoutingContext(undefined, credentials)).serverIdentityId;
+      if (routing?.prepareApprovalExecutionOriginContext) {
+        // This deferred Home fact belongs to this invocation, not the reused
+        // executor of another Action whose eager lookup may have failed.
+        return createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId,
+          readInputTypeOptions(credentials), approvalLifetime, routeHostChildAction(credentials), routing.prepareApprovalExecutionOriginContext);
+      }
       if (!fixedExecutor || sessionMemoryEnabled !== undefined) {
         const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId, readInputTypeOptions(credentials), approvalLifetime, routeHostChildAction(credentials));
         if (!params.readCredentials && sessionMemoryEnabled === undefined) {
@@ -1731,7 +1750,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             })),
           };
         }
-        const routing = await resolveInvocationRoutingContext(rawContext, credentials);
+        const routing = await resolveInvocationRoutingContext(rawContext, credentials, actionId);
         let context = routing.context;
         const prepared = await prepareOriginalCliActionInvocation(actionId, input, context, credentials);
         if (prepared.invocation) return { kind: 'ready' as const, invocation: prepared.invocation };
@@ -1781,7 +1800,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             allowConfiguredMachineTarget: fixedServerId === null,
           });
         }
-        const routing = await trace('cli.approval_context', () => resolveInvocationRoutingContext(rawContext, credentials));
+        const routing = await trace('cli.approval_context', () => resolveInvocationRoutingContext(rawContext, credentials, actionId));
         const context = routing.context;
         const { context: originalContext, invocation } = await trace('cli.original_invocation', () => prepareOriginalCliActionInvocation(actionId, input, context, credentials));
         if (invocation) return await invocation.run();

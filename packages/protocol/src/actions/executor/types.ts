@@ -2247,6 +2247,8 @@ export type ActionExecutorDeps = Readonly<{
   approvalsCreate?: (args: Readonly<{ request: ApprovalRequest; serverId?: string | null }>) => Promise<{ artifactId: string }>;
   approvalsGet?: (args: Readonly<{ artifactId: string; serverId?: string | null }>) => Promise<ApprovalRequest | TargetActionApprovalRequestV1 | null>;
   approvalsUpdate?: (args: Readonly<{ artifactId: string; request: ApprovalRequest; serverId?: string | null }>) => Promise<{ ok: true } | { ok: false; errorCode: string; error: string }>;
+  /** Host-owned Home identity preparation, demanded only when constructing an approval origin. Never serialized. */
+  prepareApprovalExecutionOriginContext?: (args: Readonly<{ signal?: AbortSignal }>) => Promise<Readonly<Pick<ActionExecutorContext, 'serverIdentityId'>>>;
   /** Revalidates the origin against current credential/runtime/target owners before effects. */
   isApprovalExecutionOriginCurrent?: (args: Readonly<{
     origin: ApprovalExecutionOriginV1;

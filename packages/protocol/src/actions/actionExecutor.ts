@@ -2582,6 +2582,17 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     currentAccount?: Readonly<{ accountId: string; serverId: string; serverIdentityId: string }>;
   }>) => Promise<ActionExecuteResult>;
 }> {
+  const prepareApprovalExecutionOrigin = async (params: Parameters<typeof buildApprovalExecutionOriginV1>[0]) => {
+    if (params.context.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+    const prepared = await deps.prepareApprovalExecutionOriginContext?.({
+      ...(params.context.signal ? { signal: params.context.signal } : {}),
+    });
+    if (params.context.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+    return buildApprovalExecutionOriginV1({
+      ...params,
+      context: prepared ? { ...params.context, serverIdentityId: prepared.serverIdentityId } : params.context,
+    });
+  };
   const isSameHome = (targetServerId: unknown, currentServerId: string | null | undefined, ctx: ActionExecutorContext): boolean =>
     typeof targetServerId === 'string' && areServerProfileIdentifiersEquivalent(targetServerId, currentServerId, identifier =>
       identifier === ctx.serverId && ctx.serverIdentityId ? ctx.serverIdentityId
@@ -4974,7 +4985,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           input: approvalActionArgs, required: sharedRequesterRequest });
         if (!requesterAdmission.ok) return requesterAdmission;
         const { requesterConfirmation } = requesterAdmission;
-        const executionOriginV1 = buildApprovalExecutionOriginV1({
+        const executionOriginV1 = await prepareApprovalExecutionOrigin({
           actionId,
           input: approvalActionArgs,
           admittedInput,
@@ -7787,7 +7798,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (!invocation.success) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
-          const approvalExecutionOrigin = buildApprovalExecutionOriginV1({
+          const approvalExecutionOrigin = await prepareApprovalExecutionOrigin({
             actionId: 'action.invoke',
             input: data,
             context: ctx,
@@ -8489,7 +8500,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 };
                 const denied = await admitCredentialScope('action.invoke', ctx, invocation);
                 if (denied) return denied;
-                const approvalExecutionOrigin = buildApprovalExecutionOriginV1({
+                const approvalExecutionOrigin = await prepareApprovalExecutionOrigin({
                   actionId: 'action.invoke', input: invocation, context: ctx,
                   targetSessionId: normalizeId(ctx.defaultSessionId) || null,
                 });
@@ -11215,7 +11226,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           input: approvalActionArgs, required: sharedRequesterRequest });
         if (!requesterAdmission.ok) return requesterAdmission;
         const { requesterConfirmation } = requesterAdmission;
-        const executionOriginV1 = buildApprovalExecutionOriginV1({
+        const executionOriginV1 = await prepareApprovalExecutionOrigin({
           actionId: targetActionId,
           input: approvalActionArgs,
           context: ctx,

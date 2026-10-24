@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from './actionExecutor.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { buildSessionPermissionRespondRpcParamsV1, SessionUserActionAnswerRpcParamsV1Schema, type SessionPermissionRespondRpcParamsV1 } from '../sessions/permissions/respondRpcParamsV1.js';
@@ -18,6 +20,41 @@ function context(ids: string[], sessions = ['s1']): ActionExecutorContext {
 }
 
 describe('ActionExecutor API token grant admission', () => {
+  it.each(['action.invoke', 'wait', 'account.security.get', 'approval.request.create'] as const)('refuses %s effects when Home-origin preparation is cancelled', async actionId => {
+    const controller = new AbortController();
+    let effects = 0;
+    const settings = normalizeActionsSettingsV1({ v: 1,
+      actions: { 'account.security.get': { approvalRequiredSurfaces: ['cli'] } } });
+    const executor = createActionExecutor({
+      // Authenticated Home lookup and contributed execution are host transport
+      // boundaries; canonical origin construction and cancellation stay real.
+      prepareApprovalExecutionOriginContext: async () => {
+        await Promise.resolve();
+        controller.abort();
+        return { serverIdentityId: 'home' };
+      },
+      invokeContributedAction: async () => {
+        effects += 1;
+        return { ok: true, result: { disposition: 'matched' } };
+      },
+      isActionApprovalRequired: ((id, ctx) => isApprovalRequiredByActionsSettings(id, settings, ctx)) satisfies NonNullable<ActionExecutorDeps['isActionApprovalRequired']>,
+      approvalsCreate: async () => { effects += 1; return { artifactId: 'unexpected' }; },
+    } as unknown as ActionExecutorDeps);
+    const input = actionId === 'action.invoke'
+      ? { action: { pluginId: 'acme.checks', localId: 'wait/checks' }, input: {} }
+      : actionId === 'wait'
+        ? { target: { kind: 'plugin_source', serverId: 'home', pluginId: 'acme.checks', sourceId: 'source' },
+            condition: { kind: 'plugin', actionLocalId: 'wait/checks', condition: 'checks_passed' } }
+        : actionId === 'approval.request.create'
+          ? { actionId: 'account.profile.get', actionArgs: {}, summary: 'Read Account profile', createdBy: { surface: 'cli' } } : {};
+    const result = await executor.execute(actionId, input, { surface: 'cli', authority: 'present_user',
+      serverId: 'home', actionRequestId: 'cancelled-origin', signal: controller.signal });
+    expect(effects).toBe(0);
+    expect(result).toMatchObject(actionId === 'wait'
+      ? { ok: true, result: { disposition: 'cancelled' } }
+      : { ok: false, errorCode: 'cancelled' });
+  });
+
   it('checks the actual run-now Automation operand before reaching the workflow HTTP port', async () => {
     const admitted: string[] = [];
     const workflowAction: NonNullable<ActionExecutorDeps['workflowAction']> = async ({ actionId, input }) => {

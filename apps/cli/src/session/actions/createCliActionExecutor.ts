@@ -65,6 +65,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     approvalRequestApprovedReplay?: ActionExecutorDeps['approvalRequestApprovedReplay'];
     /** Current authority/credential/target proof for durable core Action replay. */
     isApprovalExecutionOriginCurrent?: ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
+    prepareApprovalExecutionOriginContext?: ActionExecutorDeps['prepareApprovalExecutionOriginContext'];
     prepareApprovalExecutionAuthorization?: ActionExecutorDeps['prepareApprovalExecutionAuthorization'];
     prepareApprovedApiTokenExecution?: ActionExecutorDeps['prepareApprovedApiTokenExecution'];
     /** The exact daemon external-session RPC owner for host-stamped API requests. */
@@ -191,6 +192,9 @@ export function createCliActionExecutor(
         : {}),
       ...(params.isApprovalExecutionOriginCurrent
         ? { isApprovalExecutionOriginCurrent: params.isApprovalExecutionOriginCurrent }
+        : {}),
+      ...(params.prepareApprovalExecutionOriginContext
+        ? { prepareApprovalExecutionOriginContext: params.prepareApprovalExecutionOriginContext }
         : {}),
       ...(params.prepareApprovalExecutionAuthorization
         ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
