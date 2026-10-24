@@ -146,7 +146,8 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    * Below this width a Collection's one toolbar row (the page's name, a readable search, the lens and filters
    * leading; freshness, Refresh, ⋯, the arrangement switch and the page's Run on trailing) no longer fits, so
    * `CollectionToolbar` folds into its two calm rows instead of wrapping control by control — a list narrowed
-   * beside a details pane, a small window, a phone.
+   * beside a details pane, a small window, a phone. It is the least fold width: a page whose real controls need more
+   * (a long freshness, Run on) reports its wrapped row and `Collection` folds at that measured width instead.
    */
   toolbarFoldBelowWidthPx: 1080,
   /**

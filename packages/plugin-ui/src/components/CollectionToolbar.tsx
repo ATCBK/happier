@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -28,6 +29,15 @@ import type { TextTone } from './Text.js';
 export const CollectionToolbarCompactContext = createContext<boolean | null>(
   null,
 );
+
+/**
+ * Collection's report that its one wide row no longer fits: the trailing controls wrapped under the leading ones.
+ * Collection then folds at that width (and anything narrower), measured from the page's real controls rather than
+ * from a guessed width.
+ *
+ * @internal Provided only by `Collection`.
+ */
+export const CollectionToolbarOverflowContext = createContext<(() => void) | null>(null);
 
 /** The list's freshness, said in words. A `muted` tone is the healthy, quiet state. */
 export type CollectionToolbarFreshness = Readonly<{
@@ -118,6 +128,17 @@ export function CollectionToolbar(props: CollectionToolbarProps): ReactElement {
 function WideToolbar(props: CollectionToolbarProps): ReactElement {
   const { slots, freshness, refresh } = props;
   const chrome = useHappierPageChromeInternal();
+  const reportOverflow = useContext(CollectionToolbarOverflowContext);
+  // Where the two groups landed. Trailing controls under the leading ones are two scattered rows: fold instead.
+  // Both are centred on one line, so a shorter group sits a little lower without having wrapped: it wrapped only
+  // when it starts below the leading group's bottom.
+  type Placement = Readonly<{ y: number; height: number }>;
+  const placed = useRef<{ lead: Placement | null; trail: Placement | null }>({ lead: null, trail: null });
+  const place = (group: 'lead' | 'trail', layout: Placement) => {
+    placed.current[group] = { y: layout.y, height: layout.height };
+    const { lead, trail } = placed.current;
+    if (lead !== null && trail !== null && trail.y >= lead.y + lead.height) reportOverflow?.();
+  };
   const primary = props.primary === undefined ? null : (
     <Button title={props.primary.label} variant="primary" onPress={props.primary.onPress}
       {...(props.primary.testID === undefined ? {} : { testID: props.primary.testID })} />
@@ -130,7 +151,9 @@ function WideToolbar(props: CollectionToolbarProps): ReactElement {
       justify="space-between"
       testID={props.testID}
     >
-      <Row gap="small" wrap align="center" style={leadStyle}>
+      <Row gap="small" wrap align="center" style={leadStyle}
+        onLayout={(event) => place('lead', event.nativeEvent.layout)}
+        {...(props.testID === undefined ? {} : { testID: `${props.testID}:lead` })}>
         {slots?.title ?? null}
         {slots?.search ?? null}
         {props.lens ?? null}
@@ -140,7 +163,9 @@ function WideToolbar(props: CollectionToolbarProps): ReactElement {
       </Row>
       {/* It wraps too: a narrow window would otherwise push the arrangement switch off the right edge. Bounded by
           the toolbar's width, or a wrapping row sized to its content never has a reason to wrap. */}
-      <Row gap="xsmall" wrap align="center" style={trailStyle}>
+      <Row gap="xsmall" wrap align="center" style={trailStyle}
+        onLayout={(event) => place('trail', event.nativeEvent.layout)}
+        {...(props.testID === undefined ? {} : { testID: `${props.testID}:trail` })}>
         {freshness == null ? null : (
           <Status
             tone={freshness.tone}

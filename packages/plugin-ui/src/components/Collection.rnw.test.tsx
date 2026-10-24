@@ -4999,6 +4999,40 @@ describe('the Collection toolbar', () => {
     view.unmount();
   });
 
+  it('folds as soon as its one row no longer fits its real controls, not at a guessed width', () => {
+    const view = mount({
+      search,
+      header: toolbarHeader([]),
+      renderPopover: openPopover,
+    });
+    // Wider than the fold width, but this page's controls (a long freshness, Run on) need more than one row.
+    view.measure(1120);
+    expect(view.query('refine:toolbar')).not.toBeNull();
+    const layout = (testID: string, y: number, height: number) => {
+      const node = view.query(testID) as unknown as {
+        __reactLayoutHandler?: (event: HappierLayoutChangeEvent) => void;
+      };
+      act(() => node.__reactLayoutHandler?.({ nativeEvent: { layout: { x: 0, y, width: 400, height } } }));
+    };
+    layout('toolbar:lead', 0, 36);
+    // A shorter trailing group centred on the same line sits a little lower; that is one row, not a wrap.
+    layout('toolbar:trail', 2, 32);
+    expect(view.query('refine:toolbar')).not.toBeNull();
+    // The trailing controls wrapped under the leading ones: the row is two scattered rows, so it folds instead.
+    layout('toolbar:trail', 44, 32);
+    const toolbar = view.query('toolbar')!;
+    expect(view.query('refine:toolbar')).toBeNull();
+    expect(button(toolbar, 'Filters: 2')).not.toBeNull();
+    // Narrowing and widening within what it already needed keeps the fold; it never flips back and forth.
+    view.measure(1100);
+    view.measure(1120);
+    expect(view.query('refine:toolbar')).toBeNull();
+    // A window wide enough for the row it needed gets the one row back.
+    view.measure(1440);
+    expect(view.query('refine:toolbar')).not.toBeNull();
+    view.unmount();
+  });
+
   it('on a phone folds filters, order, freshness and refresh behind two round buttons, keeping the lens and the view switch', () => {
     const calls: string[] = [];
     const view = mount({
