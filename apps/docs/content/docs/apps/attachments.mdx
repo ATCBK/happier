@@ -169,6 +169,17 @@ This makes transcripts easier to scan when you shared:
 - diagrams
 - exported charts
 
+### Tool-result images in 0.3 development
+
+In unreleased 0.3 development, Claude tool results containing inline image data,
+including image reads, can display images in the transcript. The Session machine
+saves these files through Happier's existing media storage, under the project's
+`.happier/uploads/artifacts` directory by default. The transcript contains file
+references and media metadata rather than inline image bytes.
+
+New preview loads need access to the Session machine. Preview traffic may pass
+through the relay; this feature stores the image files on the Session machine.
+
 ### Shared image preview modal
 
 Clicking an inline image in the transcript opens the same preview modal used by the composer.

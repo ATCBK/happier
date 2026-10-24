@@ -425,6 +425,11 @@ Stop a session:
 hdev stop <session-id-or-prefix-or-tag>
 ```
 
+In 0.3 development source, CLI Stop holds the session until you explicitly
+resume it. Another ordinary message does not release that hold. See
+[resuming inactive sessions](/sessions/session-resume) for the distinction
+between explicit Stop and machine resource controls.
+
 Archive / unarchive:
 
 ```bash
