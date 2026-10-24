@@ -64,7 +64,8 @@ import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sess
 import { projectSessionFollowWakeBatchDelivery } from "@/app/session/follow/projectSessionFollowWakeBatchDelivery";
 import { readSessionMessageReplyInTx, mutateSessionMessageReplyForAccountInTx, listSessionMessageRepliesPendingInTx } from '@/app/session/messages/sessionMessageReply';
 import { readCommittedSessionMessageInTx } from '@/app/session/messages/readCommittedSessionMessage';
-import { SessionMessageReplyReadResultV1Schema, SessionMessageReplyMutationResultV1Schema, SessionMessageReplyPendingPageV1Schema, SessionMessageReplyCapabilityV1Schema, SessionMessageReplyAccountMutationV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { SessionMessageReplyReadResultV1Schema, SessionMessageReplyMutationResultV1Schema, SessionMessageReplyPendingPageV1Schema, SessionMessageReplyCapabilityV1Schema, SessionMessageReplyAccountMutationV1Schema,
+    SessionMessageReplyReadBatchRequestV1Schema, SessionMessageReplyReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 type SessionStoredMessageContent = z.infer<typeof SessionStoredMessageContentSchema>;
 
@@ -779,6 +780,22 @@ export function registerSessionMessageRoutes(app: Fastify) {
             authentication: readSessionAccessAuthenticationFromRequest(request), capability: 'readTranscript' });
         if (access.status !== 'allowed') return reply.code(404).send({ error: 'Session not found' });
         return reply.send(SessionMessageReplyCapabilityV1Schema.parse({ v: 1, protocolVersions: [1] }));
+    });
+
+    app.post('/v2/sessions/messages/replies/read-batch', {
+        preHandler: app.authenticate,
+        // Account UI transport, like the existing Session read batch. Restricted
+        // credentials keep using the exact Session-bound reply endpoint.
+        schema: { body: SessionMessageReplyReadBatchRequestV1Schema, response: { 200: SessionMessageReplyReadBatchResponseV1Schema } },
+    }, async (request, reply) => {
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const results = await inReadSnapshot(async tx => {
+            const rows = [];
+            for (const key of request.body.requests) rows.push({ ...key,
+                reply: await readSessionMessageReplyInTx(tx, { ...key, accountId: request.userId, authentication }) });
+            return rows;
+        });
+        return reply.header('Cache-Control', 'no-store').send({ results });
     });
 
     app.get('/v2/sessions/:sessionId/messages/replies/pending', {
