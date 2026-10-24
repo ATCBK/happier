@@ -125,8 +125,12 @@ describe('qualified Connected Account deadline composition', () => {
         const idleCredentialReads = fixture.readCredential.mock.calls.length;
         const idleProviderReads = requests.mock.calls.length;
         clock += 61_000;
-        vi.setSystemTime(clock);
-        expect((await runtime!.connectedServiceQuotasCoordinator!.tickOnce()).nextAutomaticRunAfterMs).toBeGreaterThan(60_000);
+        // K scheduler demands with unchanged health/quota authority must not
+        // reacquire material or poll the provider before its real deadline.
+        for (let tick = 0; tick < 25; tick++) {
+          vi.setSystemTime(clock++);
+          expect((await runtime!.connectedServiceQuotasCoordinator!.tickOnce()).nextAutomaticRunAfterMs).toBeGreaterThan(60_000);
+        }
         expect(reads).toHaveBeenCalledTimes(idleReads);
         expect(fixture.readCredential).toHaveBeenCalledTimes(idleCredentialReads);
         expect(requests).toHaveBeenCalledTimes(idleProviderReads);

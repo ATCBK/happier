@@ -612,7 +612,8 @@ export async function startDaemonConnectedServiceRuntime(
       tickMs: refreshTickMs,
       subscribeWake: subscribeCoordinatorWake,
       coordinator: { tickOnce: async () => {
-        if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
+        // Selected refresh reads and effects own their fresh authority checks;
+        // an empty wake (including quota-owned qualified work) needs no proof.
         const operation = () => connectedServiceRefreshCoordinator!.tickOnce({ skipQualified });
         return await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
       } },
