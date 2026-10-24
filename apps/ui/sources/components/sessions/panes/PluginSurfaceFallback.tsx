@@ -25,6 +25,7 @@ type PluginSurfaceFallbackState = Extract<PluginSurfacePresentationState, 'loadi
 type PluginSurfaceFallbackPresentationOptions = Readonly<{
     state?: PluginSurfaceFallbackState;
     reasonCode?: string | null;
+    reason?: string;
 }>;
 
 /** Search only the human copy drawn by the unavailable card, never its diagnostic disclosure. */
@@ -36,9 +37,10 @@ export function projectPluginSurfaceFallbackFindText(
         reasonCode: options.reasonCode,
     });
     if (!card || card.kind === 'loading') return [];
+    const reason = options.reason ?? card.reason;
     return [
         { id: 'structured-unavailable-title', text: card.title, format: 'plain' },
-        ...(card.reason ? [{ id: 'structured-unavailable-reason', text: card.reason, format: 'plain' as const }] : []),
+        ...(reason ? [{ id: 'structured-unavailable-reason', text: reason, format: 'plain' as const }] : []),
     ];
 }
 
@@ -81,6 +83,8 @@ export function PluginSurfaceFallback(props: Readonly<{
     state?: PluginSurfaceFallbackState;
     /** Raw host/runtime diagnostic; the shared presentation owner localizes it. */
     reasonCode?: string | null;
+    /** Already-localized declaration text; never an untrusted runtime diagnostic. */
+    reason?: string;
     /** Caller-owned plugin management route; shown only when management is the fix. */
     action?: SurfaceStateAction;
     /** Host-owned retry of the failing phase; shown only for transient reasons. */
@@ -129,8 +133,8 @@ export function PluginSurfaceFallback(props: Readonly<{
             kind={card.kind}
             title={card.title}
             titleContent={props.renderText?.('title', card.title)}
-            reason={card.reason}
-            reasonContent={card.reason ? props.renderText?.('reason', card.reason) : undefined}
+            reason={props.reason ?? card.reason}
+            reasonContent={(props.reason ?? card.reason) ? props.renderText?.('reason', (props.reason ?? card.reason)!) : undefined}
             diagnosticCode={presentation.diagnosticCode}
             action={resolvePluginSurfaceStateAction({
                 recoveryAction: presentation.recoveryAction,

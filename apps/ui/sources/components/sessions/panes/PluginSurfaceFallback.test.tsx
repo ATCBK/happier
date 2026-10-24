@@ -13,6 +13,14 @@ import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/plug
 import { PluginSurfaceFallback, projectPluginSurfaceFallbackFindText } from './PluginSurfaceFallback';
 
 describe('PluginSurfaceFallback', () => {
+    it('renders admitted declaration wording as the reason while retaining a separate diagnostic', async () => {
+        const reason = 'Connect this project to continue.';
+        const screen = await renderScreen(<PluginSurfaceFallback testID="page-disabled" reasonCode="policy_disabled" reason={reason} />);
+        expect(screen.getTextContent()).toContain(reason);
+        expect(projectPluginSurfaceFallbackFindText({ reasonCode: 'policy_disabled', reason }).find(field => field.id === 'structured-unavailable-reason')?.text)
+            .toBe(reason);
+        expect(screen.getTextContent()).not.toContain('policy_disabled');
+    });
     it('decorates the displayed fallback glyphs while retaining human accessibility copy', async () => {
         const reasonCode = 'hosted_web_bridge_timeout';
         const card = resolvePluginSurfaceStatePresentation({ state: 'unavailable', reasonCode }).card!;
