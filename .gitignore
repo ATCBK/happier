@@ -330,3 +330,7 @@ _.env.pipeline.production.local
 /packages/sdk/api-surface.json
 # Windows-style temp paths created literally on POSIX by path tests (Mutagen replicas, test homes)
 /\\tmp\\*
+# Agent QA screenshot captures and scratch patches dropped at the repository root.
+# Real patches live under patches/; no source image lives at the root.
+/*.png
+/*.patch
