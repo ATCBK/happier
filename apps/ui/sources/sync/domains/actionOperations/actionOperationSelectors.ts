@@ -174,7 +174,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
     let previousActivitySummary: ActionOperationActivitySummary = Object.freeze({ activeCount: 0, hasAttention: false });
     let previousInboxSummaryState: ActionOperationStoreSnapshot | null = null;
     let previousInboxSummary: InboxActionOperationSummary = Object.freeze({ count: 0, hasAttention: false });
-    const projectionCache = new Map<string, ActionOperationProjection>();
+    const projectionCache = new WeakMap<QualifiedActionOperation, ActionOperationProjection>();
     const sessionCache = new Map<string, readonly ActionOperationProjection[]>();
     const serviceCache = new Map<string, readonly ActionOperationProjection[]>();
 
@@ -183,7 +183,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
         const isUnavailableProjection = state.unavailableOperationKeys.has(key);
         const observation = readOperationObservation(state, key, operation);
         const followUpAttention = readFollowUpAttention(state, operation);
-        const cached = projectionCache.get(key);
+        const cached = projectionCache.get(operation);
         if (
             cached?.snapshot === snapshot
             && cached.serverId === operation.serverId
@@ -192,7 +192,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
             && cached.followUpAttention === followUpAttention
         ) return cached;
         const projection = Object.freeze({ serverId: operation.serverId, snapshot, observation, isUnavailableProjection, followUpAttention });
-        projectionCache.set(key, projection);
+        projectionCache.set(operation, projection);
         return projection;
     };
 
@@ -202,9 +202,6 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
             .filter(([key, operation]) => shouldIncludeOperation(state, key, operation))
             .map(([key, operation]) => readProjection(state, key, operation))
             .sort(compareOperations);
-        for (const key of projectionCache.keys()) {
-            if (!state.operationsByKey.has(key)) projectionCache.delete(key);
-        }
         const nextAll = next.length === 0
             ? EMPTY_OPERATIONS
             : hasSameItems(previousAll, next) ? previousAll : Object.freeze(next);
@@ -220,7 +217,6 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
     const selectById = (state: ActionOperationStoreSnapshot, address: ActionOperationAddress) => {
         const serverId = normalizeActionOperationServerId(address.serverId);
         if (!serverId) return null;
-        selectAll(state);
         const key = actionOperationAddressKey({ ...address, serverId });
         const operation = state.operationsByKey.get(key);
         // Dismissal changes Activity visibility, not an explicit qualified record lookup.

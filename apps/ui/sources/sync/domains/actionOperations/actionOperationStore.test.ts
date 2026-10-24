@@ -43,6 +43,39 @@ function operation(overrides: Partial<ActionOperationSnapshotV1> = {}): ActionOp
 }
 
 describe('action operation store', () => {
+    it('reads one qualified operation without traversing unrelated inventory and preserves its observation identity', () => {
+        const store = createActionOperationStore();
+        const selectors = createActionOperationSelectors();
+        const selectedOperation = operation();
+        merge(store, [selectedOperation, ...Array.from({ length: 1000 }, (_, index) => operation({ operationId: `unrelated-${index}` }))]);
+        let traversals = 0;
+        const instrument = () => {
+            const state = store.getSnapshot();
+            // Instrument the real admitted map's iteration boundary; lookup and selector logic stay real.
+            const operationsByKey = new Proxy(state.operationsByKey, { get(target, key) {
+                const value: unknown = Reflect.get(target, key, target);
+                if (typeof value !== 'function') return value;
+                return (...args: unknown[]) => {
+                    if (key === Symbol.iterator || key === 'entries' || key === 'keys' || key === 'values' || key === 'forEach') traversals++;
+                    return Reflect.apply(value, target, args);
+                };
+            } });
+            return { ...state, operationsByKey };
+        };
+        const selected = selectors.selectById(instrument(), operationAddress(selectedOperation.operationId));
+        expect(selected?.snapshot).toBe(selectedOperation);
+        expect(traversals).toBe(0);
+        merge(store, [operation({ operationId: 'another' })]);
+        expect(selectors.selectById(instrument(), operationAddress(selectedOperation.operationId))).toBe(selected);
+        store.setMachineObservation({ serverId: SERVER_ID, machineId: selectedOperation.scope.machineId }, 'reconnecting');
+        const reconnecting = selectors.selectById(instrument(), operationAddress(selectedOperation.operationId));
+        expect(reconnecting?.snapshot).toBe(selectedOperation);
+        expect(reconnecting?.observation).toBe('reconnecting');
+        expect(traversals).toBe(0);
+        store.reset();
+        expect(selectors.selectById(instrument(), operationAddress(selectedOperation.operationId))).toBeNull();
+    });
+
     it('selects the latest Delete success over an older failure and retains a genuinely later failure', () => {
         const store = createActionOperationStore();
         const selectors = createActionOperationSelectors();
