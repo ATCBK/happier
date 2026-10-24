@@ -40,20 +40,46 @@ import { createDiscussion, postDiscussionMessage } from '@/app/discussions/mutat
 import { inviteDiscussionParticipant } from '@/app/discussions/accessService';
 import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
 import { setMachineAccessGrantInTx, removeMachineAccessGrantInTx, resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
+import { observeSqliteRequests } from '@/testkit/observeSqliteRequests';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
 describe('original Session input reply custody', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => {
-        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-n1-s3-reply-', env: {
+        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-n1-s3-reply-', initAuth: true, env: {
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
             HAPPIER_FEATURE_SHARING_SESSION__ENABLED: '1',
         } });
-        await auth.init();
         await getOrCreateServerIdentityId();
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('reads the exact external input native-start witness and canonical waiting state without C2 counting', async () => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionMessage.create({ data: { sessionId: session.id, seq: 1, localId: 'external-input', messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'External work' } } },
+            acceptedTurnId: 'external-turn', acceptedTurnKind: 'newTurn', autonomousExchangeCause: 'person',
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } } });
+        const begin = await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: {
+            v: 1, sessionId: session.id, mutationId: 'external-begin', action: 'begin', turnId: 'external-turn',
+            startingInputId: 'external-input', initiator: 'user', workDepth: 0, observedAt: 10,
+        } });
+        expect(begin).toMatchObject({ ok: true, didApply: true });
+        expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: {
+            v: 1, sessionId: session.id, mutationId: 'external-wait', action: 'wait', turnId: 'external-turn', observedAt: 20,
+        } })).toMatchObject({ ok: true, didApply: true });
+        await withAuthenticatedTestApp(app => registerSessionMessageRoutes(app), async app => {
+            const result = await app.inject({ method: 'GET', url: `/v2/sessions/${session.id}/messages/by-local-id/external-input`,
+                headers: { 'x-test-user-id': account.id } });
+            expect(result.statusCode).toBe(200);
+            expect(result.json()).toMatchObject({ message: { localId: 'external-input', acceptedTurnId: 'external-turn',
+                turnStartWitnessId: 'external-turn', turn: { turnId: 'external-turn', status: 'waiting', initiator: 'user' } } });
+        });
+        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: 'external-input' } } }))
+            .toMatchObject({ acceptedTurnCounted: false, autonomousExchangeState: null, autonomousExchangeRootSessionId: null, autonomousExchangeRootLocalId: null });
+    });
 
     it('reads one exact demand batch without substituting an unrelated original or disclosing a foreign Session', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -83,6 +109,62 @@ describe('original Session input reply custody', () => {
         });
     });
 
+    it('acquires a thousand demanded reply originals as sets across Sessions', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const sessions = await Promise.all(Array.from({ length: 3 }, () => db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } })));
+        const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionMessage.create({ data: { sessionId: source.id, seq: 1, localId: 'source-input', messageRole: 'user',
+            acceptedTurnId: 'source-turn', content: { t: 'plain', v: { text: 'Ask the workers' } } } });
+        expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: {
+            v: 1, sessionId: source.id, mutationId: 'source-begin', action: 'begin', turnId: 'source-turn',
+            startingInputId: 'source-input', initiator: 'user', workDepth: 0, observedAt: 10,
+        } })).toMatchObject({ ok: true });
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId: 'source-turn', sourceInputId: 'source-input', via: 'action' };
+        const requests = Array.from({ length: 1000 }, (_, index) => ({ sessionId: sessions[index % sessions.length]!.id, localId: `ask-${index}` }));
+        await db.sessionMessage.createMany({ data: requests.map((key, index) => ({ ...key, seq: index + 1, messageRole: 'user',
+            content: { t: 'plain', v: { text: 'Question' } }, replyProgress: { v: 1, mode: 'wait', sourceSession, disposition: 'inline', outcome: { kind: 'pass' } },
+        })) });
+        const pending = await db.sessionPendingMessage.create({ data: { ...requests[0]!, position: 1,
+            content: { t: 'plain', v: { text: 'Question' } }, requestedAction: { v: 1, kind: 'enqueue' },
+            replyProgress: { v: 1, mode: 'wait', sourceSession, disposition: 'inline', outcome: { kind: 'failed' } },
+        } });
+        await withAuthenticatedTestApp(app => registerSessionMessageRoutes(app), async app => {
+            const reads: string[] = [];
+            const accessReads: string[] = [];
+            const sourceReads: string[] = [];
+            const restore = observeSqliteRequests({ before: request => {
+                if (['SessionPendingMessage', 'SessionMessage'].includes(request.model ?? '') && request.action.startsWith('find'))
+                    reads.push(`${request.model}.${request.action}`);
+                if (request.model === 'Session' && request.action.startsWith('find')) accessReads.push(request.action);
+                if (['SessionMessage', 'SessionTurn'].includes(request.model ?? '') && request.action === 'findUnique')
+                    sourceReads.push(`${request.model}.${request.action}`);
+            } });
+            try {
+                const response = await app.inject({ method: 'POST', url: '/v2/sessions/messages/replies/read-batch',
+                    headers: { 'x-test-user-id': account.id }, payload: { requests } });
+                expect(response.statusCode).toBe(200);
+                expect(response.json().results).toHaveLength(requests.length);
+                expect(response.json().results.every((row: { reply: { status: string } }) => row.reply.status === 'available')).toBe(true);
+                expect(response.json().results[0].reply.progress.outcome).toEqual({ kind: 'failed' });
+                // Physical persistent acquisitions, observed without replacing database IO.
+                // Six original-set reads plus the shared exact-source witness/recipient reads.
+                expect(reads.length).toBeLessThanOrEqual(9);
+                expect(accessReads.length).toBeLessThanOrEqual(1);
+                expect(sourceReads.length).toBeLessThanOrEqual(3);
+            } finally { restore(); }
+            await db.sessionPendingMessage.delete({ where: { id: pending.id } });
+            const retired = await app.inject({ method: 'POST', url: '/v2/sessions/messages/replies/read-batch',
+                headers: { 'x-test-user-id': account.id }, payload: { requests: [requests[0]!] } });
+            expect(retired.json().results[0].reply.progress.outcome).toEqual({ kind: 'pass' });
+            await db.session.update({ where: { id: source.id }, data: { archivedAt: new Date() } });
+            const revoked = await app.inject({ method: 'POST', url: '/v2/sessions/messages/replies/read-batch',
+                headers: { 'x-test-user-id': account.id }, payload: { requests: [requests[0]!] } });
+            expect(revoked.json().results[0].reply.status).toBe('unavailable');
+        });
+    });
+
     it('keeps an idempotent composer source entry out of user input and turn admission even when targeting itself', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
@@ -109,6 +191,16 @@ describe('original Session input reply custody', () => {
                 headers: { 'x-test-user-id': account.id } });
             expect(read.statusCode).toBe(200);
             expect(read.json()).toMatchObject({ message: { messageRole: 'event', content: body.content } });
+            const editor = await db.account.create({ data: { encryptionMode: 'plain' } });
+            await db.sessionShare.create({ data: { sessionId: source.id, sharedByUserId: account.id,
+                sharedWithUserId: editor.id, accessLevel: 'edit', canApprovePermissions: false } });
+            invocation.targets[0]!.target.sessionId = 'different-receiver';
+            invocation.targets[0]!.immediate.status = 'rejected';
+            const replaced = await app.inject({ method: 'POST', url: `/v2/sessions/${source.id}/messages`,
+                headers: { 'x-test-user-id': editor.id }, payload: body });
+            // This is ordinary editable presentation, not protected replay
+            // custody. Editing it still cannot admit input or start a turn.
+            expect(replaced.statusCode).toBe(200);
         });
         expect(await db.sessionMessage.count({ where: { sessionId: source.id } })).toBe(2);
         expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: 'self-input' } } })).messageRole).toBe('user');

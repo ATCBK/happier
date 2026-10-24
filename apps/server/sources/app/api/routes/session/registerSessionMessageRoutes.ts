@@ -63,7 +63,7 @@ import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sessionInputAdmission";
 import { projectSessionFollowWakeBatchDelivery } from "@/app/session/follow/projectSessionFollowWakeBatchDelivery";
-import { readSessionMessageReplyInTx, mutateSessionMessageReplyForAccountInTx, listSessionMessageRepliesPendingInTx } from '@/app/session/messages/sessionMessageReply';
+import { readSessionMessageRepliesInTx, readSessionMessageReplyInTx, mutateSessionMessageReplyForAccountInTx, listSessionMessageRepliesPendingInTx } from '@/app/session/messages/sessionMessageReply';
 import { readCommittedSessionMessageInTx } from '@/app/session/messages/readCommittedSessionMessage';
 import { SessionMessageReplyReadResultV1Schema, SessionMessageReplyMutationResultV1Schema, SessionMessageReplyPendingPageV1Schema, SessionMessageReplyCapabilityV1Schema, SessionMessageReplyAccountMutationV1Schema,
     SessionMessageReplyReadBatchRequestV1Schema, SessionMessageReplyReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
@@ -790,12 +790,9 @@ export function registerSessionMessageRoutes(app: Fastify) {
         schema: { body: SessionMessageReplyReadBatchRequestV1Schema, response: { 200: SessionMessageReplyReadBatchResponseV1Schema } },
     }, async (request, reply) => {
         const authentication = readSessionAccessAuthenticationFromRequest(request);
-        const results = await inReadSnapshot(async tx => {
-            const rows = [];
-            for (const key of request.body.requests) rows.push({ ...key,
-                reply: await readSessionMessageReplyInTx(tx, { ...key, accountId: request.userId, authentication }) });
-            return rows;
-        });
+        const results = await inReadSnapshot(tx => readSessionMessageRepliesInTx(tx, {
+            requests: request.body.requests, accountId: request.userId, authentication,
+        }));
         return reply.header('Cache-Control', 'no-store').send({ results });
     });
 

@@ -6,7 +6,7 @@ import { SessionMessageReplyProgressV1Schema, deriveSessionMessageReplyReturnLoc
     type SessionMessageReplySourceTurnReleaseV1, type SessionMessageReplySourceTurnReleaseResultV1, type SessionMessageReplyAccountMutationV1,
     SessionMessageReplyPendingHintV1Schema, type SessionMessageDiscussionReplyReturnV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { parseStoredSessionTurnTranscriptAnchors } from '@/app/session/turns/parseSessionTurnState';
-import { resolveSessionAccessForOperation } from '@/app/session/access/sessionAccess';
+import { resolveEffectiveSessionAccessForSessionsInTx, resolveSessionAccessForOperation } from '@/app/session/access/sessionAccess';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { backgroundDeliveryAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { resolveDiscussionContextInTx, discussionContextStorageAdapter } from '@/app/discussions/access';
@@ -28,6 +28,7 @@ import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
 import { getDbProviderFromEnv } from '@/storage/prisma';
 import type { Prisma } from '@prisma/client';
 import { log } from '@/utils/logging/log';
+import { portableQueryChunks } from '@/storage/portableQueryChunks';
 
 const selection = { id: true, replyProgress: true, targetExecutionRunId: true, inputAdmissionReceipt: true } as const;
 type Original = { sessionId: string; localId: string; pendingId?: string; messageId?: string; progress: SessionMessageReplyProgressV1 | null; malformed: boolean;
@@ -39,24 +40,46 @@ function parseProgress(value: unknown): SessionMessageReplyProgressV1 | null {
     return parsed.success ? parsed.data : null;
 }
 
+type ReplyKey = Readonly<{ sessionId: string; localId: string }>;
+const replyKey = (key: ReplyKey) => JSON.stringify([key.sessionId, key.localId]);
+
+/** Exact demanded keys only; the shared provider boundary chunks bindings, never results. */
+async function readOriginals(tx: Tx, keys: readonly ReplyKey[]): Promise<ReadonlyMap<string, Original>> {
+    const originals = new Map<string, Original>();
+    const unique = [...new Map(keys.map(key => [replyKey(key), key])).values()];
+    for (const chunk of portableQueryChunks({ values: unique, bindingsPerValue: 2 })) {
+        const where = { OR: chunk.map(({ sessionId, localId }) => ({ sessionId, localId })) };
+        const [pendingRows, messages] = await Promise.all([
+            tx.sessionPendingMessage.findMany({ where, select: { ...selection, sessionId: true, localId: true } }),
+            tx.sessionMessage.findMany({ where, select: { ...selection, sessionId: true, localId: true, sidechainId: true, seq: true } }),
+        ]);
+        const pendingByKey = new Map(pendingRows.map(row => [replyKey(row), row]));
+        const messagesByKey = new Map(messages.flatMap(row => row.localId === null ? [] : [[replyKey({ ...row, localId: row.localId }), row] as const]));
+        for (const { sessionId, localId } of chunk) {
+            const key = replyKey({ sessionId, localId });
+            const pending = pendingByKey.get(key);
+            const message = messagesByKey.get(key);
+            if (!pending && !message) continue;
+            // Pending retains custody until its retirement; a materialized copy is not a second authority.
+            const raw = pending?.replyProgress ?? message?.replyProgress;
+            const progress = parseProgress(raw);
+            const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(pending?.inputAdmissionReceipt ?? message?.inputAdmissionReceipt);
+            originals.set(key, { sessionId, localId, ...(pending ? { pendingId: pending.id } : {}), ...(message ? { messageId: message.id } : {}), progress,
+                storedProgress: raw ?? null, ...(message ? { messageSeq: message.seq } : {}), malformed: raw != null && progress === null,
+                targetExecutionRunId: pending?.targetExecutionRunId ?? message?.targetExecutionRunId ?? null,
+                sidechainId: message?.sidechainId ?? null,
+                humanRequesterAccountId: progress?.humanOrigin && receipt.success && receipt.data.issuer === 'authenticatedAccount'
+                    ? receipt.data.actorAccountId : null,
+                targetMachineId: receipt.success && (receipt.data.issuer === 'authenticatedMachine'
+                    || receipt.data.issuer === 'authenticatedAccount' && progress?.humanOrigin !== undefined)
+                    ? receipt.data.admittedTarget?.machineId ?? null : null });
+        }
+    }
+    return originals;
+}
+
 async function readOriginal(tx: Tx, sessionId: string, localId: string): Promise<Original | null> {
-    const [pending, message] = await Promise.all([
-        tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: selection }),
-        tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { ...selection, sidechainId: true, seq: true } }),
-    ]);
-    if (!pending && !message) return null;
-    // Pending retains custody until its retirement; a materialized copy is not a second authority.
-    const raw = pending?.replyProgress ?? message?.replyProgress;
-    const progress = parseProgress(raw);
-    const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(pending?.inputAdmissionReceipt ?? message?.inputAdmissionReceipt);
-    return { sessionId, localId, ...(pending ? { pendingId: pending.id } : {}), ...(message ? { messageId: message.id } : {}), progress,
-        storedProgress: raw ?? null, ...(message ? { messageSeq: message.seq } : {}), malformed: raw != null && progress === null, targetExecutionRunId: pending?.targetExecutionRunId ?? message?.targetExecutionRunId ?? null,
-        sidechainId: message?.sidechainId ?? null,
-        humanRequesterAccountId: progress?.humanOrigin && receipt.success && receipt.data.issuer === 'authenticatedAccount'
-            ? receipt.data.actorAccountId : null,
-        targetMachineId: receipt.success && (receipt.data.issuer === 'authenticatedMachine'
-            || receipt.data.issuer === 'authenticatedAccount' && progress?.humanOrigin !== undefined)
-            ? receipt.data.admittedTarget?.machineId ?? null : null };
+    return (await readOriginals(tx, [{ sessionId, localId }])).get(replyKey({ sessionId, localId })) ?? null;
 }
 
 async function writeOriginal(tx: Tx, original: Original, progress: SessionMessageReplyProgressV1): Promise<void> {
@@ -455,18 +478,51 @@ async function resolveReturnExecutionRunIdInTx(tx: Tx, progress: SessionMessageR
 export async function readSessionMessageReplyInTx(tx: Tx, params: Readonly<{
     accountId: string; sessionId: string; localId: string; authentication: SessionAccessAuthentication;
 }>): Promise<SessionMessageReplyReadResultV1> {
-    if (!await canRead(tx, params.accountId, params.sessionId, params.authentication)) return { v: 1, status: 'unavailable' };
-    const original = await readOriginal(tx, params.sessionId, params.localId);
-    if (!original) return { v: 1, status: 'unavailable' };
-    if (original.malformed) return { v: 1, status: 'unavailable' };
-    if (!original.progress) return { v: 1, status: 'none' };
-    if (!await isSessionInputReplySourceCurrentInTx(tx, params.accountId, original.progress, params.authentication,
-        { requesterAccountId: original.humanRequesterAccountId, sessionId: original.sessionId })) return { v: 1, status: 'unavailable' };
-    const returnExecutionRunId = await resolveReturnExecutionRunIdInTx(tx, original.progress);
-    return { v: 1, status: 'available', progress: original.progress,
-        ...(original.targetExecutionRunId ? { recipient: { kind: 'execution_run', runId: original.targetExecutionRunId } as const } : {}),
-        ...(returnExecutionRunId ? { returnRecipient: { kind: 'execution_run', runId: returnExecutionRunId } as const } : {}),
-        ...(original.sidechainId ? { sidechainId: original.sidechainId } : {}) };
+    return (await readSessionMessageRepliesInTx(tx, { ...params, requests: [params] }))[0]!.reply;
+}
+
+/** Single and batch transports share original custody and one snapshot's exact access/currentness facts. */
+export async function readSessionMessageRepliesInTx(tx: Tx, params: Readonly<{
+    accountId: string; requests: readonly ReplyKey[]; authentication: SessionAccessAuthentication;
+}>): Promise<Array<ReplyKey & { reply: SessionMessageReplyReadResultV1 }>> {
+    if (!params.requests.length) return [];
+    const access = await resolveEffectiveSessionAccessForSessionsInTx(tx, { ...params,
+        sessionIds: params.requests.map(key => key.sessionId) });
+    const originals = await readOriginals(tx, params.requests.filter(key => access.get(key.sessionId)?.capabilities.readTranscript));
+    // These are shared decisions inside this read snapshot, not retained result caches.
+    const currentness = new Map<string, Promise<boolean>>();
+    const returnRecipients = new Map<string, Promise<string | null>>();
+    const read = async (key: ReplyKey): Promise<SessionMessageReplyReadResultV1> => {
+        const original = originals.get(replyKey(key));
+        if (!original || original.malformed) return { v: 1, status: 'unavailable' };
+        const progress = original.progress;
+        if (!progress) return { v: 1, status: 'none' };
+        const sourceKey = JSON.stringify(progress.humanOrigin
+            ? ['human', progress.humanOrigin.sessionId, original.humanRequesterAccountId, original.sessionId]
+            : progress.discussion ? ['discussion', progress.discussion, progress.workflow]
+                : ['session', progress.sourceSession]);
+        let current = currentness.get(sourceKey);
+        if (!current) {
+            current = isSessionInputReplySourceCurrentInTx(tx, params.accountId, progress, params.authentication,
+                { requesterAccountId: original.humanRequesterAccountId, sessionId: original.sessionId });
+            currentness.set(sourceKey, current);
+        }
+        if (!await current) return { v: 1, status: 'unavailable' };
+        const recipientKey = JSON.stringify(progress.discussion ? null : progress.sourceSession ?? null);
+        let recipient = returnRecipients.get(recipientKey);
+        if (!recipient) {
+            recipient = resolveReturnExecutionRunIdInTx(tx, progress);
+            returnRecipients.set(recipientKey, recipient);
+        }
+        const returnExecutionRunId = await recipient;
+        return { v: 1, status: 'available', progress,
+            ...(original.targetExecutionRunId ? { recipient: { kind: 'execution_run', runId: original.targetExecutionRunId } as const } : {}),
+            ...(returnExecutionRunId ? { returnRecipient: { kind: 'execution_run', runId: returnExecutionRunId } as const } : {}),
+            ...(original.sidechainId ? { sidechainId: original.sidechainId } : {}) };
+    };
+    const results = [];
+    for (const key of params.requests) results.push({ sessionId: key.sessionId, localId: key.localId, reply: await read(key) });
+    return results;
 }
 
 /** Original-requester observation or non-publishing person review, never a raw metadata actor. */
