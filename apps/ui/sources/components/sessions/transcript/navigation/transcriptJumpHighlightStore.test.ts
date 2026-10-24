@@ -119,10 +119,29 @@ describe('transcriptJumpHighlightStore', () => {
         })).toBe(false);
     });
 
+    it('keeps the landing cue until the landed row paints, then runs its full duration', async () => {
+        const store = await importStore();
+
+        // A slow landing: the row paints long after the jump reported it landed (G7, 27.7 s).
+        store.setTranscriptJumpHighlight({ sessionAddress: { serverId: 'home-a', sessionId: 's1' }, routeMessageId: 'local:m-1', seq: 1 });
+        vi.advanceTimersByTime(store.TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS * 20);
+        const active = store.readActiveTranscriptJumpHighlight();
+        expect(active).not.toBeNull();
+
+        store.markTranscriptJumpHighlightPainted(active!.token);
+        vi.advanceTimersByTime(store.TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 1);
+        // A remounted row painting again does not restart the cue.
+        store.markTranscriptJumpHighlightPainted(active!.token);
+        expect(store.readActiveTranscriptJumpHighlight()).not.toBeNull();
+        vi.advanceTimersByTime(1);
+        expect(store.readActiveTranscriptJumpHighlight()).toBeNull();
+    });
+
     it('auto-expires the highlight after the canonical duration', async () => {
         const store = await importStore();
 
         store.setTranscriptJumpHighlight({ sessionAddress: { serverId: 'home-a', sessionId: 's1' }, routeMessageId: 'local:m-1', seq: 1 });
+        store.markTranscriptJumpHighlightPainted(store.readActiveTranscriptJumpHighlight()!.token);
         vi.advanceTimersByTime(store.TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 1);
         expect(store.readActiveTranscriptJumpHighlight()).not.toBeNull();
 
@@ -134,8 +153,10 @@ describe('transcriptJumpHighlightStore', () => {
         const store = await importStore();
 
         store.setTranscriptJumpHighlight({ sessionAddress: { serverId: 'home-a', sessionId: 's1' }, routeMessageId: 'local:m-1', seq: 1 });
+        store.markTranscriptJumpHighlightPainted(store.readActiveTranscriptJumpHighlight()!.token);
         vi.advanceTimersByTime(store.TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 100);
         store.setTranscriptJumpHighlight({ sessionAddress: { serverId: 'home-a', sessionId: 's1' }, routeMessageId: 'local:m-2', seq: 2 });
+        store.markTranscriptJumpHighlightPainted(store.readActiveTranscriptJumpHighlight()!.token);
 
         vi.advanceTimersByTime(store.TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 1);
         expect(store.readActiveTranscriptJumpHighlight()?.routeMessageId).toBe('local:m-2');

@@ -9,6 +9,7 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import {
     TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS,
     TRANSCRIPT_JUMP_HIGHLIGHT_FADE_MS,
+    markTranscriptJumpHighlightPainted,
     useTranscriptJumpHighlight,
 } from './transcriptJumpHighlightStore';
 
@@ -51,14 +52,19 @@ export function TranscriptJumpAttention(props: Readonly<{
     });
     return (
         <View {...(props.viewProps ?? null)} ref={props.viewRef} style={props.style}>
-            {token != null ? <TranscriptJumpAttentionRing key={token} radius={props.radius} /> : null}
+            {token != null ? <TranscriptJumpAttentionRing key={token} token={token} radius={props.radius} /> : null}
             {props.children}
         </View>
     );
 }
 
-const TranscriptJumpAttentionRing = React.memo(function TranscriptJumpAttentionRing(props: Readonly<{ radius: number }>) {
+const TranscriptJumpAttentionRing = React.memo(function TranscriptJumpAttentionRing(props: Readonly<{ token: number; radius: number }>) {
     const reducedMotion = useReducedMotionPreference();
+    // The cue's duration starts once this row has painted it, never at the jump's report.
+    React.useEffect(() => {
+        const frame = requestAnimationFrame(() => markTranscriptJumpHighlightPainted(props.token));
+        return () => cancelAnimationFrame(frame);
+    }, [props.token]);
     const opacityRef = React.useRef<Animated.Value | null>(null);
     const scaleRef = React.useRef<Animated.Value | null>(null);
     if (opacityRef.current == null) {

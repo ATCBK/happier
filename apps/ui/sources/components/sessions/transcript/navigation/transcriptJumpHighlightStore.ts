@@ -6,7 +6,7 @@ import { areSessionAddressesEqual, normalizeSessionAddress, type SessionAddress 
 /**
  * Canonical jump-landing highlight timing (spec: 1200-1800ms total, subtle wash, fade out).
  * The store owns expiry: a highlight is set when a transcript jump lands and is
- * automatically cleared after the full duration. Consumers render the wash and
+ * automatically cleared the full duration after its row first paints the cue. Consumers render the wash and
  * run the fade inside that window.
  */
 export const TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS = 1400;
@@ -91,14 +91,23 @@ export function setTranscriptJumpHighlight(identity: TranscriptJumpHighlightRowI
         ...(identity.filePath ? { filePath: identity.filePath } : {}),
     };
     nextToken += 1;
-    const expiringToken = activeHighlight.token;
+    notifyListeners();
+}
+
+/**
+ * The landed row has painted its cue: only now does the canonical duration start. A slow landing (a
+ * window that renders the row long after the jump reported it) therefore still shows the full cue,
+ * static under reduced motion, instead of expiring before anyone could see it. A later paint of the
+ * same cue (a remounted row) does not restart it; a newer jump replaces it.
+ */
+export function markTranscriptJumpHighlightPainted(token: number): void {
+    if (activeHighlight?.token !== token || expiryTimer != null) return;
     expiryTimer = setTimeout(() => {
         expiryTimer = null;
-        if (activeHighlight?.token !== expiringToken) return;
+        if (activeHighlight?.token !== token) return;
         activeHighlight = null;
         notifyListeners();
     }, TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS);
-    notifyListeners();
 }
 
 /**
