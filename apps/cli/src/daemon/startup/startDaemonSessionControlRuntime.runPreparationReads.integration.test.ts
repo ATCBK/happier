@@ -11,7 +11,7 @@ it('shares requester observations within each Run authority read and rechecks au
     resolveRunAuthority: request => {
       runReads++;
       withdrawDuringRunRead();
-      return { status: 'current', executionRunId: request.executionRunId, occurrenceId: request.expectedOccurrenceId,
+      return { status: 'current', executionRunId: request.executionRunId, occurrenceId: request.expectedOccurrenceId!,
         parentSessionId: 'parent-session', intent: 'review', runtimeState: 'idle', teamCredentialProviderModel: null };
     },
     browserStartup: { resolveServerFeaturesSnapshot: async () => ({ status: 'ready', features: FeaturesResponseSchema.parse({

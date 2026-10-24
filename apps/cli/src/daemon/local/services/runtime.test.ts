@@ -216,7 +216,7 @@ describe('createLocalServicesDaemonRuntime', () => {
                 workspace, declaration, title: 'worker' });
             await observe();
             expect(publications).toBe(2);
-            const handle = await owner.superviseProject({ workspace, declaration, cwd: workspace.rootPath,
+            const handle = await owner.superviseProject({ workspace: workspaceRef, declaration, cwd: workspaceRef.rootPath,
                 serviceId: 'worker', specIdentity: 'worker', isCurrent: () => true,
                 requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
                 processSpec: { mode: { kind: 'managedSpawn', endpointNone: true } },

@@ -1341,7 +1341,7 @@ describe('executeSpawnSessionRequest', () => {
         migration: {
           v: 1,
           completedSources: [{ sourceProfileId: 'deepseek', kind: 'connection', connectionId: ProviderConnectionIdSchema.parse('pc_deepseek') }],
-          pendingCustomProfileIds: [], migratedAt: 2,
+          pendingCustomProfileIds: [], pendingConflicts: [], migratedAt: 2,
         },
       }).catalog,
     } });
