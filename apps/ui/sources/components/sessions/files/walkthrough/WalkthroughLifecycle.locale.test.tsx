@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { getPreferredLanguage, setPreferredLanguageFromSettings, t } from '@/text/i18n';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text/i18n';
 import type { WalkthroughInventoryRow } from './walkthroughReading';
 
 vi.mock('react-native', async () => {
@@ -22,7 +22,7 @@ it('updates the running inventory after the language changes with stable rows', 
     const strings = () => screen.findAll(node => typeof node.type === 'string')
         .flatMap(node => node.children.filter((child): child is string => typeof child === 'string'));
     expect(strings()).toContain(t('walkthrough.inventory.reading'));
-    await act(async () => { setPreferredLanguageFromSettings('fr'); });
+    await act(async () => { await preloadTranslations('fr'); setPreferredLanguageFromSettings('fr'); });
     await screen.update(<WalkthroughInventory rows={rows} />);
     expect(strings()).toContain(t('walkthrough.inventory.title'));
     expect(strings()).toContain(t('walkthrough.inventory.reading'));

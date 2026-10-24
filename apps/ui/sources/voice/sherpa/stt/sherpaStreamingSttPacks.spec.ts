@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { setPreferredLanguageFromSettings } from '@/text';
+import { preloadTranslations } from '@/text/i18n';
 import { getDefaultModelPackId, listModelPackCatalogEntries } from '@happier-dev/protocol/voice/modelPacks/catalog';
 
 import { getSherpaStreamingSttPackOptions } from './sherpaStreamingSttPacks';
@@ -19,7 +20,8 @@ describe('sherpaStreamingSttPacks', () => {
     expect(options.find(option => option.id === 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17')?.title).toContain('20M');
   });
 
-  it('projects the built-in description through the active locale while preserving environment-provided option copy', () => {
+  it('projects the built-in description through the active locale while preserving environment-provided option copy', async () => {
+    await preloadTranslations('es');
     setPreferredLanguageFromSettings('es');
 
     expect(getSherpaStreamingSttPackOptions({})[0]?.subtitle).toBe(

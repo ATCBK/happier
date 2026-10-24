@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { setPreferredLanguageFromSettings } from '@/text';
 import { getKokoroAssetSetOptions } from '@/voice/kokoro/assets/kokoroAssetSets';
+import { preloadTranslations } from '@/text/i18n';
 
 describe('kokoroAssetSets', () => {
   afterEach(() => {
@@ -39,7 +40,8 @@ describe('kokoroAssetSets', () => {
     ]);
   });
 
-  it('projects localized built-in descriptions while preserving environment-provided option copy', () => {
+  it('projects localized built-in descriptions while preserving environment-provided option copy', async () => {
+    await preloadTranslations('es');
     setPreferredLanguageFromSettings('es');
 
     const localized = getKokoroAssetSetOptions({});
