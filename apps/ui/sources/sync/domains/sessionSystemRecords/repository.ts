@@ -145,10 +145,12 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         const retained = sessionEntries(session, false);
         if (!retained) return;
         const pages = [...retained.queries.values()].filter(entry => entry.query.type === 'list'
-            && entry.query.namespace === 'surface' && entry.query.kind === 'item.v1' && entry.query.localId === undefined
+            && entry.query.namespace === 'surface' && (entry.query.kind === undefined || entry.query.kind === 'item.v1')
+            && entry.query.localId === undefined
             && entry.snapshot.freshness === 'fresh' && entry.snapshot.lastError === null);
         for (const first of pages) {
             if (first.query.type !== 'list' || first.query.cursor) continue;
+            const firstQuery = first.query;
             let entry: Entry | undefined = first;
             const seen = new Set<Entry>();
             const ids = new Set<string>();
@@ -156,7 +158,9 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
                 seen.add(entry);
                 const data: RecordValue | null = entry.snapshot.data;
                 if (!data || !('records' in data)) break;
-                for (const record of data.records) ids.add(record.id);
+                for (const record of data.records) {
+                    if (record.address.owner === 'host' && record.address.namespace === 'surface' && record.address.kind === 'item.v1') ids.add(record.id);
+                }
                 if (!data.hasNext) {
                     const count = boardCount(session, true)!;
                     if (count.request?.readers === 0) count.request.controller.abort();
@@ -165,7 +169,8 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
                     return;
                 }
                 const cursor: SessionSystemRecordStoredPageResponse['nextCursor'] = data.nextCursor;
-                entry = cursor ? pages.find(page => page.query.type === 'list' && page.query.cursor === cursor) : undefined;
+                entry = cursor ? pages.find(page => page.query.type === 'list' && page.query.cursor === cursor
+                    && page.query.kind === firstQuery.kind && page.query.limit === firstQuery.limit) : undefined;
             }
         }
     }
@@ -276,7 +281,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             if (result.status === 'ok') {
                 entry.transientFailures = 0;
                 publish(entry, { data: retainObservedValue(entry, result.value), loading: 'idle', freshness: entry.invalidatedWhileLoading ? 'stale' : 'fresh', reachability: 'reachable', lastError: null });
-                if (query.type === 'list' && query.namespace === 'surface' && query.kind === 'item.v1') retainCompleteBoardInventory(session);
+                if (query.type === 'list' && query.namespace === 'surface' && (query.kind === undefined || query.kind === 'item.v1')) retainCompleteBoardInventory(session);
             } else if (isTransientFailure(result)) {
                 // A failed read never proves absence. The last record stays, its freshness is
                 // whatever invalidation made it (a failure does not stale it), and reachability
