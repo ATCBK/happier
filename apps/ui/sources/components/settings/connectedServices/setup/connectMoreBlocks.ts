@@ -4,13 +4,7 @@ import { getConnectedServiceSetupPresentation } from '@/sync/domains/connectedSe
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 
-/** The same setup target travels from an inline block or a phone detail footer to the page. */
-export function buildConnectedServiceSetupRoute(target: ConnectedServiceSetupTarget) {
-    return { pathname: '/(app)/settings/connected-services/connect' as const, params: {
-        ...(target.kind !== 'catalog' ? { service: target.serviceKey } : {}),
-        ...(target.kind === 'reconnect' ? { accountId: target.accountId } : {}),
-    } };
-}
+export { buildConnectedServiceSetupRoute } from '@/sync/domains/connectedServices/connectedAccountSettingsRoute';
 
 /** A transient route result, validated before it enters the index's existing settle owner. */
 export function readConnectedServiceSetupResult(params: Readonly<Record<string, string | string[] | undefined>>) {

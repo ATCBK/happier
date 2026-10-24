@@ -28,6 +28,19 @@ export type ConnectedAccountSettingsRouteResolution = Readonly<{
     focus: ConnectedAccountSettingsRouteFocus | null;
 }>;
 
+/** The same authentication intent is presented inline or in the collection's detail. */
+export type ConnectedServiceSetupTarget =
+    | Readonly<{ kind: 'catalog' }>
+    | Readonly<{ kind: 'service'; serviceKey: string }>
+    | Readonly<{ kind: 'reconnect'; serviceKey: string; accountId: string }>;
+
+export function buildConnectedServiceSetupRoute(target: ConnectedServiceSetupTarget) {
+    return { pathname: '/(app)/settings/connected-services/connect' as const, params: {
+        ...(target.kind !== 'catalog' ? { service: target.serviceKey } : {}),
+        ...(target.kind === 'reconnect' ? { accountId: target.accountId } : {}),
+    } };
+}
+
 function readSingleRouteParam(value: unknown): string | null {
     if (Array.isArray(value)) {
         return value.length === 1 ? readSingleRouteParam(value[0]) : null;
@@ -139,11 +152,10 @@ export function buildConnectedAccountSettingsRoute(
 ) {
     const parsed = PluginContributionIdentityV1Schema.parse(service);
     if (focus === null) {
+        if (options.add) return buildConnectedServiceSetupRoute({ kind: 'service', serviceKey: buildQualifiedPluginContributionKey(parsed) });
         return {
             pathname: CONNECTED_ACCOUNTS_SETTINGS_ROUTE,
-            params: options.add
-                ? { connect: '1', service: buildQualifiedPluginContributionKey(parsed) }
-                : {},
+            params: {},
         } as const;
     }
     const parsedFocus = focus.kind === 'account'

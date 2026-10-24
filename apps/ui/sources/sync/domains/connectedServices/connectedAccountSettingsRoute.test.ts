@@ -71,7 +71,7 @@ describe('connectedAccountSettingsRoute', () => {
         });
     });
 
-    it('opens collection setup for the exact service and reads legacy add requests', () => {
+    it('opens the exact service account draft in detail and reads legacy add requests', () => {
         const service = {
             pluginId: 'acme.connected-accounts-conformance',
             localId: 'vault',
@@ -80,8 +80,8 @@ describe('connectedAccountSettingsRoute', () => {
         const route = buildConnectedAccountSettingsRoute(service, null, { add: true });
 
         expect(route).toEqual({
-            pathname: '/(app)/settings/connected-services',
-            params: { connect: '1', service: 'acme.connected-accounts-conformance/vault' },
+            pathname: '/(app)/settings/connected-services/connect',
+            params: { service: 'acme.connected-accounts-conformance/vault' },
         });
         expect(readConnectedAccountAddRequest({ ...service, add: '1' })).toBe(true);
         expect(readConnectedAccountAddRequest(buildConnectedAccountSettingsRoute(service).params)).toBe(false);
