@@ -66,6 +66,21 @@ Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.
 
+Development `account-change` wakes may carry the committed `changeKinds` and
+`entityIds` already visible in the Account feed, without private content or
+credential material. Development UI readers admit these routing facts once at
+`homeAccountChange`, retaining coarse handling for missing, empty, unknown and
+Account kinds, including mode, key, credential and Team changes. Domain owners
+filter unrelated wakes without bypassing fresh identity or authority admission.
+Wake ids are not proof that a feed page was consumed and cannot suppress
+blocked-cursor revalidation. The separate `feedPageConsumed` observation means
+detailed planner dispatch occurred, not that a cursor or materialization is
+complete; observed Session records still refresh on advisory Session/share ids.
+Saved Secret changes retain their own catalog and dependent Profile projection.
+Direct `update-account` encryption-currentness pushes, reconnect, observer gaps
+and fresh authority admission retain their existing owners and semantics.
+Older kind-less wakes remain readable.
+
 Ordinary socket loss and resume refreshes (reconnect, foreground, reachable and
 manual) withdraw that settled observation, but do not retire a captured finite
 operation. Its exact-witness owner discards the withdrawn HTTP
@@ -956,6 +971,24 @@ relationship discovery. Operations that require the installed graph refuse with
 `project_account_rows_unavailable` until the existing snapshot subscription receives
 an accepted snapshot; missing rows never become an empty successful reconciliation
 or a daemon-wide failure.
+
+The UI Project snapshot producer applies the same captured Home/Account boundary.
+Known transient connectivity failures retain the admitted complete rows with the
+existing error status. Authentication, mode/material, malformed-content and
+unclassified read failures retire that runtime and withdraw its opened rows.
+Account-mode reconfiguration also withdraws the snapshot immediately; an older
+source-mode response cannot republish it. This adds no second snapshot cache or
+per-row refresh.
+
+Session membership may use that private census only with same-Home, same-Account
+owner authority. The explicit normalized owner projection from supported legacy
+wire data can supply that proof when its owner id is absent; a present owner id
+must match. Recipient or unknown-authority rows receive neither the private refs
+nor a bound resolver. An admitted public Session `projectKey` remains independent
+of that private inference. Daemon document admission applies the same distinction
+without removing already-readable legacy Session attachments or changing the
+current owner-envelope availability rules. A subjectless global preparation has
+no Session Project context to infer.
 
 One Account-wide graph row serializes relationship changes and ref insertion,
 root changes, and Forget. Mutations compare its revision and the reached ref
@@ -2706,9 +2739,14 @@ or retired RPC material remains a refusal, including for server-origin reads.
   wrapping and both content revisions. The entire raw metadata/state must satisfy
   the published-content safety predicate before sealing; retained private bytes
   remain pending until actual safe custodian publication. Current Manage holders
-  service later recipient changes through the existing Machine invalidation and
-  Account-change lifecycles, reusing the Session preparation pass rather than a
-  separate queue.
+  service later recipient changes through the existing AccountChange feed. The
+  canonical Machine access owner publishes the focused
+  `machineRecipientAccess` kind for the affected Machine; clients refresh that
+  Machine and advance recipient preparation only from this fact. Generic
+  `machine` content changes, including metadata and daemon-state revisions, do
+  not imply recipient demand. Owner-envelope, access and mode changes remain
+  direct preparation inputs. The client reuses the Session preparation pass
+  rather than creating a separate queue.
   Background preparation excludes published revoked or replaced Machines even
   when their retained access projection still says Manage/ready. The shared
   preparation owner also rejects an observed retired row before custodian
@@ -3356,17 +3394,25 @@ Move's exact incumbent snapshot/Stop and selected-destination status/Start reuse
 the signed SOURCE packet and original envelope on the existing RPC carrier.
 The root's target and installation stay unchanged. Its private `machine_rpc`
 purpose binds the receiving Machine/installation together with the method and
-input digest; only a Move root admits that recipient selection. The receiver
-rechecks the retained SOURCE proof and current requester access at Home, opens
-the original input with requester material, and compares the exact child and
-current linked refs before effects. A changed service, Machine, effect or revoked
-grant cannot reuse that proof. Private native-preparation HTTP ports expose only
+input digest. The closed reviewed-child owner also admits the existing
+second-opinion model-spawn child and a Section archive's exact member
+`session.stop` child; this is not general cross-Machine execution authority.
+The receiver rechecks the retained SOURCE proof and current requester access at Home, opens
+the original input with requester material, and compares the exact child before
+effects. Move additionally checks its current linked refs. A changed service,
+Machine, effect or revoked grant cannot reuse that proof. Private native-preparation HTTP ports expose only
 the original requester's required Project/metadata reads while that proof remains
 current; they neither lend the custodian's credentials nor mint a new grant.
+For Section archive, the unchanged root retains its captured member selection;
+the signed child names that exact Session, and Home rechecks its Account and
+destination-Machine relationship. Its recipient's read port permits only
+encryption/currentness and exact-member detail observations. Ordinary Stop
+policy and native admission still apply, followed by the ordinary archive
+writer; no bulk writer or borrowed approval is introduced.
 Account and paired-terminal requester custody retain their original provenance
 and authority across the child carrier.
 Plain Accounts remain keyless. This admission extension is development-only and
-does not establish a loaded or released Move capability.
+does not establish loaded-runtime or released verification for these flows.
 
 The installed terminal runtime consumes these same admitted original requester
 ports for an accepted Project standalone shell and an exact own local Session
@@ -4283,6 +4329,14 @@ loaded-stack and native-device validation remain separate evidence.
 Private Account-owned Saved Secret resources in current 0.3 development source do not require
 Teams. Account catalog and source writes remain Account-mode fenced; a Saved Secret resource's
 own stored encryption mode governs its material, including independently converted resources.
+Plugin Account secret creation uses this same resource custody. Its
+`pluginSecretBindingsV1` Settings entries contain only the selected reference and
+cleanup provenance, changed on explicit set, bind, remove or erase. Replacement
+and unbinding clean up unused binding-created resources through the resource
+owner's current reference census; selecting an existing recipient-visible resource
+does not acquire deletion ownership. An unknown binding-write outcome retains the
+resource until the outcome is resolved. Retained Settings-based SavedSecrets stay
+readable through the existing source importer.
 Genuine Team-qualified credential operations retain their feature and authentication checks;
 their composed product activation remains unverified. Brokered Team
 credential use does not publish usable credential bytes to the recipient. Direct delivery does:
