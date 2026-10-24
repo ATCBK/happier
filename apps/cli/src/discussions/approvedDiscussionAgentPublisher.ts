@@ -28,6 +28,7 @@ export function createApprovedDiscussionAgentPublisher(params: Readonly<{
     const sessionId = request.sessionId;
     const publish = createDiscussionAgentPublisher({
       serverId: params.serverId, serverUrl: params.serverUrl,
+      machineId: params.machineId,
       readOwnerAccountCredentials: async () => params.credentials,
       isApprovalExecutionOriginCurrent: args => args.origin.machineId === params.machineId
         ? params.isApprovalExecutionOriginCurrent(args) : Promise.resolve(false),

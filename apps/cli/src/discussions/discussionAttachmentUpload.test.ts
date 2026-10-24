@@ -3,13 +3,40 @@ import { describe, expect, it } from 'vitest';
 import { decodeDiscussionUploadMetadataV1, readBinaryUploadFrameV1 } from '@happier-dev/transfers';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { openResourceBinaryContent } from '@/api/encryption/resourceBinaryContent';
-import { prepareDiscussionAttachmentUpload } from './discussionAttachmentUpload';
+import { createDiscussionAttachmentFileReader, prepareDiscussionAttachmentUpload } from './discussionAttachmentUpload';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildDiscussionAttachmentBindingsV1 } from '@happier-dev/protocol/discussions/api';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { sealSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
 import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 
 describe('captured Discussion attachment sources', () => {
+  it('reads only exact bound Machine files on demand and rejects stale bytes through the existing transfer', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-discussion-file-source-'));
+    const path = join(directory, 'evidence.txt');
+    const bytes = Buffer.from('original');
+    const reference = { blobId: '7578de54-3f59-4d6d-8293-ff6e4682fd10', mime: 'text/plain', sizeBytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex') };
+    try {
+      const readAttachmentSource = createDiscussionAttachmentFileReader({ references: [reference], sources: [{ blobId: reference.blobId, path }] });
+      // Selection binds names only: the OS file does not exist until the transfer demands it.
+      await writeFile(path, bytes);
+      expect(Buffer.from(await readAttachmentSource(reference.blobId))).toEqual(bytes);
+      expect(() => createDiscussionAttachmentFileReader({ references: [reference], sources: [{ blobId: reference.blobId, path: 'relative.txt' }] }))
+        .toThrow('discussion_attachment_source_invalid');
+      await expect(readAttachmentSource('unselected')).rejects.toMatchObject({ code: 'discussion_attachment_source_invalid' });
+      await writeFile(path, 'modified');
+      const request = { discussionId: 'discussion', localId: 'original', mentionedAccountIds: [],
+        content: { t: 'plain', v: { v: 1, parts: [{ t: 'attachment', attachment: { kind: 'file', id: reference.blobId, name: 'evidence.txt', file: reference } }] } },
+        attachments: [{ blobId: reference.blobId, t: 'plain' }] };
+      const prepared = prepareDiscussionAttachmentUpload({ operation: 'post', key: { mode: 'plain', dataKey: null, dataEncryptionKey: null },
+        references: [reference], request, readAttachmentSource });
+      await expect((async () => { for await (const _chunk of prepared.body) { /* Consume the actual upload. */ } })())
+        .rejects.toMatchObject({ code: 'discussion_attachment_source_invalid' });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
   it('refuses absent or changed captured bytes rather than emitting a partial successful frame', async () => {
     const bytes = Buffer.from('original');
     const reference = { blobId: '7578de54-3f59-4d6d-8293-ff6e4682fd10', mime: 'text/plain', sizeBytes: bytes.length,

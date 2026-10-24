@@ -4,7 +4,7 @@ import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/pro
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { requiresPresentUserDecisionForActionInputV1 } from '@happier-dev/protocol/actions/decisionAuthority';
 import type { DiscussionAgentPublisherRequestV1 } from '@happier-dev/protocol/discussions/api';
-import { DiscussionDetailsResponseV1Schema } from '@happier-dev/protocol/discussions/api';
+import { DiscussionDetailsResponseV1Schema, buildDiscussionAttachmentBindingsV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionCreateInputV1Schema, DiscussionPostInputV1Schema, DiscussionDetailsResultV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { readCommittedDiscussionMessage } from '@happier-dev/protocol/actions/executor/docCollaborationActions';
 import { DiscussionMessageContentV1Schema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
@@ -178,6 +178,8 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       const mentions = readDiscussionMentionedParticipantIdsV1(input.content);
       return { content: input.content, mentionedAccountIds: input.mentionedAccountIds ?? mentions.mentionedAccountIds,
         mentionedSessionIds: input.mentionedSessionIds ?? mentions.mentionedSessionIds,
+        ...buildDiscussionAttachmentBindingsV1(input.content, 'operation' in params.request
+          ? params.request.request.firstMessage.content.t : params.request.request.content.t),
         ...(input.replyTarget === undefined ? {} : { replyTarget: input.replyTarget }) };
     };
     if (actionId === 'discussion.second_opinion.start') {
@@ -239,7 +241,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
     if ('operation' in params.request) {
       if (actionId !== 'discussion.create') return null;
       const input = DiscussionCreateInputV1Schema.safeParse(actionInput);
-      if (!input.success) return null;
+      if (!input.success || !sameStrictJsonValue(input.data.attachmentSources ?? [], params.request.attachmentSources ?? [])) return null;
       const body = params.request.request;
       if ((input.data.creationLocalId ?? deriveApprovedDiscussionMutationLocalId({ artifactId: params.artifactId, purpose: 'creation' })) !== body.creationLocalId
         || (input.data.firstMessage.localId ?? deriveApprovedDiscussionMutationLocalId({ artifactId: params.artifactId, purpose: 'first_message' })) !== body.firstMessage.localId) return null;
@@ -261,6 +263,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       if (actionId !== 'discussion.post' && actionId !== 'discussion.reply') return null;
       const input = DiscussionPostInputV1Schema.safeParse(actionInput);
       if (!input.success || input.data.discussionId !== params.request.discussionId
+        || !sameStrictJsonValue(input.data.attachmentSources ?? [], params.request.attachmentSources ?? [])
         || (input.data.localId ?? deriveApprovedDiscussionMutationLocalId({ artifactId: params.artifactId, purpose: 'post' })) !== params.request.request.localId) return null;
       const bound = bindDiscussionActionHttpRequestV1('discussion.get', { discussionId: input.data.discussionId });
       const response = await axios.get(params.serverUrl.replace(/\/+$/, '') + bound.path,

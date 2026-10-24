@@ -13,6 +13,15 @@ import { workflowInvocationKey } from '@/daemon/workflows/coordinator';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { WorkflowInvocationGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
+import { decodeBase64 } from '@/api/encryption';
+import { verifyDiscussionAttachmentAgentUploadV1 } from '@happier-dev/protocol/discussions/attachmentsUpload';
+import { readBinaryUploadFrameV1, decodeDiscussionUploadMetadataV1 } from '@happier-dev/transfers';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 
 vi.mock('axios', async original => {
   const actual = await original<typeof import('axios')>();
@@ -21,6 +30,71 @@ vi.mock('axios', async original => {
 
 describe('trusted Discussion reply publisher', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it('reads an exact workspace leaf only after the real host witness admits a signed streamed creation', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-discussion-agent-source-'));
+    const sourcePath = join(directory, 'evidence.bin');
+    const bytes = Buffer.from([0, 255, 1, 128]);
+    await writeFile(sourcePath, bytes);
+    const installation = await readOrCreateInstallationIdentity();
+    const blobId = randomUUID();
+    const accountId = 'account';
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.fixture`, encryption: null };
+    const content = { v: 1 as const, parts: [{ t: 'attachment' as const, attachment: { kind: 'file' as const,
+      id: blobId, name: 'evidence.bin', file: { blobId, mime: 'application/octet-stream', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') } } }] };
+    const wire = { id: 'first', discussionId: 'discussion', localId: 'first', seq: 1, authorAccountId: accountId,
+      accountActor: { v: 1, accountId, profile: null }, producerV1: null,
+      content: { t: 'plain' as const, v: content }, mentionedAccountIds: [], createdAt: 1 };
+    const witness = { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1] };
+    const rpc = new RpcHandlerManager({ scopePrefix: 'receiver', encryptionMode: 'plain' });
+    const posts: unknown[] = [];
+    registerDiscussionAgentPublisher({ rpcHandlerManager: rpc, serverId: 'home', serverUrl: 'https://home.test',
+      machineId: 'machine', getServerIdentityId: () => 'home', readOwnerAccountCredentials: async () => credentials,
+      isApprovalExecutionOriginCurrent: async () => false,
+      session: { sessionId: 'receiver', getActiveTurnAdmissionWitness: () => witness,
+        postAgentDiscussionMessage: async request => { posts.push(request); return { v: 1, ok: false, error: 'discussion_post_denied' }; } },
+    });
+    // The HTTP boundary consumes the real CLI source reader, encryption/frame producer and strict consumer.
+    const http = vi.spyOn(axios, 'request').mockImplementation(async config => {
+      if (!config.data || typeof config.data !== 'object' || !(Symbol.asyncIterator in config.data)) throw new Error('Missing stream');
+      const leaves: Uint8Array[] = [];
+      const metadata = await readBinaryUploadFrameV1(config.data as AsyncIterable<Uint8Array>, {
+        metadataMaxBytes: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1, decodeMetadata: decodeDiscussionUploadMetadataV1,
+        onMetadata: async metadata => {
+          if (metadata.operation !== 'create' || !metadata.agent) throw new Error('Missing admitted agent');
+          expect(metadata.agent.publication).toMatchObject({ sourceSession: { sourceSessionId: 'receiver', sourceInputId: 'input', sourceTurnId: 'turn' } });
+          expect(verifyDiscussionAttachmentAgentUploadV1({ homeId: 'home', accountId, metadata,
+            signature: metadata.agent.signature, publicKey: decodeBase64(installation.publicKey, 'base64url') })).toBe(true);
+          expect(JSON.stringify(metadata)).not.toContain(sourcePath);
+          return metadata.attachments;
+        },
+        onSegment: async (_index, chunks) => { for await (const chunk of chunks) leaves.push(chunk); },
+      });
+      expect(Buffer.concat(leaves)).toEqual(bytes);
+      if (metadata.operation !== 'create') throw new Error('Missing creation');
+      return { status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() },
+        data: { discussion: { id: 'discussion', ownerAccountId: accountId, encryptionMode: 'plain',
+        keyReadiness: true, dataEncryptionKey: null, anchor: null, access: 'owner', titleContent: metadata.input.titleContent,
+        creationLocalId: 'creation', latestMessage: { id: wire.id, localId: wire.localId, seq: wire.seq,
+          authorAccountId: accountId, accountActor: wire.accountActor, producerV1: null, createdAt: 1 },
+        messageSeq: 1, lastReadSeq: 0, unreadCount: 1, unreadMentionCount: 0, recentAuthorAccountIds: [accountId], archivedAt: null,
+        capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false } },
+        firstMessage: wire } };
+    });
+    const request = { v: 1, operation: 'create', sessionId: 'receiver', attachmentSources: [{ blobId, path: sourcePath }], request: {
+      creationLocalId: 'creation', titleContent: { t: 'plain', v: { v: 1, title: 'Files' } }, firstMessage: {
+        localId: 'first', content: wire.content, mentionedAccountIds: [], attachments: [{ blobId, t: 'plain' }] },
+    } };
+    try {
+      expect(await rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { witness: { ...witness, turnId: 'forged' }, request }))
+        .toMatchObject({ ok: false, error: 'discussion_post_denied' });
+      expect(http).not.toHaveBeenCalled();
+      expect(await rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { witness, request })).toMatchObject({ ok: true });
+      expect(http).toHaveBeenCalledTimes(1);
+      expect(posts).toEqual([]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
 
   it.each([
     { status: 503, error: 'discussions_unavailable' },

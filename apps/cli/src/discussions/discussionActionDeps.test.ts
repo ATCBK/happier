@@ -114,6 +114,47 @@ function discussionExecutor(deps: Pick<ActionExecutorDeps, 'discussionAction'> &
 }
 
 describe('Home Discussion resource transport', () => {
+  it.each(['discussion.create', 'discussion.post', 'discussion.reply'] as const)('carries workspace attachment sources through the admitted Agent publisher (%s)', async actionId => {
+    const blobId = '7578de54-3f59-4d6d-8293-ff6e4682fd10';
+    const attached = { v: 1 as const, parts: [{ t: 'attachment' as const, attachment: {
+      kind: 'file' as const, id: blobId, name: 'evidence.txt', file: { blobId, mime: 'text/plain', sizeBytes: 5,
+        sha256: createHash('sha256').update('bytes').digest('hex') },
+    } }] };
+    const attachmentSources = [{ blobId, path: '/workspace/evidence.txt' }];
+    const published: unknown[] = [];
+    const deps = action({ postAgentMessage: async request => {
+      published.push(request);
+      return 'operation' in request ? { v: 1, ok: true, value: { discussion: wireSummary(),
+        firstMessage: { ...wireMessage(), content: request.request.firstMessage.content } } }
+        : { v: 1, ok: true, value: { message: { ...wireMessage(), content: request.request.content }, messageSeq: 1 } };
+    } });
+    const input = actionId === 'discussion.create'
+      ? { ...createInput, attachmentSources, firstMessage: { ...createInput.firstMessage, content: attached } }
+      : { discussionId: 'discussion-1', localId: 'message-1', content: attached, attachmentSources,
+        ...(actionId === 'discussion.reply' ? { replyTarget: { kind: 'message' as const, messageId: 'parent' } } : {}) };
+    const result = await deps({ actionId, input,
+      context: { ...context, surface: 'agent', defaultSessionId: 'agent-session',
+        actionCaller: { kind: 'session', sessionId: 'agent-session' } } });
+    expect(result).toMatchObject(actionId === 'discussion.create' ? { firstMessage: { content: attached } } : { message: { content: attached } });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ sessionId: 'agent-session', attachmentSources });
+    expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST' && request.url.endsWith('/upload'))).toBe(false);
+    const execution = { v: 1, token: 'external-proof', binding: {
+      serverIdentityId: 'server-1', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
+      grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1', actionId, requestId: 'request-1',
+      custodianAccountId: 'account-1', installationId: 'installation-1', requestEnvelopeDigest: 'd'.repeat(43),
+      target: { kind: 'session', sessionId: 'agent-session' },
+    } } satisfies ExternalActionExecutionAuthorizationV1;
+    for (const external of [
+      { externalActionCredential: { accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1 } },
+      { externalActionExecutionAuthorization: execution },
+    ]) {
+      expect(await deps({ actionId, input, context: { ...context, ...external, surface: 'agent',
+        defaultSessionId: 'agent-session', actionCaller: { kind: 'session', sessionId: 'agent-session' } } }))
+        .toMatchObject({ ok: false, errorCode: 'discussion_attachment_upload_authority_unavailable' });
+    }
+    expect(published).toHaveLength(1);
+  });
   it.each(['material_unavailable', 'session_not_found', 'identity_denied', 'retired_session', 'missing_machine_publisher', 'machine_unavailable', 'machine_ack_lost'] as const)(
     'retains terminal publication custody for unavailable Session material but settles proved refusal (%s)', async scenario => {
     const accountId = 'account-1';
