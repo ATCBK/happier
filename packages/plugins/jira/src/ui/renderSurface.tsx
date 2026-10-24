@@ -31,7 +31,7 @@ function Overview({ input }: { input: TriageDetailSurfaceInputV1 }): React.React
     }, [active, activeSignal, execute, request, attempt]);
     const result = settled?.request === request ? settled.result : undefined;
     if (!result) return <LoadingState title={text('plugins.jira.detail.loading', 'Reading Jira issue')} />;
-    if (result.kind === 'failed') return <ErrorState title={describeTriageSourceFailureV1(result.failure, text('plugins.jira.detail.unavailable', 'Jira issue unavailable'))}
+    if (result.kind === 'failed') return <ErrorState title={describeTriageSourceFailureV1(result.failure, text('plugins.jira.detail.unavailable', 'Jira issue unavailable'), text)}
         action={<Button variant="secondary" title={text('plugins.jira.detail.retry', 'Retry')} onPress={retry} />} />;
     return <TriageDetailStory>
         <Text value={result.body || text('plugins.jira.detail.noDescription', 'No description')} />

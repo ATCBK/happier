@@ -133,7 +133,7 @@ function PageFailureBanner({
         )
         : failureDescription(
           state.failure,
-          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'),
+          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text,
         )}
     />
   );
@@ -158,7 +158,7 @@ function SettledReadEvidence({
           titleKey="plugins.azureDevops.ui.partial"
           description={failureDescription(
             state.failure,
-            text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'),
+            text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text,
           )}
         />
       )}
@@ -323,7 +323,7 @@ function AzureStoryChanges({ input, iterations, onRefreshIterations }: Readonly<
     more={state.canLoadMore || state.incomplete !== null}>
     {state.kind === 'idle' || state.kind === 'loading' ? <LoadingState title="Reading changed files" titleKey="plugins.azureDevops.ui.readingFiles" />
       : state.kind === 'unavailable' ? <ErrorState title="The changed files are unavailable" titleKey="plugins.azureDevops.ui.filesUnavailable"
-        description={failureDescription(state.failure, text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'))} />
+        description={failureDescription(state.failure, text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text)} />
       : <PageFailureBanner state={state} />}
     {iterations.kind !== 'unavailable' ? null : <Row gap="small">
       <Action.Refresh onRefresh={onRefreshIterations} variant="plain"
@@ -378,7 +378,7 @@ function OverviewPanel({
             titleKey="plugins.azureDevops.ui.iterationsUnavailable"
             description={failureDescription(
               iterations.failure,
-              text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'),
+              text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text,
             )}
           />
         )}
@@ -498,7 +498,7 @@ function FilesPanel({
         titleKey="plugins.azureDevops.ui.filesUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'),
+          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text,
         )}
       />
     );
@@ -588,7 +588,7 @@ function PoliciesPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }
         titleKey="plugins.azureDevops.ui.policiesUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'),
+          text('plugins.azureDevops.ui.readFailed', 'Azure DevOps could not complete this read.'), text,
         )}
       />
     );
@@ -922,7 +922,7 @@ function ActivityStreamPanel({
       <ErrorState
         title="The activity is unavailable"
         titleKey="plugins.azureDevops.ui.activityUnavailable"
-        description={failureDescription(commits.state.failure, readFailed)}
+        description={failureDescription(commits.state.failure, readFailed, text)}
       />
     );
   }
@@ -941,7 +941,7 @@ function ActivityStreamPanel({
               tone="warning"
               title="The activity is unavailable"
               titleKey="plugins.azureDevops.ui.activityUnavailable"
-              description={failureDescription(commits.state.failure, readFailed)}
+              description={failureDescription(commits.state.failure, readFailed, text)}
             />
           ) : <PageFailureBanner state={commits.state} />}
           <SettledReadEvidence state={iterations} />
@@ -950,7 +950,7 @@ function ActivityStreamPanel({
               tone="warning"
               title="The iterations could not be read"
               titleKey="plugins.azureDevops.ui.iterationsUnavailable"
-              description={failureDescription(iterations.failure, readFailed)}
+              description={failureDescription(iterations.failure, readFailed, text)}
             />
           ) : null}
           {threadState.kind === 'unavailable' ? (
@@ -958,7 +958,7 @@ function ActivityStreamPanel({
               tone="warning"
               title="The threads are unavailable"
               titleKey="plugins.azureDevops.ui.threadsUnavailable"
-              description={failureDescription(threadState.failure, readFailed)}
+              description={failureDescription(threadState.failure, readFailed, text)}
             />
           ) : <SettledReadEvidence state={threadState} />}
         </Stack>

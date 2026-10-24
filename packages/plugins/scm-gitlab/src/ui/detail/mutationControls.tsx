@@ -313,7 +313,7 @@ function projectSettledWrite(
         title,
         ...(outcome.failure === undefined
           ? {}
-          : { detail: describeTriageSourceFailureV1(outcome.failure, title) }),
+          : { detail: describeTriageSourceFailureV1(outcome.failure, title, text) }),
       };
     }
     case 'unavailable': {
@@ -321,7 +321,7 @@ function projectSettledWrite(
         'plugins.gitlab.ui.mutations.unavailable',
         'Nothing was attempted. GitLab could not be reached or would not allow this.',
       );
-      return { tone: 'danger', title, detail: describeTriageSourceFailureV1(outcome.failure, title) };
+      return { tone: 'danger', title, detail: describeTriageSourceFailureV1(outcome.failure, title, text) };
     }
     case 'declined':
       return {

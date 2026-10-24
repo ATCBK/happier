@@ -346,7 +346,7 @@ function projectSettledMutation(
           'Azure DevOps may have applied this write. Reload the pull request before trying again.',
         ),
         ...(result.failure === undefined ? {} : {
-          detail: failureDescription(result.failure, ''),
+          detail: failureDescription(result.failure, '', text),
         }),
       };
     case 'unavailable': {
@@ -354,7 +354,7 @@ function projectSettledMutation(
         'plugins.azureDevops.ui.mutations.unavailable',
         'Azure DevOps could not complete this write.',
       );
-      return { tone: 'danger', title, detail: failureDescription(result.failure, title) };
+      return { tone: 'danger', title, detail: failureDescription(result.failure, title, text) };
     }
   }
 }
@@ -701,7 +701,7 @@ function projectSettledThreadStatus(
           'Azure DevOps may have changed this thread. Reload it before trying again.',
         ),
         ...(result.failure === undefined ? {} : {
-          detail: failureDescription(result.failure, ''),
+          detail: failureDescription(result.failure, '', text),
         }),
       };
     case 'unavailable': {
@@ -709,7 +709,7 @@ function projectSettledThreadStatus(
         'plugins.azureDevops.ui.mutations.unavailable',
         'Azure DevOps could not complete this write.',
       );
-      return { tone: 'danger', title, detail: failureDescription(result.failure, title) };
+      return { tone: 'danger', title, detail: failureDescription(result.failure, title, text) };
     }
   }
 }

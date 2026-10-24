@@ -230,7 +230,7 @@ function SelectedOccurrenceSummary({
         titleKey="plugins.sentry.ui.occurrenceUnavailable"
         description={failureDescription(
           read.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );
@@ -317,7 +317,7 @@ function SelectedEventRefreshNotice({
         ? text('plugins.sentry.ui.lastObservation', 'Showing the last observation')
         : failureDescription(
             read.refresh.failure,
-            text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+            text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
           )}
     />
   );
@@ -402,7 +402,7 @@ function LiveSummary({
         titleKey="plugins.sentry.ui.lastObservation"
         description={failureDescription(
           summary.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );
@@ -482,7 +482,7 @@ function TagValuesSection({
         title={text('plugins.sentry.ui.tagValuesUnavailable', '{tag} values are unavailable', { tag: tagKey })}
         description={failureDescription(
           state.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );
@@ -508,7 +508,7 @@ function TagValuesSection({
             titleKey="plugins.sentry.ui.partialTagValues"
             description={failureDescription(
               state.failure,
-              text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+              text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
             )}
           />
         )}
@@ -577,7 +577,7 @@ function TagsSection({
         titleKey="plugins.sentry.ui.tagsUnavailable"
         description={failureDescription(
           distribution.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );
@@ -983,7 +983,7 @@ function ActivatedOccurrenceDetail({
         titleKey="plugins.sentry.ui.occurrenceUnavailable"
         description={failureDescription(
           read.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );
@@ -1220,7 +1220,7 @@ function OccurrencesPanel({
           titleKey="plugins.sentry.ui.eventsUnavailable"
           description={failureDescription(
             state.failure,
-            text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+            text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
           )}
         />
         {spreadControl}
@@ -1252,7 +1252,7 @@ function OccurrencesPanel({
                 titleKey="plugins.sentry.ui.partialEvents"
                 description={failureDescription(
                   state.failure,
-                  text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+                  text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
                 )}
               />
             )}
@@ -1637,7 +1637,7 @@ function ActivityPanel({
         titleKey="plugins.sentry.ui.activityUnavailable"
         description={failureDescription(
           history.failure,
-          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'),
+          text('plugins.sentry.ui.readFailed', 'Sentry could not complete this read.'), text,
         )}
       />
     );

@@ -310,9 +310,10 @@ describe('the mounted GitLab merge-request writes', () => {
 
     await detail.press(await detail.getByRole('button', { name: 'Merge' }));
 
-    await expect(detail.queryByText(
+    expect(document.body.textContent).toContain(
       'GitLab received this and could not confirm the result. Reload before trying again — it may already have taken effect.',
-    )).resolves.toBeDefined();
+    );
+    expect(document.body.textContent).not.toContain('transport-failed');
   });
 
   it('signals the target-owned reconciliation after every settled write outcome', async () => {

@@ -250,13 +250,22 @@ export function projectTriageDetailFieldsV1(
 
 /**
  * The one sentence every failed read owes its reader, without echoing a provider
- * body: the caller's own localized sentence, with the classified code beside it.
+ * body or diagnostic code. Reuse the shared classified translations, allowing a
+ * source's translated code-specific explanation before the localized fallback.
+ * The failure itself is untouched and remains available to diagnostics.
  */
 export function describeTriageSourceFailureV1(
     failure: TriageSourceFailureV1 | null,
     fallback: string,
+    translate?: (key: string, fallback?: string) => string,
 ): string {
-    return failure === null ? fallback : `${fallback} (${failure.code})`;
+    if (failure === null || translate === undefined) return fallback;
+    // Generic retry advice must not replace an operation's warning that a write
+    // may already have taken effect. Access/contract guidance remains actionable.
+    const classified = failure.class === 'authentication' || failure.class === 'permission' || failure.class === 'unsupportedContract'
+        ? translate(`plugins.triage.sourceSettings.failure.${failure.class}`, fallback)
+        : fallback;
+    return translate(`plugins.triage.sourceFailure.${failure.code}`, classified);
 }
 
 /**

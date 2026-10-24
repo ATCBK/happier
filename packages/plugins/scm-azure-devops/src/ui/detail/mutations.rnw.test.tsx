@@ -385,7 +385,8 @@ describe('the mounted Azure DevOps pull-request writes', () => {
 
     await detail.press(await detail.getByRole('button', { name: 'Abandon' }));
 
-    await expect(detail.queryByText(sentence as string)).resolves.toBeDefined();
+    expect(document.body.textContent).toContain(sentence as string);
+    expect(document.body.textContent).not.toContain('azure-unreachable');
   });
 
   it('never calls a queued completion a completion, and names auto-complete when Azure owns it', async () => {

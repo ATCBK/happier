@@ -216,7 +216,7 @@ function PublicationResult({ result, text }: Readonly<{
         title={title}
         {...(result.failure === undefined
           ? {}
-          : { description: failureDescription(result.failure, '') })}
+          : { description: failureDescription(result.failure, '', text) })}
       />
     );
   }
@@ -254,7 +254,7 @@ function PublicationResult({ result, text }: Readonly<{
           : text('plugins.azureDevops.ui.publication.partial', 'Review partially published')}
       description={result.failure === undefined
         ? detail
-        : `${detail} ${failureDescription(result.failure, '')}`.trim()}
+        : `${detail} ${failureDescription(result.failure, '', text)}`.trim()}
     />
   );
 }

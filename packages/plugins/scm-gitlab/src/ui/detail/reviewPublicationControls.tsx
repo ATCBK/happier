@@ -225,7 +225,7 @@ function PublicationResult({ result, text }: Readonly<{
         )
       : result.failure === undefined
         ? undefined
-        : describeTriageSourceFailureV1(result.failure, 'GitLab could not complete the publication preflight.');
+        : describeTriageSourceFailureV1(result.failure, 'GitLab could not complete the publication preflight.', text);
     return <Banner tone="warning" title={title} description={description} />;
   }
 
@@ -257,7 +257,7 @@ function PublicationResult({ result, text }: Readonly<{
     : '';
   const failure = result.failure === undefined
     ? ''
-    : ` ${describeTriageSourceFailureV1(result.failure, '')}`;
+    : ` ${describeTriageSourceFailureV1(result.failure, '', text)}`;
   return (
     <Banner
       tone={complete ? 'secondary' : 'warning'}

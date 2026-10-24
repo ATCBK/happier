@@ -444,7 +444,8 @@ describe('the mounted Bitbucket Cloud pull-request writes', () => {
 
     await detail.press(await detail.getByRole('button', { name: 'Decline' }));
 
-    await expect(detail.queryByText(sentence as string)).resolves.toBeDefined();
+    expect(document.body.textContent).toContain(sentence as string);
+    expect(document.body.textContent).not.toContain('bitbucket-unreachable');
   });
 
   it('offers no write at all on a pull request that is no longer open', async () => {

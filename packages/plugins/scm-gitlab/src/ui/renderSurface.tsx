@@ -169,7 +169,7 @@ function PageFailureBanner({
       titleKey="plugins.gitlab.ui.partial"
       description={failureDescription(
         state.failure,
-        text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+        text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
       )}
     />
   );
@@ -332,7 +332,7 @@ function GitlabStoryChanges({ input }: Readonly<{ input: TriageDetailSurfaceInpu
     more={state.canLoadMore || state.incomplete !== null}>
     {state.kind === 'idle' || state.kind === 'loading' ? <LoadingState title="Reading changed files" titleKey="plugins.gitlab.ui.readingFiles" />
       : state.kind === 'unavailable' ? <ErrorState title="The changed files are unavailable" titleKey="plugins.gitlab.ui.filesUnavailable"
-        description={failureDescription(state.failure, text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'))} />
+        description={failureDescription(state.failure, text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text)} />
       : <><PageFailureBanner state={state} />
         {controller.diffLimitStatus === 'reported' ? null : <Banner tone="warning" title="Diff-limit status unknown" titleKey="plugins.gitlab.ui.diffLimitUnknown"
           description="This deployment did not say whether it left any file out, so this list is not a claim that the diff is whole." descriptionKey="plugins.gitlab.ui.diffLimitUnknown.description" />}
@@ -400,7 +400,7 @@ function OverviewPanel({
               : 'plugins.gitlab.ui.overview.showingLastRead'}
             description={failureDescription(
               controller.failure,
-              text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+              text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
             )}
           />
         )}
@@ -617,7 +617,7 @@ function GitlabActivityStream({
                 tone="warning"
                 title="Part of the activity is unavailable"
                 titleKey="plugins.gitlab.ui.activityUnavailable"
-                description={failureDescription(controller.state.failure, readFailed)}
+                description={failureDescription(controller.state.failure, readFailed, text)}
               />
             )
             : <PageFailureBanner key={key} state={controller.state} />)}
@@ -780,7 +780,7 @@ function ChangesPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }>
         titleKey="plugins.gitlab.ui.filesUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
         )}
       />
     );
@@ -808,7 +808,7 @@ function ChangesPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }>
               titleKey="plugins.gitlab.ui.rawDiffUnavailable"
               description={failureDescription(
                 rawDiff.state.failure,
-                text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+                text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
               )}
             />
           )}
@@ -913,7 +913,7 @@ function PipelinesPanel({
         titleKey="plugins.gitlab.ui.pipelinesUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
         )}
       />
     );
@@ -1028,7 +1028,7 @@ function ApprovalsSection({ input }: Readonly<{ input: TriageDetailSurfaceInputV
         titleKey="plugins.gitlab.ui.approvalsUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
         )}
       />
     );
@@ -1089,7 +1089,7 @@ function ApprovalsSection({ input }: Readonly<{ input: TriageDetailSurfaceInputV
               titleKey="plugins.gitlab.ui.approvalRulesUnavailable"
         description={failureDescription(
           view.rules.failure,
-          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'),
+          text('plugins.gitlab.ui.readFailed', 'GitLab could not complete this read.'), text,
         )}
             />
           )}

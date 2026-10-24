@@ -125,7 +125,7 @@ function PageFailureBanner({
       titleKey="plugins.bitbucket.ui.partial"
       description={failureDescription(
         state.failure,
-        text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'),
+        text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'), text,
       )}
     />
   );
@@ -259,7 +259,7 @@ function BitbucketStoryChanges({ input }: Readonly<{ input: TriageDetailSurfaceI
     more={state.canLoadMore || state.incomplete !== null}>
     {state.kind === 'idle' || state.kind === 'loading' ? <LoadingState title="Reading changed files" titleKey="plugins.bitbucket.ui.readingDiff" />
       : state.kind === 'unavailable' ? <ErrorState title="The diff is unavailable" titleKey="plugins.bitbucket.ui.diffUnavailable"
-        description={failureDescription(state.failure, text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'))} />
+        description={failureDescription(state.failure, text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'), text)} />
       : <PageFailureBanner state={state} />}
   </TriageDetailChangeSummary>;
 }
@@ -313,7 +313,7 @@ function OverviewPanel({
             title={text('plugins.bitbucket.ui.partial', 'Showing what was read so far')}
             description={failureDescription(
               controller.failure,
-              text('plugins.bitbucket.ui.overviewRefreshFailed', 'Bitbucket could not refresh this overview.'),
+              text('plugins.bitbucket.ui.overviewRefreshFailed', 'Bitbucket could not refresh this overview.'), text,
             )}
           />
         )}
@@ -409,7 +409,7 @@ function DiffPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }>): 
         titleKey="plugins.bitbucket.ui.diffUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'),
+          text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'), text,
         )}
       />
     );
@@ -520,7 +520,7 @@ function BuildsPanel({
         titleKey="plugins.bitbucket.ui.buildsUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'),
+          text('plugins.bitbucket.ui.readFailed', 'Bitbucket could not complete this read.'), text,
         )}
       />
     );
@@ -742,7 +742,7 @@ function ActivityStreamPanel({
       <ErrorState
         title="The activity is unavailable"
         titleKey="plugins.bitbucket.ui.activityUnavailable"
-        description={failureDescription(activity.state.failure, readFailed)}
+        description={failureDescription(activity.state.failure, readFailed, text)}
       />
     );
   }
@@ -760,7 +760,7 @@ function ActivityStreamPanel({
               tone="warning"
               title="The activity is unavailable"
               titleKey="plugins.bitbucket.ui.activityUnavailable"
-              description={failureDescription(activity.state.failure, readFailed)}
+              description={failureDescription(activity.state.failure, readFailed, text)}
             />
           ) : <PageFailureBanner state={activity.state} />}
           {comments.state.kind === 'unavailable' ? (
@@ -768,7 +768,7 @@ function ActivityStreamPanel({
               tone="warning"
               title="The comments are unavailable"
               titleKey="plugins.bitbucket.ui.commentsUnavailable"
-              description={failureDescription(comments.state.failure, readFailed)}
+              description={failureDescription(comments.state.failure, readFailed, text)}
             />
           ) : <PageFailureBanner state={comments.state} />}
           <BitbucketReviewCommentReplyControls input={input} comments={commentRows} />

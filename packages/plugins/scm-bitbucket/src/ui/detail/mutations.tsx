@@ -296,7 +296,7 @@ function projectSettledMutation(
           'Bitbucket may have applied this write. Reload the pull request before trying again.',
         ),
         ...(result.failure === undefined ? {} : {
-          detail: failureDescription(result.failure, ''),
+          detail: failureDescription(result.failure, '', text),
         }),
       };
     case 'unavailable': {
@@ -304,7 +304,7 @@ function projectSettledMutation(
         'plugins.bitbucket.ui.mutations.unavailable',
         'Bitbucket could not complete this write.',
       );
-      return { tone: 'danger', title, detail: failureDescription(result.failure, title) };
+      return { tone: 'danger', title, detail: failureDescription(result.failure, title, text) };
     }
   }
 }
@@ -848,7 +848,7 @@ function projectSettledCommentResolution(
           'Bitbucket may have changed this thread. Reload it before trying again.',
         ),
         ...(result.failure === undefined ? {} : {
-          detail: failureDescription(result.failure, ''),
+          detail: failureDescription(result.failure, '', text),
         }),
       };
     case 'unavailable': {
@@ -856,7 +856,7 @@ function projectSettledCommentResolution(
         'plugins.bitbucket.ui.mutations.unavailable',
         'Bitbucket could not complete this write.',
       );
-      return { tone: 'danger', title, detail: failureDescription(result.failure, title) };
+      return { tone: 'danger', title, detail: failureDescription(result.failure, title, text) };
     }
   }
 }

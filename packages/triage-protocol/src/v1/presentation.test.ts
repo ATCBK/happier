@@ -117,13 +117,38 @@ describe('triage detail presentation', () => {
         expect(bare?.label).toBe('source/bare');
     });
 
-    it('states the caller sentence alone when nothing failed, and the code beside it when something did', () => {
+    it('keeps diagnostic codes out of reader copy, including unknown source codes', () => {
         expect(describeTriageSourceFailureV1(null, 'Could not complete this read.'))
             .toBe('Could not complete this read.');
         expect(describeTriageSourceFailureV1(
             { class: 'authentication', code: 'source/unauthorized' },
             'Could not complete this read.',
-        )).toBe('Could not complete this read. (source/unauthorized)');
+        )).toBe('Could not complete this read.');
+    });
+
+    it('uses translated typed failure copy with a code-specific translation and a classified fallback', () => {
+        const translations: Readonly<Record<string, string>> = {
+            'plugins.triage.sourceSettings.failure.authentication': 'Reconnectez cette source.',
+            'plugins.triage.sourceFailure.source/scope-missing': 'Choisissez un projet.',
+        };
+        const translate = (key: string, fallback?: string) => translations[key] ?? fallback ?? key;
+        const failure = { class: 'authentication', code: 'source/unauthorized' } as const;
+        expect(describeTriageSourceFailureV1(failure, 'Lecture indisponible.', translate))
+            .toBe('Reconnectez cette source.');
+        expect(describeTriageSourceFailureV1({ class: 'unknown', code: 'source/scope-missing' }, 'Lecture indisponible.', translate))
+            .toBe('Choisissez un projet.');
+        expect(describeTriageSourceFailureV1({ class: 'unknown', code: 'source/new-failure' }, 'Lecture indisponible.', translate))
+            .toBe('Lecture indisponible.');
+        expect(failure.code).toBe('source/unauthorized');
+    });
+
+    it.each(['transient', 'rateLimit', 'unknown'] as const)('preserves an uncertain write warning instead of generic retry advice (%s)', (failureClass) => {
+        const warning = 'The source may have applied this change. Reload before trying again.';
+        const translate = (key: string, fallback?: string) => key.startsWith('plugins.triage.sourceSettings.failure.')
+            ? 'Try this request again.'
+            : fallback ?? key;
+        expect(describeTriageSourceFailureV1({ class: failureClass, code: 'source/confirmation-failed' }, warning, translate))
+            .toBe(warning);
     });
 
     it('speaks a status fact in the shared status vocabulary: healthy and news stay quiet, a caution needs you, failure is rose', () => {

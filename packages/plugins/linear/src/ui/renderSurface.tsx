@@ -56,7 +56,7 @@ function DetailSection({ input, section }: { input: TriageDetailSurfaceInputV1; 
   }, [active, load]);
   if (readAuthority.current !== request || state.kind === 'idle' || state.kind === 'loading') return <LoadingState title={text('plugins.linear.detail.loading')} />;
   return <>
-    {state.failure && <ErrorState title={describeTriageSourceFailureV1(state.failure, text('plugins.linear.detail.unavailable'))}
+    {state.failure && <ErrorState title={describeTriageSourceFailureV1(state.failure, text('plugins.linear.detail.unavailable'), text)}
       action={<Button variant="secondary" title={text('plugins.linear.detail.retry')} onPress={() => load(state.continuation ?? undefined)} />} />}
     {state.kind === 'ready' && <>
       {state.rows.length === 0 ? <EmptyState title={text('plugins.linear.detail.empty')} />
