@@ -66,7 +66,7 @@ export default defineConfig({
         // keeps its own expensive-fixture exclusion in the base project.
         resolve(__dirname, './tsconfig.vitest.json'),
         resolve(__dirname, '../ui/tsconfig.json'),
-        resolve(__dirname, '../cli/tsconfig.json'),
+        resolve(__dirname, '../cli/tsconfig.vitest.json'),
       ],
     }),
   ]
