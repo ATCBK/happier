@@ -6,7 +6,7 @@ import type { HappierSeriesPoint } from '../presentation/data/dataModel.js';
 import { HappierDataMetric } from '../presentation/data/Metric.js';
 import { HappierDataRows, HappierDataTable } from '../presentation/data/DataRows.js';
 import { HappierHeading, HappierMetadata } from '../presentation/content/Foundation.js';
-import { HappierInfoState, HappierInfoTile } from '../presentation/state/InfoState.js';
+import { HAPPIER_STATE_LINE_METRICS, HappierInfoState, HappierInfoTile, HappierStateLine } from '../presentation/state/InfoState.js';
 import { HappierList, HappierListItem, HappierListSection } from '../presentation/collection/List.js';
 import { HappierMarkdown } from '../presentation/content/Markdown.js';
 import { HappierStack, resolveHappierLayoutGap } from '../presentation/layout/Layout.js';
@@ -213,6 +213,11 @@ export type DeclarativeNodeRenderContext = Readonly<{
     minimumTouchTarget: number;
     /** Live mounted surfaces use the component adapter so mount/tab activity pauses motion. */
     useSharedSpinner?: boolean;
+    /**
+     * The mount sits in a line container (a section of an inspector such as Session Info): a `state` node
+     * is one quiet line among the rows around it, not the centred column of a whole surface.
+     */
+    stateLine?: boolean;
     resolveAction: (node: RecordValue) => DeclarativeActionAffordance | null;
     /**
      * Settings controls are the one leaf the two consumers genuinely disagree
@@ -534,6 +539,25 @@ const DECLARATIVE_NODE_RENDERERS = Object.freeze({
         const iconToken = typeof node.icon === 'string' ? node.icon : null;
         const color = resolveDeclarativeToneColor(context.presentationTheme, presentation.tone);
         const path = readDeclarativePath(node, context.nodePath);
+        if (context.stateLine) {
+            const lineColor = presentation.tone === 'danger' ? color : context.presentationTheme.colors.secondaryText;
+            return (
+                <HappierStateLine
+                    key={path}
+                    testID={`plugin-declarative-state:${path}`}
+                    accessibilitySemantics={presentation.role === 'alert' ? 'alert' : 'status'}
+                    icon={presentation.busy
+                        ? context.useSharedSpinner
+                            ? context.host.renderSpinner(context.presentationTheme.colors.secondaryText)
+                            : <HappierSpinner color={context.presentationTheme.colors.secondaryText} animationEnabled={false} />
+                        : (iconToken ? context.host.renderIcon(iconToken, 'small', lineColor, context.direction) : undefined)}
+                >
+                    <context.host.Text style={{ color: lineColor, ...HAPPIER_STATE_LINE_METRICS.text }}>
+                        {renderDisplayText(context, 'title')}{description ? ' · ' : null}{description ? renderDisplayText(context, 'description') : null}
+                    </context.host.Text>
+                </HappierStateLine>
+            );
+        }
         return (
             <HappierInfoState
                 key={path}
