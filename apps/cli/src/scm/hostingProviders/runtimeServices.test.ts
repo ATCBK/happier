@@ -420,7 +420,11 @@ describe('createHostScmHostingProviderRuntimeServices', () => {
       await expect(result).resolves.toMatchObject({ kind: 'missing' });
       expect(materializeAccount).not.toHaveBeenCalled();
     } else {
-      await expect(result).resolves.toEqual({ kind: 'available', token: 'exact-bound-token' });
+      await expect(result).resolves.toEqual({
+        kind: 'available',
+        token: 'exact-bound-token',
+        account: { service, accountId: 'exact-deployment' },
+      });
     }
   });
 
@@ -494,6 +498,7 @@ describe('createHostScmHostingProviderRuntimeServices', () => {
     )).resolves.toEqual({
       kind: 'available',
       token: 'ghp_exact',
+      account: { service, accountId: 'bound-account' },
     });
     expect(materialize).toHaveBeenCalledWith({
       account: { service: { pluginId: GITHUB_PLUGIN_MANIFEST.id, localId: 'github-account' }, accountId: 'bound-account' },

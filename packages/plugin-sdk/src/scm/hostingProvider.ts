@@ -10,6 +10,7 @@ import type {
     ScmPullRequestSummary,
 } from './projections.js';
 import type { PluginJsonValueV2 } from '../identity.js';
+import type { ConnectedAccountRef } from '../connectedAccounts.js';
 
 export type ScmHostingProviderKind =
     | 'github'
@@ -109,6 +110,8 @@ export type HostingProviderRuntimeTokenMaterializationResult =
         kind: 'available';
         token: string;
         profileKey?: string;
+        /** Exact admitted binding, absent for native or older-host materialization. */
+        account?: ConnectedAccountRef;
     }>
     | Readonly<{
         kind: 'missing';

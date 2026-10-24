@@ -500,6 +500,7 @@ export function createHostScmHostingProviderRuntimeServices(
             return {
                 kind: 'available',
                 token,
+                ...(target.kind === 'account' ? { account: target.account } : {}),
             };
         },
         async resolveScmHostingBasicAuthMaterialization(
