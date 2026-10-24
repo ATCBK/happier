@@ -198,9 +198,13 @@ function AttentionBannerStrip(props: React.ComponentProps<typeof AttentionBanner
             )}
             action={hasActions ? (
                 <>
+                    {/* A text link keeps to the start of its line (it ends sentences); its own box centres it
+                        on the strip's action row beside the bordered button instead of riding high. */}
                     {links.map(({ action, testID }) => (
-                        <TextLinkButton key={testID} testID={action.testID ?? testID} tone="strong" size="meta"
-                            label={action.label} onPress={action.onPress} disabled={action.disabled} />
+                        <View key={testID}>
+                            <TextLinkButton testID={action.testID ?? testID} tone="strong" size="meta"
+                                label={action.label} onPress={action.onPress} disabled={action.disabled} />
+                        </View>
                     ))}
                     {props.action ? <BannerButton action={props.action} testID={`${props.testID}.action`} /> : null}
                 </>
