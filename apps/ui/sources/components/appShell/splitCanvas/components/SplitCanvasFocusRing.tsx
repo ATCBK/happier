@@ -1,15 +1,17 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { useSplitCanvasInputModality } from '../hooks/useSplitCanvasInputModality';
 
 export const SplitCanvasFocusRing = React.memo((props: Readonly<{
     leafId: string;
     visible: boolean;
-    keyboardVisible: boolean;
+    keyboardOnly: boolean;
 }>) => {
     const { theme } = useUnistyles();
+    const keyboardVisible = useSplitCanvasInputModality(props.visible) === 'keyboard';
 
-    if (!props.visible) {
+    if (!props.visible || (props.keyboardOnly && !keyboardVisible)) {
         return null;
     }
 
@@ -23,11 +25,11 @@ export const SplitCanvasFocusRing = React.memo((props: Readonly<{
                 right: 0,
                 bottom: 0,
                 left: 0,
-                borderWidth: props.keyboardVisible ? 2 : 1,
-                borderColor: props.keyboardVisible ? theme.colors.accent.blue : theme.colors.border.default,
+                borderWidth: keyboardVisible ? 2 : 1,
+                borderColor: keyboardVisible ? theme.colors.accent.blue : theme.colors.border.default,
                 // The pane's own corner (`SplitCanvasLeafFrame`), so the ring lies on its edge.
                 borderRadius: theme.borderRadius.xl,
-                opacity: props.keyboardVisible ? 0.95 : 0.72,
+                opacity: keyboardVisible ? 0.95 : 0.72,
             }}
         />
     );

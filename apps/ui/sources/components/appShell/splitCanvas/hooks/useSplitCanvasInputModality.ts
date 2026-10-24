@@ -3,11 +3,37 @@ import { Platform } from 'react-native';
 
 export type SplitCanvasInputModality = 'pointer' | 'keyboard';
 
-export function useSplitCanvasInputModality(enabled: boolean): SplitCanvasInputModality {
-    const [modality, setModality] = React.useState<SplitCanvasInputModality>('pointer');
+type InputModalitySource = Readonly<{
+    read: () => SplitCanvasInputModality;
+    subscribe: (listener: () => void) => () => void;
+    change: (modality: SplitCanvasInputModality) => void;
+}>;
+
+const InputModalityContext = React.createContext<InputModalitySource | null>(null);
+const readPointerModality = (): SplitCanvasInputModality => 'pointer';
+const subscribeToNothing = () => () => {};
+
+/** One event owner per canvas; only its focus-ring leaves subscribe to the fact. */
+export function SplitCanvasInputModalityProvider(props: React.PropsWithChildren<Readonly<{ enabled: boolean }>>) {
+    const [source] = React.useState<InputModalitySource>(() => {
+        let modality: SplitCanvasInputModality = 'pointer';
+        const listeners = new Set<() => void>();
+        return {
+            read: () => modality,
+            subscribe(listener) {
+                listeners.add(listener);
+                return () => { listeners.delete(listener); };
+            },
+            change(next) {
+                if (modality === next) return;
+                modality = next;
+                for (const listener of listeners) listener();
+            },
+        };
+    });
 
     React.useEffect(() => {
-        if (!enabled || Platform.OS !== 'web') {
+        if (!props.enabled || Platform.OS !== 'web') {
             return;
         }
 
@@ -17,11 +43,11 @@ export function useSplitCanvasInputModality(enabled: boolean): SplitCanvasInputM
         }
 
         const onKeyDown = () => {
-            setModality('keyboard');
+            source.change('keyboard');
         };
 
         const onPointerDown = () => {
-            setModality('pointer');
+            source.change('pointer');
         };
 
         maybeWindow.addEventListener('keydown', onKeyDown);
@@ -35,7 +61,16 @@ export function useSplitCanvasInputModality(enabled: boolean): SplitCanvasInputM
             maybeWindow.removeEventListener('mousedown', onPointerDown);
             maybeWindow.removeEventListener('touchstart', onPointerDown);
         };
-    }, [enabled]);
+    }, [props.enabled, source]);
 
-    return modality;
+    return React.createElement(InputModalityContext.Provider, { value: source }, props.children);
+}
+
+export function useSplitCanvasInputModality(presented: boolean): SplitCanvasInputModality {
+    const source = React.useContext(InputModalityContext);
+    return React.useSyncExternalStore(
+        source && presented ? source.subscribe : subscribeToNothing,
+        source && presented ? source.read : readPointerModality,
+        readPointerModality,
+    );
 }

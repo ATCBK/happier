@@ -98,6 +98,37 @@ function findAncestorWithFlattenedStyle(
 }
 
 describe('SplitCanvasHost', () => {
+    it('updates keyboard focus chrome without rebuilding unrelated pane bodies', async () => {
+        // Browser event delivery is the boundary; the real canvas owns modality and focus chrome.
+        const browser = new EventTarget();
+        vi.stubGlobal('window', browser);
+        const renderLeaf = vi.fn(({ leaf }: { leaf: SplitCanvasLeafNode<string> }) =>
+            React.createElement('LeafContent', { leafId: leaf.id }));
+        const screen = await renderScreen(<SplitCanvasHost state={createNestedState()} dispatch={() => {}}
+            chrome="flat" renderLeaf={renderLeaf} />);
+        await act(async () => { invokeTestInstanceHandler(screen.findByTestId('split-canvas-host'), 'onLayout',
+            { nativeEvent: { layout: { width: 1000, height: 600 } } }); });
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-a')).toBeNull();
+        const builds = renderLeaf.mock.calls.length;
+        for (let index = 0; index < 20; index += 1) {
+            await act(async () => { browser.dispatchEvent(new Event('keydown')); });
+        }
+        expect(renderLeaf.mock.calls.length).toBe(builds);
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-a')).toBeTruthy();
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-b')).toBeNull();
+        await act(async () => { browser.dispatchEvent(new Event('pointerdown')); });
+        expect(renderLeaf.mock.calls.length).toBe(builds);
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-a')).toBeNull();
+        await act(async () => { browser.dispatchEvent(new Event('keydown')); });
+        expect(renderLeaf.mock.calls.length).toBe(builds);
+        // A newly focused ring reads the incumbent modality even while it had no visible consumer.
+        await screen.update(<SplitCanvasHost state={{ ...createNestedState(), focusedLeafId: 'leaf-b' }}
+            dispatch={() => {}} chrome="flat" renderLeaf={renderLeaf} />);
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-a')).toBeNull();
+        expect(screen.findByTestId('split-canvas-focus-ring-leaf-b')).toBeTruthy();
+        await screen.unmount();
+    });
+
     it('uses an eight pixel inset gutter for both layout and split admission', async () => {
         const controlsRef: React.MutableRefObject<SplitCanvasHostControls | null> = { current: null };
         const screen = await renderScreen(<SplitCanvasHost state={createNestedState()} dispatch={() => {}}

@@ -23,7 +23,7 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
     quietChrome?: boolean;
     showControls: boolean;
     showFocusRing: boolean;
-    keyboardFocusVisible?: boolean;
+    focusRingKeyboardOnly?: boolean;
     onLayout?: (event: any) => void;
     onHostRefChange?: (host: SplitCanvasLeafHostRef | null) => void;
     onFocus: () => void;
@@ -159,7 +159,7 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
                 <SplitCanvasFocusRing
                     leafId={props.leafId}
                     visible={props.showFocusRing}
-                    keyboardVisible={props.keyboardFocusVisible === true}
+                    keyboardOnly={props.focusRingKeyboardOnly === true}
                 />
             </View>
         </View>

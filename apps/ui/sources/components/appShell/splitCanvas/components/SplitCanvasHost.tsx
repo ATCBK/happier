@@ -7,7 +7,7 @@ import { SplitCanvasDivider, SPLIT_CANVAS_DIVIDER_SIZE_PX } from './SplitCanvasD
 import { SplitCanvasDropOverlay } from './SplitCanvasDropOverlay';
 import { SplitCanvasLeafFrame } from './SplitCanvasLeafFrame';
 import { useSplitCanvasDnD, splitCanvasEntityTargetId, type SplitCanvasEntityDrop } from '../hooks/useSplitCanvasDnD';
-import { useSplitCanvasInputModality } from '../hooks/useSplitCanvasInputModality';
+import { SplitCanvasInputModalityProvider } from '../hooks/useSplitCanvasInputModality';
 import { useSplitCanvasKeyboard } from '../hooks/useSplitCanvasKeyboard';
 import type {
     SplitCanvasAction,
@@ -135,7 +135,6 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
     const dividerSizePx = React.useMemo<DividerSizes>(() => props.gutterSizePx === undefined
         ? SPLIT_CANVAS_DIVIDER_SIZE_PX : { row: props.gutterSizePx, column: props.gutterSizePx }, [props.gutterSizePx]);
     const keyboardEnabled = props.keyboardEnabled ?? true;
-    const inputModality = useSplitCanvasInputModality(keyboardEnabled);
     const leafCount = countSplitCanvasLeaves(props.state.root);
     const hasMultipleLeaves = leafCount > 1;
     const leafSizesRef = React.useRef<Map<string, MinimumSize>>(new Map());
@@ -278,7 +277,6 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                     isMaximized={isMaximized}
                     hasMultipleLeaves={hasMultipleLeaves}
                     flatChrome={props.chrome === 'flat'}
-                    inputModality={inputModality}
                     dispatch={props.dispatch}
                     renderLeaf={renderLeaf}
                     retainedContent={props.retainedLeafContents !== undefined}
@@ -290,7 +288,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                 />
             );
     }, [
-        hasMultipleLeaves, inputModality, props.chrome, props.dispatch,
+        hasMultipleLeaves, props.chrome, props.dispatch,
         renderLeaf, props.retainedLeafContents, props.renderLeafLabel, props.state.focusedLeafId, props.state.maximizedLeafId,
         handleLeafLayout, registerLeafHost, handleSplitRequest, handleContentSlotLayout,
     ]);
@@ -312,7 +310,6 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
         );
     }, [
         hasMultipleLeaves,
-        inputModality,
         props.chrome,
         props.entityDrop,
         props.dispatch,
@@ -336,7 +333,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
     });
 
     return (
-        <View
+        <SplitCanvasInputModalityProvider enabled={keyboardEnabled}><View
             ref={hostDropRef}
             testID="split-canvas-host"
             onLayout={handleHostLayout}
@@ -394,7 +391,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                     </View>;
                 }) : null}
             </View>
-        </View>
+        </View></SplitCanvasInputModalityProvider>
     );
 }
 
@@ -425,7 +422,6 @@ function SplitCanvasLeafRendererInner<TLeafPayload>(props: Readonly<{
     isMaximized: boolean;
     hasMultipleLeaves: boolean;
     flatChrome: boolean;
-    inputModality: 'pointer' | 'keyboard';
     dispatch: (action: SplitCanvasAction<TLeafPayload>) => void;
     renderLeaf: (input: Readonly<{
         leaf: SplitCanvasLeafNode<TLeafPayload>;
@@ -473,9 +469,8 @@ function SplitCanvasLeafRendererInner<TLeafPayload>(props: Readonly<{
             isMaximized={props.isMaximized}
             quietChrome={props.flatChrome || !props.hasMultipleLeaves}
             showControls={!props.flatChrome && props.hasMultipleLeaves && (props.isFocused || props.isMaximized)}
-            showFocusRing={props.hasMultipleLeaves && props.isFocused
-                && (!props.flatChrome || props.inputModality === 'keyboard')}
-            keyboardFocusVisible={props.hasMultipleLeaves && props.isFocused && props.inputModality === 'keyboard'}
+            showFocusRing={props.hasMultipleLeaves && props.isFocused}
+            focusRingKeyboardOnly={props.flatChrome}
             onLayout={handleLayout}
             onHostRefChange={handleHostRefChange}
             onFocus={handleFocus}
