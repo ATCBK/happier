@@ -7,6 +7,33 @@ const specs = [
   { id: 'settings.set', surfaces: { ui: true, agent: true, mcp: true, cli: true }, cli: { commands: [{ path: ['settings', 'set'] }] } },
 ];
 
+test('exempts machine presentation state and validated Action forwarding only at their canonical owners', () => {
+  const sources = [
+    { filePath: 'apps/ui/sources/components/navigation/shell/appRail/AppRailMachines.tsx',
+      content: `const apply = useApplyLocalSettings(); apply({ machinesRailSeenV1: next });` },
+    { filePath: 'apps/ui/sources/components/machines/vitals/MachineVitalsRangeBar.tsx',
+      content: `const [, setRange] = useLocalSettingMutable('machineVitalsRangeV1'); setRange('7d');` },
+    { filePath: 'apps/ui/sources/components/machines/guard/activity/useGuardWayBack.ts',
+      content: `createFrontDoorActionExecute()(item.actionId, item.input);` },
+    { filePath: 'apps/ui/sources/activity/notifications/guardStopWarningLifecycle.ts',
+      content: `createFrontDoorActionExecute()(command.actionId, command.payload);` },
+  ];
+  const report = collectUiActionParity(sources, specs, []);
+  assert.deepEqual(report.findings, []);
+  assert.equal(report.exclusions.length, 4);
+  assert.ok(report.exclusions.every(site => site.reason.length > 0));
+  const neighboring = collectUiActionParity(sources.map(source => ({ ...source,
+    filePath: 'apps/ui/sources/components/machines/Unvalidated.tsx' })), specs, []);
+  assert.deepEqual(neighboring.findings.map(site => site.code), [
+    'setting_unmapped', 'setting_unmapped', 'dynamic_action', 'dynamic_action',
+  ]);
+  const unknown = collectUiActionParity(sources.map(source => ({ ...source,
+    content: source.content.replace('machinesRailSeenV1', 'unknownViewState')
+      .replace('machineVitalsRangeV1', 'unknownRange').replace('item.actionId', 'other.actionId')
+      .replace('command.actionId', 'other.actionId') })), specs, []);
+  assert.equal(unknown.findings.length, 4);
+});
+
 test('walks aliases, conditional dispatch, registrations and settings instead of a fixed operation inventory', () => {
   const report = collectUiActionParity([{
     filePath: 'apps/ui/sources/components/Example.tsx',

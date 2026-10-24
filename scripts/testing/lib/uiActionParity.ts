@@ -19,6 +19,31 @@ type Discovery = Readonly<{ agentIds?: ReadonlySet<string>; mcpIds?: ReadonlySet
   agentExclusionReasons?: ReadonlyMap<string, string>;
   settingBindings?: ReadonlyMap<string, readonly string[]>; sourceRoot?: string }>;
 
+// Owner-local exclusions apply to every census, including corridor checks. They
+// exempt presentation state or validated forwarding, never a new UI effect.
+const SOURCE_PARITY_EXCLUSIONS = [
+  {
+    filePath: 'apps/ui/sources/components/navigation/shell/appRail/AppRailMachines.tsx',
+    operation: 'local:machinesRailSeenV1',
+    reason: 'Machine rail acknowledgement is device-local seen state (R4), not a machine or Account setting',
+  },
+  {
+    filePath: 'apps/ui/sources/components/machines/vitals/MachineVitalsRangeBar.tsx',
+    operation: 'local:machineVitalsRangeV1',
+    reason: 'Remembered chart history range is device-local presentation state (plan 60 §4.1)',
+  },
+  {
+    filePath: 'apps/ui/sources/components/machines/guard/activity/useGuardWayBack.ts',
+    operation: 'PropertyAccessExpression: item.actionId',
+    reason: 'Activity forwards the daemon ActionIdSchema-validated way-back reference through the Action executor',
+  },
+  {
+    filePath: 'apps/ui/sources/activity/notifications/guardStopWarningLifecycle.ts',
+    operation: 'PropertyAccessExpression: command.actionId',
+    reason: 'Guard push forwards readGuardStopWarningPushActionV1 schema-admitted controls through the Action executor',
+  },
+] as const;
+
 function unwrap(node: ts.Expression): ts.Expression {
   if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node)
     || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node)) return unwrap(node.expression);
@@ -49,6 +74,12 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
   const settings: (Site & { key: string; scope: string })[] = [];
   const findings: UiParityFinding[] = [];
   const exclusions: (Site & { reason: string })[] = [];
+  function exclude(operation: string, site: Site): boolean {
+    const exclusion = SOURCE_PARITY_EXCLUSIONS.find(entry => entry.filePath === site.filePath && entry.operation === operation);
+    if (!exclusion) return false;
+    exclusions.push({ ...site, reason: exclusion.reason });
+    return true;
+  }
   const contents = new Map(files.map(file => [file.filePath, file.content]));
   // Resolve first-party source operands without loading the framework type graph.
   const root = discovery.sourceRoot ?? resolvePath('/__ui_action_parity__');
@@ -277,6 +308,7 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
 
   function checkSetting(key: string, scope: string, site: Site): void {
     settings.push({ ...site, key, scope });
+    if (exclude(`${scope}:${key}`, site)) return;
     if (scope === 'account' && key === 'preferredLanguage'
       && declarations.some(declaration => declaration.anchor === 'language.appLanguage'
         && declaration.storage?.access === 'read_only')) {
@@ -623,6 +655,7 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     function dispatch(node: ts.Expression): void {
       if (checked.has(node.pos)) return;
       checked.add(node.pos);
+      if (exclude(`${ts.SyntaxKind[node.kind]}: ${node.getText()}`, location(node))) return;
       const operand = unwrap(node);
       const binding = ts.isIdentifier(operand) ? lookup(operand, operand.text) : undefined;
       const annotation = binding?.annotation;
