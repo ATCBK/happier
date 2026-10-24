@@ -17,6 +17,7 @@ import { captureUsageModelPriceCatalogInTx, resolveCapturedUsageModelPriceCatalo
 import { loadUsageMessageCountsBySessionInTx } from "./query/loadUsageMessageStatsForQuery";
 import {
     resolveScopedUsageContributions,
+    resolveUsageContributionSourceContext,
     usageAccountingSubjectKey,
     type ScopedUsageContribution,
     type ScopedUsageEventRow,
@@ -182,7 +183,8 @@ function matchesUsageFilters(row: ScopedUsageContribution, filters: UsageAnalyti
         && matches(filters?.workspaceIds, row.workspaceId)
         && matches(filters?.machineIds, row.machineId)
         && matches(filters?.backendModes, row.backendMode)
-        && matches(filters?.sources, row.source);
+        && matches(filters?.sources, row.source)
+        && (filters?.execution === undefined || resolveUsageContributionSourceContext(row).execution === filters.execution);
 }
 
 async function loadRetainedLegacyUsageReports(
@@ -250,7 +252,8 @@ export async function captureUsageAnalyticsInTx(
     // Reconciliation may exclude candidates. Capture their counts now and sum
     // only the selected Sessions after commit, preserving publication ceilings.
     let messageCountsBySession: ReadonlyMap<string, number> | undefined;
-    if (request.population !== 'public_eligible_personal' && (request.includeMessageStats || request.includeInsights)) {
+    if (request.population !== 'public_eligible_personal' && request.filters?.execution === undefined
+        && (request.includeMessageStats || request.includeInsights)) {
         const sessionIds = new Set<string>();
         for (const row of rows) if (row.sessionId) sessionIds.add(row.sessionId);
         for (const report of legacyReports) if (report.sessionId) sessionIds.add(report.sessionId);
@@ -283,7 +286,8 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
             premiumRows.flatMap((row) => (row.sessionId ? [row.sessionId] : [])),
         ),
     );
-    const capturedMessageCounts = publicPopulation ? undefined : snapshot.messageCountsBySession;
+    // Whole-Session counts cannot prove membership in a selected execution population.
+    const capturedMessageCounts = publicPopulation || request.filters?.execution !== undefined ? undefined : snapshot.messageCountsBySession;
     const messageCounts = capturedMessageCounts
         ? { messageCount: sessionIds.reduce((count, sessionId) => count + (capturedMessageCounts.get(sessionId) ?? 0), 0) }
         : undefined;
@@ -303,9 +307,9 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
         }, {})
         : undefined;
     let evidenceRows = scopedRows;
-    if (publicPopulation) {
+    if (publicPopulation || request.filters?.execution !== undefined) {
         const selectedEventIds = new Set(totalContributions.flatMap(row => row.contributingEventIds));
-        evidenceRows = scopedRows.filter(row => selectedEventIds.has(row.id) && isPublicEligibleUsageRow(row));
+        evidenceRows = scopedRows.filter(row => selectedEventIds.has(row.id) && (!publicPopulation || isPublicEligibleUsageRow(row)));
     } else {
         const selectedSubjects = new Set(totalContributions.map(usageAccountingSubjectKey));
         evidenceRows = scopedRows.filter((row) => selectedSubjects.has(usageAccountingSubjectKey(row))

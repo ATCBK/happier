@@ -177,6 +177,8 @@ export const UsageAnalyticsBreakdownDimensionSchema = lazyZodSchema(() => z.enum
 ]));
 export type UsageAnalyticsBreakdownDimension = z.infer<typeof UsageAnalyticsBreakdownDimensionSchema>;
 
+export const UsageAnalyticsExecutionSchema = lazyZodSchema(() => z.enum(['happier', 'outside', 'unknown']));
+
 export const UsageAnalyticsQueryFiltersSchema = lazyZodSchema(() => z.strictObject({
   sessionIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
   agentIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
@@ -185,6 +187,7 @@ export const UsageAnalyticsQueryFiltersSchema = lazyZodSchema(() => z.strictObje
   workspaceIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
   backendModes: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
   sources: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  execution: z.optional(UsageAnalyticsExecutionSchema),
   machineIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
 }));
 export type UsageAnalyticsQueryFilters = z.infer<typeof UsageAnalyticsQueryFiltersSchema>;
@@ -296,7 +299,7 @@ const UsageAnalyticsInsightsSchema = lazyZodSchema(() => z.strictObject({
 /** Capture path and execution attribution are independent; native replay can be linked to Happier. */
 export const UsageAnalyticsSourceContextSchema = lazyZodSchema(() => z.strictObject({
   path: z.enum(['runtime', 'native', 'legacy', 'unknown']),
-  execution: z.enum(['happier', 'outside', 'unknown']),
+  execution: UsageAnalyticsExecutionSchema,
 }));
 export type UsageAnalyticsSourceContext = z.infer<typeof UsageAnalyticsSourceContextSchema>;
 

@@ -27,6 +27,7 @@ export const UsageQuerySchema = lazyZodSchema(() => {
     machines: z._default(filters.machineIds._zod.def.innerType, []),
     projects: z._default(filters.projectKeys._zod.def.innerType, []),
     sources: z._default(filters.sources._zod.def.innerType, []),
+    execution: filters.execution,
     session: z._default(z.nullable(z.union([filters.sessionIds._zod.def.innerType._zod.def.element, filters.sessionIds._zod.def.innerType])), null),
     costBasis: z._default(clauses.costMode._zod.def.innerType, 'auto'),
     metric: z._default(UsagePresentationMetricSchema, 'tokens'),
@@ -102,7 +103,7 @@ export function resolveUsageQueryPeriod(query: Pick<UsageQuery, 'period' | 'time
 
 export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now()): UsageAnalyticsQueryRequest {
   const query = normalizeUsageQuery(value);
-  const { period: _period, agents, machines, projects, sources, session, costBasis, metric: _metric,
+  const { period: _period, agents, machines, projects, sources, execution, session, costBasis, metric: _metric,
     includeAccounting: _accounting, includeQuotaHistory: _quotaHistory, includeSessionEvidence: _sessionEvidence, includeTranscriptEvidence: _transcriptEvidence,
     includeWorkEvidence: _workEvidence, breakdown,
     modelIds, workspaceIds, backendModes, population, ...clauses } = query;
@@ -111,6 +112,7 @@ export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now
     ...(population === 'public_eligible_personal' ? { population } : {}),
     dateRange: resolveUsageQueryPeriod(query, nowMs), costMode: costBasis, breakdowns: breakdown,
     filters: { agentIds: selected(agents), machineIds: selected(machines), projectKeys: selected(projects), sources: selected(sources),
+      ...(execution === undefined ? {} : { execution }),
       sessionIds: session === null ? undefined : typeof session === 'string' ? [session] : session,
       modelIds: selected(modelIds), workspaceIds: selected(workspaceIds), backendModes: selected(backendModes) },
   });
@@ -119,7 +121,7 @@ export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now
 export function usageAnalyticsRequestToQuery(value: z.input<typeof UsageAnalyticsQueryRequestSchema>, presentation: Readonly<{ metric?: UsageQuery['metric'] }> = {}): UsageQuery {
   const { dateRange, filters, costMode, breakdowns, ...clauses } = UsageAnalyticsQueryRequestSchema.parse(value);
   return normalizeUsageQuery({ ...clauses, period: dateRange, agents: filters?.agentIds, machines: filters?.machineIds,
-    projects: filters?.projectKeys, sources: filters?.sources, session: filters?.sessionIds ?? null,
+    projects: filters?.projectKeys, sources: filters?.sources, ...(filters?.execution === undefined ? {} : { execution: filters.execution }), session: filters?.sessionIds ?? null,
     costBasis: costMode, breakdown: breakdowns, modelIds: filters?.modelIds, workspaceIds: filters?.workspaceIds,
     backendModes: filters?.backendModes, ...presentation });
 }

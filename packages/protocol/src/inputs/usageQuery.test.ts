@@ -9,6 +9,14 @@ import * as usageQuery from './usageQuery.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 describe('shared UsageQuery', () => {
+  it('preserves witnessed execution selection separately from producer sources', () => {
+    const query = normalizeUsageQuery({ execution: 'happier', sources: ['native'] });
+    const request = usageQueryToAnalyticsRequest(query);
+    expect(request.filters).toMatchObject({ execution: 'happier', sources: ['native'] });
+    expect(usageAnalyticsRequestToQuery(request)).toMatchObject({ execution: 'happier', sources: ['native'] });
+    expect(getUsageQueryKey(query)).not.toBe(getUsageQueryKey({ sources: ['native'] }));
+    expect(usageQueryToAnalyticsRequest(normalizeUsageQuery({})).filters).not.toHaveProperty('execution');
+  });
   it('preserves rolling intent through stored reads without admitting malformed or mixed period modes', () => {
     const stored = createStoredReadSchema(UsageQuerySchema);
     for (const period of [{ relative: '90days' }, { startMs: 100, endMs: 200 }, {}]) {
