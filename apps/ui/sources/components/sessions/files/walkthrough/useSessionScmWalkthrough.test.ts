@@ -21,6 +21,7 @@ function entry(key: string, overrides: Partial<ScmDiffSummaryEntry> & Pick<ScmDi
         finalSummary: null,
         lastKnownSummary: null,
         latestOutput: null,
+        displayOutputs: null,
         error: null,
         retryAttempt: 0,
         ...overrides,

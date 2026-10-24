@@ -104,8 +104,8 @@ describe('saved output restoration', () => {
         const scope = { serverId, accountId };
         const key = loadSavedScmDiffSummaryResult({ sessionId, scope, result: original });
         if (!key) throw new Error('Saved reading is unavailable');
-        const receipt = readScmDiffSummaryPublicationReceipt({ happier: { kind: 'scm_diff_summary.v1', payload: original.output },
-            scmResultUpdate: { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
+        const receipt = readScmDiffSummaryPublicationReceipt(original.output,
+            { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] });
         if (!receipt) throw new Error('Publication receipt is unavailable');
         const mounted = await renderHook(({ currentReceipt, requestKey }) => {
             const { binding } = useServerCredentialAccountScopeBinding(serverId);
@@ -124,8 +124,7 @@ describe('saved output restoration', () => {
         expect(mounted.getCurrent().onUndo).toBeUndefined();
         await act(async () => staleCallback());
         expect(boundary.methods).toEqual([]);
-        const currentReceipt = readScmDiffSummaryPublicationReceipt({ happier: { kind: 'scm_diff_summary.v1', payload: newer.output },
-            scmResultUpdate: receipt.publication });
+        const currentReceipt = readScmDiffSummaryPublicationReceipt(newer.output, receipt.publication);
         if (!currentReceipt) throw new Error('Current receipt is unavailable');
         await mounted.rerender({ currentReceipt, requestKey: key });
         const undone = ScmDiffSummaryResultSchema.parse({ ...newer, revision: 3, canUndo: false, output: { ...newer.output, revision: 3,
@@ -145,8 +144,8 @@ describe('saved output restoration', () => {
         const original = { ...saved('keyless-receipt', { walkthrough: reading }, ['walkthrough']), canUndo: true };
         const newer = ScmDiffSummaryResultSchema.parse({ ...original, revision: 2, output: { ...original.output, revision: 2 } });
         boundary.results[original.resultId] = { success: true, result: newer };
-        const receipt = readScmDiffSummaryPublicationReceipt({ happier: { kind: 'scm_diff_summary.v1', payload: original.output },
-            scmResultUpdate: { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
+        const receipt = readScmDiffSummaryPublicationReceipt(original.output,
+            { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] });
         if (!receipt) throw new Error('Publication receipt is unavailable');
         const mounted = await renderHook(({ currentReceipt }) => {
             const { binding } = useServerCredentialAccountScopeBinding(serverId);
@@ -160,9 +159,9 @@ describe('saved output restoration', () => {
         expect(boundary.methods).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ]);
         expect(mounted.getCurrent().failure).toMatchObject({ success: false, errorCode: 'revision_conflict', latestRevision: 2 });
         expect(mounted.getCurrent().onUndo).toBeUndefined();
+        expect(mounted.getCurrent().undone).toBe(false);
 
-        const currentReceipt = readScmDiffSummaryPublicationReceipt({ happier: { kind: 'scm_diff_summary.v1', payload: newer.output },
-            scmResultUpdate: receipt.publication });
+        const currentReceipt = readScmDiffSummaryPublicationReceipt(newer.output, receipt.publication);
         if (!currentReceipt) throw new Error('Current receipt is unavailable');
         await mounted.rerender({ currentReceipt });
         const undone = ScmDiffSummaryResultSchema.parse({ ...newer, revision: 3, canUndo: false, output: { ...newer.output, revision: 3,
@@ -187,8 +186,8 @@ describe('saved output restoration', () => {
                 nextGroupIndex: 0, stopAfterCurrent: false, acceptance: { groups: [], leftOutChangeRefs: [],
                     comparisonId: comparison.id, repositoryRootPath: '/repo/exact', expectedHeadOid: null, expectedRef: null } } } : {}) });
         boundary.results[original.resultId] = { success: true, result: current };
-        const receipt = readScmDiffSummaryPublicationReceipt({ happier: { kind: 'scm_diff_summary.v1', payload: original.output },
-            scmResultUpdate: { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
+        const receipt = readScmDiffSummaryPublicationReceipt(original.output,
+            { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }] });
         if (!receipt) throw new Error('Publication receipt is unavailable');
         const mounted = await renderHook(() => {
             const { binding } = useServerCredentialAccountScopeBinding(serverId);
@@ -201,6 +200,7 @@ describe('saved output restoration', () => {
         expect(boundary.methods).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ]);
         expect(mounted.getCurrent().failure?.errorCode).toBe(errorCode);
         expect(mounted.getCurrent().onUndo).toBeUndefined();
+        expect(mounted.getCurrent().undone).toBe(true);
     });
 
     it.each([false, true])('shares the workspace binding inventory with its pending proposal projection (older proposal: %s)', async olderProposal => {
