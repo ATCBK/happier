@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { connect } from '@happier-dev/sdk';
 import { buildFixtureHappierUrl, createFixtureStore, createCredentialIssuer, createLeadChat,
-  projectFixtureErrorResponse } from './fixture.mjs';
+  projectFixtureErrorLog, projectFixtureErrorResponse } from './fixture.mjs';
 import { FIXTURE_ORIGIN } from './leads-fixture/contracts.mjs';
 
 const token = process.env.HAPPIER_EMBED_KEY;
@@ -83,6 +83,7 @@ const server = createServer(async (req, res) => {
     reply(res, 404, { error: 'not_found' });
   } catch (error) {
     const response = projectFixtureErrorResponse(error);
+    process.stderr.write(`Fixture request failed: ${JSON.stringify(projectFixtureErrorLog(error))}\n`);
     reply(res, response.status, response.body);
   }
 });
