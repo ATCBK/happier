@@ -2550,6 +2550,10 @@ Artifact bytes and grants. See the
   separate string `coverage` describes actual readable completeness. A completed
   legacy fallback can therefore return `coverage:'complete'` together with
   partial `kindCoverage`, without hiding a genuinely unreadable source.
+  Exact-kind HTTP pages must carry that typed `coverage` witness even when
+  `hasUnclassified` is false; a missing witness is invalid, not complete empty
+  membership. Already-admitted local projections use the same pure selection
+  policy without manufacturing a new server-classification witness.
   An already-complete exact list needs one header query and no repair request.
   Omitting selectors preserves the array response.
   Rows expose coarse nullable `kind` and, when canonically classified,
