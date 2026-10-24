@@ -410,6 +410,8 @@ export function useProjectScriptsController(
       : consent?.scopeKey === scopeKey ? consent : null,
     dismissConsent,
     approvalId: approval.approvalId,
+    approvalPending: approval.approvalPending,
+    approvalSummary: approval.approvalSummary,
   };
 }
 

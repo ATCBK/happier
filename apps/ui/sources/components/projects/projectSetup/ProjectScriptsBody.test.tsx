@@ -488,6 +488,17 @@ describe('ProjectScriptsBody runs', () => {
       await act(async () => { gate.resolve({ operation: operation('accepted', 1) }); });
     }
   });
+  it('names a Run that waits on an approval and offers the one way to open it', async () => {
+    shared.inspection = { definition: presentDefinition(declared), detection, importCandidates: [] };
+    shared.responses['projects.script.run'] = {
+      kind: 'approval_request_created', artifactId: 'approval-a', actionId: 'projects.script.run',
+    };
+    const screen = await render('page', 'scripts.script:test.run');
+    await screen.pressByTestIdAsync('scripts.script:test.run');
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.approval')).toBeTruthy());
+    expect(screen.getTextContent()).toContain('approvals.waitingForYou');
+    expect(screen.findByTestId('scripts.approval.open')).toBeTruthy();
+  });
   it('retains proven readiness during Script refresh and replaces it only with the inspection result', async () => {
     const manifest = { version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] }, scripts: { test: { source: nativeRef('test') } } };
     shared.inspection = { definition: presentDefinition(manifest), detection, importCandidates: [],

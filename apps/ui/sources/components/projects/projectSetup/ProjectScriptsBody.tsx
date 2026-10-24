@@ -37,6 +37,9 @@ import { useLayoutMaxWidth, useLayoutMaxWidthStyle } from '@/components/ui/layou
 import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { projectSetupReadinessLine } from './projectSetupReadinessLine';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerScopedMachine } from '@/sync/store/hooks';
@@ -127,6 +130,7 @@ export function ProjectScriptsBody({
       .map(([name]) => projectScriptRowKey(workspace, name)) : [];
   }, [read, workspace]);
   const controller = useProjectScriptsController(workspace, retry, binding, { runChoiceKeys });
+  const router = useRouter();
   const [editor, setEditor] = React.useState<EditorState>(null);
   // Workers settings open in place, like the editor: Scripts › Workers and Run on › Worker settings….
   const [workersKey, setWorkersKey] = React.useState<string | null>(null);
@@ -218,12 +222,14 @@ export function ProjectScriptsBody({
     );
   }
 
-  const approval = controller.approvalId ? (
-    <AttentionBanner
+  // What waits on the person, with its one way in: the same notice every Action-approval page carries.
+  const approval = controller.approvalId && controller.approvalPending ? (
+    <ActionApprovalPendingNotice
+      presentation="banner"
       testID={`${testID}.approval`}
-      tone="neutral"
-      title={t('approvals.title')}
-      description={t('approvals.status.open')}
+      message={t('approvals.waitingForYou')}
+      description={controller.approvalSummary}
+      onOpenApproval={() => router.push(buildApprovalHref(controller.approvalId!, workspace.serverId))}
     />
   ) : null;
   if (!page)
