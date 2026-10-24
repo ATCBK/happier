@@ -10,6 +10,7 @@ import type { WorkflowBlock, WorkflowDefinitionV1, WorkflowSessionAuthoringSelec
 import { readSessionLifecycleKind } from './formatTriggerSummary';
 import { buildSimpleScheduleCron, parseSimpleSchedule, type SimpleSchedule } from './triggerSchedule';
 import { withWorkflowAuthoringEngineFields } from '@/sync/domains/workflows/workflowAuthoringEngineSelection';
+import { projectWorkflowRunInputFields, buildWorkflowRunStartInputs, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
 
 /**
  * What a session or Account trigger's popover edits (FIN 04 §5.4–§5.5; 07 S16, S16b): **When** and
@@ -73,6 +74,34 @@ export type TriggerThenValue =
     | Readonly<{ kind: 'kept'; target: TriggerTargetV1; inputs: Readonly<Record<string, JsonValue>> }>;
 
 export type TriggerFormValue = Readonly<{ when: TriggerWhenValue; then: TriggerThenValue; enabled: boolean }>;
+
+/** Trigger input presentation delegates ordinary fields to the shared authoring owner. */
+export function projectSessionTriggerWorkflowInputFields(
+    params: Parameters<typeof projectWorkflowRunInputFields>[0] & Readonly<{ when: TriggerWhenValue }>,
+): readonly WorkflowRunInputFieldState[] {
+    const inputs = params.when.kind === 'prComment' || params.when.kind === 'ciFailed'
+        ? params.inputs.filter(input => input.name !== 'prUpdate' || input.valueType !== 'json')
+        : params.inputs;
+    return projectWorkflowRunInputFields({ ...params, inputs });
+}
+
+export function buildSessionTriggerWorkflowInputs(params: Readonly<{
+    when: TriggerWhenValue;
+    fields: readonly WorkflowRunInputFieldState[];
+    declarations: WorkflowDefinitionV1['inputs'];
+    retainedInputs: Readonly<Record<string, JsonValue>>;
+}>): Readonly<Record<string, JsonValue>> {
+    const inputs = buildWorkflowRunStartInputs(params.fields) ?? {};
+    // A shared target may also have manual or scheduled triggers. Their
+    // retained constant remains available even though a PR occurrence wins it.
+    if ((params.when.kind === 'prComment' || params.when.kind === 'ciFailed')
+        && params.declarations.some(input => input.name === 'prUpdate' && input.valueType === 'json')
+        && !params.fields.some(field => field.definition.name === 'prUpdate')
+        && params.retainedInputs.prUpdate !== undefined) {
+        return { ...inputs, prUpdate: params.retainedInputs.prUpdate };
+    }
+    return inputs;
+}
 
 const LIFECYCLE_EVENTS = AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1;
 

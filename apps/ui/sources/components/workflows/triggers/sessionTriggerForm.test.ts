@@ -6,6 +6,8 @@ import {
     buildTriggerDefinition,
     buildTriggerExecutionTarget,
     buildTriggerTarget,
+    projectSessionTriggerWorkflowInputFields,
+    buildSessionTriggerWorkflowInputs,
     createDefaultWhen,
     readTriggerThen,
     readTriggerWhen,
@@ -14,6 +16,30 @@ import {
 const selection = { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } };
 
 describe('session trigger form', () => {
+    it.each(['prComment', 'ciFailed'] as const)('binds declared JSON prUpdate from %s occurrence rather than requiring a constant', kind => {
+        const inputs = [{ name: 'prUpdate', valueType: 'json' as const, required: true },
+            { name: 'request', valueType: 'string' as const, required: true }];
+        const when = { kind, pullRequest: { repository: 'acme/widgets', number: 42 } };
+        const fields = projectSessionTriggerWorkflowInputFields({ when, inputs, values: { request: 'Analyse this update' } });
+        expect(fields.map(field => field.definition.name)).toEqual(['request']);
+        expect(fields.some(field => field.blocking)).toBe(false);
+        expect(buildSessionTriggerWorkflowInputs({ when, fields, declarations: inputs,
+            retainedInputs: { prUpdate: { manualSeed: true }, request: 'Old request' } }))
+            .toEqual({ request: 'Analyse this update', prUpdate: { manualSeed: true } });
+        expect(buildSessionTriggerWorkflowInputs({ when, fields, declarations: inputs.slice(1),
+            retainedInputs: { prUpdate: { undeclared: true } } })).toEqual({ request: 'Analyse this update' });
+        expect(inputs).toHaveLength(2);
+    });
+    it('keeps non-PR required inputs and incompatible prUpdate declarations in the normal repair form', () => {
+        const inputs = [{ name: 'prUpdate', valueType: 'json' as const, required: true }];
+        const scheduled = projectSessionTriggerWorkflowInputFields({ when: { kind: 'schedule', schedule: null,
+            expression: '0 9 * * *', timezone: null }, inputs, values: {} });
+        expect(scheduled).toMatchObject([{ definition: inputs[0], blocking: true, errorCode: 'missing_required_input' }]);
+        const incompatible = projectSessionTriggerWorkflowInputFields({ when: { kind: 'prComment',
+            pullRequest: { repository: 'acme/widgets', number: 42 } }, inputs: [{ ...inputs[0]!, valueType: 'string' }], values: {} });
+        expect(incompatible).toMatchObject([{ blocking: true, errorCode: 'missing_required_input' }]);
+    });
+
     it.each(['session', 'account'] as const)('authors the selected Agent on a new %s prompt trigger', (scope) => {
         const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.agents', localId: 'reviewer' } };
         const then = { kind: 'sendPrompt' as const, prompt: 'Review the changes', selection: { agentTarget } };
