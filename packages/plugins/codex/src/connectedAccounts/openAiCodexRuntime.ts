@@ -21,6 +21,7 @@ import {
   parseOpenAiCodexConnectedAccountQuotaLimits,
 } from '../agent/auth/services/quota/openaiFetcher.js';
 import { mapCodexRateLimitResetCredits } from '../agent/auth/services/quota/rateLimitResetCredits.js';
+import { readCodexRateLimitSnapshotPlanLabel } from '../agent/auth/services/quota/rateLimitSnapshot.js';
 import {
   consumeCodexRateLimitResetCredit,
   fetchCodexRateLimitResetCredits,
@@ -489,11 +490,12 @@ const openAiCodexRuntimeDefinition: PluginConnectedAccountRuntime = {
     if (response.status < 200 || response.status >= 300) {
       throw createOpenAiCodexQuotaFetchError(response, Date.now());
     }
+    const payload = parseResponseBody(response.body);
+    const planLabel = readCodexRateLimitSnapshotPlanLabel(payload);
     return {
       observedAtMs: Date.now(),
-      limits: parseOpenAiCodexConnectedAccountQuotaLimits(
-        parseResponseBody(response.body),
-      ),
+      ...(planLabel ? { planLabel } : {}),
+      limits: parseOpenAiCodexConnectedAccountQuotaLimits(payload),
     };
   },
   recoveryCredits: {

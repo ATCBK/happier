@@ -250,6 +250,7 @@ describe('Codex public runtime usage snapshots', () => {
         {
           meterId: 'primary',
           utilizationPct: 88,
+          label: '5-hour',
           windowDurationMs: 300 * 60_000,
           resetAtMs: 1_779_098_400_000,
           resetsAt: 1_779_098_400_000,
@@ -257,6 +258,7 @@ describe('Codex public runtime usage snapshots', () => {
         {
           meterId: 'secondary',
           utilizationPct: 40,
+          label: 'Weekly',
           windowDurationMs: 10_080 * 60_000,
           resetAtMs: 1_779_698_400_000,
           resetsAt: 1_779_698_400_000,

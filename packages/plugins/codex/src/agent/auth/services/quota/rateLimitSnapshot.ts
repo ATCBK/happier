@@ -1,5 +1,6 @@
 import { parseTimestampMs } from '@happier-dev/plugin-sdk';
 import type { AgentAccountUsageMeter } from '@happier-dev/plugin-sdk/agents/runtime';
+import { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/plugin-sdk/connected-accounts';
 
 export const CODEX_RATE_LIMIT_SNAPSHOT_STALE_AFTER_MS = 5 * 60 * 1000;
 
@@ -91,7 +92,11 @@ function buildMeter(input: Readonly<{
     readString(record.providerLimitId ?? record.provider_limit_id ?? record.limitId ?? record.limit_id)
     ?? meterId
   );
-  const baseLabel = input.windowLabel ?? (input.window === 'primary' ? 'Primary' : 'Secondary');
+  const knownWindowId = windowDurationMs === 5 * 60 * 60_000 ? 'five_hour'
+    : windowDurationMs === 7 * 24 * 60 * 60_000 ? 'seven_day' : null;
+  const baseLabel = knownWindowId
+    ? resolveConnectedServiceQuotaMeterLabel(knownWindowId)
+    : input.windowLabel ?? (input.window === 'primary' ? 'Primary' : 'Secondary');
   return {
     meterId,
     label: input.providerLimitLabel ? `${input.providerLimitLabel} · ${baseLabel}` : baseLabel,

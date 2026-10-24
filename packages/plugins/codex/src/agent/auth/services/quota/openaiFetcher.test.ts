@@ -84,6 +84,35 @@ describe('createOpenAiCodexQuotaFetcher', () => {
     ]));
   });
 
+  it('labels exact provider window durations without changing meter identities or guessing unknown durations', () => {
+    const limits = parseOpenAiCodexConnectedAccountQuotaLimits({
+      rate_limit: {
+        primary_window: { used_percent: 12, limit_window_seconds: 18_000 },
+        secondary_window: { used_percent: 25, limit_window_seconds: 604_800 },
+      },
+      additional_rate_limits: {
+        codex_spark: { limit_name: 'Spark', rate_limit: {
+          primary_window: { used_percent: 81, limit_window_seconds: 18_000 },
+          secondary_window: { used_percent: 40, limit_window_seconds: 604_800 },
+        } },
+      },
+    });
+    expect(limits).toEqual([
+      expect.objectContaining({ id: 'session', providerLimitId: 'session', label: '5-hour', windowDurationMs: 18_000_000 }),
+      expect.objectContaining({ id: 'weekly', providerLimitId: 'weekly', label: 'Weekly', windowDurationMs: 604_800_000 }),
+      expect.objectContaining({ id: 'codex_spark:primary', providerLimitId: 'codex_spark', label: 'Spark · 5-hour' }),
+      expect.objectContaining({ id: 'codex_spark:secondary', providerLimitId: 'codex_spark', label: 'Spark · Weekly' }),
+    ]);
+    for (const duration of [undefined, 17_999]) {
+      expect(parseOpenAiCodexConnectedAccountQuotaLimits({ rate_limit: {
+        primary_window: { used_percent: 12, limit_window_seconds: duration },
+      } })).toEqual([
+        expect.objectContaining({ id: 'session', label: 'Session' }),
+        expect.objectContaining({ id: 'weekly', label: 'Weekly', status: 'unavailable' }),
+      ]);
+    }
+  });
+
   it('returns a provider-neutral public usage observation from the private quota fetcher', async () => {
     const now = 1_000_000;
     const record = buildConnectedServiceCredentialRecord({

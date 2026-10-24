@@ -674,6 +674,7 @@ describe('OpenAI Codex Connected Account', () => {
       finalUrl: 'https://chatgpt.com/backend-api/wham/usage',
       headers: {},
       body: new TextEncoder().encode(JSON.stringify({
+        plan_type: 'pro',
         rate_limit: {
           primary_window: { used: 50, limit: 200, used_percent: 25, reset_at: 1_700_000_000, limit_window_seconds: 18_000 },
           secondary_window: { used_percent: 60, reset_at: 1_800_000_000 },
@@ -716,15 +717,18 @@ describe('OpenAI Codex Connected Account', () => {
     } as Parameters<NonNullable<PluginConnectedAccountRuntime['quota']>>[0]))
       .resolves.toMatchObject({
         observedAtMs: expect.any(Number),
+        planLabel: 'pro',
         limits: expect.arrayContaining([
           { id: 'session', used: 50, limit: 200, remaining: 150, utilizationPct: 25, remainingPct: 75, resetsAtMs: 1_700_000_000_000,
-            label: 'Session', windowDurationMs: 18_000_000, scope: 'session', limitScope: 'account', confidence: 'exact' },
+            label: '5-hour', windowDurationMs: 18_000_000, scope: 'session', limitScope: 'account', confidence: 'exact' },
           { id: 'weekly', used: 60, remaining: 40, resetsAtMs: 1_800_000_000_000 },
           { id: 'codex_spark:primary', providerLimitId: 'codex_spark', used: 81, remaining: 19,
-            label: 'Spark · Primary', windowDurationMs: 18_000_000, modelId: 'gpt-5.3-codex-spark',
+            label: 'Spark · 5-hour', windowDurationMs: 18_000_000, modelId: 'gpt-5.3-codex-spark',
             scope: 'primary', limitScope: 'account', confidence: 'exact', status: 'ok', unit: 'unknown' },
         ].map((limit) => expect.objectContaining(limit))),
       });
+    // Plan and every window come from this same provider observation.
+    expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith({
       url: 'https://chatgpt.com/backend-api/wham/usage',
       method: 'GET',
