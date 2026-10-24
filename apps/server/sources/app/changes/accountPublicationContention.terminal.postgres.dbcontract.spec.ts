@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ChangesResponseSchema } from '@happier-dev/protocol/changes';
 import { db, initDbPostgres } from '@/storage/db';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, transactionResult, type Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/prisma';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { changesRoutes } from '@/app/api/routes/changes/changesRoutes';
-import { afterAccountChangePublication, beforeAccountChangePublication, markAccountChanged } from '@/app/changes/markAccountChanged';
+import { afterAccountChangePublication, beforeAccountChangePublication, markAccountChanged, markAccountsChanged, markSessionAccountsChanged } from '@/app/changes/markAccountChanged';
 import { acquireAccountSessionOwnerMetadataFenceInTx } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { observeLazyPrismaQuery } from './accountPublicationContention.testkit';
@@ -79,6 +79,106 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         } finally {
             emitted.mockRestore();
             await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('coalesces mixed-writer wakes per committed Account without dropping feed cursors or hints', async () => {
+        const accounts = await Promise.all([0, 1].map(() => db.account.create({ data: { encryptionMode: 'plain' } })));
+        const accountIds = accounts.map(account => account.id);
+        const sessions = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: accounts[0].id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain',
+        } })));
+        const app = createAuthenticatedTestApp();
+        changesRoutes(app);
+        const readCommitted = async (accountId: string) => ({
+            seq: (await db.account.findUniqueOrThrow({ where: { id: accountId }, select: { seq: true } })).seq,
+            changes: await db.accountChange.findMany({ where: { accountId }, orderBy: { cursor: 'asc' },
+                select: { kind: true, entityId: true, cursor: true, hint: true } }),
+        });
+        const emissions: Array<{ room: string | string[]; eventName: string; payload: unknown;
+            committed: Promise<Awaited<ReturnType<typeof readCommitted>>> }> = [];
+        // Socket.IO is the outward system boundary; independent SQL here must
+        // already see every feed row when the real router publishes the wake.
+        eventRouter.setIo({ to: room => ({ disconnectSockets: () => {}, emit: (eventName, payload) => {
+            const accountId = accountIds.find(id => room === `account-stored-content-v3:${id}`);
+            const committed = accountId ? readCommitted(accountId) : Promise.reject(new Error(`Unexpected room: ${room}`));
+            void committed.catch(() => {});
+            emissions.push({ room, eventName, payload, committed });
+        } }) });
+        try {
+            const cursors = await inTx(async tx => {
+                const point = await markAccountChanged(tx, { accountId: accounts[0].id, kind: 'account',
+                    entityId: 'settings', hint: { keys: ['theme'] } });
+                const set = await markAccountsChanged(tx, { accountIds, entityId: 'profile' });
+                const sessionSet = await markSessionAccountsChanged(tx, new Map([
+                    [sessions[0].id, accountIds], [sessions[1].id, [accounts[0].id]],
+                ]));
+                expect(emissions).toHaveLength(0);
+                return transactionResult(() => [point, ...set, ...sessionSet]
+                    .map(publication => ({ accountId: publication.accountId, cursor: publication.resolveCursor() })));
+            });
+            expect(emissions).toHaveLength(2);
+            expect(emissions.map(emission => emission.room).sort()).toEqual(accountIds
+                .map(id => `account-stored-content-v3:${id}`).sort());
+            for (const [index, accountId] of accountIds.entries()) {
+                const expectedSeq = index === 0 ? 4 : 2;
+                expect(cursors.filter(cursor => cursor.accountId === accountId).map(cursor => cursor.cursor).sort())
+                    .toEqual(Array.from({ length: expectedSeq }, (_, cursor) => cursor + 1));
+                const emission = emissions.find(value => value.room === `account-stored-content-v3:${accountId}`)!;
+                expect(emission.eventName).toBe('update');
+                expect(emission.payload).toEqual(expect.objectContaining({ seq: expectedSeq, body: { t: 'account-change' } }));
+                const committed = await emission.committed;
+                expect(committed.seq).toBe(expectedSeq);
+                expect(committed.changes.map(change => change.cursor)).toEqual(Array.from({ length: expectedSeq }, (_, cursor) => cursor + 1));
+                expect(committed.changes.map(({ cursor: _cursor, ...change }) => change)).toEqual(expect.arrayContaining([
+                    { kind: 'account', entityId: 'profile', hint: null },
+                    { kind: 'session', entityId: sessions[0].id, hint: null },
+                    ...(index === 0 ? [
+                        { kind: 'account', entityId: 'settings', hint: { keys: ['theme'] } },
+                        { kind: 'session', entityId: sessions[1].id, hint: null },
+                    ] : []),
+                ]));
+                const response = await app.inject({ method: 'GET', url: '/v2/changes?after=0&limit=7',
+                    headers: { 'x-test-user-id': accountId } });
+                expect(response.statusCode).toBe(200);
+                const page = ChangesResponseSchema.parse(response.json());
+                expect(page.changes.map(change => ({ kind: change.kind, entityId: change.entityId, cursor: change.cursor, hint: change.hint })))
+                    .toEqual(committed.changes.map(change => ({ ...change,
+                        hint: change.kind === 'session' ? { pendingExecutionRunIds: [] } : change.hint,
+                    })));
+                expect(page.nextCursor).toBe(expectedSeq);
+            }
+
+            const failure = new Error('discard terminal wake and allocation');
+            await expect(inTx(async tx => {
+                const publications = await markAccountsChanged(tx, { accountIds, entityId: 'rolled-back' });
+                return transactionResult(() => {
+                    expect(publications.map(publication => publication.resolveCursor()).sort()).toEqual([3, 5]);
+                    throw failure;
+                });
+            })).rejects.toBe(failure);
+            expect(emissions).toHaveLength(2);
+            expect(await db.accountChange.count({ where: { accountId: { in: accountIds }, entityId: 'rolled-back' } })).toBe(0);
+
+            await inTx(async tx => {
+                await markAccountsChanged(tx, { accountIds, entityId: 'next-transaction' });
+                await markAccountsChanged(tx, { accountIds, entityId: 'next-transaction-tail' });
+            });
+            expect(emissions).toHaveLength(4);
+            for (const accountId of accountIds) {
+                const next = emissions.slice(2).filter(emission => emission.room === `account-stored-content-v3:${accountId}`);
+                expect(next).toHaveLength(1);
+                const committed = await next[0].committed;
+                expect(committed.seq).toBe(accountId === accounts[0].id ? 6 : 4);
+                expect(next[0].payload).toEqual(expect.objectContaining({ seq: committed.seq, body: { t: 'account-change' } }));
+                expect(committed.changes.filter(change => change.entityId.startsWith('next-transaction'))).toHaveLength(2);
+            }
+        } finally {
+            eventRouter.clearIo();
+            await Promise.allSettled(emissions.map(emission => emission.committed));
+            await app.close();
+            await db.session.deleteMany({ where: { accountId: { in: accountIds } } });
+            await db.account.deleteMany({ where: { id: { in: accountIds } } });
         }
     });
 

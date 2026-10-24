@@ -20,6 +20,7 @@ interface AccountPublicationPhase {
     operations: Array<(tx: Tx) => Promise<void>>;
     validations: Array<(tx: Tx) => Promise<void>>;
     projections: Array<(tx: Tx) => Promise<void>>;
+    wakes?: Map<string, { cursor: number }>;
 }
 
 const accountPublicationSymbol = Symbol('account-publication');
@@ -177,10 +178,20 @@ function compactHint(_kind: ChangeKind, hint: unknown): unknown {
 }
 
 function scheduleAccountChangeWake(tx: Tx, accountId: string, cursor: number): void {
+    const state = publicationPhase(tx);
+    const wakes = state.wakes ??= new Map<string, { cursor: number }>();
+    const pending = wakes.get(accountId);
+    if (pending) {
+        pending.cursor = Math.max(pending.cursor, cursor);
+        return;
+    }
+    // Generic wakes share one V3 audience; keep each Account's maximum at its first callback slot.
+    const wake = { cursor };
+    wakes.set(accountId, wake);
     afterTx(tx, () => {
         eventRouter.emitUpdate({
             userId: accountId,
-            payload: buildAccountChangeWakeUpdate(cursor, randomKeyNaked(12)),
+            payload: buildAccountChangeWakeUpdate(wake.cursor, randomKeyNaked(12)),
             recipientFilter: { type: 'account-stored-content-v3' },
         });
     });

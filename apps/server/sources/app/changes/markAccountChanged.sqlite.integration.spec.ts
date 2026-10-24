@@ -58,7 +58,26 @@ describe("terminal AccountChange publication on SQLite", () => {
             .resolves.toEqual(changes.map(change => ({ ...change,
                 sessionId: null, machineId: null, artifactId: null, accountPetPackageId: null,
             })).sort((left, right) => left.cursor - right.cursor));
+        expect(emit).toHaveBeenCalledTimes(1);
         expect(emit).toHaveBeenCalledWith("update", expect.objectContaining({ seq: 4, body: { t: "account-change" } }));
+    });
+
+    it("coalesces mixed writers independently for each recipient Account", async () => {
+        const accounts = await Promise.all(["first", "second"].map(name => db.account.create({
+            data: { publicKey: `coalesced-${name}-recipient` },
+        })));
+        const emit = vi.fn();
+        const to = vi.fn((_room: string | string[]) => ({ emit, disconnectSockets: vi.fn() }));
+        eventRouter.setIo({ to });
+        await inTx(async tx => {
+            await markAccountChanged(tx, { accountId: accounts[0].id, kind: "account", entityId: "settings" });
+            await markAccountsChanged(tx, { accountIds: accounts.map(account => account.id), entityId: "profile" });
+            expect(emit).not.toHaveBeenCalled();
+        });
+        expect(to.mock.calls.map(([room]) => room).sort()).toEqual(accounts
+            .map(account => `account-stored-content-v3:${account.id}`).sort());
+        expect(emit.mock.calls.map(([, payload]) => payload.seq).sort()).toEqual([1, 2]);
+        expect(emit.mock.calls.every(([event, payload]) => event === "update" && payload.body.t === "account-change")).toBe(true);
     });
 
     it("captures the declared Session audience and entities before caller-owned maps and arrays change", async () => {
@@ -141,7 +160,10 @@ describe("terminal AccountChange publication on SQLite", () => {
 
         expect(result.cursor).toBeGreaterThanOrEqual(result.fullCursor);
         expect(afterCommitCursor).toBe(result.cursor);
-        expect(emit).toHaveBeenCalled();
+        expect(emit).toHaveBeenCalledTimes(1);
+        expect(emit).toHaveBeenCalledWith("update", expect.objectContaining({
+            seq: result.cursor, body: { t: "account-change" },
+        }));
         await expect(db.accountChange.findMany({ where: { accountId: account.id },
             select: { entityId: true, cursor: true, hint: true } })).resolves.toEqual([{
             entityId, cursor: result.cursor,
@@ -170,5 +192,16 @@ describe("terminal AccountChange publication on SQLite", () => {
             .resolves.toEqual({ seq: 0 });
         await expect(db.accountChange.findMany({ where: { accountId: account.id } })).resolves.toEqual([]);
         expect(emit).not.toHaveBeenCalled();
+
+        for (const cursor of [1, 2]) {
+            const publication = await inTx(async tx => markAccountChanged(tx, {
+                accountId: account.id, kind: "account", entityId: "settings",
+            }));
+            expect(publication.resolveCursor()).toBe(cursor);
+            expect(emit).toHaveBeenCalledTimes(cursor);
+            expect(emit).toHaveBeenLastCalledWith("update", expect.objectContaining({
+                seq: cursor, body: { t: "account-change" },
+            }));
+        }
     });
 });
