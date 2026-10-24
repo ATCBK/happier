@@ -111,6 +111,21 @@ function uuid(value: number): string {
 }
 
 describe('sessionDraftRepository', () => {
+    it('prepares a frame-local New Session draft without reading the Account transport', async () => {
+        const storage = createMemoryStorage();
+        const draftId = uuid(955);
+        const address = { kind: 'newSession' as const, draftId };
+        const writer = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        writer.writeNewSessionDraft({ scope, draftId, patch: { text: 'Frame-owned draft' }, materializationIntent: 'userEdit' });
+        const remote = createRemote(undefined, address);
+        const reader = createSessionDraftRepository({ storage, cipher: plainCipher(), transport: remote.transport, syncEnabled: true });
+
+        await reader.prepareLocalSessionDraftScope(scope);
+
+        expect(remote.transport.read).not.toHaveBeenCalled();
+        expect(reader.getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('Frame-owned draft');
+    });
+
     it('seals the qualified Doc passage in the existing Account draft payload and restores it on another repository', async () => {
         const address = { kind: 'newDiscussion' } as const;
         const passage = { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: scope.serverId },

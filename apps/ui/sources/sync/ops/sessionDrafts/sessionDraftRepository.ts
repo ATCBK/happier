@@ -2374,6 +2374,19 @@ export class SessionDraftRepository {
         return this.isCurrentRuntime(runtime);
     }
 
+    /**
+     * Prepares a locally-owned draft surface without granting it a synchronized Account reader.
+     * Frame-scoped new-chat credentials can name their exact draft scope, but their spawn-only
+     * grant cannot read Account drafts. Both surfaces still use this repository and persistence
+     * format; only the unavailable remote materialization step is omitted.
+     */
+    async prepareLocalSessionDraftScope(scope: SessionDraftRepositoryScope): Promise<void> {
+        if (this.storage.prepare) await this.storage.prepare();
+        // One serialized scope owns all exact addresses. Loading it is the complete local
+        // hydration boundary; individual reads below reuse the same parsed scope state.
+        this.getScopeState(scope);
+    }
+
     /** Uses an invocation-owned exact Home transport without reconfiguring the singleton runtime. */
     async materializeExactWithScopedRuntime(params: Readonly<{
         scope: SessionDraftRepositoryScope;
@@ -2906,6 +2919,7 @@ export const resolveSessionDraftConflict = singleton.resolveSessionDraftConflict
 export const materializeExactSessionDraft = singleton.materializeExact.bind(singleton);
 export const materializeExactSessionDraftWithScopedRuntime = singleton.materializeExactWithScopedRuntime.bind(singleton);
 export const ensureSessionDraftAddressesHydrated = singleton.ensureSessionDraftAddressesHydrated.bind(singleton);
+export const prepareLocalSessionDraftScope = singleton.prepareLocalSessionDraftScope.bind(singleton);
 export const ensureSessionDraftRepositoryHydrated = singleton.ensureSessionDraftRepositoryHydrated.bind(singleton);
 export const ensureSessionDraftRepositoryHydratedWithScopedRuntime = singleton.ensureSessionDraftRepositoryHydratedWithScopedRuntime.bind(singleton);
 export const getExistingSessionDraftProjection = singleton.getExistingSessionDraftProjection.bind(singleton);
