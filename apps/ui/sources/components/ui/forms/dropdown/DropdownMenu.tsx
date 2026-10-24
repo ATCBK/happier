@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View, ViewStyle, StyleProp, TextStyle, useWindowDimensions, type AccessibilityState } from 'react-native';
+import { Platform, View, ViewStyle, StyleProp, TextStyle, useWindowDimensions, type AccessibilityState, type LayoutChangeEvent } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Popover, type PopoverAnchor, type PopoverPlacement } from '@/components/ui/popover';
@@ -23,6 +23,10 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { Icon } from '@/components/ui/icons/Icon';
 
 const DROPDOWN_ACTION_FRAME_FALLBACK_MS = 100;
+
+
+/** A menu that is not tied to its trigger's width reads as a menu, not a sheet: this is its widest. */
+export const DROPDOWN_MENU_MAX_WIDTH_PX = 320;
 
 export type DropdownMenuItem = Readonly<{
     id: string;
@@ -53,6 +57,8 @@ export type DropdownMenuSubmenu = Readonly<{
     maxWidthCap?: number;
     /** Draw this submenu's category titles (a chooser titled by what it acts on), whatever its parent does. */
     showCategoryTitles?: boolean;
+    /** Draw a hairline between this submenu's groups ("Sections" | New section…, Back to project). */
+    separateCategories?: boolean;
     /**
      * The submenu's own name when it differs from the row that opens it ("Move “Client work” to" under "Move to
      * folder…"): its accessible name, and its title where a phone presents it as a sheet.
@@ -289,7 +295,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const resolvedTriggerDensity = useResolvedItemDensity(props.itemTrigger?.itemProps?.density);
     const createItemDisplay = props.createItemDisplay ?? null;
     const matchTriggerWidth = props.matchTriggerWidth ?? true;
-    const maxWidthCap = props.maxWidthCap ?? (matchTriggerWidth ? 1024 : 320);
+    const maxWidthCap = props.maxWidthCap ?? (matchTriggerWidth ? 1024 : DROPDOWN_MENU_MAX_WIDTH_PX);
     // A menu is as tall as its content and the window allow (the Popover clamps to the room on its
     // side); it never cuts a list off at a fixed height. A caller's explicit cap still wins.
     const { height: windowHeight } = useWindowDimensions();
@@ -496,6 +502,14 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const [highlightMoved, setHighlightMoved] = React.useState(false);
     React.useEffect(() => { if (!props.open) setHighlightMoved(false); }, [props.open]);
     const searchable = props.search === true;
+    // A searched menu keeps the height it opened at: narrowing to a few rows (or none) never shrinks the
+    // overlay, so it neither jumps away from its trigger nor re-places itself while the person types.
+    const [resultsMinHeight, setResultsMinHeight] = React.useState(0);
+    React.useEffect(() => { if (!props.open) setResultsMinHeight(0); }, [props.open]);
+    const onResultsLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const height = event.nativeEvent.layout.height;
+        setResultsMinHeight((current) => (height > current ? height : current));
+    }, []);
     const followKeyboardSelection = React.useCallback((index: number) => {
         setHighlightMoved(true);
         if (!searchable) resultsRef.current?.focusItem(index);
@@ -709,7 +723,10 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 props.overlayStyle ?? null,
                             ]}
                         >
-                            <View style={{ paddingBottom: resultsPaddingBottom }}>
+                            <View
+                                onLayout={searchable ? onResultsLayout : undefined}
+                                style={{ paddingBottom: resultsPaddingBottom, minHeight: searchable ? resultsMinHeight : undefined }}
+                            >
                                 <SelectableMenuResults
                                     ref={resultsRef}
                                     wrapItem={props.wrapItem}
@@ -758,6 +775,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 rowKind={props.rowKind}
                                 itemRowProps={props.itemRowProps}
                                 showCategoryTitles={activeSubmenuItem.submenu.showCategoryTitles ?? props.showCategoryTitles}
+                                separateCategories={activeSubmenuItem.submenu.separateCategories ?? props.separateCategories}
                                 allowEmptySelection={props.allowEmptySelection}
                                 // A menu that is a sheet on a phone opens its submenus as sheets too.
                                 popoverPhonePresentation={props.popoverPhonePresentation}

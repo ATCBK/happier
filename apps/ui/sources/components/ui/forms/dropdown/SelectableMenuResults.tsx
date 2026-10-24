@@ -354,6 +354,8 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                 if (category.items.length === 0) return null;
 
                 const categoryStartIndex = currentIndex;
+                // Checked rows among siblings are one choice (radios); a lone checked row is an on/off toggle.
+                const checkRole = category.items.filter((entry) => entry.checked !== undefined).length > 1 ? 'radio' as const : 'checkbox' as const;
                 const categoryItems = category.items.map((item, idx) => {
                     const itemIndex = categoryStartIndex + idx;
                     const isSelected = itemIndex === props.selectedIndex;
@@ -394,8 +396,8 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                             titleStyle={item.rowTitleStyle}
                             subtitle={item.subtitleNode ?? item.subtitle}
                             accessibilityLabel={item.accessibilityLabel}
-                            accessibilityRole={item.checked === undefined ? props.itemProps?.accessibilityRole : 'radio'}
-                            webRole={item.checked === undefined ? props.itemProps?.webRole : 'radio'}
+                            accessibilityRole={item.checked === undefined ? props.itemProps?.accessibilityRole : checkRole}
+                            webRole={item.checked === undefined ? props.itemProps?.webRole : checkRole}
                             accessibilityChecked={item.checked ?? props.itemProps?.accessibilityChecked}
                             icon={left}
                             rightElement={right}
@@ -421,7 +423,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                             title={item.titleNode ?? item.title}
                             subtitle={item.subtitleNode ?? item.subtitle}
                             accessibilityLabel={item.accessibilityLabel}
-                            accessibilityRole={item.checked === undefined ? undefined : 'radio'}
+                            accessibilityRole={item.checked === undefined ? undefined : checkRole}
                             accessibilityChecked={item.checked}
                             containerStyle={item.rowContainerStyle}
                             titleStyle={item.rowTitleStyle}
