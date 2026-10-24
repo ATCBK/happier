@@ -808,6 +808,35 @@ describe('getSessionStatus', () => {
         expect(status.awareness?.runtime).toBe('background_active');
     });
 
+    it('keeps delayed background observations in Working with an awaiting-updates label', async () => {
+        const { getSessionStatus, presentSessionAwarenessV1 } = await import('./sessionUtils');
+        const now = 1_000_000;
+        const session = createBaseSession({
+            active: true,
+            presence: 'online',
+            activeAt: now - 300_000,
+            thinking: false,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: now - 300_000,
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 2,
+            runtimeActivityObservedAt: now - 300_000,
+        });
+        const status = getSessionStatus(session, now, { workingTextMode: 'static' });
+        expect(status).toMatchObject({
+            state: 'background_active', bucket: 'working', statusText: 'status.awaitingUpdates',
+            isPulsing: false, awareness: { runtime: 'background_active', freshness: 'stale' },
+        });
+        expect(presentSessionAwarenessV1(status.awareness)).toMatchObject({
+            state: 'background_active', statusText: 'status.awaitingUpdates',
+        });
+        expect(getSessionStatus({ ...session, activeAt: now, runtimeActivityObservedAt: now }, now,
+            { workingTextMode: 'static' })).toMatchObject({
+            state: 'background_active', bucket: 'working', statusText: 'status.backgroundActive',
+            awareness: { freshness: 'live' },
+        });
+    });
+
     it('keeps offline precedence over provider runtime activity', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const now = 1_000_000;

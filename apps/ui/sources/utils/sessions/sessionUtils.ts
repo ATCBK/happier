@@ -360,9 +360,13 @@ export function presentSessionAwarenessV1(
         disconnectedTextMode?: 'lastSeen' | 'offline';
         /** The caller's already-chosen working wording; omitted callers get the static one. */
         workingLabel?: string;
+        /** Observation uncertainty changes the wording without settling reported work. */
+        freshness?: UiSessionAwareness['freshness'];
     }>,
 ): SessionAwarenessPresentationV1 {
-    return presentSessionAwarenessStateV1(readSessionAwarenessPresentationV1(awareness), options);
+    return presentSessionAwarenessStateV1(readSessionAwarenessPresentationV1(awareness), {
+        ...options, freshness: awareness.freshness,
+    });
 }
 
 /** Localize an already classified state without running a second presentation decision. */
@@ -415,7 +419,8 @@ export function presentSessionAwarenessStateV1(
         };
         case 'ready': return { state: 'ready', statusText: t('status.ready'), quiet: false };
         case 'pending_input': return { state: 'pending_input', statusText: t('status.queuedInput'), quiet: false };
-        case 'background_active': return { state: 'background_active', statusText: t('status.backgroundActive'), quiet: false };
+        case 'background_active': return { state, quiet: false,
+            statusText: options?.freshness === 'stale' ? t('status.awaitingUpdates') : t('status.backgroundActive') };
         case 'waiting':
             // An idle, reachable Session is not news: the canonical presenter has always kept
             // this one quiet rather than labelling it.
@@ -440,6 +445,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const facts = { ...awareness, viewer: session.viewer, archiving };
     const status = readSessionAwarenessWorkStatusV1({ awareness: facts });
     const presented = presentSessionAwarenessStateV1(status.state, {
+        freshness: awareness.freshness,
         lastSeenAtMs: session.activeAt,
         disconnectedTextMode: resolvedOptions.disconnectedTextMode,
     });
