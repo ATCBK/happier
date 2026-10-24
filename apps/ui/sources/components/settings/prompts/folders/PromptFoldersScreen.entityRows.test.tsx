@@ -34,7 +34,8 @@ describe('folder editor catalog mutation', () => {
         let revision = 4;
         const tombstones = PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== 'folders').map(key => ({ key, revision: 1 }));
         let value: Extract<PromptLibraryRecordV1, { key: 'folders' }>['value'] = { v: 1, folders: [{ id: 'folder-old', name: 'Original', parentId: null }] };
-        const connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-folder-row.example.test', accountId: 'alice',
+        // Each fixture starts at revision 4; a fresh Home keeps the prior case's revision 5 receipt authoritative only there.
+        const connection = await restoreServerAccountForTest({ serverUrl: `https://prompt-folder-row-${outcome}.example.test`, accountId: 'alice',
             request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
