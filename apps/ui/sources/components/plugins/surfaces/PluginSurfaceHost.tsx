@@ -2439,13 +2439,10 @@ function PluginSurfaceHostMount(props: Readonly<(
     const requesterAccountEntry = descriptor?.contributionKind === 'settingsPage'
         ? requesterAccountProjection?.settingsPagesById[descriptor.id]
         : descriptor ? requesterAccountProjection?.surfacePlacementsById[descriptor.id] : undefined;
-    // The canonical union may explicitly select trusted development UI instead
-    // of the bundled declaration. Observe that producer choice without electing
-    // a source here or borrowing the bundled declaration's Account custody.
-    const requesterDeclaration = descriptor?.hostUiSourceSelection === 'explicitDevelopment'
-        ? descriptor : requesterAccountEntry;
-    const expectedRequesterOrigin = React.useMemo(() => readPluginUiAccountExecutableOrigin(requesterDeclaration),
-        [requesterDeclaration]);
+    // Renderer byte selection cannot admit a retained Machine requester while
+    // Availability already owns this exact destination under Account custody.
+    const expectedRequesterOrigin = React.useMemo(() => readPluginUiAccountExecutableOrigin(requesterAccountEntry),
+        [requesterAccountEntry]);
     const requesterAccountObservationLoaded = requesterAccountAdmission !== undefined
         && (requesterAccountAdmission.kind === 'available'
             || (requesterAccountAdmission.code !== 'account_availability_not_loaded'
