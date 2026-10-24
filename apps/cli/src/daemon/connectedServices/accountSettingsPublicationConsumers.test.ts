@@ -10,14 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   notifyActiveAccountConnectedServicesProjection,
+  getActiveAccountSettingsSnapshot,
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
-  subscribeActiveAccountSettingsSnapshotChanges,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { subscribeTeamCredentialDirectMaterialSourceChanges } from './directMaterial/daemonTeamCredentialDirectMaterialReconciler';
 
 // Only the Home HTTP transport and the credentials file are system boundaries
 // here. The Saved Secret catalog owner, the Account Settings publication cut,
@@ -172,11 +173,21 @@ describe('Account Settings publication consumers', () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [sharedRow] } });
     await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
     const reconcile = vi.fn();
-    const unsubscribe = subscribeActiveAccountSettingsSnapshotChanges(() => reconcile());
+    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges(() => reconcile());
     try {
       // The reconciler's own source admission re-hydrates the catalog; an
       // unchanged answer must not start another reconciliation.
-      await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
+      vi.mocked(axios.get).mockImplementation(async () => {
+        // The transport response races a projection notification while shared
+        // material is withdrawn. Only the settled catalog may be published.
+        expect(getActiveAccountSettingsSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
+        notifyActiveAccountConnectedServicesProjection(resolveAccountSettingsScopeKeyForToken(token));
+        expect(getActiveAccountSettingsSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
+        return { status: 200, data: { resources: [sharedRow] } };
+      });
+      for (let index = 0; index < 25; index++) {
+        await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
+      }
       notifyActiveAccountConnectedServicesProjection(resolveAccountSettingsScopeKeyForToken(token));
       expect(reconcile).not.toHaveBeenCalled();
 

@@ -69,9 +69,8 @@ export type ActiveAccountSettingsSnapshotCommit = Readonly<{
 }>;
 
 let active: ActiveAccountSettingsSnapshot | null = null;
-// The snapshot listeners last observed. It trails `active` only while a Saved
-// Secret catalog refresh has withdrawn material without publishing, and after
-// a refresh that observed a logically unchanged catalog.
+// Settled listener facts. `active` can independently withdraw several catalog
+// facets during refresh; settling one facet must not publish the others.
 let published: ActiveAccountSettingsSnapshot | null = null;
 // This token is intentionally owner-local: Account scope or key-material
 // retirement advances it; a newer preference revision alone does not.
@@ -129,6 +128,19 @@ function emitActiveAccountSettingsSnapshot(
       // The accepted local winner must not roll back because a consumer wake failed.
     }
   }
+}
+
+/** Settle only the observed facets; synchronous admission still reads `active`. */
+function publishSettledAccountCatalog(
+  next: ActiveAccountSettingsSnapshot,
+  facets: readonly typeof independentAccountFields[number][],
+  unchanged: boolean,
+): void {
+  const publication = published && belongsToSameAccount(published, next)
+    ? { ...published, ...Object.fromEntries(facets.map(facet => [facet, next[facet]])) }
+    : next;
+  if (unchanged) published = publication;
+  else emitActiveAccountSettingsSnapshot(publication);
 }
 
 /** One inheritance policy for daemon and issued-invocation preference refreshes. */
@@ -241,8 +253,7 @@ export function commitActiveAcpCatalog(input: Readonly<{
   if (unchanged && previous.acpCatalog === catalog && published?.settings === previous.settings) return true;
   const next = { ...previous, acpCatalog: catalog };
   active = next;
-  if (unchanged && published?.settings === next.settings) published = next;
-  else emitActiveAccountSettingsSnapshot(next);
+  publishSettledAccountCatalog(next, ['acpCatalog'], unchanged);
   return true;
 }
 
@@ -393,8 +404,7 @@ function commitActiveAccountCatalog<Key extends AccountCatalogFacet>(input: Acco
   if (unchanged && previous[input.facet] === incumbent && published?.settings === previous.settings) return true;
   const next: ActiveAccountSettingsSnapshot = { ...previous, [input.facet]: unchanged ? incumbent : input.catalog };
   active = next;
-  if (unchanged && published?.settings === next.settings) published = next;
-  else emitActiveAccountSettingsSnapshot(next);
+  publishSettledAccountCatalog(next, [input.facet], unchanged);
   return true;
 }
 
@@ -492,8 +502,8 @@ export function commitActiveConnectedAccountCatalog(input: Readonly<{
   const next = input.key === 'configurations' ? { ...active, connectedConfigurationCatalog: catalog }
     : { ...active, connectedPurposeCatalog: catalog };
   active = next;
-  if (unchanged && published?.settings === next.settings) published = next;
-  else emitActiveAccountSettingsSnapshot(next);
+  publishSettledAccountCatalog(next,
+    [input.key === 'configurations' ? 'connectedConfigurationCatalog' : 'connectedPurposeCatalog'], unchanged);
   return true;
 }
 
@@ -681,19 +691,13 @@ function savedSecretCatalogPublicationKey(snapshot: ActiveAccountSettingsSnapsho
  * (teams-lane-10 08 §5.8; 06 L10D-R13).
  */
 function publishSavedSecretCatalogIfChanged(next: ActiveAccountSettingsSnapshot): void {
-  if (
+  const unchanged = Boolean(
     published
     && published.scopeKey === next.scopeKey
     && published.settings === next.settings
-    && accountCatalogFields.every(field => published![field] === next[field])
     && savedSecretCatalogPublicationKey(published) === savedSecretCatalogPublicationKey(next)
-  ) {
-    // Consumers already hold this logical snapshot; adopt the current object so
-    // a later unchanged re-publication keeps its identity.
-    published = next;
-    return;
-  }
-  emitActiveAccountSettingsSnapshot(next);
+  );
+  publishSettledAccountCatalog(next, ['savedSecretResources', 'savedSecretCatalogState'], unchanged);
 }
 
 /**
@@ -816,7 +820,11 @@ export function notifyActiveAccountConnectedServicesProjection(scopeKey: string)
   const snapshot = active;
   if (snapshot?.scopeKey && snapshot.scopeKey !== scopeKey) return;
   activeConnectedServicesProjectionRevision += 1;
-  emitActiveAccountSettingsSnapshot(snapshot);
+  // A projection notice changes only its own revision. `active` can contain
+  // unpublished catalog withdrawals while refreshes are in flight; promoting
+  // those here would turn an equal refresh into withdrawal/restoration wakes.
+  // Synchronous admission still reads `active` and remains fail closed.
+  emitActiveAccountSettingsSnapshot(published);
 }
 
 export function resetActiveAccountSettingsSnapshotForTests(): void {

@@ -15,16 +15,22 @@ vi.mock('./teamCredentialDirectMaterialHttp', () => ({
   fetchTeamCredentialDirectMaterialCensus: vi.fn(async () => ({ recipients: [], nextCursor: null })),
   fetchTeamCredentialDirectMaterialPreparation: vi.fn(),
   upsertTeamCredentialDirectMaterial: vi.fn(),
+  withdrawTeamCredentialDirectMaterial: vi.fn(async () => ({})),
 }));
 
 import { createDaemonTeamCredentialDirectMaterialReconciler, subscribeTeamCredentialDirectMaterialSourceChanges } from './daemonTeamCredentialDirectMaterialReconciler';
 import {
+  beginActiveConnectedAccountCatalogRefresh,
+  beginActiveProviderConnectionsCatalogRefresh,
+  beginActiveSavedSecretCatalogRefresh,
   clearActiveAccountSettingsSnapshot,
+  commitActiveAcpCatalog,
   commitActiveNotificationChannelCatalog,
   commitActiveProviderConnectionsCatalog,
   commitActiveSavedSecretCatalog,
   getActiveAccountSettingsSnapshotLifetimeToken,
   getActiveAccountSettingsSnapshot,
+  notifyActiveAccountConnectedServicesProjection,
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -32,6 +38,8 @@ import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/p
 import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import {
   fetchTeamCredentialDirectMaterialPreparation,
+  fetchTeamCredentialDirectMaterialCensus,
+  withdrawTeamCredentialDirectMaterial,
 } from './teamCredentialDirectMaterialHttp';
 import { commitActiveConnectedAccountCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
@@ -156,8 +164,203 @@ function reconciler(homeDomainAction: NonNullable<ActionExecutorDeps['homeDomain
   });
 }
 
+const unrelatedService = { pluginId: 'email.test', localId: 'imap-smtp' };
+const ownedService = { pluginId: 'service.test', localId: 'source' };
+
+function scopedWakeFixture() {
+  let resources = Array.from({ length: 20 }, (_, index) => TeamCredentialResourceSummaryV1Schema.parse({
+    ...summary({ id: `resource-${index}` }),
+    source: { v: 1, kind: 'connected_account', credentialIncarnation: 'incarnation',
+      target: { kind: 'account', account: { service: ownedService, accountId: 'account' } } },
+  }));
+  const page = () => TeamCredentialResourcePageV1Schema.parse({
+    resources, viewer: { manageCredentials: false, offerOwnCredential: true }, nextCursor: null,
+  });
+  const homeDomainAction = vi.fn<NonNullable<ActionExecutorDeps['homeDomainAction']>>(async request => (
+    request.actionId === 'teams.list' ? teamsPage : page()
+  ));
+  let observerCurrent = true;
+  let revoked = false;
+  vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockImplementation(async request => {
+    const resource = resources.find(candidate => candidate.id === request.resourceId);
+    if (!resource) throw new Error('Resource unavailable');
+    const source = resource.source;
+    if (source?.kind !== 'connected_account') throw new Error('Unexpected source');
+    return {
+      homeServerIdentityId: 'home', teamId: 'team', resourceId: resource.id, resourceRevision: 1,
+      source, sourceMember: { kind: 'connected_account', service: source.target.account.service, connectedAccountId: 'account' },
+      sourceCredentialIncarnation: 'incarnation', publishedSourceVersion: revoked ? 'published' : null,
+      recipients: [], nextCursor: null,
+    };
+  });
+  const owner = createDaemonTeamCredentialDirectMaterialReconciler({
+    token: 'token', accountId: ACCOUNT_ID, homeDomainAction,
+    isAccountChangesObserverCurrent: () => observerCurrent,
+    establishedRuntimeOwner: { readMaterialSnapshot: async () => { throw new Error('Unexpected material read'); } },
+    listAccounts: async () => ({ accounts: [] }),
+    readGroup: async () => null, resolveProviderSource: async () => null,
+  });
+  return { owner, homeDomainAction, page,
+    setResources: (next: typeof resources) => { resources = next; },
+    setObserverCurrent: (next: boolean) => { observerCurrent = next; },
+    revoke: () => { revoked = true; },
+  };
+}
+
 describe('daemon Team credential direct-material reconciler', () => {
   beforeEach(() => { vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockReset(); });
+
+  it('does zero passes for 25 unrelated service health changes across 20 owned resources, preserving source, broad and revocation wakes', async () => {
+    const { owner, homeDomainAction, revoke } = scopedWakeFixture();
+    const passLog = vi.spyOn(logger, 'debug');
+    const passes = () => passLog.mock.calls.filter(([message]) => message === '[DAEMON RUN] Team credential direct-material pass');
+    try {
+      await owner.reconcile(undefined, undefined, 'startup');
+      const preparations = vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mock.calls.length;
+      const censuses = vi.mocked(fetchTeamCredentialDirectMaterialCensus).mock.calls.length;
+      homeDomainAction.mockClear();
+      for (let index = 0; index < 25; index++) {
+        await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+      }
+      expect(passes()).toHaveLength(1);
+      expect(homeDomainAction).not.toHaveBeenCalled();
+      expect(fetchTeamCredentialDirectMaterialPreparation).toHaveBeenCalledTimes(preparations);
+      expect(fetchTeamCredentialDirectMaterialCensus).toHaveBeenCalledTimes(censuses);
+
+      await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService, ownedService] });
+      expect(passes()).toHaveLength(2);
+      await owner.reconcile(undefined, undefined, 'account-changes');
+      expect(passes()).toHaveLength(3);
+      const withdrawals = vi.mocked(withdrawTeamCredentialDirectMaterial).mock.calls.length;
+      revoke();
+      await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [ownedService] });
+      expect(passes()).toHaveLength(4);
+      expect(withdrawTeamCredentialDirectMaterial).toHaveBeenCalledTimes(withdrawals + 20);
+      expect(homeDomainAction).toHaveBeenCalledTimes(6);
+    } finally { passLog.mockRestore(); }
+  });
+
+  it('keeps cold, recovery, unknown-scope, targeted and stale-observer wakes fresh', async () => {
+    const { owner, homeDomainAction, setObserverCurrent } = scopedWakeFixture();
+    const wake = { connectedServiceRefs: [unrelatedService] };
+    await owner.reconcile(undefined, undefined, 'account-changes', wake);
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    for (const reason of ['account-connect', 'account-reconnect', 'account-page-limit', 'account-cursor-gone', 'source-snapshot', 'registry-invalidated'] as const) {
+      homeDomainAction.mockClear();
+      await owner.reconcile(undefined, undefined, reason, wake);
+      expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    }
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    homeDomainAction.mockClear();
+    await owner.reconcile({ teamId: 'team', resourceId: 'resource-0' }, undefined, 'account-changes', wake);
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    setObserverCurrent(false);
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', wake);
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retain a partial or refused resource census as proof of unrelated services', async () => {
+    const { owner, homeDomainAction } = scopedWakeFixture();
+    await owner.reconcile();
+    homeDomainAction.mockResolvedValueOnce({ ok: false });
+    await owner.reconcile();
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    homeDomainAction.mockResolvedValueOnce(teamsPage).mockResolvedValueOnce({ invalidPage: true });
+    await owner.reconcile();
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('includes a pool service even when its members are unavailable, and excludes disabled, broker-only and foreign resources', async () => {
+    const { owner, homeDomainAction, setResources } = scopedWakeFixture();
+    const poolService = { pluginId: 'pool.test', localId: 'service' };
+    setResources([
+      TeamCredentialResourceSummaryV1Schema.parse({ ...summary({ id: 'pool' }), source: {
+        v: 1, kind: 'connected_pool', poolIncarnation: 'pool-incarnation',
+        target: { kind: 'group', service: poolService, groupId: 'pool' },
+      } }),
+      ...[
+        { id: 'disabled', enabled: false },
+        { id: 'broker-only', disclosureCeiling: 'brokered_only' },
+        { id: 'foreign', custodianAccountId: 'other' },
+      ].map(overrides => TeamCredentialResourceSummaryV1Schema.parse({
+        ...summary({ id: overrides.id }), ...overrides,
+        source: { v: 1, kind: 'connected_account', credentialIncarnation: 'incarnation',
+          target: { kind: 'account', account: { service: unrelatedService, accountId: 'account' } } },
+      })),
+    ]);
+    await owner.reconcile();
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).not.toHaveBeenCalled();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [poolService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let an older overlapping pass replace the census after a topology change', async () => {
+    const { owner, homeDomainAction, page, setResources } = scopedWakeFixture();
+    await owner.reconcile();
+    const stalePage = page();
+    let release!: (page: typeof stalePage) => void;
+    const pendingPage = new Promise<typeof stalePage>(resolve => { release = resolve; });
+    homeDomainAction.mockResolvedValueOnce(teamsPage).mockImplementationOnce(async () => pendingPage);
+    const older = owner.reconcile();
+    // Enter the old resource-list boundary before delivering the new topology.
+    await vi.waitFor(() => expect(homeDomainAction).toHaveBeenCalledTimes(4));
+    setResources([]);
+    await owner.reconcile();
+    release(stalePage);
+    await older;
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).not.toHaveBeenCalled();
+  });
+
+  it('retires the census across Account lifetimes and honors cancellation before skipping', async () => {
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'scoped-wake-account',
+      settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    const { owner, homeDomainAction } = scopedWakeFixture();
+    await owner.reconcile();
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(owner.reconcile(undefined, controller.signal, 'account-changes', {
+      connectedServiceRefs: [unrelatedService],
+    })).rejects.toThrow('cancelled');
+    clearActiveAccountSettingsSnapshot();
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('forgets negative census evidence when a feature-gated wake cannot run, including an in-flight pass', async () => {
+    const { owner, homeDomainAction, page } = scopedWakeFixture();
+    await owner.reconcile();
+    homeDomainAction.mockClear();
+    owner.invalidateSourceCensus();
+    expect(homeDomainAction).not.toHaveBeenCalled();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+    let release!: (value: ReturnType<typeof page>) => void;
+    const pendingPage = new Promise<ReturnType<typeof page>>(resolve => { release = resolve; });
+    homeDomainAction.mockResolvedValueOnce(teamsPage).mockImplementationOnce(async () => pendingPage);
+    const running = owner.reconcile();
+    await vi.waitFor(() => expect(homeDomainAction).toHaveBeenCalledTimes(4));
+    owner.invalidateSourceCensus();
+    release(page());
+    await running;
+    homeDomainAction.mockClear();
+    await owner.reconcile(undefined, undefined, 'account-changes', { connectedServiceRefs: [unrelatedService] });
+    expect(homeDomainAction).toHaveBeenCalledTimes(2);
+  });
 
   it('does no resource or account reads for 25 unrelated and cleanup-only publications across 20 resources and 5 sources', async () => {
     resetActiveAccountSettingsSnapshotForTests();
@@ -204,10 +407,15 @@ describe('daemon Team credential direct-material reconciler', () => {
       record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'configurations', value: { v: 1, entries: [] } }) };
     setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'source-account',
       settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      savedSecretResources: [], savedSecretCatalogState: 'ready',
       providerConnectionsCatalog: providerCatalog, connectedConfigurationCatalog: configurationCatalog });
     const incumbent = { scopeKey: 'source-account', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
     const passes: Promise<unknown>[] = [];
-    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges(() => { passes.push(owner.reconcile()); });
+    const sourceChanges = vi.fn();
+    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges((...args) => {
+      sourceChanges(...args);
+      passes.push(owner.reconcile(undefined, undefined, 'source-snapshot', args[2]));
+    });
     try {
       // Establish that the fixture actually reaches every owned source.
       await owner.reconcile(undefined, undefined, 'startup');
@@ -220,11 +428,43 @@ describe('daemon Team credential direct-material reconciler', () => {
       }]]);
       homeDomainAction.mockClear(); listAccounts.mockClear();
       for (let index = 0; index < 25; index++) {
+        // Projection-only notices must not publish in-flight withdrawals or
+        // turn an unchanged reobservation into another source-authority change.
+        beginActiveProviderConnectionsCatalogRefresh(incumbent);
+        notifyActiveAccountConnectedServicesProjection(incumbent.scopeKey);
+        expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog?.status).toBe('loading');
+        commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: structuredClone(providerCatalog) });
+        beginActiveConnectedAccountCatalogRefresh({ ...incumbent, key: 'configurations' });
+        notifyActiveAccountConnectedServicesProjection(incumbent.scopeKey);
+        expect(getActiveAccountSettingsSnapshot()?.connectedConfigurationCatalog?.status).toBe('loading');
+        commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: structuredClone(configurationCatalog) });
+        beginActiveSavedSecretCatalogRefresh(incumbent);
+        notifyActiveAccountConnectedServicesProjection(incumbent.scopeKey);
+        expect(getActiveAccountSettingsSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
+        commitActiveSavedSecretCatalog({ ...incumbent, resources: [], state: 'ready' });
         commitActiveNotificationChannelCatalog({ ...incumbent, catalog: { status: 'ready', revision: index, channels: [], diagnostics: [] } });
         commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog,
           cleanup: { status: 'cleanup-pending', reason: `maintenance-${index}` } } });
         commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: { ...configurationCatalog,
           cleanup: index % 2 ? { status: 'complete' } : { status: 'cleanup-pending', reason: 'history-incomplete' } } });
+        // An independent catalog can settle while material admission is
+        // withdrawn in other facets. Its publication must not expose those
+        // transient withdrawals as credential changes.
+        beginActiveProviderConnectionsCatalogRefresh(incumbent);
+        beginActiveConnectedAccountCatalogRefresh({ ...incumbent, key: 'configurations' });
+        beginActiveSavedSecretCatalogRefresh(incumbent);
+        commitActiveNotificationChannelCatalog({ ...incumbent, catalog: {
+          status: 'ready', revision: 100 + index, channels: [], diagnostics: [],
+        } });
+        expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog?.status).toBe('loading');
+        expect(getActiveAccountSettingsSnapshot()?.connectedConfigurationCatalog?.status).toBe('loading');
+        expect(getActiveAccountSettingsSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
+        commitActiveAcpCatalog({ ...incumbent, catalog: {
+          status: 'ready', revision: index + 1, record: { v: 1, definitions: [] },
+        } });
+        commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: structuredClone(providerCatalog) });
+        commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: structuredClone(configurationCatalog) });
+        commitActiveSavedSecretCatalog({ ...incumbent, resources: [], state: 'ready' });
       }
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(0);
@@ -235,10 +475,22 @@ describe('daemon Team credential direct-material reconciler', () => {
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(2);
       expect(listAccounts).toHaveBeenCalledTimes(5);
+      expect(sourceChanges.mock.calls.at(-1)?.[2]).toEqual({
+        predicates: ['provider-catalog-authority'],
+        previousRevisions: { settings: 1, providerCatalog: 1, connectedConfiguration: 1, accountLifetime: incumbent.lifetimeToken },
+        nextRevisions: { settings: 1, providerCatalog: 2, connectedConfiguration: 1, accountLifetime: incumbent.lifetimeToken },
+      });
+      expect(passRecords().at(-1)?.[1]).toEqual({
+        wakeReason: 'source-snapshot', observerCurrent: true, selectedServiceCount: 5,
+        ...sourceChanges.mock.calls.at(-1)?.[2],
+        readsIssued: { teamPages: 1, resourcePages: 1, qualifiedAccountLists: 5,
+          qualifiedGroupReads: 0, preparationPages: 20, censusPages: 20 },
+      });
       commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: { ...configurationCatalog, revision: 2 } });
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(4);
       expect(listAccounts).toHaveBeenCalledTimes(10);
+      expect(sourceChanges.mock.calls.at(-1)?.[2].predicates).toEqual(['connected-configuration-revision']);
       commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { status: 'unavailable', reason: 'forbidden' } });
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(6);
@@ -253,6 +505,7 @@ describe('daemon Team credential direct-material reconciler', () => {
       expect(listAccounts).toHaveBeenCalledTimes(20);
       expect(passRecords().at(-1)?.[1]).toEqual({
         wakeReason: 'account-changes', observerCurrent: false, selectedServiceCount: 5,
+        accountInvalidationReason: 'changes',
         readsIssued: { teamPages: 1, resourcePages: 1, qualifiedAccountLists: 5,
           qualifiedGroupReads: 0, preparationPages: 20, censusPages: 20 },
       });
@@ -277,6 +530,7 @@ describe('daemon Team credential direct-material reconciler', () => {
       expect(passRecords()).toHaveLength(8);
       expect(passRecords().at(-1)?.[1]).toEqual({
         wakeReason: 'account-reconnect', observerCurrent: false, selectedServiceCount: 0,
+        accountInvalidationReason: 'reconnect',
         readsIssued: { teamPages: 1, resourcePages: 0, qualifiedAccountLists: 0,
           qualifiedGroupReads: 0, preparationPages: 0, censusPages: 0 },
       });
@@ -285,6 +539,49 @@ describe('daemon Team credential direct-material reconciler', () => {
       await Promise.all(passes);
       resetActiveAccountSettingsSnapshotForTests();
       passLog.mockRestore();
+    }
+  });
+
+  it('attributes every fired source predicate with payload-free revisions and Account retirement', () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'private-scope',
+      settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      savedSecretResources: [], savedSecretCatalogState: 'ready',
+      providerConnectionsCatalog: { status: 'ready', revision: 3, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 },
+      connectedConfigurationCatalog: { status: 'ready', revision: 4,
+        record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'configurations', value: { v: 1, entries: [] } }) },
+    });
+    const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const listener = vi.fn();
+    const wakes = () => listener.mock.calls.map(args => args[2]);
+    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges(listener);
+    try {
+      setActiveAccountSettingsSnapshot({ source: 'cache', scopeKey: 'other-private-scope',
+        settings: accountSettingsParse({ secrets: [{ id: 'private-id', name: 'private-name', kind: 'token',
+          encryptedValue: { _isSecretValue: true, value: 'private-value' }, createdAt: 1, updatedAt: 1 }] }),
+        settingsVersion: 2, loadedAtMs: 2, settingsSecretsReadKeys: [new Uint8Array([9])],
+        savedSecretResources: [], savedSecretCatalogState: 'temporarily_unavailable',
+        providerConnectionsCatalog: { status: 'unavailable', reason: 'forbidden' },
+        connectedConfigurationCatalog: { status: 'unavailable', reason: 'forbidden' },
+      });
+      expect(wakes()).toEqual([{
+        predicates: ['provider-catalog-authority', 'connected-configuration-revision', 'connected-configuration-content',
+          'saved-secret-resources', 'saved-secret-state', 'secrets', 'read-keys', 'source', 'scope', 'account-lifetime'],
+        previousRevisions: { settings: 1, providerCatalog: 3, connectedConfiguration: 4, accountLifetime: lifetime },
+        nextRevisions: { settings: 2, providerCatalog: null, connectedConfiguration: null, accountLifetime: lifetime + 1 },
+      }]);
+      // Availability/content can change independently of a numeric row revision.
+      commitActiveConnectedAccountCatalog({ scopeKey: 'other-private-scope',
+        lifetimeToken: lifetime + 1, key: 'configurations', catalog: { status: 'unavailable', reason: 'unreachable' } });
+      expect(wakes().at(-1)?.predicates).toEqual(['connected-configuration-content']);
+      clearActiveAccountSettingsSnapshot();
+      expect(wakes().at(-1)).toMatchObject({ predicates: expect.arrayContaining(['account-lifetime']),
+        previousRevisions: { accountLifetime: lifetime + 1 },
+        nextRevisions: { settings: null, providerCatalog: null, connectedConfiguration: null, accountLifetime: null },
+      });
+    } finally {
+      unsubscribe();
+      resetActiveAccountSettingsSnapshotForTests();
     }
   });
 

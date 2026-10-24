@@ -266,6 +266,7 @@ import {
   createDaemonTeamCredentialDirectMaterialReconciler,
   subscribeTeamCredentialDirectMaterialSourceChanges,
   type TeamCredentialDirectMaterialWakeReason,
+  type TeamCredentialDirectMaterialSourceWake,
 } from './connectedServices/directMaterial/daemonTeamCredentialDirectMaterialReconciler';
 import { createHttpTeamCredentialDirectMaterialClient } from './connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
@@ -1931,15 +1932,16 @@ export async function startDaemon(
           target?: Parameters<typeof reconciler.reconcile>[0],
           signal?: AbortSignal,
           wakeReason?: TeamCredentialDirectMaterialWakeReason,
+          sourceWake?: TeamCredentialDirectMaterialSourceWake,
         ) => {
           const snapshot = serverFeaturesSnapshotStore.getSnapshot();
           if (
             snapshot?.status !== 'ready'
             || readServerEnabledBit(snapshot.features, 'teams.credentialResources') !== true
           ) return { prepared: 0, remaining: 0, failures: [] };
-          return await reconciler.reconcile(target, signal, wakeReason);
+          return await reconciler.reconcile(target, signal, wakeReason, sourceWake);
         };
-        const reconcileDirectMaterialBestEffort = (wakeReason: TeamCredentialDirectMaterialWakeReason) => void reconcileIfEnabled(undefined, undefined, wakeReason).catch((error) => logger.debug(
+        const reconcileDirectMaterialBestEffort = (wakeReason: TeamCredentialDirectMaterialWakeReason, sourceWake?: TeamCredentialDirectMaterialSourceWake) => void reconcileIfEnabled(undefined, undefined, wakeReason, sourceWake).catch((error) => logger.debug(
             '[DAEMON RUN] Team credential direct-material reconciliation failed (non-fatal)',
             { error: serializeAxiosErrorForLog(error) },
           ));
@@ -1949,7 +1951,7 @@ export async function startDaemon(
         // Team grant, recipient and connected-service facts arrive through the
         // AccountChange wake attached with the machine client below.
         teamCredentialDirectMaterialChangeCleanup = subscribeTeamCredentialDirectMaterialSourceChanges(
-          () => reconcileDirectMaterialBestEffort('source-snapshot'),
+          (_previous, _next, wake) => reconcileDirectMaterialBestEffort('source-snapshot', wake),
         );
         reconcileDirectMaterialBestEffort('startup');
     }

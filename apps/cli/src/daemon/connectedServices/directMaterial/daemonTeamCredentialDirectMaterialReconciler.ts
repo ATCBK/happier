@@ -29,38 +29,74 @@ import {
 } from './teamCredentialDirectMaterialHttp';
 import { reconcileTeamCredentialDirectMaterial } from './reconcileTeamCredentialDirectMaterial';
 import {
+  getActiveAccountSettingsSnapshotLifetimeToken,
   subscribeActiveAccountSettingsSnapshotChanges,
   type ActiveAccountSettingsSnapshot,
-  type ActiveAccountSettingsSnapshotListener,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 // These are the Account facts read by Provider direct-source admission and
 // connected-account materialization. Other opened catalogs share the snapshot
 // publication cut but do not change credential material.
-const directMaterialSourceSnapshotFields = [
-  'scopeKey', 'source',
-  'savedSecretResources', 'savedSecretCatalogState',
-] as const satisfies readonly (keyof ActiveAccountSettingsSnapshot)[];
+type DirectMaterialSourcePredicate =
+  | 'provider-catalog-authority' | 'connected-configuration-revision' | 'connected-configuration-content'
+  | 'saved-secret-resources' | 'saved-secret-state' | 'secrets' | 'read-keys'
+  | 'source' | 'scope' | 'account-lifetime';
+
+type DirectMaterialSourceRevisions = Readonly<{
+  settings: number | null;
+  providerCatalog: number | null;
+  connectedConfiguration: number | null;
+  accountLifetime: number | null;
+}>;
+
+type DirectMaterialSnapshotWake = Readonly<{
+  predicates: readonly DirectMaterialSourcePredicate[];
+  previousRevisions: DirectMaterialSourceRevisions;
+  nextRevisions: DirectMaterialSourceRevisions;
+}>;
+
+export type TeamCredentialDirectMaterialSourceWake = DirectMaterialSnapshotWake
+  | Readonly<{ connectedServiceRefs: readonly QualifiedConnectedAccountRef['service'][] }>;
+
+function sourceRevisions(snapshot: ActiveAccountSettingsSnapshot | null, lifetime: number): DirectMaterialSourceRevisions {
+  return {
+    settings: snapshot?.settingsVersion ?? null,
+    providerCatalog: snapshot?.providerConnectionsCatalog?.status === 'ready' ? snapshot.providerConnectionsCatalog.revision : null,
+    connectedConfiguration: snapshot?.connectedConfigurationCatalog?.status === 'ready' ? snapshot.connectedConfigurationCatalog.revision : null,
+    accountLifetime: snapshot ? lifetime : null,
+  };
+}
 
 export function subscribeTeamCredentialDirectMaterialSourceChanges(
-  listener: ActiveAccountSettingsSnapshotListener,
+  listener: (previous: ActiveAccountSettingsSnapshot | null, next: ActiveAccountSettingsSnapshot | null,
+    wake: DirectMaterialSnapshotWake) => void,
 ): () => void {
+  let previousLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
   return subscribeActiveAccountSettingsSnapshotChanges((previous, next) => {
     // Catalog producers also publish real source/history cleanup diagnostics.
     // Direct delivery consumes the admitted row, not its maintenance outcome.
     const previousConfiguration = previous?.connectedConfigurationCatalog;
     const nextConfiguration = next?.connectedConfigurationCatalog;
-    const sameConfiguration = previousConfiguration === nextConfiguration
+    const sameConfigurationContent = previousConfiguration === nextConfiguration
       || previousConfiguration?.status === 'ready' && nextConfiguration?.status === 'ready'
-        && previousConfiguration.revision === nextConfiguration.revision
         && isDeepStrictEqual(previousConfiguration.record, nextConfiguration.record);
-    if (previous && next
-      && directMaterialSourceSnapshotFields.every(field => previous[field] === next[field])
-      && sameProviderConnectionsCatalogAuthority(previous.providerConnectionsCatalog, next.providerConnectionsCatalog)
-      && sameConfiguration
-      && isDeepStrictEqual(previous.settings.secrets, next.settings.secrets)
-      && isDeepStrictEqual(previous.settingsSecretsReadKeys, next.settingsSecretsReadKeys)) return;
-    listener(previous, next);
+    const nextLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const previousRevisions = sourceRevisions(previous, previousLifetime);
+    const nextRevisions = sourceRevisions(next, nextLifetime);
+    previousLifetime = nextLifetime;
+    const predicates: DirectMaterialSourcePredicate[] = [];
+    if (!sameProviderConnectionsCatalogAuthority(previous?.providerConnectionsCatalog, next?.providerConnectionsCatalog)) predicates.push('provider-catalog-authority');
+    if (previousRevisions.connectedConfiguration !== nextRevisions.connectedConfiguration) predicates.push('connected-configuration-revision');
+    if (!sameConfigurationContent) predicates.push('connected-configuration-content');
+    if (previous?.savedSecretResources !== next?.savedSecretResources) predicates.push('saved-secret-resources');
+    if (previous?.savedSecretCatalogState !== next?.savedSecretCatalogState) predicates.push('saved-secret-state');
+    if (!isDeepStrictEqual(previous?.settings.secrets, next?.settings.secrets)) predicates.push('secrets');
+    if (!isDeepStrictEqual(previous?.settingsSecretsReadKeys, next?.settingsSecretsReadKeys)) predicates.push('read-keys');
+    if (previous?.source !== next?.source) predicates.push('source');
+    if (previous?.scopeKey !== next?.scopeKey) predicates.push('scope');
+    if (previousRevisions.accountLifetime !== nextRevisions.accountLifetime) predicates.push('account-lifetime');
+    if (predicates.length === 0) return;
+    listener(previous, next, { predicates, previousRevisions, nextRevisions });
   });
 }
 
@@ -80,8 +116,9 @@ async function listOwnedResources(input: Readonly<{
   accountId: string;
   homeDomainAction: HomeDomainAction;
   signal?: AbortSignal;
-}>): Promise<readonly TeamCredentialResourceSummaryV1[]> {
+}>): Promise<Readonly<{ resources: readonly TeamCredentialResourceSummaryV1[]; complete: boolean }>> {
   const resources: TeamCredentialResourceSummaryV1[] = [];
+  let complete = true;
   let cursor: string | null = null;
   do {
     const page = await input.homeDomainAction({
@@ -90,9 +127,9 @@ async function listOwnedResources(input: Readonly<{
       context: { surface: 'cli' },
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    if (isActionFailure(page)) return resources;
+    if (isActionFailure(page)) return { resources, complete: false };
     const parsedPage = createStoredReadSchema(TeamsPageV1Schema).safeParse(page);
-    if (!parsedPage.success) return resources;
+    if (!parsedPage.success) return { resources, complete: false };
     for (const team of parsedPage.data.items) {
       // The administration list is paginated and carries no custodian filter,
       // so every page is drained before the owned direct rows are selected.
@@ -104,9 +141,9 @@ async function listOwnedResources(input: Readonly<{
           context: { surface: 'cli' },
           ...(input.signal ? { signal: input.signal } : {}),
         });
-        if (isActionFailure(listed)) break;
+        if (isActionFailure(listed)) { complete = false; break; }
         const parsedListed = createStoredReadSchema(TeamCredentialResourcePageV1Schema).safeParse(listed);
-        if (!parsedListed.success) break;
+        if (!parsedListed.success) { complete = false; break; }
         resources.push(...parsedListed.data.resources.filter((resource) => (
           resource.custodianAccountId === input.accountId
           && resource.enabled
@@ -118,7 +155,7 @@ async function listOwnedResources(input: Readonly<{
     }
     cursor = parsedPage.data.nextCursor;
   } while (cursor);
-  return resources;
+  return { resources, complete };
 }
 
 function connectedMember(account: QualifiedConnectedAccountRef): TeamCredentialSourceMemberV1 {
@@ -143,9 +180,19 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
   resolveProviderSource(source: Extract<TeamCredentialSourceBindingV1, { kind: 'provider_connection' }>, signal: AbortSignal): Promise<TeamCredentialSourceSnapshot | null>;
   serverUrl?: string;
 }>): Readonly<{
+  invalidateSourceCensus(): void;
   census(input: TeamCredentialDirectMaterialCensusInputV1, signal?: AbortSignal): Promise<TeamCredentialDirectMaterialCensusOutputV1>;
-  reconcile(input?: TeamCredentialDirectMaterialReconcileInputV1, signal?: AbortSignal, wakeReason?: TeamCredentialDirectMaterialWakeReason): Promise<TeamCredentialDirectMaterialReconcileOutputV1>;
+  reconcile(input?: TeamCredentialDirectMaterialReconcileInputV1, signal?: AbortSignal, wakeReason?: TeamCredentialDirectMaterialWakeReason,
+    sourceWake?: TeamCredentialDirectMaterialSourceWake): Promise<TeamCredentialDirectMaterialReconcileOutputV1>;
 }> {
+  // Retain only the last completed full pass's census, within this Account
+  // lifetime. Team/resource/audience and source-authority wakes invalidate it
+  // synchronously before reading. A current Account observer delivers those
+  // changes; recovery and unknown scope always read again. Pool service identity
+  // belongs to the resource, so even an empty/unavailable pool remains relevant.
+  let completedCensus: Readonly<{ services: ReadonlySet<string>; accountLifetime: number; remaining: number }> | null = null;
+  let activePasses = 0;
+  let retainCensus = false;
   const resolveConnectedSnapshot = async (
     source: Extract<TeamCredentialSourceBindingV1, { kind: 'connected_account' }>,
     account: QualifiedConnectedAccountRef,
@@ -171,6 +218,12 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
   };
 
   return Object.freeze({
+    invalidateSourceCensus() {
+      // A wake discarded by the outer feature gate still invalidates negative
+      // evidence, including any census currently being read.
+      completedCensus = null;
+      retainCensus = false;
+    },
     async census(input, signal) {
       signal = signal && params.signal ? AbortSignal.any([signal, params.signal]) : signal ?? params.signal;
       return await fetchTeamCredentialDirectMaterialCensus({
@@ -182,9 +235,23 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
         ...(signal ? { signal } : {}),
       });
     },
-    async reconcile(target, signal, wakeReason = 'request') {
+    async reconcile(target, signal, wakeReason = 'request', sourceWake) {
       signal = signal && params.signal ? AbortSignal.any([signal, params.signal]) : signal ?? params.signal;
       const observerCurrent = params.isAccountChangesObserverCurrent?.() === true;
+      const accountLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+      const census = completedCensus;
+      const serviceRefs = sourceWake && 'connectedServiceRefs' in sourceWake ? sourceWake.connectedServiceRefs : undefined;
+      if (!target && wakeReason === 'account-changes' && observerCurrent
+        && census?.accountLifetime === accountLifetime && serviceRefs?.length
+        && serviceRefs.every(service => !census.services.has(buildQualifiedPluginContributionKey(service)))) {
+        signal?.throwIfAborted();
+        return { prepared: 0, remaining: census.remaining, failures: [] };
+      }
+      // Overlapping reads can complete out of order. None of their censuses is
+      // sufficient negative evidence until a later non-overlapping full pass.
+      retainCensus = activePasses === 0;
+      activePasses++;
+      completedCensus = null;
       const readsIssued = { teamPages: 0, resourcePages: 0, qualifiedAccountLists: 0,
         qualifiedGroupReads: 0, preparationPages: 0, censusPages: 0 };
       const accountsByService = new Map<string, Promise<Readonly<{
@@ -195,7 +262,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
         return params.readGroup(source, currentSignal);
       };
       try {
-        const resources = await listOwnedResources({
+        const listed = await listOwnedResources({
           accountId: params.accountId,
           homeDomainAction: request => {
             if (request.actionId === 'teams.list') readsIssued.teamPages++;
@@ -203,9 +270,10 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
             return params.homeDomainAction(request);
           },
           ...(signal ? { signal } : {}),
-        }).then((listed) => target
-          ? listed.filter((resource) => resource.teamId === target.teamId && resource.id === target.resourceId)
-          : listed);
+        });
+        const resources = target
+          ? listed.resources.filter((resource) => resource.teamId === target.teamId && resource.id === target.resourceId)
+          : listed.resources;
         let prepared = 0;
         const failures: TeamCredentialDirectMaterialReconcileOutputV1['failures'][number][] = [];
         // The service inventory is one read for this pass, even when resources,
@@ -350,12 +418,25 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
             cursor = page.nextCursor ?? undefined;
           } while (cursor);
         }
+        if (!target && listed.complete && !signal?.aborted && retainCensus && activePasses === 1
+          && accountLifetime === getActiveAccountSettingsSnapshotLifetimeToken()) {
+          const services = new Set<string>();
+          for (const resource of resources) {
+            const source = resource.source;
+            if (source?.kind === 'connected_account') services.add(buildQualifiedPluginContributionKey(source.target.account.service));
+            else if (source?.kind === 'connected_pool') services.add(buildQualifiedPluginContributionKey(source.target.service));
+          }
+          completedCensus = { services, accountLifetime, remaining };
+        }
         return { prepared, remaining, failures };
       } finally {
+        activePasses--;
         // One payload-free join per pass, including failed/cancelled passes.
         // Counts cover this owner's read boundaries, not nested material reads.
         logger.debug('[DAEMON RUN] Team credential direct-material pass', {
           wakeReason, observerCurrent, selectedServiceCount: accountsByService.size, readsIssued,
+          ...(sourceWake ?? {}),
+          ...(wakeReason.startsWith('account-') ? { accountInvalidationReason: wakeReason.slice('account-'.length) } : {}),
         });
       }
     },
