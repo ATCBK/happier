@@ -18,6 +18,7 @@ import {
 import { inferAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { configuration } from '@/configuration';
 import type { RawJSONLines } from '@/backends/claude/types';
+import { persistClaudeToolResultMedia } from '@/backends/claude/attachments/persistClaudeToolResultMedia';
 import {
     buildClaudeJsonlLocalId,
     buildClaudeJsonlLocalIdFromMessageKey,
@@ -4130,11 +4131,14 @@ export class ApiSessionClient extends EventEmitter {
             : await request();
     }
 
-    private prepareClaudeSessionMessage(body: RawJSONLines, meta?: Record<string, unknown>): {
+    private async prepareClaudeSessionMessage(body: RawJSONLines, meta?: Record<string, unknown>): Promise<{
         content: MessageContent;
         localId: string;
         sidechainId: string | null;
-    } {
+    }> {
+        ({ body, meta } = await persistClaudeToolResultMedia({
+            body, meta, workingDirectory: this.resolveWorkingDirectory(), sessionId: this.sessionId,
+        }));
         this.outboundShapeLogger.log('claude:raw-jsonl', body);
 
         const sidechainId = (() => {
@@ -4213,23 +4217,23 @@ export class ApiSessionClient extends EventEmitter {
         if (isToolTraceEnabled()) {
             recordClaudeToolTraceEvents({ sessionId: this.sessionId, body });
         }
-        const { content, localId, sidechainId } = this.prepareClaudeSessionMessage(body, meta);
-
-        this.logSendWhileDisconnected('Claude session message', { type: body.type });
-
-        const payload = this.buildOutboundSessionMessagePayload(content);
-        this.observeTurnAssistantTextFromSessionContent(content, {
-            source: 'ephemeral',
-            localId,
-            sidechainId,
-            provider: 'claude',
-        });
-        this.commitSessionMessageBestEffort({
-            message: payload,
-            localId,
-            sidechainId,
-            messageRole: resolveClaudeSessionMessageRole(body),
-            logErrorMessage: '[SOCKET] Failed to commit Claude session message (non-fatal)',
+        const localId = buildClaudeJsonlLocalId(body);
+        void this.enqueueMessageCommit('best-effort', {
+            operation: 'claude-message-commit', details: { localId, messageType: body.type },
+        }, async () => {
+            const { content, sidechainId } = await this.prepareClaudeSessionMessage(body, meta);
+            this.logSendWhileDisconnected('Claude session message', { type: body.type });
+            this.observeTurnAssistantTextFromSessionContent(content, {
+                source: 'ephemeral', localId, sidechainId, provider: 'claude',
+            });
+            return this.commitSessionMessage({
+                message: this.buildOutboundSessionMessagePayload(content), localId, sidechainId,
+                messageRole: resolveClaudeSessionMessageRole(body), requireCommit: false,
+            });
+        }).catch((error) => {
+            logger.debug('[SOCKET] Failed to commit Claude session message (non-fatal)', {
+                localId, error: serializeAxiosErrorForLog(error),
+            });
         });
 
         this.applyClaudeSessionMessageAuxiliaryEffects(body);
@@ -4242,36 +4246,23 @@ export class ApiSessionClient extends EventEmitter {
         if (isToolTraceEnabled()) {
             recordClaudeToolTraceEvents({ sessionId: this.sessionId, body });
         }
-        const { content, localId, sidechainId } = this.prepareClaudeSessionMessage(body, meta);
+        const localId = buildClaudeJsonlLocalId(body);
         requireExactCommitLocalId(localId);
-
-        this.logSendWhileDisconnected('Claude session message', { type: body.type });
-        const commitResult = await this.enqueueMessageCommit('required', {
+        await this.enqueueMessageCommit('required', {
             operation: 'claude-message-exact-commit',
-            details: {
-                localId,
-                messageType: body.type,
-                requireCommit: true,
-                connectionEpoch: this.userSocketSettingsConnectionEpoch,
-            },
-        }, () =>
-            this.commitSessionMessage({
-                message: this.buildOutboundSessionMessagePayload(content),
-                localId,
-                sidechainId,
-                messageRole: resolveClaudeSessionMessageRole(body),
-                requireCommit: true,
-                requireWriteDisposition: true,
-            }),
-        );
-        this.observeTurnAssistantTextFromSessionContent(content, {
-            source: 'committed',
-            seq: commitResult?.seq ?? null,
-            localId,
-            sidechainId,
-            provider: 'claude',
+            details: { localId, messageType: body.type, requireCommit: true, connectionEpoch: this.userSocketSettingsConnectionEpoch },
+        }, async () => {
+            const { content, sidechainId } = await this.prepareClaudeSessionMessage(body, meta);
+            this.logSendWhileDisconnected('Claude session message', { type: body.type });
+            const commitResult = await this.commitSessionMessage({
+                message: this.buildOutboundSessionMessagePayload(content), localId, sidechainId,
+                messageRole: resolveClaudeSessionMessageRole(body), requireCommit: true, requireWriteDisposition: true,
+            });
+            this.observeTurnAssistantTextFromSessionContent(content, {
+                source: 'committed', seq: commitResult?.seq ?? null, localId, sidechainId, provider: 'claude',
+            });
+            this.applyClaudeSessionMessageAuxiliaryEffects(body);
         });
-        this.applyClaudeSessionMessageAuxiliaryEffects(body);
     }
 
     async sendClaudeSessionMessageCommitted(
@@ -4283,7 +4274,7 @@ export class ApiSessionClient extends EventEmitter {
             meta?: Record<string, unknown>;
         }>,
     ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
-        const { content, localId, sidechainId } = this.prepareClaudeSessionMessage(body, opts.meta);
+        const { content, localId, sidechainId } = await this.prepareClaudeSessionMessage(body, opts.meta);
         requireExactCommitLocalId(localId);
 
         this.logSendWhileDisconnected('Claude session message', { type: body.type });

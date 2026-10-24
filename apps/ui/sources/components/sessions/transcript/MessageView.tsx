@@ -1628,6 +1628,15 @@ function ToolCallBlock(props: {
   toolRouteCommon: TranscriptToolRouteCommon;
 }) {
   const structuredPinHost = useRowActionHoverHost();
+  const router = useRouter();
+  const sessionMedia = React.useMemo(
+    () => parseSessionMediaMessageMeta(props.message.meta, props.message.tool?.id),
+    [props.message.meta, props.message.tool?.id],
+  );
+  const handleOpenMediaPath = React.useCallback((filePath: string) => {
+    pushSessionFileDeepLink(router, { sessionId: props.sessionId, filePath });
+  }, [props.sessionId, router]);
+
   const handleJumpToAnchor = useStructuredMessageJumpHandler(
     props.sessionId,
     props.interaction.canOpenFiles === true,
@@ -1726,6 +1735,16 @@ function ToolCallBlock(props: {
           embedded={props.layoutContext === 'tool_calls_group'}
         />
       )) : null}
+      {sessionMedia.inlineImages.length > 0 ? (
+        <SessionMediaInlineImages
+          sessionId={props.sessionId}
+          media={sessionMedia.inlineImages}
+          onOpenPath={handleOpenMediaPath}
+          fileOpenEnabled={props.interaction.canOpenFiles === true}
+          mediaPreviewEnabled={props.interaction.canPreviewMedia === true}
+        />
+      ) : null}
+      <SessionMediaUnavailableItems items={sessionMedia.unavailableMedia} />
     </>
   );
   // The tool chrome (ToolView / ToolTimelineRow) owns the jump-landing attention

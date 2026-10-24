@@ -66,15 +66,21 @@ function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSumma
     };
 }
 
-function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null): Readonly<{
+function parseSessionMediaEnvelope(envelope: HappierMetaEnvelope | null, toolCallId?: string): Readonly<{
     inlineImages: readonly SessionMediaInlineImageSummary[];
     unavailableMedia: readonly SessionMediaUnavailableSummary[];
 }> {
     if (envelope === null) return { inlineImages: [], unavailableMedia: [] };
     const parsed = SessionMediaMessageMetaEnvelopeV1Schema.safeParse(envelope);
     if (!parsed.success) return { inlineImages: [], unavailableMedia: [] };
+    // Single-result envelopes already belong to their row, including transports
+    // that namespace the displayed tool id. Bundled results need per-tool selection.
+    const bundledToolResults = toolCallId !== undefined && new Set(
+        parsed.data.payload.media.flatMap(item => item.origin.toolCallId ? [item.origin.toolCallId] : []),
+    ).size > 1;
     return {
         inlineImages: parsed.data.payload.media.flatMap((item) => {
+            if (bundledToolResults && item.origin.toolCallId && item.origin.toolCallId !== toolCallId) return [];
             const normalized = normalizeSessionMediaItem(item);
             return normalized ? [normalized] : [];
         }),
@@ -111,9 +117,9 @@ function parseLegacyAttachmentsMeta(meta: unknown): AttachmentsMessageMetaV1 | n
     return parsed.data;
 }
 
-export function parseSessionMediaMessageMeta(meta: unknown): ParsedSessionMediaMessageMeta {
-    const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'));
-    const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'));
+export function parseSessionMediaMessageMeta(meta: unknown, toolCallId?: string): ParsedSessionMediaMessageMeta {
+    const primaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happier'), toolCallId);
+    const secondaryMedia = parseSessionMediaEnvelope(readEnvelope(meta, 'happierMedia'), toolCallId);
     const legacyAttachments = parseLegacyAttachmentsMeta(meta);
     const legacyMedia = legacyAttachments ? normalizeAttachmentMetaToSessionMedia(legacyAttachments.attachments) : [];
 

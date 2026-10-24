@@ -135,6 +135,18 @@ If an image is too large for the in-app preview budget, or the preview cannot be
 
 This protects transcript performance while preserving access to the underlying file.
 
+## Images returned by Agent tools
+
+In development source, Claude Code tool results that contain image blocks can also
+appear as previews below the tool row, including images read with `Read`. This
+requires the corrected CLI and app; it is not a claim of availability in 0.2.17.
+The image is stored with the session's workspace media and uses the existing
+preview flow. The machine hosting the session must be reachable to load it.
+
+The CLI keeps the tool's text and execution status if image persistence fails.
+A persisted unavailable-media item explains that the image could not be attached.
+Remote HTTP image URLs are not downloaded by this flow.
+
 ## Attachment storage location
 
 You can control where Happier stores uploaded message attachments.

@@ -96,6 +96,22 @@ Diffs and edits:
 - Codex per-turn diffs (`turn_diff.unified_diff`) are emitted as a single `CodexDiff` per turn and normalized to canonical `Diff`.
   Multi-file unified diffs are rendered per-file in the app.
 
+### Claude tool-result images (development source)
+
+All Claude transcript write modes, including exact live writes and historical replay,
+pass through `ApiSessionClient.prepareClaudeSessionMessage`. Its Claude-owned media
+adapter reuses the existing content-block extractor and `createAgentSessionMediaPersister`
+before serialization. Image bytes become workspace media files; the tool result keeps
+its identity, text, permissions and sidechain, with the existing `session_media.v1`
+metadata. Duplicate native image bytes are replaced in the transcript copy only.
+Persistence failures use the shared unavailable-media result. The protocol envelope
+owns the per-row entry budget; overflow is reported in the normal file log.
+
+The shared tool transcript row renders that metadata with the same preview and
+unavailable-item components as text rows. Images with a tool-call origin are shown
+only on their matching tool, including bundled parallel results. This requires both
+the corrected CLI writer and UI renderer; it introduces no new server wire format.
+
 ### 3) App rendering normalization (fallback)
 
 The app prefers V2 (`_happier.canonicalToolName`) when present. For sessions without `_happier` metadata (legacy + Claude local-control),
