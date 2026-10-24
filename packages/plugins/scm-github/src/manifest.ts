@@ -1487,6 +1487,7 @@ function createGithubPlugin() {
     [CHANNELS_PLUGIN_ID]: {
       [CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1]: {
         [GITHUB_CHANNEL_PROVIDER_CONTRIBUTION_ID]: providers.contribute({
+          descriptor: { v: 1, displayName: 'GitHub' },
           operations: {
             setup: providers.operations.setup.bind(GITHUB_CHANNEL_ACTION_IDS.setup),
             connectionTest: providers.operations.connectionTest.bind(GITHUB_CHANNEL_ACTION_IDS.connectionTest),

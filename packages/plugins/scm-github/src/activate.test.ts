@@ -61,6 +61,7 @@ describe('activate', () => {
       expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual(
         expect.arrayContaining([{
           id: 'github-repository',
+          descriptor: { v: 1, displayName: 'GitHub' },
           target: { pluginId: 'happier.channels', pointId: 'providers' },
           protocol: { id: 'happier.channels/providers', version: 1 },
           operations: GITHUB_CHANNEL_PROVIDER_OPERATIONS,
