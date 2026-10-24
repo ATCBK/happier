@@ -317,9 +317,19 @@ async function reportSourceStatus(params: SourceStatusParams): Promise<void> {
     const existing = await params.tx.automationEventSourceStatus.findUnique({
         where: key,
         select: {
+            eventPluginId: true,
+            eventLocalId: true,
+            sourceSelectorId: true,
             triggerRevision: true,
+            reporterMachineId: true,
+            reporterMachineInstallationId: true,
+            reporterMaterializationId: true,
+            reporterSourceCustody: true,
+            state: true,
+            code: true,
             lastObservedAt: true,
             lastDispositionAt: true,
+            nextRetryAt: true,
             observedCount: true,
             admittedCount: true,
             skippedCount: true,
@@ -329,7 +339,7 @@ async function reportSourceStatus(params: SourceStatusParams): Promise<void> {
     const currentRevisionStatus = existing?.triggerRevision === params.input.triggerRevision
         ? existing
         : null;
-    const values = {
+    const semanticValues = {
         eventPluginId: params.input.eventRef.pluginId,
         eventLocalId: params.input.eventRef.localId,
         sourceSelectorId: params.input.sourceSelectorId,
@@ -359,8 +369,12 @@ async function reportSourceStatus(params: SourceStatusParams): Promise<void> {
             currentRevisionStatus?.skippedCount ?? 0,
             params.input.skippedDelta,
         ),
-        revision: addBoundedCounter(existing?.revision ?? 0, 1),
     };
+    const { revision, ...existingValues } = existing ?? {};
+    // A receipt has no independent freshness clock. Keep currentness admission
+    // above, but advance its projection only when a source fact actually changes.
+    if (existing && isDeepStrictEqual(existingValues, semanticValues)) return;
+    const values = { ...semanticValues, revision: addBoundedCounter(revision ?? 0, 1) };
     if (existing) {
         const updated = await params.tx.automationEventSourceStatus.updateMany({
             where: { ...key, revision: existing.revision, triggerRevision: existing.triggerRevision },

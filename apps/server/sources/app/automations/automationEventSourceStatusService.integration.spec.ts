@@ -765,6 +765,80 @@ describe("Automation Event source status", () => {
         });
     });
 
+    it("publishes source status only when current report facts or counters change", async () => {
+        await seed();
+        const emitUpdate = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
+        const report = {
+            kind: "source" as const,
+            automationId: AUTOMATION_ID,
+            triggerId: TRIGGER_ID,
+            triggerRevision: TRIGGER_REVISION,
+            eventRef: { pluginId: PLUGIN_ID, localId: EVENT_LOCAL_ID },
+            sourceSelectorId: SOURCE_SELECTOR_ID,
+            state: "observing" as const,
+            code: "none" as const,
+            nextRetryAt: null,
+            observedDelta: 0,
+            admittedDelta: 0,
+            skippedDelta: 0,
+        };
+        const send = (input: unknown = report) => reportAutomationEventSourceStatusV1({ accountId: ACCOUNT_ID, caller, input });
+        const readStatus = () => db.automationEventSourceStatus.findUniqueOrThrow({ where: { triggerId: TRIGGER_ID } });
+        const published = async (revision: number) => {
+            const account = await db.account.findUniqueOrThrow({ where: { id: ACCOUNT_ID }, select: { seq: true } });
+            const change = await db.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: {
+                accountId: ACCOUNT_ID, kind: "automation", entityId: "automation-source-status",
+            } }, select: { cursor: true } });
+            expect({ revision: (await readStatus()).revision, accountSeq: account.seq, cursor: change.cursor,
+                wakes: emitUpdate.mock.calls.filter(([update]) => update.payload.body.t === "account-change").length,
+                sourceUpdates: emitUpdate.mock.calls.filter(([update]) => update.payload.body.t === "automation-source-status-updated").length,
+            }).toEqual({ revision, accountSeq: revision, cursor: revision, wakes: revision, sourceUpdates: revision });
+        };
+        await send();
+        const initial = await readStatus();
+        for (let index = 0; index < 3; index++) await send();
+        // Omitted occurrence times and explicit nulls describe the same initial facts.
+        await send({ ...report, lastObservedAt: null, lastDispositionAt: null });
+        await published(1);
+        expect(await readStatus()).toEqual(initial);
+
+        await send({ ...report, lastObservedAt: 1_723_247_200_000, lastDispositionAt: 1_723_247_200_001 });
+        await published(2);
+        await send();
+        await published(2);
+        expect(await readStatus()).toMatchObject({ lastObservedAt: new Date(1_723_247_200_000),
+            lastDispositionAt: new Date(1_723_247_200_001) });
+        // Explicit null clears a timestamp; omitting it above preserved it.
+        await send({ ...report, lastObservedAt: null });
+        await published(3);
+        await send({ ...report, observedDelta: 1 });
+        await published(4);
+        await send({ ...report, state: "backingOff", code: "admissionUnavailable", nextRetryAt: 1_723_247_260_000 });
+        await published(5);
+
+        // A current reporter must replace retained facts belonging to an old reporter,
+        // even when its state, timestamps and counters otherwise match.
+        const backingOff = { ...report, state: "backingOff", code: "admissionUnavailable", nextRetryAt: 1_723_247_260_000 };
+        const retiredReporterFields = [
+            { reporterMachineId: "retired-machine" },
+            { reporterMachineInstallationId: "retired-installation" },
+            { reporterMaterializationId: "retired-materialization" },
+            { reporterSourceCustody: { ...caller.sourceCustody, immutableGenerationId: "retired-generation" } },
+        ];
+        for (const [index, data] of retiredReporterFields.entries()) {
+            await db.automationEventSourceStatus.update({ where: { triggerId: TRIGGER_ID }, data });
+            await send(backingOff);
+            await published(6 + index);
+        }
+        await send(backingOff);
+        await published(9);
+
+        // Equal facts do not bypass current materialization admission.
+        await db.pluginMachineMaterialization.updateMany({ where: { materializationId: MATERIALIZATION_ID }, data: { enabled: false } });
+        await expect(send(backingOff)).rejects.toMatchObject({ code: "caller_materialization_not_current" });
+        await published(9);
+    });
+
     it("publishes catalog status only for semantic changes, not unchanged receipts", async () => {
         await seed();
         const emitUpdate = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
