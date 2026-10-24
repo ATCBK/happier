@@ -67,7 +67,17 @@ describe('CapabilityMachineTruth', () => {
         await pressTestInstanceAsync(screen.findByTestId('mt:machine:nl2'), 'nl2 row');
 
         expect(opened).toEqual(['nl2']);
-        expect(screen.getTextContent()).toContain('setup for nl2');
         expect(screen.getTextContent()).not.toContain('setup for MacBook Pro');
+    });
+
+    it('keeps the open machine in view when it would fold behind "more machines"', async () => {
+        const rows = ROWS.map((row) => ({ ...row, detail: <React.Fragment>{`setup for ${row.machineName}`}</React.Fragment> }));
+        const screen = await renderScreen(
+            <CapabilityMachineTruth testID="mt" presentation="list" rows={rows} summary="" visibleCount={1} expandedMachineId="nl2" />,
+        );
+        // The page that sends someone to a machine ("Set up Codex" on nl2) never hides that machine's row.
+        expect(screen.findAllByTestId('mt:machine:nl2').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('mt:machine:win')).toHaveLength(0);
+        expect(screen.getTextContent()).toContain('1 more machine');
     });
 });

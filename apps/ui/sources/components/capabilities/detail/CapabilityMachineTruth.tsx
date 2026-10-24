@@ -70,6 +70,10 @@ export function CapabilityMachineTruth(props: Readonly<{
     // The list form shows its first rows; a long tail (machines that can't run it, offline) folds behind one row.
     const [showAll, setShowAll] = React.useState(false);
     const visibleCount = Math.max(1, props.visibleCount ?? LIST_FOLD_AFTER);
+    // The machine a page opens (for example, the one a recovery names) is never folded away.
+    const shownRows = showAll
+        ? props.rows
+        : props.rows.filter((row, index) => index < visibleCount || row.machineId === props.expandedMachineId);
     const action = props.sectionAction;
     return (
         <ItemGroup
@@ -93,7 +97,7 @@ export function CapabilityMachineTruth(props: Readonly<{
                 <Item testID={`${props.testID}:none`} title={props.emptyLabel ?? t('capabilities.detail.noMachines')} showChevron={false} />
             ) : props.presentation === 'list' ? (
                 <>
-                    {(showAll ? props.rows : props.rows.slice(0, visibleCount)).map((row) => (
+                    {shownRows.map((row) => (
                         <CapabilityMachineTruthRowView
                             key={row.machineId}
                             row={row}
@@ -102,10 +106,10 @@ export function CapabilityMachineTruth(props: Readonly<{
                             onExpandedChange={props.onExpandedMachineChange}
                         />
                     ))}
-                    {!showAll && props.rows.length > visibleCount ? (
+                    {shownRows.length < props.rows.length ? (
                         <Item
                             testID={`${props.testID}:more`}
-                            title={t('capabilities.detail.moreMachines', { count: props.rows.length - visibleCount })}
+                            title={t('capabilities.detail.moreMachines', { count: props.rows.length - shownRows.length })}
                             titleStyle={styles.more}
                             leftElement={<ExpandableItemCaret expanded={false} />}
                             onPress={() => setShowAll(true)}
