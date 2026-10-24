@@ -215,7 +215,7 @@ describe('connectedServiceRegistry', () => {
       configuration: { scope: 'service' as const, changeBehavior: 'reconnect' as const, fields: [] } };
     const projection: ConnectedAccountDescriptorProjectionState = { scopeKey: 'server-a', status: 'ready', conflicts: [], errorReason: null,
       descriptors: [{ id: service.localId, pluginId: service.pluginId, serviceId: 'cloud', title: 'Cloud', provenance: 'external',
-        sourceKind: 'installed', authentication: { defaultModeId: mode.id, modes: [mode] }, capabilities: [],
+        sourceKind: 'installed', authentication: { defaultModeId: mode.id, modes: [mode] }, capabilities: [], ui: { category: 'cloud-machines' },
         availability: { state: 'blocked', reason: 'runtime_unavailable' }, diagnostics: [] }] };
     let current = true;
     const lifetime = { scope: { serverId: 'server-a', accountId: 'account-a' }, isCurrent: () => current,
@@ -228,6 +228,7 @@ describe('connectedServiceRegistry', () => {
     expect(getConnectedServiceRegistrySnapshot(lifetime.scope).entries).toHaveLength(1);
     expect(getConnectedServiceRegistrySnapshot({ ...lifetime.scope, accountId: 'account-b' }).entries).toEqual([]);
     expect(getQualifiedConnectedServiceRegistryEntry(service)?.executable).toBe(false);
+    expect(getQualifiedConnectedServiceRegistryEntry(service)?.projectedDescriptor?.ui).toEqual({ category: 'cloud-machines' });
     expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toEqual(mode);
     expect(getAccountConnectedServiceConfigurationMode(target, { ...lifetime.scope, accountId: 'account-b' })).toBeNull();
     installConnectedAccountDescriptorProjection({ ...projection, status: 'stale' }, lifetime);

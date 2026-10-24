@@ -36,7 +36,7 @@ type ConnectedServiceTokenKind =
 // Built-in presentation follows the same exact qualified identity as the released compatibility
 // owner. A third-party contribution with a matching local id never borrows these instructions.
 const BUILT_IN_SETUP_PRESENTATION = {
-  'claude-subscription': { order: 0, firstRun: true, catalogDescriptionKey: 'connectedServicesSettings.catalogClaude', manualMethodTitleKey: 'connectedServicesSettings.methodToken' },
+  'claude-subscription': { order: 0, firstRun: true, catalogDescriptionKey: 'connectedServicesSettings.catalogClaude' },
   'openai-codex': { order: 1, firstRun: true, catalogDescriptionKey: 'connectedServicesSettings.catalogChatGpt' },
   gemini: { order: 2, firstRun: true, catalogDescriptionKey: 'connectedServicesSettings.catalogGemini' },
   anthropic: {
