@@ -52,6 +52,13 @@ describe('stored MessageMetaSchema', () => {
         expect(TranscriptRawRecordV1Schema.parse(stored).meta).toEqual(parsed.meta);
     });
 
+    it('keeps the saved SCM publication receipt that sits beside its result envelope', () => {
+        const scmResultUpdate = { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'created' }] };
+        const parsed = MessageMetaSchema.parse({ source: 'cli', happier: { kind: 'scm_diff_summary.v1', payload: { success: true } }, scmResultUpdate });
+
+        expect(parsed.scmResultUpdate).toEqual(scmResultUpdate);
+    });
+
     it('drops unknown and prototype-related stored keys', () => {
         const payload = JSON.parse(
             '{"source":"ui","safeProviderFlag":true,"__proto__":{"polluted":true},"constructor":{"prototype":{"evil":true}},"prototype":{"x":1}}',

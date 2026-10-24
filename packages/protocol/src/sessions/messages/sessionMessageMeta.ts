@@ -147,6 +147,8 @@ export function createSessionMessageMetaSchema(zod: typeof z) {
       [HAPPIER_SKILL_MENTIONS_METADATA_KEY]: zod.catch(zod.optional(zod.array(SkillMentionV1Schema)), undefined),
       happierBrowserContext: z.catch(z.optional(BrowserContextMessageMetaV1Schema), undefined),
       happierExecutionRunInputTurnV1: z.catch(z.optional(ExecutionRunInputTurnV1Schema), undefined),
+      // A saved SCM result's publication or refusal beside its `scm_diff_summary.v1` envelope; the receipt reader validates it.
+      scmResultUpdate: zod.optional(zod.unknown()),
       // Legacy attachment/native identity carriers are decoded by their existing source owners.
       happierAttachments: zod.optional(zod.unknown()),
       opencodeMessageId: zod.optional(zod.unknown()),
