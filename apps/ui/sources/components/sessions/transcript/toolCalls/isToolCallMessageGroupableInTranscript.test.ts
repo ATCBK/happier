@@ -69,3 +69,18 @@ describe('transcript visual replies', () => {
         expect(isToolCallMessageGroupableInTranscript(visualCall('transcript', 'running'))).toBe(true);
     });
 });
+
+describe('Ask record rows', () => {
+    const sendCall = (name: string, actionId: string | null) => {
+        const base = createToolCallMessageFixture();
+        return createToolCallMessageFixture({ tool: { ...base.tool, name,
+            input: actionId ? { actionId, input: { sessionId: 'receiver', message: 'Question', reply: 'wait' } } : { sessionId: 'receiver' },
+            result: { ok: true, result: { status: 'accepted', localId: 'request' } } } });
+    };
+
+    it('stands an agent’s message send on its own, so who it asked and how it ended stay visible, and groups other Actions', () => {
+        expect(isToolCallMessageGroupableInTranscript(sendCall('mcp__happier__action_execute', 'session.message.send'))).toBe(false);
+        expect(isToolCallMessageGroupableInTranscript(sendCall('mcp__happier__action_execute', 'session.status.get'))).toBe(true);
+        expect(isToolCallMessageGroupableInTranscript(sendCall('exec', null))).toBe(true);
+    });
+});

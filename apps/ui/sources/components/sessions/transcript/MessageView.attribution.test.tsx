@@ -417,15 +417,50 @@ describe('MessageView Account attribution', () => {
         expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.body.fold')).toBeNull();
         // Measured longer than the bound: Show more appears, and pressing it releases the clip.
         measure(4000);
+        // The clip ends in the shared edge fade, so it never slices a line of text in half.
+        expect(JSON.stringify(clip())).toContain('maskImage');
         expect(screen.getTextContent()).toContain('session.returnedAnswer.showMore');
         await screen.pressByTestIdAsync('transcript-returned-answer:returned-answer.body.fold');
         expect(JSON.stringify(clip())).not.toContain('maxHeight');
+        expect(JSON.stringify(clip())).not.toContain('maskImage');
         expect(screen.getTextContent()).toContain('session.returnedAnswer.showLess');
         await screen.pressByTestIdAsync('transcript-returned-answer:returned-answer.body.fold');
         expect(JSON.stringify(clip())).toContain('maxHeight');
         // An answer that fits is drawn whole: no control.
         measure(48);
         expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.body.fold')).toBeNull();
+        expect(JSON.stringify(clip())).not.toContain('maskImage');
+    });
+
+    it('draws a composer Ask entry as the Ask record row, not as a generic information line', async () => {
+        const { normalizeRawMessage } = await import('@happier-dev/session-core/raw');
+        const { createReducer, reducer } = await import('@happier-dev/session-core/reducer');
+        const { projectSessionMessageInvocationV1 } = await import('@happier-dev/protocol/sessions/messages/sessionMessageInvocationV1');
+        const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
+        const { publishAppliedActiveServerSnapshot, getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const home = await upsertServerProfile({ serverUrl: 'https://ask-record-wiring.example.test' });
+        const previousRuntime = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        try {
+            storage.getState().activateProfileScope({ serverId: home.id, accountId: 'alice' });
+            publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: 'https://ask-record-wiring.example.test', generation: previousRuntime.generation + 1 });
+            const invocation = projectSessionMessageInvocationV1({ serverId: home.id, localId: 'attempt', requestLocalId: 'attempt', target: 'receiver', reply: 'none',
+                result: { ok: true, result: { status: 'accepted', localId: 'attempt' } } });
+            const raw = normalizeRawMessage('ask-entry', 'attempt', 10, { role: 'agent', content: { type: 'event', id: 'attempt', data: {
+                type: 'message', message: 'Is the changelog wording final?', sessionMessageInvocationV1: invocation } } }, { messageRole: 'event', seq: 1 });
+            const message = reducer(createReducer(), [raw!]).messages[0]!;
+            const screen = await renderScreen(
+                <MessageViewWithSessionCommon sessionId="asker" serverId={home.id} metadata={null} message={message}
+                    forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
+                    messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
+                    toolChromeCommon={{ ...settingsDefaults, serverId: home.id }} toolRouteCommon={{ messagesById: {}, reducerState: null }} />,
+            );
+            expect(screen.getTextContent()).toContain('Is the changelog wording final?');
+            expect(screen.findAllByType(TranscriptEventRow)).toHaveLength(0);
+            expect(screen.findHostByTestId(`session-ask-record:${message.id}`)).not.toBeNull();
+        } finally {
+            publishAppliedActiveServerSnapshot(previousRuntime, previousAvailable);
+        }
     });
 
     it('renders a single trusted human byline before the bubble while preserving recovered-history status', async () => {

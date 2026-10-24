@@ -13,19 +13,17 @@ import {
   type SessionInputReturnedAnswerV1,
 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
-import { resolveAgentIdFromFlavor } from '@/agents/registry/registryCore';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { useTranscriptSessionIdentity } from '@/components/sessions/transcript/references/useTranscriptSessionIdentity';
 import { useSelectedSessionMessageReply } from '@/components/sessions/transcript/references/useSelectedSessionMessageReply';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
-import { useSessionDisplayNameSource } from '@/sync/domains/state/storage';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
 /** The protected return facts on an answer that came back to this session, if it is one. */
@@ -36,6 +34,12 @@ export function readReturnedAnswer(
   const authority = readSessionInputAuthority(message.meta, 'stored');
   return authority?.v === 1 ? (authority.returnedAnswer ?? null) : null;
 }
+
+// The clip ends in the shared scroll-edge fade, so a long answer never ends on half a line of text.
+const QUOTE_CLIP_FADE = resolveVerticalScrollEdgeMaskStyle(
+  { top: false, bottom: true, left: false, right: false },
+  { fadeSize: transcriptMarkdownTextStyle.lineHeight * 1.5 },
+) ?? undefined;
 
 function readLabels(): HappierReturnedAnswerQuoteLabels {
   return {
@@ -79,11 +83,7 @@ export function ReturnedAnswerQuote(
     null;
   // The transcript's own Home qualifies the sender, as the provenance label does.
   const serverId = props.serverId ?? transcriptSource.serverId ?? null;
-  const sender = useSessionDisplayNameSource(senderId ?? '', serverId);
-  const senderName = sender
-    ? getSessionName(sender, serverId)
-    : t('message.provenanceSession');
-  const senderAgentId = resolveAgentIdFromFlavor(sender ? readSessionOwnerMetadataView(sender)?.flavor ?? null : null);
+  const sender = useTranscriptSessionIdentity(senderId, serverId);
   const navigate = transcriptSource.navigate;
   const [questionOpen, setQuestionOpen] = React.useState(false);
   // One exact read, only while the question is open; never one per transcript row.
@@ -116,14 +116,14 @@ export function ReturnedAnswerQuote(
   return (
     <HappierReturnedAnswerQuote
       testID={`transcript-returned-answer:${props.message.id}`}
-      answerer={senderName}
+      answerer={sender.name}
       outcome={props.answer.outcome}
       onOpenAnswerer={senderId && navigate
         ? () => navigate(buildScopedSessionRouteHref({ sessionId: senderId, serverId }))
         : undefined}
       question={{ open: questionOpen, onToggle: () => setQuestionOpen((open) => !open), state: question }}
       labels={labels}
-      answererMark={<AgentIcon agentId={senderAgentId} size={ICON_SIZE.xs} />}
+      answererMark={<AgentIcon agentId={sender.agentId} size={ICON_SIZE.xs} />}
       informationMark={<Icon name="info" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
       Text={QuoteText}
       Action={QuoteAction}
@@ -137,6 +137,7 @@ export function ReturnedAnswerQuote(
       radius={theme.borderRadius.xl}
       collapse={{
         lineHeight: transcriptMarkdownTextStyle.lineHeight,
+        fade: QUOTE_CLIP_FADE,
         showMore: t('session.returnedAnswer.showMore'),
         showLess: t('session.returnedAnswer.showLess'),
       }}

@@ -1,6 +1,7 @@
 import { readTurnChangeToolMetadataFromToolCall } from '@happier-dev/protocol/sessions/messages/canonicalTurnDiffTool';
 import { isTranscriptSessionBoardItemReplyCallV1 } from '@happier-dev/protocol/sessions/board';
 import { readReviewToolRunId } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
+import { isSessionMessageInvocationAnchor } from '../references/readSessionMessageInvocation';
 
 import type { Message, ToolCallMessage } from "@happier-dev/session-core/messages";
 
@@ -21,6 +22,10 @@ export function isToolCallMessageGroupableInTranscript(message: Message): messag
     if (isTranscriptSessionBoardItemReplyCallV1({ toolName: tool.name, state: tool.state, input: tool.input, result: tool.result })) {
         return false;
     }
+
+    // An agent's Ask or Send is a record of who was asked and how it ended (its row sits under the call), so it
+    // stays in the reply column instead of inside a collapsed group.
+    if (isSessionMessageInvocationAnchor(message)) return false;
 
     // An unanswered permission, question or credential request owns interactive
     // controls; ordinary tool disclosure must never conceal those controls.

@@ -94,6 +94,8 @@ import { isRecoveredHistoryTranscriptObservation } from "@happier-dev/session-co
 import type { TranscriptEventEmphasis } from '@/components/sessions/transcript/events/transcriptEventEmphasis';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ReturnedAnswerQuote, readReturnedAnswer } from '@/components/sessions/transcript/returnedAnswer/ReturnedAnswerQuote';
+import { SessionAskRecord } from '@/components/sessions/transcript/askRecord/SessionAskRecord';
+import { isSessionMessageInvocationAnchor } from '@/components/sessions/transcript/references/readSessionMessageInvocation';
 import { Typography } from '@/constants/Typography';
 import { SessionMessageAccountByline } from './SessionMessageAccountByline';
 import type { ToolViewDisplaySettings } from '@/components/tools/shell/views/toolViewDisplaySettings';
@@ -620,6 +622,11 @@ function RenderBlock(props: {
       />;
 
     case 'agent-event':
+      // A composer Ask or Send is one record in the asker's own transcript (its text, targets and results).
+      if (isSessionMessageInvocationAnchor(props.message)) {
+        return <SessionAskRecord message={props.message} sessionId={props.sessionId}
+          serverId={props.toolChromeCommon.serverId ?? props.serverId ?? null} />;
+      }
       return (
         <TranscriptJumpAttention
           sessionAddress={transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null}
@@ -1660,6 +1667,9 @@ function ToolCallBlock(props: {
           displaySettings={props.toolChromeCommon.toolDisplaySettings}
         />
       )) : null}
+      {isSessionMessageInvocationAnchor(props.message) ? (
+        <SessionAskRecord message={props.message} sessionId={props.sessionId} serverId={props.toolChromeCommon.serverId ?? null} embedded />
+      ) : null}
       {toolSessionMediaMeta ? (
         <SessionMediaInlineImages
           sessionId={props.sessionId}
