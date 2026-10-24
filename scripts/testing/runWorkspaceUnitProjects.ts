@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,7 +46,24 @@ async function createProject(rootDir: string, workspace: WorkspaceManifest): Pro
   };
 }
 
-/** One Vitest instance; package manifests retain ownership of non-Vitest checks. */
+/** Combine the per-project Vitest JSON reports into the single report CI consumes. */
+async function mergeJsonReports(parts: readonly string[], output: string): Promise<void> {
+  const merged: Record<string, unknown> & { testResults: unknown[]; success: boolean } = { testResults: [], success: true };
+  for (const part of parts) {
+    const report = JSON.parse(await readFile(part, 'utf8')) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(report)) {
+      if (key === 'testResults' && Array.isArray(value)) merged.testResults.push(...value);
+      else if (key === 'success') merged.success &&= value === true;
+      else if (key === 'startTime' && typeof value === 'number') merged[key] = Math.min(value, typeof merged[key] === 'number' ? merged[key] : value);
+      else if (typeof value === 'number') merged[key] = (typeof merged[key] === 'number' ? merged[key] : 0) + value;
+      else if (!(key in merged)) merged[key] = value;
+    }
+    await rm(part, { force: true });
+  }
+  await writeFile(output, JSON.stringify(merged));
+}
+
+/** One Vitest instance per project; package manifests retain ownership of non-Vitest checks. */
 export async function runWorkspaceUnitProjects(options: {
   rootDir: string;
   workspaces: readonly WorkspaceManifest[];
@@ -73,29 +90,37 @@ export async function runWorkspaceUnitProjects(options: {
     if (await runHook(workspace, 'test:unit:prepare')) ready.push(workspace);
   }
   if (ready.length > 0) {
-    const projects = await Promise.all(ready.map((workspace) => createProject(options.rootDir, workspace)));
     const workers = resolveVitestWorkers();
     const poolEnv = resolveVitestPoolEnv(workers);
     const previous = Object.keys(poolEnv).map((key) => [key, process.env[key]] as const);
+    const previousExitCode = process.exitCode;
+    const jsonOutput = process.env.HAPPIER_UNIT_JSON_OUTPUT;
+    const jsonParts: string[] = [];
     const passed: WorkspaceManifest[] = [];
+    let selectedModuleCount = 0;
     try {
       Object.assign(process.env, poolEnv);
-      const vitest = await startVitest('test', [...(options.filters ?? [])], {
-        root: options.rootDir,
-        config: false,
-        run: true,
-        watch: false,
-        allowOnly: false,
-        reporters: ['default', ...(process.env.HAPPIER_UNIT_JSON_OUTPUT ? ['json' as const] : [])],
-        ...(process.env.HAPPIER_UNIT_JSON_OUTPUT ? { outputFile: process.env.HAPPIER_UNIT_JSON_OUTPUT } : {}),
-        ...workers,
-      }, { test: { projects } });
-      if (!vitest) throw new Error('Vitest could not start the selected unit projects.');
-      try {
-        const modules = vitest.state.getTestModules();
-        for (const workspace of ready) {
-          const name = workspace.packageName ?? workspace.workspaceDirectory;
-          const selectedModules = modules.filter((module) => module.project.name === name);
+      // Every Vitest instance retains one Vite module graph per project until it
+      // closes, so memory grows with the sum of projects. Run one project per
+      // instance so each graph is released before the next project starts.
+      for (const workspace of ready) {
+        const name = workspace.packageName ?? workspace.workspaceDirectory;
+        const partFile = jsonOutput ? `${jsonOutput}.part-${jsonParts.length}` : undefined;
+        process.exitCode = undefined;
+        const vitest = await startVitest('test', [...(options.filters ?? [])], {
+          root: options.rootDir,
+          config: false,
+          run: true,
+          watch: false,
+          allowOnly: false,
+          reporters: ['default', ...(partFile ? ['json' as const] : [])],
+          ...(partFile ? { outputFile: partFile } : {}),
+          ...workers,
+        }, { test: { projects: [await createProject(options.rootDir, workspace)] } });
+        if (!vitest) throw new Error('Vitest could not start the selected unit projects.');
+        try {
+          const selectedModules = vitest.state.getTestModules().filter((module) => module.project.name === name);
+          selectedModuleCount += selectedModules.length;
           if (selectedModules.some((module) => module.state() === 'failed')) {
             failures.push(`${workspace.workspaceDirectory}: Vitest failed`);
           } else if (selectedModules.length === 0) {
@@ -103,16 +128,22 @@ export async function runWorkspaceUnitProjects(options: {
           } else {
             passed.push(workspace);
           }
+          for (const error of vitest.state.getUnhandledErrors()) {
+            const message = error !== null && typeof error === 'object' && 'message' in error ? error.message : undefined;
+            failures.push(String(message ?? error));
+          }
+          if (process.exitCode && selectedModules.length > 0 && !failures.some((failure) => failure.startsWith(`${workspace.workspaceDirectory}`))) {
+            failures.push(`${workspace.workspaceDirectory}: Vitest exited unsuccessfully.`);
+          }
+        } finally {
+          await vitest.close();
         }
-        for (const error of vitest.state.getUnhandledErrors()) {
-          const message = error !== null && typeof error === 'object' && 'message' in error ? error.message : undefined;
-          failures.push(String(message ?? error));
-        }
-        if (process.exitCode && failures.length === 0) failures.push('Vitest exited unsuccessfully.');
-      } finally {
-        await vitest.close();
+        if (partFile) jsonParts.push(partFile);
       }
+      if (options.filters?.length && selectedModuleCount === 0) failures.push('No test files matched the requested filters.');
+      if (jsonOutput) await mergeJsonReports(jsonParts, jsonOutput);
     } finally {
+      process.exitCode = previousExitCode;
       for (const [key, value] of previous) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
