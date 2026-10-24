@@ -1,7 +1,7 @@
 import type { FileSearchItem } from '@/sync/domains/fileSystem/fileSearchItem';
 
 export type RecentWorkspaceFiles = Readonly<Record<string, string[]>>;
-// The approved storage count protects the device-local settings blob; the oldest path drops.
+// The approved recent-list length; the oldest path drops when another file opens.
 const RECENT_WORKSPACE_FILE_COUNT = 20;
 
 export function parseRecentWorkspaceFiles(value: unknown): Record<string, string[]> {
