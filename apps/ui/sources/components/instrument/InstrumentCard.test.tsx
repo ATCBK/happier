@@ -52,12 +52,12 @@ describe('instrument InstrumentCard', () => {
     });
 
     it('tile variant (default) adopts the canonical flat grouped-surface chrome — no competing drop shadow or bespoke radius (D-R4-1)', () => {
-        // The canonical grouped surface (ItemGroup) draws the ink `border.surface` hairline, its raised
-        // bottom lip and the level-1 lift. InstrumentCard's tile must match exactly so it does not
-        // read as a different tile than every other in the app.
+        // The canonical in-flow card (ItemGroup) draws the card fill, the ink `border.surface` hairline,
+        // its raised bottom lip and the card grounding. InstrumentCard's tile must match exactly so it does
+        // not read as a different tile than every other in the app.
         const tree = render(<InstrumentCard testID="card"><React.Fragment>content</React.Fragment></InstrumentCard>);
         const surface = surfaceStyleOf(tree);
-        expect(surface.backgroundColor).toBe('#ffffff');
+        expect(surface.backgroundColor).toBe(lightTheme.colors.edge.cardFill);
         expect(surface.borderColor).toBe(lightTheme.colors.border.surface);
         expect(Number(surface.borderWidth)).toBeGreaterThan(0);
         expect(Number(surface.borderBottomWidth)).toBeGreaterThan(0);
