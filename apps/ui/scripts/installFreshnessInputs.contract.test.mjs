@@ -28,7 +28,7 @@ test('UI manifest declares every local postinstall input through the canonical i
     ['vendor-pierre-diffs-worker', ['tools/diffs']],
     ['vendor-password-kdf-worker', ['tools/password', 'tools/sourceAsset.mjs']],
     ['vendor-crypto-worker', ['tools/crypto', 'tools/sourceAsset.mjs']],
-    ['prepare-atmosphere-renderers', ['tools/atmosphere', 'tools/sourceAsset.mjs']],
+    ['prepare-atmosphere-renderers', ['tools/atmosphere/buildAtmosphereRenderers.mjs', 'tools/sourceAsset.mjs']],
     ['vendor-codemirror-webview-bundle', ['tools/codemirror']],
     ['vendor-xterm-webview-bundle', ['tools/xterm']],
     [

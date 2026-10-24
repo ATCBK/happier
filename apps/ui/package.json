@@ -13,7 +13,7 @@
       "tools/diffs",
       "tools/password",
       "tools/crypto",
-      "tools/atmosphere",
+      "tools/atmosphere/buildAtmosphereRenderers.mjs",
       "tools/sourceAsset.mjs",
       "tools/codemirror",
       "tools/xterm",
