@@ -168,7 +168,7 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
     knownRequests?: readonly AgentStartRequestV1[];
 }> {
     const { actionId, input: request, context, baseline } = params;
-    if (actionId === 'session.goal.set') {
+    if (actionId === 'session.goal.set' || actionId === 'session.goal.clear') {
         return { ok: true, effectiveInput: request,
             requests: [{ kind: 'session_target', targetSessionId: String(request.sessionId) }] };
     }
