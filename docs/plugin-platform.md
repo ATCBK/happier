@@ -23,6 +23,17 @@ immutable built-in registry for bundled declarations. Installed-plugin discovery
 still runs on each merged read; it cannot overwrite that built-in snapshot or
 retain an installed generation across reloads.
 
+Local CLI read-only help, Agent listing and static completion instead consume
+the installation writer's existing `approvedAuthorityManifest`. The canonical
+registry pointer and revision readers validate their supported framing once,
+without re-admitting each stored declaration or reopening a live plugin source.
+A supported installation without that accepted manifest retains its installation
+identity and `plugin_manifest_missing` diagnostic, but contributes no read-only
+metadata; there is no live-source fallback or new persisted projection. These
+readers share command admission and selected-family field projectors with the
+executable registry. Invocation, activation and remote dynamic completion retain
+their existing full validation, approval and occurrence-currentness boundaries.
+
 The daemon's current catalog also retains the process-immutable bundled
 declaration projection. Each read still discovers installed entries, applies
 their bundled-id overrides, and joins generations, diagnostics and executable
@@ -41,6 +52,52 @@ that ignores the selection still supplies its full reply; tool consumers use its
 tools and retain the existing freshness checks.
 
 This is the standing reference for **0.3 development source / Developer Preview authoring**. Source availability is distinct from registry publication and loaded-platform verification. Exact public exports and capability facts come from the package-owned generated API and capability reports, not a hand-maintained list in this page.
+
+Executable Plugin UI mounts expose their existing physical renderer identity as
+`useSurfaceContext().mountId` (also `RenderContext.surface.mountId`). Native/RNW
+and hosted renderers retain it through rerenders, resizing and retained
+hide/reveal; a replacement renderer has a new identity. Unsupported contexts
+omit it rather than deriving one from a view, container, or React id. This is
+identity, not execution authority. An author binding mounted Actions releases
+its registration on component cleanup and on the existing `RenderContext.signal`
+abort, so host retirement also clears a callback in a retained tree. Hosted
+frames still have no in-process ephemeral shared-scope bridge. This is an
+unpublished current-source addition, not a compatibility promise for stale
+independently bundled development SDKs with an earlier strict context grammar.
+
+The development `openAutomationEvent` UI host method opens the existing Account trigger
+popover and its Event editor. Plugins supply a qualified Event and source-specific setup
+input, optionally a monitoring Machine and qualified Connected Account. Omitted choices
+remain unselected: the existing watcher chooser admits an explicit current Machine before
+loading its Event catalog, and the Event's Action form owns Connected Account selection. Only an opaque,
+Account-scoped temporary seed handle enters the Workflows route. The Event's current
+setup Action owns input validation and account selection; contradictory seeded account
+references are refused. Opening performs no source setup, enrollment or trigger write.
+The person explicitly configures the source, then completes the incumbent trigger form,
+including its Runs on and Then selections. The current Event editor serves the active
+Account only; an addressed nonactive Account is refused before navigation. Both native
+and hosted transports negotiate the method, and an older host reports unsupported.
+Generated SDK governance and loaded-runtime verification remain separate checks.
+
+The development `revealSessionInput({sessionId, localId})` UI host method opens one
+committed main user input in the Session transcript. The mounted Account supplies
+Home authority; the exact-input reader resolves its opaque local ID without an
+inventory scan, and the existing scoped message route and transcript jump owner
+load, scroll and highlight it. The host refuses unavailable or non-input rows,
+another active Home/Account, retired mounts and cancelled requests before navigation.
+Successful settlement means navigation was requested, not that a row already
+rendered. Both native and hosted clients negotiate the method through the existing
+host-method vocabulary; an unsupported host remains unsupported. This is an
+unreleased 0.3 author capability, with no new server or persistence format.
+
+The development `readMachineDisplayName({serverId, machineId})` UI host method
+reads the mounted active Account's exact `machineDisplayById` entry and reuses
+the canonical Machine display-name formatter. Unknown or revoked Machines,
+another Home, and a mismatched active Account return typed unavailable.
+Native and hosted clients negotiate this read through the existing method
+vocabulary. It adds no store, inventory scan, network read, or cross-Home
+fallback; only the viewer's already-admitted display projection is visible.
+This is an unreleased 0.3 source contract.
 
 The development executable participant picker is a controlled Plugin UI
 presentation, not another participant catalog or setup service. Core's modal
@@ -68,13 +125,29 @@ Plugin UI `presentation/capabilities/**`. Happier's Skills, MCP and Agents surfa
 primitives to it, and plugins reach it through the public `components` adapters (`CapabilityStatusChip`,
 `CapabilityFacts`, `CapabilityDetailHeader`, `CapabilityBlockingBanner`, `capabilityCollectionAnatomy`).
 The Where-it's-on control (its sentence, rule rows, add menu, consequence and words) is also composed by
-Plugin UI `presentation/capabilities/**` (`HappierWhereItsOnControl`, `sayHappierWhereItsOn`); Happier binds
-its words, settings primitives, Agent marks and the protocol reach rule engine
-(`whereItsOnReach` over `reachRulesChangeV1`) in `components/capabilities/where/**`. It has no public
-`components` adapter yet: plugins have no public reach rule engine (grouping, precedence, writes), and
-publishing one is an SDK decision. The catalog Add dialog and the reach map remain host-only.
+Plugin UI `presentation/capabilities/**` (`HappierWhereItsOnControl`, `sayHappierWhereItsOn`). It is
+engine-agnostic: it takes the computed state (Everywhere on or off, the stated rules, optionally the sentence) and
+says the person's choice as an intent (`everywhere`, `add`, `remove`, `narrow`). Happier's binding in
+`components/capabilities/where/**` turns its reach rules into that state and each intent into one `replace` through
+the protocol rule engine (`whereItsOnReach` over `reachRulesChangeV1`, `resolveCreateReachV1` for add flows), and
+passes the pruned sentence. Plugins use the public `WhereItsOnControl` adapter with their own state; no reach engine
+is published through Plugin UI or the SDK.
+
+The Add dialog's body (the ways to add as tabs, the catalog list with details beside it or pushed on a phone, the
+pinned footer and the registry selector) is owned by `presentation/capabilities/CapabilityAddBody.tsx`
+(`HappierCapabilityAddBody`). Happier's Add a skill, Add a server and Add an agent dialogs bind their primitives in
+`components/capabilities/add/CapabilityAddModal.tsx` and keep the modal frame (card, header, back link); plugins render
+the public `CapabilityAddBody` in their own page or sheet. No public dialog is added. The reach map remains
+host-only.
+
+The body reports mode changes to its caller; data acquisition stays with that caller. The skill and MCP
+callers demand registry item lists only while their catalog mode is shown. Opening Link, Upload or Paste
+does not load a never-presented catalog; returning to Browse uses the existing registry reader and its
+retained results and freshness checks.
 
 ## Declaration, activation and projection
+
+Generators, projections, catalogs and registries built from independent contributions isolate per contribution. An invalid or unprojectable contribution fails alone, with a diagnostic naming the plugin and the field, while host faults still propagate. Policy for one caller's intent stays at that caller; the shared reader returns facts.
 
 In 0.3 development source, the existing Machine registry projection carries
 the admitted Agent's optional `providerRequirements` and each Provider's typed
@@ -93,17 +166,52 @@ installed-package, Action, Resource, Machine-provisioner and Connected Account
 builders under the same registry lease, without constructing unrelated model, SCM,
 UI or Event payloads. Selection is part of the transport request identity. These
 partial replies never populate the complete UI projection cache; omitted selection
-still builds the full catalog. Workflow materialization retains that full demand
-because it consumes Action availability and occurrence metadata as well as Agents.
+still builds the full catalog.
 This describes source behavior, not a loaded-runtime performance result.
+
+In 0.3 development source, Workflow materialization requests
+`selection: 'workflowMaterialization'` from this same Describe owner. It projects
+only Agents and Actions, including current Action availability, occurrence,
+execution origin and authorization facts from the same runtime lease. Action
+schemas remain exact, occurrence-fenced reads. This selection builds no Settings,
+UI models, installed-package catalog or other contribution families, and does
+not populate the complete UI catalog cache.
+
+Settings projection isolates a malformed contribution using the existing
+`PluginDiagnosticRecordV1` channel. Full and Settings-only reads omit that
+contribution and retain healthy peers, including other families from the same
+plugin. Diagnostics carry the plugin version/source, contribution identity,
+typed Settings error code and field id. Notification-channel Settings use the
+same projection. The shared Settings admission owner in
+`apps/cli/src/plugins/settings/localSettingsContributions.ts` reuses the field-schema,
+default and editable-control validators. Author-module evaluation (including
+`plugins doctor`) and canonical install-manifest ingestion refuse invalid groups
+before publication, with the typed plugin/contribution/field diagnostic.
+Reading an already-admitted installation (managed, accepted development or
+bundled) validates its manifest framing and semantics without reapplying the
+new-publication Settings refusal. Retained declarations pass through that same owner:
+projection, runtime Settings services, declarative models and daemon Get/Set
+exclude invalid groups while retaining healthy siblings. This is demand-scoped
+Settings admission, not whole-registry compilation. Actual Settings values remain
+strictly validated on writes; opaque stored field ids survive healthy writes.
+Archive/npm staging and compatibility preflight retain safe typed Settings
+attribution. The daemon's install-failure result and CLI JSON carry the Settings
+code and plugin/group/field identity through the existing failure message,
+without exposing authored values.
+Missing host attribution or unexpected host
+failures remain errors. This is development-source behavior; loaded-runtime
+validation is a separate check.
 
 The daemon's existing generation-scoped build cache retains these selected
 registry projections separately from full replies. It shares output-equivalent
 host contexts, but full replies still distinguish locale, Host UI API and
 effective renderer availability. Current source, brand and applied-policy facts
 must match before reuse; changed facts replace the previous body for that
-context. Full construction prepares SCM before capturing those facts. After
-asynchronous miss preparation, execution origins are read again and the same
+context. Full construction reads SCM backend and hosting-provider declarations
+without activating their native runners. The existing SCM operation owner demands
+those runners when repository work begins and retains its authoritative registry
+lease through completion; named startup background services remain startup consumers.
+After asynchronous miss preparation, execution origins are read again and the same
 prepared snapshot supplies both the cache witness and response. Skill
 content remains a fresh filesystem read, not a generation-cached payload. This
 does not introduce a fleet-wide declaration cache or share Machine authority.
@@ -144,13 +252,164 @@ continue to govern both bundled and installed plugins.
 Account Action discovery retains selected manifests and exact source custody,
 including daemon-only targeted source declarations. Only Account-placed Actions
 receive Account activation targets; retaining a declaration grants no daemon
-execution rights. Resources retain their declarations in the selected manifest,
-but the Account runtime's executable Resource projection is empty because their
-registration host is daemon-only. They cannot require an Account activation
-target or fail unrelated discovery. Actual module or activation failures retain
+execution rights. Dynamic Resources explicitly select their executable placement:
+omitting `execution` keeps the daemon owner, while
+`execution: { target: 'account', account: { artifactId, exportName } }` uses the
+same portable artifact and `definePlugin.activateAccount` registration owner as
+Account Actions. Resource scope selects its host context, not its execution
+placement. Account Resource reads and observations use the selected Account
+without requiring a Machine; daemon-only declarations remain discoverable but
+receive no Account execution rights. Actual module or activation failures retain
 their plugin-scoped diagnostics and exclude that plugin's callable Actions while
 healthy peers remain discoverable. This applies to bundled and external plugins
 in 0.3 development source.
+
+Dynamic Resource callbacks in the 0.3 development source can compose admitted
+Action reads through `options.readAction(ref, input, { signal })`. The canonical
+Action executor retains the Resource's owning plugin caller, captured Account,
+occurrence and host-stamped Session context. The target must declare
+`readOnly: true` or a matching predicate in the existing input-predicate grammar;
+`dangerLevel: 'safe'` alone does not establish a read. Admission validates the
+actual input before invoking the target, so one mixed read/write Action can
+admit its read operands while refusing its mutation operands. The result keeps
+the ordinary Action success/failure envelope and existing permission checks.
+
+`options.observeAction(ref, input, invalidate, { signal })` installs dependencies
+without running the read handler. The target registers `observeRead` beside
+`run` in `definePlugin`, or through
+`api.actions.register(id, handler, { observeRead })`. Its observer receives the
+same admitted target context and owns its qualified dependencies, such as the
+selected Session's Collection query; the calling Resource receives invalidation
+and a disposable rather than another plugin's private storage. Cancellation,
+Account or occurrence retirement disposes the observation and fences late
+callbacks. A target or transport without read observation reports a typed
+unavailable failure; it does not silently substitute polling or execute a native
+read to establish a watch. These source extensions are under integration;
+package publication and loaded-runtime validation are not yet established.
+
+An Account Collection observer can select one intrinsic row with
+`collection.watch({ kind: 'row', rowId }, invalidate)`, using the same physical
+identity as `get(rowId)`. The host filters the existing content-free AccountChange
+row identities before fan-out; unrelated live row changes cause no callback or
+read. Full invalidations and cursor resets still wake the observer. Catch-up
+between an initial read and registration may conservatively wake that exact-row
+reader, without retaining a second row cache or requiring another index.
+
+In 0.3 development source, Collection read refusals retain their exact typed
+codes through daemon and direct Account UI readers. Resource refresh owners
+preserve the producer's nonretryable decision: a refused read settles, and an
+already-admitted observation waits for a real producer change rather than
+retrying the read or reopening the watch. Transient failures retain their
+existing recovery. `collection_update_required` means the exact reader contract
+is missing or cannot safely read the current writer; compatible retained readers
+still receive read-only access. This refusal carries no required application
+version or schema-version remedy. A plugin can surface the update code once;
+it must not infer a version from it. These are source contracts, not loaded
+runtime verification.
+
+When an observed Action's admitted source or credential authority retires, the
+host withdraws the affected Resource bytes through the existing
+`expired_resource` watch failure. The shared client store clears both raw content
+and typed reconciliation baselines before freshly admitting the still-demanded
+read and watch. A refused replacement stays unavailable. Ordinary dependency
+invalidation retains the admitted value while refreshing. For revisioned
+selected credentials, metadata-only Connected Account updates do not retire
+credential authority.
+
+The observer's `PluginActionReadInvalidation` is callable for ordinary refresh
+and exposes `invalidate.retire()` for loss of the authority behind an admitted
+read. A plugin uses retirement only after observing an actual replacement or
+removal of its previously admitted source authority, not for a generic wake-up
+or a presentation-only change. Both forms use the same qualified observer and
+host-owned cancellation lifetime; retirement adds no public credential identity
+or reason protocol.
+The captured-observer reader `readPluginActionReadObserver` belongs only to
+the host-facing SDK `/host/registration` entrypoint. Plugin authors register
+`observeRead` through the existing Action definition or registration options;
+the reader is excluded from the author API.
+For a standalone Resource read that installs such an observation, retirement
+aborts that captured acquisition and refuses its late response; ordinary
+invalidation does not abort or reacquire it.
+
+An Action observer can compose another contributed read through
+`services.actions.observe(ref, input, invalidate, { signal })`, returning the
+same asynchronous disposable contract. This accepts contributed references,
+not host Action ids, and retains caller, read-only and registered-observer
+admission without running the read. Declared Session operands must already be
+exact host-resolved string ids, not selectors or reserved shorthand. Expected
+execution-origin/routing pins are preserved; a transport unable to enforce them
+or retain callbacks returns typed observation-unavailable rather than dropping
+authority or substituting polling. The retained process Runner currently has no
+observation callback transport.
+
+Mounted consumers can declare one stable `PluginUiResourceProjection<T>` with
+`decode(content, previous)` and consume it through
+`useLivePluginResourceProjection(ref, projection, selector, { enabled })`.
+The existing shared Resource entry admits each new content value once for that
+descriptor, supplies the preceding typed value for domain reconciliation, and
+notifies a selector only when its selected value changes by `Object.is`.
+Freshness, pending work, errors and subscription state remain separate snapshot
+dimensions available to the selector. Disabled bodies acquire nothing; typed
+projection does not add a second reader, watch or polling lifecycle.
+
+The development PR-glance placement contract follows successful explicit link
+Actions only. Relation refresh, Session remount and reopen never add a glance;
+after personal removal, only the next successful link Action may add it again.
+The completion wiring and real PR widget body remain under integration. Placement
+uses the existing widget Actions and Companion preferences, without removal
+history, a relation observer, or a hidden/collapsed presentation override.
+
+Mounted surfaces may read the optional, readonly `SurfaceContext.accountScope`
+(`serverId`, `accountId`) supplied only by their admitted current Account lifetime.
+It is an identity hint, not a grant; each Action retains its own scope and lifetime
+admission. Older or unadmitted mounts without it do not infer an Account from a
+Session or the globally focused Home. Triage's explicit link caller captures this
+scope before attachment and rechecks it after acknowledged success before placing
+a glance. Watch-at-open completion carries the original matching link result;
+ordinary mode changes and Resource-derived off bindings do not qualify. Generic
+binding-form completion and the visible body remain integration work.
+
+The development SCM cards bind contributed PR presentation through the existing
+`ui.views` inline role `scmPullRequest`, with Session or App context and content
+presentation. Launch input is `{homeServerId,pullRequest: ScmPullRequestSummary}`;
+the physical host stamps `homeServerId` from the same admitted runtime as the
+mount's Home, while the PR is SCM's branch discovery. The public SDK `/scm`
+entrypoint owns `ProtocolScmHostingProviderKind`, `ScmHostingRepositoryIdentityV1`
+and `ScmPullRequestSummary`; `/protocol` exposes their composable repository
+identity and summary schemas, with matching Node/browser exports. Those schemas
+project SCM's current normalized field grammar. A Session mount supplies its exact host-stamped
+Session separately. The contribution owns matching an explicit relationship and
+displaying its status. An App mount has no implied Session and stays cold after
+its explicit picker-and-attach flow; that choice does not retarget the mount.
+Actual Session navigation and mounting own Session-status demand. Missing or ambiguous contributors
+leave the existing discovery card in place. The shared PR bodies and their visual
+validation remain under integration.
+
+For that explicit choice, `selectActionInput({hostAction: {
+action: 'session.transcript.get', projection: 'sessionAddress'}})` opens the
+existing native Session picker in reference-only mode. The admitted Account
+supplies the Home; plugins cannot provide a Home override or Session inventory.
+The result is `{kind:'sessionAddress',session:ActionSessionAddressV1}` or the
+existing cancellation/typed Host API failure. It creates and sends nothing and
+grants no Action authority; the subsequent Action rechecks its chosen target.
+Account retirement and cancellation close the picker. These are development
+source contracts, pending package and loaded-runtime validation.
+
+The callback's `options.resources` binds the ordinary Resource service to its
+own plugin, occurrence and exact host context. A composed Resource can read or
+watch another Resource through this owner. `resources.watch(id, invalidate)`
+returns `Promise<Disposable>`; dynamic `runtime.observe(invalidate, options)`
+may likewise return its disposable asynchronously. The existing host awaits
+dependency admission before reporting a live subscription, propagates the
+original typed failure, and disposes an attachment that settles after its
+captured lifetime has ended. This avoids treating a pending or refused
+dependency as an established watch. An invocation read reuses a current
+snapshot held by live demand, and concurrent acquisitions share their in-flight
+read; the owner releases retained bytes when that demand ends or authority
+retires. An ordinary external read or explicit refresh still acquires a fresh
+snapshot. Recursive dependency chains fail with
+`plugin_resource_dependency_cycle` rather than reading another plugin or
+constructing a second cache.
 
 In 0.3 development source, mounted plugins call `hostApi.admitAction(action, input, options)`
 before a caller-owned Account KV or Collection mutation. The existing surface Action
@@ -172,7 +431,19 @@ Catalog reads without input retain the declaration's conservative default.
 This does not change execution authority, Agent permission policy, or durable
 approval replay checks. Bundled and installed plugins use the same rule; Channels
 uses it to read Session pull request bindings without asking by default while
-retaining confirmation for attaching links and removing triggers.
+retaining automated confirmation for attaching links and removing triggers.
+
+In 0.3 development source, `confirmation.inputFields` declares reviewed
+`{path, title}` operands. Each dot-separated path (with `[]` array segments)
+must resolve in the declared input schema; conditional union operands may be
+absent. Client fingerprint custody and daemon request custody pass the exact
+invocation input to the existing native/hosted Action confirmation owner. That owner
+uses approval review's field traversal, formatting and confidential-input
+projection, then appends only the declared operands to the static consequence.
+Titles are statically localized declarations; plugins supply neither executable
+text templates nor a second dialog. Missing operands add no line. The manifest
+and each nested field remain closed declarations; older unsupported strict
+hosts refuse this unreleased addition through normal compatibility admission.
 
 The same `confirmationWhen` declaration accepts
 `{ presentUserUi: false }` for a uniformly reversible own-UI operation such as
@@ -183,6 +454,14 @@ the danger/confirmation default. Omission retains that default everywhere.
 Local writes can overwrite data, so `writesLocal` alone is never an exemption;
 destructive and outward operations should retain review. Explicit user Ask
 still wins, and a waiver changes confirmation without granting human authority.
+
+The scoped form's optional `default` input predicate preserves conditional
+defaults for requesters outside that present-user UI scope. Channels combines
+its non-list predicate with `presentUserUi: false`: reads remain direct,
+reversible person-operated binding changes skip the default dialog, and
+automated writes retain their approval floor. This is an unreleased development
+manifest extension; unsupported strict readers refuse it through the existing
+compatibility admission rather than dropping the policy.
 
 In 0.3 development source, bundled client-only declarations receive the same
 process-local occurrence and source custody as other plugins. The executable
@@ -206,6 +485,11 @@ those combined facts to the same current-generation policy. Cold daemon
 activation therefore cannot block an already applied client handler, while a
 missing, replaced or retired client registration still refuses execution. This
 applies to bundled and installed plugins in 0.3 development source.
+
+Contributed client Action delivery consults the authenticated live RPC registry, not the absence of
+a positive reconnect hint. A definitive missing-handler refusal, including the UI's decoded
+retirement receipt, preserves `actionHandlerInvocation: notStarted` through the existing settlement
+owner. An issued effect with a lost or malformed receipt retains unknown outcome and is not retried.
 
 ### Background-service placement (unreleased 0.3)
 
@@ -243,6 +527,13 @@ including `backgroundServices` itself and UI. Availability reports the bindings
 actually supplied, and required unsupported HostAccess refuses admission. This is
 process placement for trusted plugin code, not a sandbox.
 
+Consumed Agent reader operations bind the available subset of that same service
+set through the ordinary invocation owner. An Agent manifest can also require
+interactive runtime services, such as terminal control; those unrelated
+requirements do not prevent a native transcript read from binding its permitted
+Exec service. Unsupported services remain unavailable, and process-runner
+admission still rejects required unsupported HostAccess.
+
 The maintained public example is
 [`background-indexer`](../packages/plugin-sdk/examples/background-indexer/src/index.ts).
 Its refresh Action demands the process runner through the same SDK boundary used
@@ -276,15 +567,49 @@ placements. There is no Account-specific invocation or settlement engine;
 refused, applied, uncertain and failed outcomes retain their existing meaning.
 An uncertain write is not automatically replayed.
 
+In 0.3 development source, a host's bundled Account declaration is identified by
+package, plugin id and version. Its process-local occurrence owns retirement;
+manifest or artifact hashes do not grant authority. A mounted Account caller
+carries its package version and declared contribution, which the receiving host
+checks against its current enabled Account selection. Portable releases retain
+their exact selected archive identity. Byte digests still identify fetched
+artifacts and resources; they do not prompt for trust or replace Account policy.
+
+Availability validates and normalizes declarations at claim/release publication.
+Its stored-declaration readers check the identifying envelope rather than
+re-parsing the full server-written contribution graph on each admission. Fresh
+Account intent, exact Machine installation/materialization and selected-release
+correspondence checks remain authoritative. Release-less Event digests still
+bind retained definitions to their exact schema; they are not trust grants.
+
+In 0.3 development source, release ingress parses once, then prepares an
+immutable snapshot with canonical Collection and UI-slot order. Hosts publishing
+already-admitted facts prepare that snapshot without another schema admission.
+First-publication conflicts compare the prepared facts structurally; no
+per-object admission cache or cached signing string determines agreement.
+
+A successful Collection writer claim is retained for its manifest and invoking
+occurrence/Account lifetime. An unrelated change-stream reset is not a new
+writer declaration. Every read/write still passes server authorization; refused
+claims can retry on availability hints, and transient failures remain retryable.
+
 `definePlugin(...).activateAccount` exports the same `activate(api)` ABI, limited
 to the declared Account Action ids for that artifact/export. Its context exposes
-`services.storage.account`, `services.actions.execute`,
-`services.actions.executeAdmittedTargetedOperation` and
+`services.storage.account`, Account-only `services.settings.forScope({ kind: 'account' })`
+reads and watches, `services.actions.execute`,
+`services.actions.executeAdmittedTargetedOperation`,
+`services.actions.observeAdmittedTargetedOperation` and
 `services.targetedContributions`, together with the invocation surface, signal
 and host-stamped caller. It exposes no Machine filesystem, process, credentials
 or UI navigation services. Storage remains with the existing Account KV and
 Collection authorization/CAS owners; nested Actions independently pass the
 ordinary host policy and approval gate.
+
+Portable Settings expose the existing declaration-bound `snapshot`, `get`,
+`describe` and `watch` operations. Snapshots contain persisted non-secret values;
+`get` also applies the declared default. Daemon Settings and direct Settings
+mutation methods are unavailable in this context. Mutations retain the existing
+Settings Actions, and observation retires with the invoking Account/generation.
 
 Portable artifacts use the SDK's existing universal CommonJS compiler (including
 its Node-builtin rejection), the UI's existing client executable module host,
@@ -293,22 +618,43 @@ entry under `./happier-plugin-ui/<artifactId>`; it must not import host internal
 See the [SDK author reference](../packages/plugin-sdk/README.md#portable-account-actions-03-development)
 and [separately authored fixture](../packages/plugin-sdk/fixtures/account-actions/src/index.ts).
 
-In 0.3 development source, the UI's existing module registry retains evaluated
-CommonJS namespaces by plugin id, Artifact id, digest and the executable host's
-exact authority and activation target (including its contribution and export).
-Re-admission of unchanged code for that same scope reuses its namespace within
-the JavaScript realm (one browser document on web). Different concurrent
-authorities or activation targets receive separate namespaces: a plugin may
-capture its activation API in module-level state. Loads without an executable
-authority scope use a fresh namespace. Installed and bundled Artifacts share
-this loader. Byte admission, activation/currentness checks, registrations and
-cleanup retain their existing owners; module reuse grants no authority.
+In 0.3 development source, the UI's existing executable host shares pending
+activation work and reuses a current activation for its exact authority,
+contribution, export and Artifact identity. After real activation retirement,
+a later activation evaluates a fresh CommonJS namespace, even for unchanged
+bytes and the same Account. Different concurrent authorities or activation
+targets also receive separate namespaces: a plugin may capture its activation
+API in module-level state. There is no process-global executable namespace
+cache. Installed and bundled Artifacts share this loader. The separate surface
+module registry retains only modules owned by active scoped projections and
+rejects late writes after retirement. Byte admission, activation/currentness
+checks, registrations and cleanup retain their existing owners; module reuse
+grants no authority.
 
 In this unreleased UI path, Account Availability projects current page caller
 custody and standalone targeted renderer facts. The app projection merge admits
 Account Actions without a Machine. Mounted Account targets reuse SDK declaration
 admission and the shared Protocol semantic projection; each contributor child
 receives its own custody and contribution snapshot rather than the parent's.
+The current-context Action front door uses that same committed Account
+registration and its captured Home/Account/custody, without requiring a Machine
+origin. Its on-demand schemas come from the admitted Account declaration;
+Machine-placed Actions retain their existing exact-occurrence schema transport.
+Cancellation, Account retirement and replaced registration still refuse entry.
+Ordinary host read dependencies use that same current-context registration and
+the shared read-observation dispatcher, with input-sensitive read-only admission.
+They do not execute the Action handler or fabricate a Resource caller. The
+Session trigger hook observes the public Channels Watch Action rather than its
+private collection name; cancellation and Account retirement release the observer.
+
+In 0.3 development source, the native Host API adapter consumes immutable surface snapshots from the host
+context factory. Equal content retains the existing surface and nested-object
+identities; changed content publishes through that adapter's existing watchers.
+There is no schema-admission sidecar or serialized semantic key on a native
+snapshot. Hosted transport context results and events still validate at their
+actual wire ingress. Negotiation carries the version, methods and nonce-bound
+mount identity, not an unused initial surface. Context reads and watches use the
+current host snapshot through their ordinary methods.
 
 An explicitly selected Machine, when supplied, provides transport for
 Machine-placed source roles. It grants an Account child neither Machine
@@ -378,6 +724,74 @@ route's Run on control trailing it) so the title keeps its size and place when t
 frame is the Collection's own (`CollectionLoadingRows` in `@happier-dev/plugin-ui`: ruled column band, table rows,
 footer band) filling the whole content area rather than the page column. Where navigation
 chrome already shows the title (a phone) the page header stays the one identity owner.
+
+### Plugin Project pages (0.3 development source)
+
+`appPage` also admits `target: { kind: 'project' }` through the same surface
+registry, portable declaration projection and page catalog as app pages. The SDK
+surface shorthand accepts that explicit target; omitting the target still means
+an app page. Project pages share description, header style and header Actions;
+app columns, app-rail placement and personal `widgetAreas` remain app-target-only.
+Installed external plugins use the same declaration and renderer chain.
+
+The accepted Project context is `{kind:'project',projectKey,source?,checkout?,repository?,branch?}`.
+`source` is the qualified accepted Source, `checkout` is the accepted Workspace
+reference and `repository` is the canonical credential-free hosting identity.
+The existing Project/widget context producer supplies these facts and
+`project.repository.kind` policy evaluation. An absent kind stays unknown,
+including under negation; a present literal `unknown` is an ordinary kind value.
+Reading context neither probes SCM nor selects a Run-on Machine. A page can
+render with no Source, an offline checkout and no execution Machine selected.
+
+Contextual dynamic Resources receive that same strict target as
+`options.context.target`, including when only unopened navigation chrome needs
+the Resource. Project targets expose the admitted repository and observed named
+branch; Session targets expose `repository?`, `branch?` and `headOid?` from the
+existing exact-Home SCM observation. Session Resource targets must match the
+context's `sessionId`. Unknown facts are omitted and a detached checkout does
+not fabricate a branch. These are context facts, not execution or credential
+authority. Branch/HEAD changes replace Resource demand without replacing the
+surface's physical page/frame lifetime. Global Resource context is unchanged.
+
+In unreleased 0.3 source, daemon dynamic Resources may provide a
+`createProducer` factory returning flat `read`, `observe` and `dispose` callbacks.
+The existing admitted Resource context owns that producer's signal and
+read-only Action ports; settling one read does not retire an overlapping
+observer. Context retirement aborts and disposes the producer, including an
+asynchronous factory result that arrives after retirement. Other placements
+reject the factory explicitly rather than silently ignoring its lifecycle.
+The ordinary direct callbacks remain required and must fail explicitly when
+they cannot honor that lifecycle. Domain reads and dependency observation still
+use the canonical Action/Resource owners, not a consumer-owned transport or timer.
+
+The host owns `/projects/<workspaceRefId>/plugins/<pluginId>/<localId>` and its
+encoded local subpaths, preserving qualified Home and checkout route context.
+Private launch input stays in the existing ephemeral, target-qualified handoff.
+Only the selected presented page mounts executable content. Primary pages share
+the device-local `projectTabBar` placement on desktop and phone; companion rails
+and panes retain their separate selection and lifetime.
+
+Sidebar destinations and Project pages can declare one labelled count binding:
+`counts:{resourceId,items:[{field,label}]}`. It references one declared dynamic
+JSON Resource; labels are declaration-owned localized strings, not Resource
+output. The atomic value has exactly the declared fields, each a nonnegative
+integer or `null` (unknown). Malformed, missing or extra fields make the entire
+record unknown. Running and failed counts stay separate; no sum or priority
+scalar is inferred. The existing count owner shares read/watch demand for a
+matching destination/body context, while explicit Hidden withdraws badge demand.
+Explicit instance/input handoffs retain their distinct contextual identity. Legacy sidebar
+`countResourceId` with strict `{count}` remains supported and cannot be combined
+with `counts` on the same declaration.
+
+Public `Collection`/`DetailsPane` uses the existing Project details column (push
+on phones). `DetailsPaneOpenAsPageButton` is the shared Open as page control;
+authors put it in `DetailsPane.actions` and bind it to the existing
+`host.replacePageLocation(subPath, {backLocation})`. Pane/page/return locations
+belong to the plugin's validated local grammar. The host supplies the Project
+prefix; authors never concatenate a route or change pane-column preferences.
+See the [author recipe](../apps/docs/content/docs/plugins/ui/configuration-pages.mdx#project-pages).
+These are Developer Preview source contracts; publication and loaded-platform
+validation are separate evidence.
 
 In 0.3 development source, `registrySources` is a descriptor-only manifest
 family. `definePlugin.registrySources` projects plugin-local declarations;
@@ -641,7 +1055,7 @@ between invocations.
 
 Safe checks may return an optional prerequisite `repairAction` containing a qualified Action reference and JSON invocation input. The host validates that reference and input against the current Action catalog without activating or running the repair. The fact is descriptive, not installation authority: an explicit repair uses the ordinary Action front door and its current approval and execution policy. A missing system tool does not imply a managed installer exists.
 
-Native options may disclose optional `nativeFacts` with labelled size, image and location identities. A size can include observed CPU cores, memory bytes and disk bytes; omitted dimensions and measurements remain unknown. Images may include a localized `description` and a declarative `preview` naming an exact packaged PNG Resource (`resource: {pluginId, localId}`) with an optional localized `accessibilityLabel` for the existing public Image renderer. Locations may include the native ISO alpha-2 `countryCode`; no country is inferred from a label or region id. Hetzner projects its returned image description and location country code; DigitalOcean projects its returned image description and leaves country absent. Both omit previews because their native catalogs supply none. An explicit `monthlyCapStatus: 'none'` reports a native absence of a monthly cap; `unknown` or omission never becomes a cap inferred from a monthly rate. These facts do not replace the strict raw launch selectors or become acquisition authority. The shared reviewed-configuration builder snapshots supplied native facts for later receipt presentation. Retention declarations separately expose optional `finiteOnly`: omission is unknown, and neither native expiry nor the absence of power operations supplies that fact. Policy qualification remains at the sole retention resolver.
+Native options may disclose optional `nativeFacts` with labelled size, image and location identities. The public SDK's `MachineProvisionerNativeOptionFactsV1` and `MachineProvisionerOptionsResultV1` expose these same Protocol-owned facts to external authors. A size can include observed CPU cores, memory bytes and disk bytes; omitted dimensions and measurements remain unknown. Images may include a localized `description` and a declarative `preview` naming an exact packaged PNG Resource (`resource: {pluginId, localId}`) with an optional localized `accessibilityLabel` for the existing public Image renderer. Locations may include the native ISO alpha-2 `countryCode`; no country is inferred from a label or region id. Hetzner projects its returned image description and location country code; DigitalOcean projects its returned image description and leaves country absent. Both omit previews because their native catalogs supply none. An explicit `monthlyCapStatus: 'none'` reports a native absence of a monthly cap; `unknown` or omission never becomes a cap inferred from a monthly rate. These facts do not replace the strict raw launch selectors or become acquisition authority. The shared reviewed-configuration builder snapshots supplied native facts for later receipt presentation. Retention declarations separately expose optional `finiteOnly`: omission is unknown, and neither native expiry nor the absence of power operations supplies that fact. Policy qualification remains at the sole retention resolver.
 
 Provisioners that return pending acquisition handles declare an optional `reconciliation` hook with a closed native-operation schema and a safe same-plugin daemon Action. The public `defineMachineProvisionerReconciliationSchemas` constructor consumes the launch schema and supplies a strict input union: the retained native handle, or the original managed-row/request correlation with its declared launch. The shared acquire/reconcile result validates pending handles and eventual bound resources. The same constructor supplies the destroy input for either a bound resource or proven-owned partial attachments identified by the retained native handle. Ordinary resource inspection remains unchanged. Reconciliation requires private retained-row custody and performs read-only lookup; it cannot repeat acquisition. Without the hook, strict acquire writes cannot emit pending, while retained generic row data remains readable for unavailable/manual recovery.
 
@@ -668,6 +1082,8 @@ The public machine-provisioner author surface also prepares [persistence-only la
 An acquire invocation can receive the host-populated managed-row id as a native naming/correlation tag beside its raw launch value. That tag grants no authority, does not select another resource or leaf, and promises no native exactly-once behavior; the private admitted-row custody remains authoritative.
 
 An SSH bootstrap invocation may also receive the public key derived from that row's retained bootstrap credential. A leaf can install this public key through its qualified native setup path and return the existing credential reference with observed host-key evidence. The private key never becomes launch, resource, preset or native command-argument data. Lume uses the managed-row id for its unique VM name and inspects the recorded storage before Stop/Delete. Cua local leaves share one native adapter: private stdin is uploaded into a private guest directory, executed through the exact local sandbox and deleted. Unconfirmed cleanup fails the operation; cancellation can prevent further host-admitted native effects and must not be reported as confirmed cleanup.
+
+In current 0.3 development source, Cua local Sandbox and Space options report gVisor choices as unavailable and omit their executable launch, even when native doctor reports gVisor ready. Happier has no qualified detached guest-daemon bootstrap carrier for that runtime. Acquisition reuses those options and refuses gVisor before native creation. Native readiness remains observable, and retained gVisor resources keep their exact inspect, recovery and cleanup paths; this does not remove the native runtime from stored resource readers.
 
 Hetzner and DigitalOcean development leaves use the admitted managed-row id for
 native naming and recovery correlation, and inject only that row's public SSH
@@ -889,6 +1305,16 @@ under the current Account/plugin lifetime; this is presentation identity, not
 fabricated execution custody. Machine-owned reads can therefore leave loading
 and show their unavailable state while the Account shell stays mounted.
 
+In 0.3 development source, that same scope advertises optional
+`acquireExecutionBound` for values that must share only on the exact admitted
+execution origin. It uses the existing value owner, qualified by the full
+host-held origin, including source custody or materialization. It discloses no
+credential material and refuses mounts without an admitted origin. Consumers
+requiring this operation stay unavailable when an older scope omits it; hosted
+frames without a sharing scope retain their own local lifetime. Credential
+selection and its invalidation remain the invoking domain's admission contract;
+execution-origin equality alone does not prove credential equivalence.
+
 Optional Account hosting no longer waits for its network upload before verified
 React Native or native hosted content can render. The existing publication helper
 first captures the complete verified file snapshot, then the existing Account
@@ -1047,6 +1473,16 @@ fact: a missing selected page or sidebar destination stays pending while an
 eligible origin is establishing, rather than becoming an unavailable tombstone.
 Machine presence updates that leave the resolved target set unchanged do not
 republish the installed/runtime catalog.
+Availability cursor and observation-time changes also leave the catalog snapshot
+intact when its prepared declarations and availability facts are unchanged.
+Availability's reader store publishes a separate cursor-free descriptive UI
+snapshot, retaining equal materialization, declaration and Account-model inputs.
+AppShell subscribes to that semantic snapshot; live observation subscribers and
+invocation policy readers still see current cursors and authority. Declaration
+edits, revocation and Account retirement withdraw or replace the publication.
+The origin-report owner changes its immutable selection maps only when a
+selection, stored-choice status or admitted membership changes; the union uses
+those published references without comparing equal selection maps again.
 Origin reports that leave the UI union unchanged do not rebuild it. This includes
 native-only package selections and additional controller checks that cannot
 change an agreed or explicitly selected declaration. A changed UI or Resource
@@ -1064,6 +1500,29 @@ Home, platform and ready locale, not only a daemon generation or changes cursor.
 Heartbeat callbacks still reach the Machine producer even when the storage root
 reference is unchanged. Declaration-only consumers do not subscribe to executable
 activation diagnostics.
+
+The full-describe and selected-reply adapter owns its admitted declaration
+snapshot once per arrival. It retains equal keyed families and rows in that
+existing snapshot, so unchanged presentation rows do not repeat their decoders,
+native JSON ownership requests or execution-origin preparation. Metadata-only
+arrivals preserve nested identity; a changed or withdrawn row replaces only its
+affected declaration output, including same-generation edits. Specific typed
+Registry families use their ingress-admitted fields directly; generic serialized
+contribution bags still use their actual decoder when their row changes. This
+sharing adds no second registry or permission cache, and public raw replies do
+not become mutable aliases of the privately owned publication.
+
+Raw Registry replies retain their current numeric generation. Semantic UI
+publications do not change merely because that unrelated catalog counter advances;
+the nullable UI-model generation records source readiness, not an aggregate
+invocation authority. Exact origin, occurrence, version, artifact, selection and
+Account lifetime remain authoritative at their existing owners. Palette forms and
+their pending acquisitions follow their admitted Action row and exact host binding,
+rather than the identity or generation of the whole merged catalog.
+The AppShell producer routes its existing committed readers only on declaration,
+candidate, Account or availability changes. Raw Browser/Voice subscribers still
+observe fresh Machine reports through that same owner; they do not create another
+projection loader or currentness store.
 
 Prepared declarations are not cached permission decisions. Account intent,
 currentness, exact target custody and invocation admission remain fresh on access;
@@ -1155,6 +1614,16 @@ execution custody. The daemon marks a confirmed rollback retryable so existing
 idempotent callers, including Channels polling, can recover on their ordinary
 retry path. Uncertain mutation outcomes retain their separate custody.
 
+Both Account Collection realms also project the shared logical codec's exact
+private-envelope size refusal as `collection_quota_incompatible`, with
+`{ dimension: 'maxRowEncodedBytes', effectiveMaximum }` in `PluginError.details`,
+before issuing a mutation. The content-envelope schema owns the unchanged
+512 KiB encoded JSON bound; its size issue supplies the exact measured bytes
+and maximum to the codec. Measurement and writes use that same outcome.
+Malformed private payloads and crypto failures retain invalid-value errors;
+unavailable E2EE material retains Account unavailability. No wire or persisted
+envelope shape changes.
+
 In unreleased 0.3 source, thread Session creation uses the Session owner's
 canonical creation key and persisted birth facts. Launching a runner for an
 already committed row does not require a second fresh-create settlement.
@@ -1171,6 +1640,24 @@ reader contracts return `collection_update_required` (HTTP 409), preserved as a
 typed Collection rejection through the app Data adapter. The affected Collection
 requires an app update; unrelated operations remain available. This introduces
 neither an older-schema writer nor a compatibility shim for unreleased intermediates.
+
+Channels' generation-owned supervisors settle `collection_update_required` at
+their admitted Collection access boundary, before recovery adapters can reduce
+it to transient unavailability. They cancel their dependent work, join started
+work, and emit one content-free update diagnostic per supervisor activation.
+That activation performs no later Collection reads or writes; ordinary row
+changes and retry deadlines cannot make its compiled contract current. A new
+activation obtains fresh admission. The existing `connections-v1` management
+Resource projects `{status:{kind:'updateRequired',code:'collection_update_required',
+collectionId,retryable:false,recovery:'updateHappierOnThisMachine'}}` when either
+required Collection refuses its reader. It omits the connections list because
+an unreadable list is not empty. The Channels presentation owner consumes that
+state to render “Update Happier on this Machine” without a Retry action; the
+Resource does not claim which application version is required.
+The Session Collection membership observer likewise retires after this refusal.
+Discord and Slack settle the same typed refusal from core reconciliation,
+ingress and transport-fact Actions, stop their existing workers, and do not
+reconcile again on row or credential hints until a new provider activation.
 
 App-scoped plugin UI does not use `plugins.home` as catalog authority. That named
 Administration target remains responsible for install, installation settings,
@@ -1234,9 +1721,15 @@ preference, including Agent, MCP and CLI requests. They do not use Account CAS.
 The existing local Administration target owner stores only the Home-qualified
 Machine. A source root or materialization id belongs to the freshly dispatched
 operation, never the preference. An unavailable explicit Machine keeps its name
-and blocks effects rather than silently running elsewhere. The same local
-Administration target map retains the last-used hint separately from explicit
-pins; it is never sent as Account state. `plugins.execution_origin.list` reports
+and blocks effects rather than silently running elsewhere. In 0.3 development,
+explicit Run-on choices remain device-local Account/Home preferences. Automatic
+last-use observations use the existing keyed device UI-state persistence owner,
+with the same exact Account/Home scope and no Settings publication. Stored
+`plugin.lastRunOn:*` entries are copied out of the old target map before removal;
+an already-current observation wins, and a refused copy retains its source.
+Automatically initialized Administration targets use that same navigation owner;
+choosing a target deliberately still records a preference.
+`plugins.execution_origin.list` reports
 `selectionSource: 'auto' | 'pinned' | null`, also available in the chip's selection
 data. Retired
 `machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId` values
@@ -1438,6 +1931,38 @@ opaque JSON sent at initialization, while optional `settings` answer the
 server's dotted-section configuration requests. These configuration bags carry
 server options, not host authority.
 
+`settings` are also sent once through `workspace/didChangeConfiguration` after
+`initialized`, before documents open, for servers that consume notifications.
+An optional `initializationOptionsSetting: { scope, field }` reads one declared,
+non-secret setting from that plugin's canonical Account or daemon settings
+service at startup, including descriptor-only plugins without executable
+activation. Its value replaces `initializationOptions`; unavailable
+settings fail startup instead of selecting a different scope or falling back.
+Changing initialization options takes effect on Restart. No query-time read or
+settings watcher is added. The binding and executable declarations remain closed.
+
+The development `lang-web` plugin uses this binding for JSON schema protocols:
+only local `file` schemas are enabled by default. Explicitly adding `https` or
+`http` in its Machine-scoped Schema loading setting permits those downloads
+after Restart. The server handles `$schema` and local schema references itself;
+the host adds no JSON-specific request handler or parser.
+
+Native completion edit positions are projected against the held document before
+the shared response reaches either editor, including an exclusive EOF position
+past the final line. The host indexes the document once per completion list;
+completion resolution uses the same projection. Explicit server-backed hover
+keeps the caret even when the fallback lexer has no identifier there (for
+example, a schema-backed JSON property string); fallback searches remain lexical.
+
+An optional `projectCheck` contribution declares `executable`, `args`, a
+workspace-relative `projectFile`, and `output: { kind: 'typescript' }`. It uses
+the same managed-dependency/system-tool reference admission as the server.
+The Machine executes it only for an explicit project diagnostics request when
+the server does not advertise workspace pull diagnostics. The output codec
+accepts file diagnostics, continuation lines and source-less configuration
+errors (attributed to `projectFile`). Unknown output or a failing process
+without diagnostic evidence is a failed check, never an empty success.
+
 Executable declarations reuse `PluginDeclaredExecutableRefSchema`: a reference
 to `managedDependencies` or `systemTools`. The manifest reference owner rejects
 missing dependencies. There is no command string, project-local executable,
@@ -1446,13 +1971,28 @@ resolver callback, environment override or separate timeout policy. The bundled
 type acquisition disabled. The archive keeps the standard-library declarations
 beside its executable; see [binary runtime](binary-runtime.md#native-language-server-acquisition-03-development-source).
 
-The approved 0.3 delivery starts a server only for an explicit language query;
-opening a file alone does not start it. A plugin supplies definitions only on
+JavaScript language servers can declare a `managedJavaScriptPackage` source in
+`managedDependencies`, with an exact `packageName`, `version`, and `installId`.
+The dependency's `executable` names a bin in the installed package's metadata.
+The shared managed package installer retains its dependencies and disables
+lifecycle scripts. The resolver runs the JavaScript entry through the existing
+managed runtime, without a system-Node or shell-shim launch. Acquisition is an
+explicit install operation, not a document-open side effect. This path is shared
+by bundled and installed external plugins.
+
+The approved 0.3 delivery starts a server for an explicit language query or on
+entering Edit; View and Changes keep query-driven activation. A plugin supplies definitions only on
 the Machine where it is installed and enabled. Public source availability,
 loaded-runtime proof and released SDK availability remain separate facts in the
 generated capability matrix. See the [author declaration](../apps/docs/content/docs/plugins/manifest/contributions.mdx#language-servers-in-development).
 
 ## Public seam and authority
+
+In the 0.3 development SDK, shared Session target authoring belongs to
+`@happier-dev/plugin-sdk/sessions`: import the target schema and its target,
+selector and declaration types there. The schema delegates to Protocol's
+`actions/sessionTargetV1` owner. Existing `/actions` type imports for this
+unpublished surface must move to `/sessions`.
 
 In 0.3 development source, Session-targeted Action declarations project the
 same `sessionTarget` operand/cardinality metadata through built-in and contributed
@@ -1463,6 +2003,15 @@ A Discussion selector means executable Session participants, never people;
 membership does not grant transcript access or create a model Session. Declared
 selectors without current backing refuse as unavailable. See
 [Actions](actions.md) for the resolution owner and current support boundary.
+
+Installed external Actions retain this public declaration through the admitted
+runtime's discovery projection. `action.invoke` projects the declared path
+under its `input` operand and enters the existing shared resolver before plugin
+input parsing and approval. The read-only inspection Action accepts the same
+canonical qualified id advertised by discovery. SDK calls inside the runtime
+consume that same declaration projection; they do not create another resolver.
+Read signatures retain the admitted wrapper root, and approval retains concrete
+targets rather than re-expanding selector intent.
 
 Session send, exact reply and Post update also share those host contracts.
 An Agent plugin supplies native accepted-input/turn/result facts; the host owns
@@ -1551,7 +2100,12 @@ as a local marketplace, with no second materializer or native-folder write.
 
 Skill catalog facets use Protocol's `SkillCatalogItemV1` directly; there is no
 parallel SDK item shape. Agent facets produce their native catalog facts, while
-the host annotates current delivered identities. Claude's SDK reload waits for
+the host annotates native rows that match current delivered identities; it does
+not fabricate availability for skills omitted by the native catalog. The shared
+delivery owner preserves source folders and publishes a regular `SKILL.md`
+entrypoint, including on POSIX: Codex skips file-symlink entrypoints. Supporting
+children retain their existing cache links unless the Agent requires full copies.
+Claude's SDK reload waits for
 both its successful `reload_skills` control response and `commands_changed`;
 Codex's app-server reload waits for the repeated `skills/extraRoots/set`
 response. Their terminal and shared-proxy launch paths retain their explicit
@@ -1749,7 +2303,8 @@ fields and array entries survive composition, while later scalar values win.
 
 In 0.3 development source, Plugin UI `readResource` and `watchResource` also
 accept the closed host-read reference `{ hostRead: actionId, input }` for
-`usage.query` and `connectedServices.quota.get`. It selects a host snapshot, not
+`usage.query`, `connectedServices.quota.get`, `connectedServices.pools.selection.get`
+and `discussion.get`. It selects a host snapshot, not
 a plugin contribution or an authority. The canonical Action preparation owner
 admits the current plugin caller, input, settings and captured Account before
 the mount can join the existing Resource store. A safe read still obeys an
@@ -1768,6 +2323,41 @@ Account; it never fabricates a plugin id. An invalidation carries no snapshot
 bytes: rereading remains the single snapshot authority. Unsupported older
 bridge ceilings refuse the new reference without changing incumbent plugin
 references. Source contract tests do not certify a loaded native/hosted journey.
+
+The development Discussion host read projects only `{discussionId, revision}`.
+Its revision is the observed AccountChange cursor, initially zero before an
+observation, and is not a Discussion content version or replay frontier. The
+Discussion Action rechecks resource access before each refreshed projection;
+content remains behind the ordinary Discussion Actions. The mounted Discussion
+AccountChange observer supplies exact IDs and revisions to the incumbent Resource
+subscription owner, so other Discussions and other Accounts produce no read or
+publication. Closing the consumer releases that observer. No polling or content
+cache is added. Native and hostedWeb carry the same digest-only invalidation.
+
+Daemon plugins observe the same Account feed through the existing Host Event
+broker as `@happier/session/discussion-invalidated`, scoped to the invoking
+Account. The closed payload permits only `discussionId` and an optional
+`revision`. It is a refresh hint, including access changes, not a message,
+authored content channel or exactly-once occurrence stream. Plugins cannot emit
+it through the reserved host namespace. These are unreleased 0.3 source contracts.
+
+In unreleased 0.3 source, an existing `ui.views` right-sidebar tab may declare
+`defaultPlacement: 'pinned' | 'overflow' | 'auto'` and `countResourceId` naming
+its own declared dynamic `application/json` Resource. Omission keeps overflow.
+The public SDK's `PluginRightSidebarCountV1Schema` validates exactly
+`{ count: number | null }`: a number is a nonnegative safe integer, zero is
+empty, and null is unknown. A positive count supplies the numeric badge and
+pins an automatic tab; zero, unknown, denied or invalid data leaves automatic
+placement in overflow. Static badge text is the fallback and never proves
+content. The person's saved placement still wins. Counts use the existing
+Resource read/watch owner while an admitted enabled tab is in a presented
+rail or its overflow, with no pane renderer or polling. Hidden or unavailable
+tabs and static previews add no demand; retirement releases the last read/watch
+lease. Global Resources stay global, Session Resources require a Session tab,
+and surface Resources use the pane's same host-derived singleton context and
+launch input, including for App tabs appended to a Session or Project rail.
+Authors register their Resource leaf through the existing `activate(api)` ABI;
+this adds no contribution family, Resource scope, or Host API method.
 
 The existing Resource entry admits independent Usage source revisions while
 its read remains pending: current accounting does not wait for comparison or
@@ -1912,6 +2502,16 @@ The same context owner projects `requesterExecutionReady`: an app-union requeste
 waits for scoped Availability and, when its destination has Account custody, for
 that exact admitted origin. Loaded absence of an Account destination leaves a
 legitimate Machine requester available; a withdrawn Account origin is not ready.
+Development renderer bytes are selected separately from physical declarations.
+An existing real Account destination retains its Account custody when explicit
+development bytes are selected. A retained Machine descriptor waits until that
+exact Account destination reaches its mount; selecting bytes cannot admit the
+interim requester. Genuine Machine-owned or new development destinations without
+an Account declaration retain Machine custody.
+An optional cached Machine binding does not establish physical execution
+authority until the controller's same can-interact fact admits it. Pending
+binding churn keeps an admitted Account controller; real replacement or
+withdrawal after Machine admission retains the existing fencing.
 Account-local reads use `usePluginHostReadiness(false)` to ignore unrelated
 Machine admission, not requester admission. Their readiness and revision remain
 independent of Machine-only changes. Account reads on Settings and other surfaces
@@ -1969,6 +2569,26 @@ real-device feel remains a separate QA check.
 
 The app shell supplies plugin-column physical focus eligibility through the existing presentation provider, using its dock visibility and peek focus facts. Hover previews may remain presented without receiving programmatic focus; deferred or exiting peek content cannot receive it. Columns explicitly do not publish semantic current UI context: that authority remains with the active page's existing owner.
 
+### Composer control placement (0.3 development)
+
+Composer membership is device-local presentation, stored in the `composer`
+slice of `navigationSurfacePlacementsV1`. The existing navigation-placement
+resolver applies saved order and placement to one lightweight descriptor
+inventory; the row, overflow menu and field accessories consume that result.
+Protected placement and already-held pending facts affect the effective result
+without rewriting saved preferences. Physical wrap/scroll remains separate.
+
+`composer.controls` declarations accept optional `defaultPlacement: 'pinned' |
+'overflow'` from the shared Protocol UI placement schema. Omission means
+overflow; saved user placement wins. Actions retain their existing
+`composer.primary` / `composer.more` bindings, deduplicated by qualified Action
+id with primary taking precedence. Host preference ids distinguish
+`plugin:control:<qualified-id>` from `plugin:action:<qualified-id>`, including
+when the local ids match. Catalog projection reads descriptors, not control
+Resources; existing contextual Resource demand still owns mounted details.
+This is an undeployed 0.3 declaration extension, not an older-host compatibility
+promise. See the [public composer guide](../apps/docs/content/docs/plugins/guides/composer.mdx).
+
 ### Composer inline references and decorations (0.3 development)
 
 The host's composer document is the one owner of text, selection, typed
@@ -1981,6 +2601,21 @@ offsets refer to token-bearing composer text. Chips require typed bindings;
 plain pasted text never creates one. Discussions use those same ranges rather
 than a second mention-span model. The [Session input owner](runtime-core.md#session-input-and-inline-references)
 defines token grammar, readable markers and the single Agent reference block.
+
+In 0.3 development source, the Discussion binding also consumes declared
+`composerReferences` through the existing execution-origin selection and
+reference search/resolve owners. Reference-only plugins acquire their producer
+when a query demands it, not on composer mount. The captured Account/Home and
+installed occurrence must still be current when results arrive. Public composer
+transactions retain those typed references in the existing document; core Send
+serializes them as `t: 'reference'` through the Discussion content owner, and
+message readers retain their identity. This is not executable addressing:
+only the committed Account/Session participant projection of `t: 'mention'`
+parts can address a receiver. Pasted markers or contributed reference labels
+cannot create that projection. Follow input carries selected reference identity
+through the existing structured-input metadata and contributed context resolver,
+not another reference parser. Loaded-runtime validation is distinct from this
+unreleased source contract.
 
 `composer.transaction.apply` retains expected-revision admission. Its
 `attachment.add` operation accepts optional `mentionAt: { start, end }` in the
@@ -2017,6 +2652,8 @@ existing contributor admission and custody checks.
 Protocol owns the [portable entity contracts](../packages/protocol/src/plugins/ui/entityDragDrop.ts) and [declaration admission](../packages/protocol/src/plugins/contributions/entityDragDrop.ts). The mounted UI's [treeDragDrop runtime](../apps/ui/sources/components/ui/treeDragDrop/entityDragDropRuntime.ts) owns carry, current geometry, target selection, release revalidation and cancellation. The plugin binding validates custom references and Action allowlists against the current occurrence; it supplies host-built identity for built-in references. A reference selects an item and grants neither access nor execution authority.
 
 Public Plugin UI `DragSource` and `DropTarget`, declarative `dragSource`/`dropTarget` nodes, and SDK hosted DOM bindings join that same runtime. Authors supply declared local ids, JSON references and target-local input. The host supplies scope, measurements, currentness and caller provenance. Hosted methods `readEntityDragItem`, `updateEntityDragDrop` and `watchEntityDragDrop` are negotiated through the existing Host API; frame coordinates are converted at the host boundary. Retired or hidden mounts cannot begin an effect.
+
+Real mounted targets, including plugin targets, retain an exact Home/Account scope. A host-owned collection catchall may explicitly use the admitted source's scope when its geometry spans several Homes, as the Session list does. Its domain resolver still refuses foreign-Home destinations, and dispatch uses that source's captured credential lifetime through the ordinary mounted Action owner. This host-private geometry mode is not an SDK authoring option and grants no cross-Home mutation authority.
 
 `DragSource` may observe its settled `onDropOutcome` to refresh a read-only
 projection, as Tasks does for its existing Account index. This notification is
@@ -2060,9 +2697,11 @@ authors use admitted public `/components` exports. The
 [public-profile page](../apps/docs/content/docs/accounts/public-profiles.mdx)
 records current availability and the draft/disclosure distinction.
 
-Widget Views use the same contribution catalog and Surface Registry as other plugin UI. Their App/Session target is an executable data context, not a physical placement allowlist. Each configured instance has its own identity and closed field bindings, defined by [`widgets`](../packages/protocol/src/widgets/widgetInstanceV1.ts); field descriptors, predicates and options reuse the neutral [`inputs`](../packages/protocol/src/inputs/index.ts) owner. The shared [`WidgetSurface`](../apps/ui/sources/components/widgets/surface/WidgetSurface.tsx) body consumes that admission and the incumbent installed-surface controller. Host layouts retain their own frames and persistence.
+Widget Views use the same contribution catalog and Surface Registry as other plugin UI. Their App/Session/Project target is an executable data context, not a physical placement allowlist. Each configured instance has its own identity and closed field bindings, defined by [`widgets`](../packages/protocol/src/widgets/widgetInstanceV1.ts); field descriptors, predicates and options reuse the neutral [`inputs`](../packages/protocol/src/inputs/index.ts) owner. The shared [`WidgetSurface`](../apps/ui/sources/components/widgets/surface/WidgetSurface.tsx) body consumes that admission and the incumbent installed-surface controller. Host layouts retain their own frames and persistence.
 
 A Session widget selects its exact Home-qualified Session through its declared input path. Following a host context and pinning a different Session are distinct intents. The selected Session supplies current access, policy, machine and projection; neither the physical Home/Session host nor launch-input routing fields grant authority. Missing, ambiguous, lost or denied targets remain repairable and never fall back to the visible Session.
+
+In unreleased 0.3 source, any plugin can declare `container:'widget', target:{kind:'project'}` with the required `sizeDeclaration` and optional ordinary repository applicability. The existing Project Overview/widget-area owner supplies its admitted Project target through host-only surface context, not editable widget inputs or launch input. The configured binder checks the exact Home, Project identity and current authority; the same inline host receives repository/checkout context and Project policy. A missing, mismatched or retired Project is unavailable or denied, never an App-target fallback. This adds neither a placement store nor a separate widget renderer, and does not make a Project page's personal `widgetAreas` capability app-independent.
 
 While that exact Session's detail is hydrating, configured widgets consume the existing Session-route hydration lifecycle and show loading without offering input repair. A settled missing or denied target retains its refusal; an available target proceeds through the same access and runtime admission.
 
@@ -2135,6 +2774,142 @@ retiring one reader fences its own facade without disposing a surviving reader's
 values. The final current binding's retirement disposes the Account scope.
 
 Native mounts, hosted read/watch bridges and this Action share the existing contextual Resource owner under the captured canonical Account and exact machine/occurrence/context. Declared global Resources share across physical hosts; Session Resources retain the selected Session identity. Final-consumer release or Account retirement disposes the store. Canceling an Action releases its wait rather than canceling another mount's shared read. Headless/client-only execution, missing declarations/scope or unavailable surface provenance returns typed unavailable, without child capability registries or current-UI routing. Native builtin definitions have no plugin Resource declaration; they retain their native data subscriptions/Retry and this Resource Refresh Action is unavailable for them.
+
+In 0.3 development source, a dynamic JSON Resource can declare
+`sessionInbox: { detailResourceId }`. The index has `scope: 'surface'`; the
+same plugin declares a JSON detail Resource with `scope: 'session'`. This is
+Resource metadata, not a second producer registry or permission grant.
+`PluginSessionInboxRowPageV1Schema` owns the closed ready/unavailable response:
+ready carries `rows` and nullable `nextCursor`; each row has `id`, canonical
+`session: { serverId, sessionId }`, `title`, nullable `detail`, and
+`detailResource: { pluginId, resourceId }`. Optional row `controls` uses the
+existing `PluginDeclarativeButtonsV1Schema`, shared with notification-category
+buttons: each control has an arbitrary nonempty, row-unique `id`, localized
+`label`, and a closed `effect`. `open` optionally names the producer plugin's
+exact `page: { pageId, subPath? }`; without a page it opens the row's normal
+destination. `action` contains `invocation: { action: { pluginId, localId },
+input }`, with required strict JSON input. Cross-plugin Action references are
+valid here; notification categories' own-manifest Action restriction belongs
+to notification declaration admission, not this shared binding. Unavailable carries exactly one of
+`locked`, `unavailable`, `denied`, or `sourceUnavailable` as `reason`.
+The author surface is `@happier-dev/plugin-sdk/resources` (source exports in
+`resources/index.public.ts`; publication uses the canonical SDK generator).
+
+The mounted, presented Inbox reads pages through its existing Resource store,
+using host surface context `mountInstanceKey: 'happier:session-inbox'` and
+`launchInput: { cursor: null | string, serverId: string }`, with the Home id
+captured from the admitted Account lifetime. Row identity is qualified by plugin,
+index Resource and stable row id. Admission requires the declared same-plugin
+detail and captured Home/Account; the host stamps the detail's exact Session
+context. Rows join the existing Session/request item and open its Session route.
+The row exposes the admitted detail binding for the Session detail composition;
+index discovery never reads detail bodies. Visible detail consumers use the same
+contextual Resource store, not an Inbox-owned loader. Hidden Inbox, declaration
+withdrawal and Account retirement release demand; unrelated Account arrivals do
+not reread the index. Failed/unavailable producers do not mean “caught up”.
+
+The host projects current Action availability before offering a row control;
+an absent or disabled Action supplies no affordance. A press uses the shared
+declarative-button dispatcher and contributed-Action front door with the
+viewer's `ui` authority, normal policy and in-app confirmation, the captured
+Home/Account/Session, and current registration admission. The Action validates
+its input; stale/replay protection belongs to that Action's own contract, such
+as revision CAS. Resource bytes grant
+no authority, plugin JavaScript initiates no press, and no global exactly-once
+store is introduced. Two localized open-only controls, Allow and Deny, may both
+carry the same `deployment-review` page/subPath destination: neither label implies
+a deployment decision or permission Action. Host control-row visual composition
+remains separate from this development-source data and dispatch contract.
+
+Triage's 0.3 development declaration is `session-pull-request-inbox-v1`, paired
+with the same-plugin Session detail `session-pull-request-status-v1`. Both execute
+in the portable Account artifact `triage-account-runtime`. The index consumes
+Channels' public `session-pull-request-watch-v1` `list` Action: one page of
+admitted Session addresses and retained binding/watch/latest-update metadata,
+without native PR status reads. Exact-Session metadata uses the same Action's
+`get` arm. Channels owns selection, paging and binding/link semantics; Triage
+projects one landing per returned Session, using the canonical distinct-link
+projection and latest retained summary. Demanded detail alone acquires native
+status through its existing configured-source owner. The host folds landings
+into existing Session/request rows, honors the existing explicit settled
+standing, and uses loaded Session title/privacy and update time when available.
+The former Channels Inbox/detail declarations and private host collection
+reader are retired rather than retained as competing producers. SDK/package
+publication and composed runtime validation remain integration boundaries;
+this describes development source, not a released availability claim.
+
+Configured PR Fix sends in 0.3 development use the same Channels Watch Action's
+`deliverConfiguredFix` arm. The caller retains choice, source preparation,
+linking and recovery; it supplies the exact Session, binding revision, PR,
+head and resolved SDK forge evidence with its delivery idempotency key and text.
+Channels checks the current native PR head, retains the configured cause on its
+existing input obligation, and reserves the same binding `activeRound` used by
+ingress. Channels sends and reads its own original input result; only an exact
+host start witness charges the shared fixing allowance. Accepted replay returns
+the retained canonical send result. Uncertain delivery retains the same host
+idempotency key for recovery; outstanding or exhausted work returns a typed
+hold. Compose-only drafts stay with the caller and never enter this send arm.
+The Action retains its existing UI/agent policy and confirmation.
+
+In development, exhausted Watch bindings contribute localized Continue/Stop
+controls on that same Triage row through the shared declarative button contract.
+Continue declares the existing Channels Watch `retryFix`; Stop declares
+`configure` with the retained policy changed only to Off. Each carries the exact
+Session, binding and expected revision. The host, not plugin JavaScript,
+dispatches the press with the viewer's captured Home/Account and ordinary Action
+policy/confirmation. Watch's binding CAS owns stale/replayed refusal and grants
+the current effective finite allowance once. This AM-QC1 continuation is not a
+C1 question or answer consequence; no second Inbox producer or answer writer is
+introduced. Current controls remain an incomplete presentation contract:
+the shared localized label accepts only a string or `{key,fallback}`, without
+interpolation values or per-control PR context. Showing an unambiguous PR and
+"Continue N more" therefore requires the shared label/presentation owner to
+publish a consumable generic contract; the host must not parse Action input or
+branch on a plugin id to recover that context. This source producer is not
+complete rendered continuation UX.
+
+The retained PR ingress leader sends push-only `update` attention through C1's
+existing notifications service, using its stable leader id and the authorized
+Session summary's exact Home address. It creates no notice/item id and does not
+replace question, approval or Follow consequence delivery. Notify/status-only
+updates retain retry custody for a transient unavailable destination or sender;
+canonical quiet/suppressed delivery can settle without waking the Session.
+Already-accepted agent input settles first: its subsequent push is best-effort,
+and a failed/unknown push is logged without reopening or resending that input.
+Retained live PR context is independent of phone delivery.
+
+The development Watch-at-open offer reads the existing `plugins.settings.list`
+Action for Channels' Account scope/target. That Settings owner supplies declared
+effective values in one snapshot; Triage validates the policy and fix limit with
+the public Watch schemas rather than maintaining another default policy. Its
+reader hook performs no mount-time fetch: the actual open/link offer explicitly
+requests the values with its cancellation signal. Unavailable or malformed
+Settings remain unavailable, not an invented Notify choice, and canonical
+pending approval is preserved. Reading defaults never configures a binding.
+
+A newly committed provider-credential failure updates the existing connection
+readiness and sends best-effort `blocked` attention through that same C1 helper
+to its captured, still-current watched PR Sessions. Repeated blocked polls do
+not republish the transition or push again. The helper rechecks the caller's
+captured connection/binding admission after resolving the exact Session/Home;
+retargeted, Off and ordinary chat bindings do not receive this attention.
+Delivery failure is logged and never rolls back truthful credential health.
+
+The development targeted-contribution reply carries optional
+`resourceDeclarationsByPluginId` alongside its handles. A present plugin key is
+that plugin's complete Resource declaration set, including `{}` for known-empty;
+an absent key or field means that reply supplied no census. The controller uses
+a complete targeted set in preference to the full describe. Otherwise, the
+full-describe producer marks each included plugin's installed-package row with
+the host-private `resourceDeclarationsComplete` fact. Its complete set includes
+known-empty; a witnessed occurrence mismatch or noncurrent/conflicted source
+does not supply coverage. A plugin absent from both complete sources remains
+unknown and retains ordinary Resource transport. Selected Action replies,
+partial installed-UI declarations and restored presentation cannot establish
+coverage; a numeric or aggregate generation is not evidence of it. Only a
+complete set can establish withdrawal. Coverage is descriptive, not an
+additional permission decision or RPC/SDK field, and installed external plugins
+use the same path.
 
 Home layout and setup dismissals use one Account Artifact; shared Session instances use Board records and revisions; direct Companion instances remain viewer/device-local presentation preferences. The widget instance Action family delegates mutations to those owners. Personal Companion changes do not edit Board content. Viewer bindings consume only the viewer's own existing Connected Account purpose selection; there is no per-instance viewer override, Action or local selection setting. A widget declaration without correlation to an admitted existing purpose consumer fails closed; it does not guess another consumer or change a global binding. Pinned Connected Account references are allowed on personal surfaces only.
 
@@ -2424,6 +3199,25 @@ Resource-only plugins do not need an unrelated View to supply app-scope widget d
 
 Client-targeted Actions receive the bounded [`PluginClientActionUi`](../packages/plugin-sdk/src/actions/contracts.ts) subset, not a mounted `SurfaceContext`. Its `context(options?)` returns only current `targetedContributions` for the Action's plugin (or `null`). `version()` and `selectActionInput(...)` reuse the canonical host method advertisement and selected-input admission/custody; `executeAction` and `openSurface` remain the effect seams. An Action gets no page, mount, layout or UI-selection owner from this capability.
 
+In 0.3 development source, that capability also exposes `readSession`,
+`readComposer` and `applyComposer` through the incumbent Account and Composer
+owners. Composer operations require the exact mounted draft in the invoking
+Account; an absent Composer returns its ordinary unavailable result. The
+ordinary New Session seed accepts an optional canonical `agentTarget`, which
+the authoring draft retains alongside its profile selection.
+
+Session reads expose that exact `agentTarget` independently of the catalog's
+display identity. Their optional `acceptedWorkspace` contains an accepted
+`checkout` address and known `repository` from the invoking Account's admitted
+Project census. Private, incomplete, ambiguous or unmatched facts stay absent;
+the host does not derive repository authority from the Session's displayed path.
+The existing `session.status.get` Action exposes the same optional proof when
+`includeAcceptedWorkspace: true` is requested. Ordinary status reads perform no
+Project-row acquisition. The daemon opens the invoking Account's private rows
+under its captured requester custody and applies the canonical Session checkout
+resolver; unavailable proof stays absent without changing the status envelope.
+`SessionAcceptedWorkspaceV1Schema` owns both projections' strict value shape.
+
 The shared Session recipe composer resolves saved Home aliases through the same
 server-profile identity owner as New Session before looking up its Machine and
 Agent catalog. Host targets, recipe seeds, offered candidates and returned drafts
@@ -2439,6 +3233,34 @@ and SDK `executeAction` calls retain structured execution semantics; a schema
 alone does not declare a form.
 
 Feature-specific caller contracts belong in their public feature package. For PRs & Issues, [`@happier-dev/triage-protocol/v1`](../packages/triage-protocol/src/v1/index.ts) publishes source detail-tab declarations and qualified fix-link Action schemas/references. Triage retains its private relationship writer and resolver; callers receive the owner-resolved read projection. These contracts add no Triage policy to the generic SDK or host. See [Triage source ownership](triage-sources.md).
+
+Hosted CI's 0.3 development-source contracts use the same protocol-only
+`@happier-dev/triage-protocol` package's explicit `/ci/v1` and
+`/ci/testing/v1` domain entries. Releases use `/releases/v1` and
+`/releases/testing/v1`; the existing root, `/v1` and `/testing/v1` retain their
+source-author contract. The [SDK evolution doctrine](compatibility.md#sdk-protocol-evolution)
+governs each domain epoch. Shared CI adapters and presentation belong to
+`@happier-dev/forge-ci/runtime`, `/ui` and `/translations`; native clients,
+credentials and provider writes remain in the forge plugin. The runtime entry
+does not load UI. These are public Developer Preview source contracts, not an
+npm availability claim. The canonical CLI-managed authoring path delivers
+declared public package dependencies; external publication requires release-owner
+approval.
+
+The development-source mounted UI API `host.downloadFile({ action, input }, { signal })`
+runs an admitted daemon-placed contributed Action through the ordinary plugin-surface
+dispatcher. The host supplies `input.destination: { destinationId }`; authors supply
+neither destination paths/URLs nor bytes in Action JSON. The Action publishes acquired
+bytes with `context.services.fs.prepareDownload({ name, bytes, destination }, { signal })`
+after its normal caller admission, without a nested filesystem Action. A present
+person's direct download and an agent's approval-by-default therefore remain the
+same declared Action with their existing caller policies. The client requires the
+accepted receipt to match its held destination, then uses the shared platform sink
+and direct-export receiver for integrity, close and acknowledgement. An accepted
+receipt is not saved-byte success, and a lost final acknowledgement remains unknown.
+Headless Voice does not gain mounted-person or device-destination authority. This
+is a Developer Preview source contract; generated package and loaded-runtime gates
+still apply before claiming availability.
 
 Mounted target surfaces receive locale-resolved translation bundles from their admitted contributors through the existing `SurfaceContext.translations` projection. Contributor keys retain their authored namespaces; the mounted plugin's own bundle takes precedence on a collision, followed by framework-owned chrome. Unadmitted plugins' bundles are not included. Each bundle uses the same preferred-locale and English fallback owner.
 
@@ -2654,6 +3476,14 @@ near-viewport admission to area cards. Offscreen executable bodies release
 Resource read/watch demand while their frames retain measured room; reentry
 mounts the current bound context. Route focus remains an additional admission
 condition, not a substitute for viewport activity.
+
+The same private presentation host also binds a plugin surface's primary
+vertical `ScrollArea` to the containing pane header's scroll-linked shade
+(`paneHeaderScroll.useReporter`): the outermost vertical area reports its
+distance from the top, nested and horizontal areas never do, and author
+`onScroll` callbacks and viewport tracking are unchanged. It is presentation
+only, absent outside a header-owning pane, and not part of the public SDK.
+Installed plugin panes take the host's header band and edge unchanged.
 
 Area copies use the shared pointer grip, staged keyboard and Move-to chooser.
 Current membership and anchors become requests to `widgets.item.move`;
@@ -3064,6 +3894,25 @@ the controlled collection-item capability. Authors import these adapters from
 host-internal. Field-box presentation and segmented radio choices remain available through `Select`;
 tab navigation retains its distinct tab semantics through `Tabs`.
 
+In 0.3 development source, same-realm public `VoicePresence` binds one existing
+`useVoiceAttemptControl` projection for its children. Public `VoiceMark`,
+`VoiceStatusLine` and `VoiceTransport` delegate to the existing host components;
+the binding adds no layout. `useVoiceAttempt` exposes only the typed, sanitized
+attempt presentation, including its failure sentence and exact runtime recovery
+target. Raw provider errors, prompts, transcripts and credential configuration
+do not cross this read seam. Controls retain the host's ordinary Action approval
+and attempt binding. Hidden presentation withdraws the binding and its animation
+demand; mounting it starts no media. Hosts without these optional same-realm
+bindings use the author's fallback. This is an unpublished author addition,
+not a hosted-web media bridge or a change to the app's presence composition.
+
+Realtime declined and thrown safe failure codes use the same canonical machine
+classifier as Local Voice. Agent authentication, provider credential review and
+service setup therefore retain their distinct recoveries. The public
+`VoiceAttemptFailureKindSchema`, `VoiceAttemptRecoveryActionSchema` and
+`VoiceAttemptPresentationSchema` project that host taxonomy; plugins supply
+codes and never author recovery labels or routes.
+
 Public `TextField.dictation` composes `DictationButton` with the existing field,
 binding capture admission to field editability. Authors may also use the public
 button beside a custom controlled input. Both deliver editable text only and
@@ -3232,6 +4081,19 @@ does not migrate stored configuration or infer the shape from a provider ID.
 The `welcome` control presents the shared Greeting preference and uses its
 canonical settings declaration rather than publishing a second provider field
 for the same preference.
+
+In development source, the contributed credential and Connected Account rows
+also expose typed `settings.invoke` operations. `voice_connected_services`
+selects existing accounts or pools in the provider's declared configuration
+field; it does not change Account purpose defaults. `voice_saved_secret`
+selects an existing reference, inspects its recipient disclosure, reviews that
+exact binding, or removes it, including for API-key-only services and machine
+overrides. Pickers use these same operations. Inputs carry references and the
+captured Settings version, never credential values or caller-created trust
+approval. The host resolves the current recipient contract, presents the
+existing confirmation, and rechecks reference and contribution currentness
+before the canonical mutation. Creation and rotation remain with the Saved
+Secret resource Actions and their existing plain/encrypted custody rules.
 
 Development Session voice preferences use that same declared field and provider
 schema. The qualified contribution and exact setting path identify one voice
@@ -3507,6 +4369,37 @@ selection. Triage's shared settings and administration Action persist only the
 native service identity. Source and review metadata retain that identity rather
 than inventing an account id. See [Triage source ownership](triage-sources.md).
 
+### Shared provider reads (0.3 development)
+
+The optional `HttpService.prepareRead` capability admits and snapshots one GET
+or trusted-plugin-declared GraphQL query without sending it. Its single-use
+handle keeps the exact URL, headers, body and original host policy while its
+`request({ signal })` uses the shared request owner's cancellation. The host
+rechecks occurrence, retained network binding and final-policy currentness before
+sending and after receiving the response. Invocation cancellation does not cancel a peer's
+admitted read. Dispose unused handles and dispose the executing handle when its
+flight settles; invocation-bound credential injection remains on ordinary
+`http.request`.
+
+GitHub's account request owner in
+[`githubApiClient.ts`](../packages/plugins/scm-github/src/observations/githubApiClient.ts)
+uses this capability for simultaneous equivalent safe reads. Its occurrence
+retains only in-flight requests and the maximum provider rate-limit deadline,
+partitioned by admitted Account, credential materialization and execution origin.
+An exhausted primary bucket reported on a successful response also parks later
+demand until its provider reset, without changing the successful result or
+decoding its body.
+Channels, Automation, Triage and SCM adapters borrow this owner after their own
+credential admission. Before publishing a shared response, each native API caller
+re-admits its exact request under its own current HTTP binding and disposes that
+unused handle, without sending another HTTP request. Connected Account purpose
+membership is admitted by the Connected Accounts materialization owner, not
+inferred from the HTTP binding. Unidentified native credentials and anonymous public
+repository reads cannot borrow an identified Account. Settled requests are
+removed; throttled demand returns the existing typed failure without provider
+HTTP, a timer or mutation replay. These are development-source contracts;
+loaded-runtime and release validation remain separate evidence.
+
 ### Connected Account refresh and quota identity (0.3 development)
 
 Claude subscription usage identifies a provider user and organization together.
@@ -3529,9 +4422,17 @@ replacing that token invalidates unscoped local evidence. Known user/organizatio
 context survives ordinary token rotation. Local observations use the coordinator's
 existing freshness and polling policy and do not create global aliases.
 
-Claude's native codec writes user and organization into the actual root
-`.claude.json`, reconciles account caches when context changes and preserves
-workspace settings. Reset-credit debit verifies the current user and any known
+For native-home materialization, the host supplies the Connected Account runtime's
+optional `existingFiles` input with a byte snapshot of the prepared home's declared
+secret files. Missing files and credential-store directories have no entry; other
+materialization paths omit this input. The snapshot stays machine-local and grants
+no arbitrary-path reads. The host retains home serialization, binding/currentness
+checks and protected writes; bundled and external runtimes use the same callback.
+Claude reconciles user, email and organization into that home's `.claude.json`,
+invalidates account caches, and preserves workspace approvals, project trust and
+unrelated private preferences. Unreadable or malformed retained config refuses
+materialization instead of replacing private state with an empty config.
+Reset-credit debit verifies the current user and any known
 organization before posting. Metadata-only context enrichment joins the existing
 refresh lease, staging, CAS and distribution lifecycle; it neither rotates tokens
 nor provides positive authentication/quota evidence. A successful rotation without
@@ -3741,12 +4642,35 @@ checked at their existing boundaries. Negotiated predecessor V2/V3 transport
 retains its acquisition cadence because the 0.2 usage writer does not publish
 these usage changes; its finite manual-refresh catch-up also remains.
 
+In 0.3 development, daemon qualified-account health and quota work share the
+existing quota scheduling loop when both are active. Health-only operation
+retains the refresh loop. After initial health discovery, unchanged healthy
+credentials park until their refresh deadline. After the initial quota read,
+known notice opt-out Accounts without an active group consumer wait for a real
+quota reset or invalidation. Opted-in notices, active groups and unknown Settings
+retain observation-freshness acquisition (60 seconds by default); that remaining
+sampling is not zero-poll. Opted-in background usage alerts consume successive
+live observations even without a Session; removing sampling requires an explicit
+alert-policy decision or a real provider change signal. Canonical Account-scoped
+Settings publications wake the existing scheduler when demand changes. The established runtime
+owner prepares one exact credential/configuration pair for an account's due
+status/quota work, without retaining it for later calls. Each operation keeps
+its own fresh credential, Account and effect/disclosure checks. A credential or
+configuration change rearms the existing deadlines rather than adding a poll.
+
+Manual V4 Refresh commits its marker and an exact Provider Account Usage record
+hint in the existing Account feed. The daemon drains that feed page by page and
+delivers the hint before acknowledging its cursor; page length alone does not
+invalidate unrelated catalogs or Collections. Reconnect and cursor-gap recovery
+still invalidate the affected observations. Negotiated legacy transports retain
+their existing cadence because their producers do not emit this refresh hint.
+
 After credential settlement, the daemon checks the established runtime's actual
 quota contribution and initializes an absent PAU source before returning
 `connected`, without calling the provider quota API. An initialization failure
-does not undo committed credentials; the existing quota poll repairs the source.
+does not undo committed credentials; the existing quota owner repairs the source.
 Before admitted qualified quota work enters the plugin, the daemon also creates
-an absent source as `not_loaded`, with no fetched observation. Polls, group
+an absent source as `not_loaded`, with no fetched observation. Scheduled reads, group
 probes and post-recovery refreshes share this admission/failure owner. A failed
 read writes `error_last_known_good`, keeping prior meters and their observation
 times; safe provider status/code and the existing retry time travel in optional
@@ -3796,6 +4720,13 @@ retirement detaches its wake subscriptions and joins current work. These are
 0.3 source contracts; loaded-runtime performance is separate evidence.
 
 Targeted feature composition uses public `defineContributionProtocol` / `defineContributionPoint` values and typed handles. A feature protocol keeps explicit versioned exports, validator-neutral schemas and source-neutral DTOs; it excludes host runtime, provider clients, credentials and persistence. The SDK's [`featureProtocolPackagePolicy.test.ts`](../packages/plugin-sdk/src/featureProtocolPackagePolicy.test.ts) owns the allowed dependency classification. [Triage sources](triage-sources.md) is one current consumer.
+
+In unreleased 0.3 source, `happier.channels/providers` V1 requires the presentation
+descriptor `{ v: 1, displayName }` through that same SDK mechanism. Its outer
+schema is additive-open/drop; the required known fields remain strict. Channels
+names providers from the admitted descriptor, with plugin branding as a fallback
+when the surface has no descriptor. This evolves the undeployed V1 in place and
+adds no provider registry or compatibility adapter.
 
 ### Project-native definitions (0.3 development source)
 
@@ -3947,8 +4878,12 @@ completed final-launch journey.
 Manifest-owned `captureSources` register through the same activation rights and
 occurrence lifecycle as other executable contributions. The existing daemon
 capture registry owns exact sources and retirement; replacement aborts viewers
-of the old occurrence. The mounted UI binds a typed reference to its own plugin,
-machine, server and lifetime. Plugin authors never choose a transport address.
+of the old occurrence. Capture-only plugins stay dormant at ordinary daemon
+startup unless they explicitly declare startup activation. Resolving a declared
+source activates its existing occurrence on first real capture demand; an
+undeclared source never activates it. This applies to installed external plugins
+as well as first-party contributions. The mounted UI binds a typed reference to
+its own plugin, machine, server and lifetime. Plugin authors never choose a transport address.
 Viewing another plugin's source is refused. Each host-source viewing requires
 the existing `capture.view` Action's blocking approval, unless the user has
 waived that approval for this plugin in the existing Actions settings document.
@@ -4094,6 +5029,68 @@ Notification channel authors must account for the development sender signature's
 when upgrading a category-dependent sender; the plugin send service and host
 Activity path have distinct category contracts.
 
+In 0.3 development source, `services.notifications.send` accepts `type` without
+`itemId`. The existing attention policy evaluates that type; the sender retains
+the supplied routing data, but creates no Account notice. Both parsed admission
+and replay identity retain the type. `page` and `resolved` still require
+`itemId`; adding either without notice identity is invalid. Supplying `itemId`
+continues to use the existing notice custody and delivery policy, not a second
+notification path.
+
+In 0.3 development source, a default plugin notification send also joins the
+host Activity dispatcher's configured native push channel. The same attention
+policy selects needs-you push, quiet updates/mentions and quiet hours; explicit
+`channelIds` continue to select only those contributed transports. A stored
+notice pushes its admitted Artifact/page reference. Its default tap opens the
+same page as the Inbox, after saved Home and Account admission, and never
+submits a decision. Plugin notification categories may declare their own
+`buttons`, each with an arbitrary nonempty `id`, a localized `label`, and a
+closed shared declarative `effect`: `{kind:'open', page?}` or
+`{kind:'action', invocation:{action:{pluginId,localId}, input}}`. Button ids are
+unique within a category. The Action binding admits strict Protocol JSON,
+including null, scalar, array and object inputs; it carries no execution
+authority. Notification manifest admission requires the Action and any page
+reference to belong to that plugin's declared contributions. Generic consumers
+of the shared binding retain their own reference-admission rules.
+
+Native category ids and button identifiers are plugin-qualified. The native app
+projects the committed shell category catalog and resolves labels through the
+existing plugin translation runtime; catalog, active-language and relevant copy
+changes refresh registration. Unrelated projection arrivals do not rescan or
+rewrite categories. These foreground controls do not reuse the Session-permission
+Allow/Deny category or its background execution owner.
+
+`services.notifications.send` may supply `buttonInputs`, keyed by a declared
+Action button id, to replace that button's default `invocation.input` for one
+notification. It cannot choose another Action, button, label or effect. Those
+operands enter the native push payload and must contain no secrets or
+credentials. A changed override under the same `clientRequestId` conflicts with
+the already-bound send, like other changed notification content.
+
+A press re-admits the saved Home and Account, current plugin occurrence and
+declaration, then invokes the canonical Action front door with the viewer's UI
+authority and the Action's normal input validation and policy. A press requiring
+interactive approval or unavailable execution opens the notification's exact
+page for review; it does not synthesize a prompt or bypass approval. Cached launch
+responses remain navigation-only. The target Action's own revision/currentness
+contract protects consequential stale or repeated requests; the button supplies
+no additional authority or global exactly-once guarantee. These are Developer
+Preview source contracts. Signed iOS/Android device delivery and OS presentation
+remain release checks.
+
+Typed push-only sends retain no `itemId` and create no notice. For a bound
+Session, obtain `const session = await services.sessions.get(id)` and then
+`const address = (await session?.summary())?.address`. This is the optional exact
+`{sessionId, serverId, serverUrl}` projection. The existing authorized Session
+reader supplies the Session; its captured Home feature observation supplies
+portable identity and its public Home URL supplies routing. The local HTTP
+carrier and a plugin connection's transport identity supply neither. Missing
+Home identity or an unroutable public URL omits the address while retaining the
+Session summary. Native delivery re-admits that exact Session under the captured
+Account and suppresses only push when its destination is unavailable; it does
+not copy or retire the plugin's live source. This describes source contracts,
+not signed-device delivery or SDK publication evidence.
+
 ## GitHub checks observation (development source)
 
 In the 0.3 development source, the Account change-feed projects a content-free
@@ -4121,8 +5118,28 @@ No checks is explicit, not success. Completion may include failed or neutral
 checks; passed requires every selected check to pass. A moved head supersedes
 the observation instead of accepting green checks for another commit.
 
-Acquisition uses the plugin's existing credential-bound API client, cycle-local
-request coalescer and checkpointed-pull observer. Its current snapshot is stored
+For retained Session PR bindings, the 0.3 development Channels poll reconciles
+native state against its admitted endpoint baseline. Equal state retains its
+semantic observation time and endpoint identity; a successful poll's clock
+alone does not revise the binding. Checkpoint progress remains separate and
+captured checkpoint/binding revisions fence obsolete results. Disabled link-only
+bindings still supply exact-PR terminal refresh demand.
+
+Direct linked-PR input renders external text and labels through the shared
+`renderSessionInputContextPromptV1` forge-evidence block. Repository-write
+evidence admits unmarked feedback even from the connected principal; canonical
+Reviews publication markers suppress reflected posts before direct or scoped
+Workflow routing. PR text cannot supply chat approval, answer, stop or
+new-session authority, including when an older frozen obligation is replayed.
+The actual Session send clamps remote approval scope to Off. Partial Reviews
+publication retries mark each new native review body using the newly dispatched
+entries' canonical markers without duplicating a settled verdict's marker.
+These are development-source corrections, with integrated runtime validation
+still pending; they do not establish availability of the planned watch modes.
+
+Acquisition uses the plugin's existing credential-bound API client and
+checkpointed-pull observer. The client joins the Account request owner for
+shared backoff and simultaneous safe reads, including Channels polling. Its current snapshot is stored
 in the existing Automation checkpoint Collection; this is state recovery, not
 a claim of complete check-event history. The first observation establishes a
 baseline without retroactive trigger admission. The declared history-gap reset
@@ -4312,7 +5329,7 @@ The external-author fixture in
 valid definitions and rejects unknown block kinds. This changes development
 source typing without changing the trigger runtime validator.
 
-The CLI publisher [`generateBundledPluginEntries.ts`](../apps/cli/scripts/build-owned/generateBundledPluginEntries.ts) owns bundled semantic/catalog/daemon projections. The UI publisher [`generateBundledPluginUiArtifacts.mjs`](../apps/ui/scripts/generateBundledPluginUiArtifacts.mjs) owns app-preseed UI byte inventories. They are different products, not competing publishers. Change their inputs or producer, never an emitted projection; do not add handwritten Agent/Provider lists beside generated facts.
+The CLI publisher [`generateBundledPluginEntries.ts`](../apps/cli/scripts/build-owned/generateBundledPluginEntries.ts) owns bundled semantic/catalog/daemon projections. Its build-owned [`uiDeclarations.mjs`](../apps/cli/scripts/build-owned/bundledPlugins/uiDeclarations.mjs) projects the semantic declarations for app-bundled UI. The UI publisher [`generateBundledPluginUiArtifacts.mjs`](../apps/ui/scripts/generateBundledPluginUiArtifacts.mjs) serializes those declarations separately from its app-preseed byte inventory in the same ignored output. Availability consumes the declaration export directly; finding a digest in the byte inventory does not admit a declaration. No compiled custody hash joins the two. Change their inputs or producer, never an emitted projection; do not add handwritten Agent/Provider lists beside generated facts.
 
 In 0.3 development source, the CLI publisher emits locator paths and metadata,
 with normalized declarations under
@@ -4320,18 +5337,22 @@ with normalized declarations under
 demand through its bundled manifest reader and retains its process-admitted
 catalog. The emitted locator shape lets daemon and Session-runner consumers import
 metadata without parsing all bundled declarations. Clean-checkout Agent preparation reads these tracked JSON
-files before the ignored packaged plugin manifests exist; published CLI runtimes
+files without requiring packaged plugin manifests; published CLI runtimes
 include them as runtime assets. The locator and JSON files form one publication
 closure and must be regenerated together before loading the changed locator shape.
 
-Source-runtime daemon builds use that same CLI publisher to derive their locator
-and JSON closure into private build output from the captured plugin sources.
+Source-runtime and native daemon code builds use that same CLI publisher to derive
+their locator and JSON closure into private build output from their plugin sources.
 They neither require fresh checkout projections nor rewrite them. Invalid optional
 plugin declarations are omitted from that closure and carried through the existing
 publication-failure inventory to unavailable catalog rows; required host plugins
 and generator failures still stop the build. Committed projections retain their
-strict freshness check in CI and package/release builds. This describes 0.3
-development source.
+strict freshness check in CI and package/release builds. That existing check also
+compares present packaged `plugin.json` files, including tracked copies, with
+their source-derived normalized declarations and reports a scoped regeneration
+command on drift. Scoped package publication derives peer projections from
+current source while publishing only the selected packages' installed artifacts.
+This describes 0.3 development source.
 
 Bundled prompt-library adapter descriptors are projected as data. The Claude
 predecessor message-metadata bridge binds the Protocol-owned writer to defaults
@@ -4521,7 +5542,12 @@ time alone does not make a plugin persistently unavailable.
 Executable RPC request/handler/write queues, callback queues and plugin
 WebSocket backlogs have no implicit count or aggregate-byte ceilings. Explicit
 authored budgets remain enforceable; this is not a bounded aggregate-memory
-guarantee. Individual frame/message and encoded-header byte contracts, RFC
+guarantee. Shared JSON-RPC process clients also have no default payload-size
+cap; a caller can supply an explicit `maxFrameBytes` budget. Content-Length
+framing still requires exactly one valid non-negative safe-integer length and
+fails malformed or truncated frames closed. Local LSP uses this same uncapped
+client, with process supervision and request cancellation unchanged. Explicit
+frame budgets for other protocol kinds, encoded-header byte contracts, RFC
 protocol-token validation and the WebSocket driver's peer-security defaults
 remain. In particular, the driver retains its fragment/chunk allocation
 protections documented in
@@ -4679,11 +5705,66 @@ refreshing the shared dependency tree. Missing or incompatible required packages
 fail preparation. External author roots retain managed dependency preparation
 and the public-author package policy.
 
+The host SDK-resolution owner identifies those canonical workspace roots for
+dependency preparation, candidate evaluation and UI compilation. Candidates feed
+the source runtime's authored export aliases into the existing generation-scoped
+module evaluator, so the SDK and feature protocols use current source together.
+Only the plugin's declared workspace runtime-dependency closure contributes
+aliases (including its public subpaths); dev-only and unrelated packages do not.
+Canonical first-party candidates use package-source prefixes with exact entries
+for root, irregular and shadowed exports. Their Bundler-mode package typechecks
+reject undeclared package subpaths before shipping; development prefixes do not
+themselves enforce that export boundary. External author resolution is unchanged.
+Absolute terminal aliases are normalized once before entering the evaluator,
+not quadratically again for every nested module-loader construction.
+The managed UI-compiler child consumes that same source-export authority and the
+SDK's existing universal compiler. Only packages in the workspace inventory use
+source-export resolution; third-party imports use the compiler's ordinary package
+resolution. External author projects retain their installed
+package exports and project-local SDK containment checks. This does not rebuild
+SDK `dist` or replace the development module loader.
+
+Live Expo's bundled UI preparation selects the same `happier-source` condition
+for manifest evaluation, including synchronous dependency loads, and reuses the
+source compiler above. Its inventory owner retains the last validated declaration
+and complete byte graph when preparation fails, even without compiler-reuse
+metadata. The preparation diagnostic marks retained UI as stale; only a plugin
+without a usable prior graph becomes unavailable, while healthy peers advance.
+Metro's existing change feed observes plugin and compiler inputs, including the
+preparation launcher and source preload, so repairing an input triggers another
+preparation without restarting Expo. This describes 0.3 development source;
+loaded-stack confirmation remains separate.
+
 The shared authoring source observer excludes that marker-owned configuration
 and remembers the last attempted input signatures separately from the adopted
 baseline. A retained or failed candidate therefore waits for a real input edit
 or an explicit reload, while its unadopted dependency changes remain part of the
 next candidate. Preparation output events cannot replay an unchanged candidate.
+
+The in-development GitHub local-workflow path declares installed act through
+the existing system-tools service. Safe inspection uses the admitted executable
+for version/help only; actual runs delegate to the primary-constrained Project
+compute Action, preserving preference, setup/trust, requester-secret and operation
+admission. Local form editing uses the same mounted `{mountId,operation}` intent
+shape as other plugin forms. Its safe open operation requires the producer-known
+`seed.target`: `{kind:'session',sessionId}` for a6/c3 or
+`{kind:'project',projectId}` for workflow/job entries. The corresponding declared
+`github-local-act` / `github-local-act-project` view uses the existing details
+pane; the explicit target also qualifies the opening rendezvous and form
+lifetime. No navigation-state query or fallback chooses a target.
+Its controller owns no terminal, container lifecycle,
+hosted-CI projection or output poller. Selected terminal evidence delegates to the
+configured Triage handoff and its canonical external-content framing. Person Run
+uses the host client to invoke ordinary compute directly; agent/MCP uses the
+plugin local-run Action with incumbent approval policy. Neither path grants the
+other's caller authority. The compute declaration's direct policy suppresses
+confirmation only for the present person's own UI invocation; automated callers
+retain the dangerous-Action default and explicit Settings choices still win.
+The plugin adds no confirmation. The form's nullable Machine display name uses
+the public qualified `readMachineDisplayName` host read, backed by the existing
+Machine display owner, not a plugin store or inventory scan.
+Rendered integration and loaded-runtime evidence remain
+pending; these source declarations do not establish released availability.
 
 ## Related
 
