@@ -30,6 +30,7 @@ const { PageHeader } = await import('@/components/ui/layout/PageHeader');
 const { COLLECTION_RAIL_MIN_WIDTH_PX, useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
 const { HAPPIER_COLLECTION_RAIL_WIDTH_PX } = await import('@happier-dev/plugin-ui/advanced');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { AppShellTailContext, useAppShellTail } = await import('@/components/navigation/shell/appShellTail');
 
 const modeSeen: Array<string | null> = [];
 const detailMounts = { count: 0 };
@@ -280,5 +281,21 @@ describe('SettingsCollectionLayout', () => {
         const header = screen.root.findAll((node) => node.props?.testID === 'collection-header')[0];
         expect(header).toBeDefined();
         expect(header!.findAll((node) => node.props?.testID === 'settings-modal-back')).toHaveLength(0);
+    });
+    it('keeps the shell\'s canvas tail from a pane host inside the detail: the detail is one pane of a split, not the page sheet', async () => {
+        const tailsSeen: unknown[] = [];
+        function TailProbe() {
+            tailsSeen.push(useAppShellTail());
+            return null;
+        }
+        await renderScreen(
+            <AppShellTailContext.Provider value={{ placement: 'canvas', rightHost: null, railHost: null, containerWidthPx: 1104 }}>
+                <SettingsCollectionLayout navigator="machines" rootPathname="/settings/machines"
+                    resolveChildRoute={() => '[id]'} rail={<View />} railWidth="standard" detailMinWidthPx={480}
+                    testID="settings-machines" detailTop={<TailProbe />} />
+            </AppShellTailContext.Provider>,
+        );
+        expect(tailsSeen.length).toBeGreaterThan(0);
+        expect(tailsSeen.every((tail) => tail === null)).toBe(true);
     });
 });

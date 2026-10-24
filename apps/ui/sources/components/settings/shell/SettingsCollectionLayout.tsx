@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { AppShellTailContext } from '@/components/navigation/shell/appShellTail';
 import { Stack, usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -97,14 +98,16 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
                 detailActive
                 // Narrow screens show the detail stack only: its index page is the list.
                 stackedPane="detail"
-                detail={<View style={{ flex: 1, minHeight: 0 }}>
+                // The detail is one pane of a split, never the page sheet: a pane host inside it keeps its
+                // right panel in the page and budgets its own width, so the shell's canvas tail stays out.
+                detail={<AppShellTailContext.Provider value={null}><View style={{ flex: 1, minHeight: 0 }}>
                     {props.detailTop}
                     <CollectionDetailControlsHost enabled={isModalPresentation} rootPathname={props.rootPathname}>
                         <Stack screenOptions={{ headerShown: false }}>
                             {routes.map((route) => <Stack.Screen key={route.name} name={route.name} />)}
                         </Stack>
                     </CollectionDetailControlsHost>
-                </View>}
+                </View></AppShellTailContext.Provider>}
             />
         </View>
     </CollectionDraftTitleScope>;
