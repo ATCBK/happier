@@ -12,6 +12,7 @@ import { t } from '@/text';
 import type { ConnectedAccountUiNegotiation } from './resolveConnectedAccountUiNegotiation';
 import type { ConnectedAccountIdentityLabelKind, ConnectedAccountIdentityPresenter } from './maskAccountEmail';
 import { abbreviateConnectedAccountId } from './maskAccountEmail';
+import { humanizeConnectedServiceIdentity } from './connectedServiceIdentityLabel';
 
 import {
   resolveQualifiedConnectedAccountLabel,
@@ -231,14 +232,15 @@ export function presentQualifiedConnectedAccountTarget(input: Readonly<{
   /** The consuming device's identity privacy policy, applied before visible and assistive text. */
   presentIdentity?: ConnectedAccountIdentityPresenter;
 }>): QualifiedConnectedAccountTargetPresentation {
+  const target = input.target;
+  const service = target.kind === 'account' ? target.account.service : target.service;
   const serviceTitle = nonEmptyText(input.serviceTitle)
-    ?? t('connectedServices.fallbackName');
+    ?? (humanizeConnectedServiceIdentity(service.localId) || t('connectedServices.fallbackName'));
   const missingTargetLabel = input.sourceNegotiation === 'indeterminate'
     ? t('common.loading')
     : input.sourceNegotiation === 'legacy'
       ? t('connectedServices.purposeTargets.legacyUnavailable')
       : t('common.unavailable');
-  const target = input.target;
   if (target.kind === 'account') {
     const accountRef = target.account;
     const account = input.accounts.find((candidate) => (

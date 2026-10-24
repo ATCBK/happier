@@ -1,5 +1,6 @@
 import { resolveProjectedLocalizedText } from '@/components/plugins/surfaces/resolvePluginDisplayString';
 import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { humanizeConnectedServiceIdentity } from '@/sync/domains/connectedServices/connectedServiceIdentityLabel';
 import {
     getGeneratedLegacyConnectedServiceRegistryFallback,
     getLegacyConnectedServiceRegistryEntry,
@@ -26,7 +27,8 @@ export function resolveConnectedServiceRegistryEntryDisplayName(
     if (projectedTitle) {
         return projectedTitle;
     }
-    return translate(entry.displayNameKey ?? 'connectedServices.fallbackName');
+    if (entry.displayNameKey) return translate(entry.displayNameKey);
+    return humanizeConnectedServiceIdentity(entry.service?.localId ?? entry.serviceId) || translate('connectedServices.fallbackName');
 }
 
 /**
@@ -53,9 +55,13 @@ export function resolveQualifiedConnectedServiceRegistryDisplayName(
     localizePluginText?: PluginLocalizedTextResolver,
 ): string {
     const entry = resolveQualifiedConnectedServiceRegistryEntry(registry, service);
-    return entry
+    const label = entry
         ? resolveConnectedServiceRegistryEntryDisplayName(entry, translate, localizePluginText)
-        : translate('connectedServices.fallbackName');
+        : humanizeConnectedServiceIdentity(service.localId) || translate('connectedServices.fallbackName');
+    const collision = registry.entries.some(candidate => candidate.service
+        && candidate.service.pluginId !== service.pluginId
+        && resolveConnectedServiceRegistryEntryDisplayName(candidate, translate, localizePluginText) === label);
+    return collision ? `${label} · ${service.pluginId}` : label;
 }
 
 export function resolveConnectedServiceDisplayName(

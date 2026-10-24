@@ -31,6 +31,19 @@ const group = Object.freeze({
 });
 
 describe('presentQualifiedConnectedAccountTarget', () => {
+  it('keeps retained account and pool names meaningful when their descriptor title is absent', () => {
+    const unnamed = { ref: account.ref };
+    const pool = { ref: group.ref };
+    const input = { accounts: [unnamed], groups: [pool], labelsByKey: {}, serviceTitle: null };
+    const accountPresentation = presentQualifiedConnectedAccountTarget({ ...input, target: { kind: 'account', account: unnamed.ref } });
+    const poolPresentation = presentQualifiedConnectedAccountTarget({ ...input, target: { kind: 'group', ...pool.ref } });
+
+    expect(accountPresentation.primaryLabel).toBe('Managed Accounts account');
+    expect(poolPresentation.primaryLabel).toBe('Managed Accounts');
+    expect(accountPresentation.accessibilityLabel).not.toContain(account.ref.accountId);
+    expect(poolPresentation.accessibilityLabel).not.toContain(group.ref.groupId);
+  });
+
   it('summarizes a pool by the accounts it rotates and the one in use, never by an id', () => {
     const second = { ref: { service, accountId: 'account_opaque_789' }, displayName: 'Bot account' };
     const member = (connectedAccountId: string, enabled = true) => ({ connectedAccountId, enabled });

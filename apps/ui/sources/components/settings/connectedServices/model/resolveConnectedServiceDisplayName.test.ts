@@ -107,10 +107,21 @@ describe('resolveQualifiedConnectedServiceRegistryDisplayName', () => {
         }, (key) => key)).toBe('connectedServices.serviceNames.anthropic');
     });
 
-    it('fails closed to the generic service title when no applied descriptor matches', () => {
+    it('names a retained external service from its stored identity without claiming it is installed', () => {
         expect(resolveQualifiedConnectedServiceRegistryDisplayName({ entries: [] }, {
             pluginId: 'external.plugin',
-            localId: 'gateway',
-        }, (key) => key)).toBe('connectedServices.fallbackName');
+            localId: 'cloud-account',
+        }, (key) => key)).toBe('Cloud Account');
+    });
+
+    it('distinguishes matching service titles with their qualified plugin identity', () => {
+        const entries = ['com.acme.cloud', 'com.example.cloud'].map(pluginId => ({
+            serviceId: 'cloud', service: { pluginId, localId: 'cloud' },
+            connectCommand: '', supportsOauth: false, projectedTitle: 'Cloud',
+        }));
+        expect(resolveQualifiedConnectedServiceRegistryDisplayName({ entries }, entries[0]!.service, key => key))
+            .toBe('Cloud · com.acme.cloud');
+        expect(resolveQualifiedConnectedServiceRegistryDisplayName({ entries }, entries[1]!.service, key => key))
+            .toBe('Cloud · com.example.cloud');
     });
 });
