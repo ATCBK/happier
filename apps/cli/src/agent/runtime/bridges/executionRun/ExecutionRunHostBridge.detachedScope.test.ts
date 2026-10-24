@@ -28,7 +28,8 @@ import { createWorkflowInteractionCapacityError } from '@/agent/permissions/inte
 import { buildRunScopedExecutionPermissionRequestId } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import type { AgentState } from '@/api/types';
-import { createActionExecutor, type ActionExecutorDeps, StrictJsonValueSchema, waitForExecutionRunTerminal } from '@happier-dev/protocol';
+import { createActionExecutor, StrictJsonValueSchema, waitForExecutionRunTerminal } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { freezeActionCompletionContractV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
@@ -125,13 +126,14 @@ describe('ExecutionRunHostBridge detached task scope', () => {
     // This replaces only the machine transport/native runtime. Action admission,
     // profile capability, completion and Workflow result validation remain real.
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       executionRunCheckProtocolV2: async () => ({ ok: true }),
       executionRunStart: async (sessionId, request) => {
         const parsed = ExecutionRunStartRequestSchema.parse(request);
         return manager.start({ ...parsed, sessionId: sessionId ?? null, modelSelection: null,
           backendTarget: convertBackendTargetRefV2ToV1(readBackendTargetRefV2(parsed.backendTarget)) });
       },
-    } as ActionExecutorDeps);
+    });
     const store = createInMemoryWorkflowCoordinatorStore();
     const coordinator = createWorkflowCoordinator({ store, executeStep: async () => { throw new Error('Unexpected Agent leaf'); },
       allocateInvocationRecordId: () => `invocation-${store.list().length}`,

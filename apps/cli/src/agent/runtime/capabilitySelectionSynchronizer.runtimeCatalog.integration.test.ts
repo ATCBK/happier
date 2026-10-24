@@ -154,6 +154,8 @@ describe('capability refresh during real Run admission', () => {
         const atGate = new Promise<void>(resolve => { gateEntered = resolve; });
         const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
         const restart = vi.fn<NonNullable<CapabilitySelectionSynchronizerInput['requestRestart']>>(async (_request, options) => {
+          const restartSignal = options.signal;
+          if (!restartSignal) throw new Error('Expected the synchronizer restart lifetime signal');
           const tracked = trackedSessions.find(child => child.happySessionId === session.sessionId && child.pid === process.pid);
           if (!tracked) throw new Error('Missing daemon-tracked fixture Session');
           const result = await requestPlannedRunnerRestart({ sessionId: session.sessionId, tracked,
@@ -161,7 +163,7 @@ describe('capability refresh during real Run admission', () => {
             pidToTrackedSession: new Map([[tracked.pid, tracked]]), isProcessSafeToSignal: async () => true,
             prepareSignal: async () => {
               gateEntered();
-              return await prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal: options.signal,
+              return await prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal: restartSignal,
                 onHold: attempt => { tracked.plannedRestartAdmission = attempt; },
                 callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
             },

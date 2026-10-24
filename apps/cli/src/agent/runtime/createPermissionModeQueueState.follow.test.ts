@@ -16,7 +16,7 @@ import { createPermissionModeQueueState } from './createPermissionModeQueueState
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import { createSessionProviderInputOutcomeBinding, type SessionProviderInputOutcome } from './session/input/providerInputOutcome';
 
-function createFollowHarness(overrides?: Partial<ApiSessionClient>) {
+function createFollowHarness(overrides?: Omit<Partial<ApiSessionClient>, 'updateMetadata'>) {
   let emit: ((message: UserMessage) => boolean | void) | undefined;
   const steerText = vi.fn(async () => undefined);
   const queuedDuringTurn = vi.fn();

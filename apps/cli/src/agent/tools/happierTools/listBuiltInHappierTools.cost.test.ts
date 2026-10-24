@@ -14,7 +14,7 @@ describe('native tool inventory cost', () => {
     };
     const pluginToolCatalog = [declaration];
     const before = createHappierToolInventory({ surface: 'mcp', pluginToolCatalog, actionsSettings: null });
-    const replacement = { ...declaration, name: 'acme_read_next', inputSchema: {
+    const replacement: ProjectedPluginToolCatalogEntry = { ...declaration, name: 'acme_read_next', inputSchema: {
       type: 'object', properties: { label: { type: 'string' } }, required: ['label'],
     } };
     pluginToolCatalog.splice(0, 1, replacement);
@@ -60,8 +60,8 @@ describe('native tool inventory cost', () => {
   it.each([64, 512])('projects %i admitted plugin declarations without whole-catalog reprojection per tool', (size) => {
     let schemaReads = 0;
     let identityReads = 0;
-    const inputSchema = { type: 'object', properties: { sessionId: { type: 'string' } },
-      required: ['sessionId'], additionalProperties: false } as const;
+    const inputSchema: ProjectedPluginToolCatalogEntry['inputSchema'] = { type: 'object', properties: { sessionId: { type: 'string' } },
+      required: ['sessionId'], additionalProperties: false };
     const pluginToolCatalog: ProjectedPluginToolCatalogEntry[] = Array.from({ length: size }, (_, index) => ({
       toolId: `acme.inventory/tool-${index}`,
       get actionId() { identityReads += 1; return `acme.inventory/actions/action-${index}`; },

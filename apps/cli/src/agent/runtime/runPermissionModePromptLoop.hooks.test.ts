@@ -109,7 +109,7 @@ async function runSingleSpecialCommand(params: Readonly<{
       observeProviderInputSettlement,
       confirmUserMessageLocallyConsumed,
       enqueueAgentMessageCommitted,
-    } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+    },
   });
   session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
   const queue = createModeQueue();
@@ -777,7 +777,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('dispatches an advertised provider command verbatim without consuming fresh-session composition', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-provider-command' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-provider-command' },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -848,7 +848,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('keeps a provider-native command before its provenance without agent context transformation', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-attributed-provider-command' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-attributed-provider-command' },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -955,7 +955,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('keeps the shared Pending pump armed through a non-steerable settling window until the turn ends', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-active-turn-pump' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-active-turn-pump' },
     });
     session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
     const queue = createModeQueue();
@@ -1032,7 +1032,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('does not retain an arbitrary active-turn Pending pump rejection', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-active-turn-pump-log-privacy' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-active-turn-pump-log-privacy' },
     });
     session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
     const queue = createModeQueue();
@@ -1092,7 +1092,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('arms the active-turn Pending pump for send-now interrupt when in-flight steer is unsupported', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-active-turn-pump-send-now-without-steer' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-active-turn-pump-send-now-without-steer' },
     });
     session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
     const queue = createModeQueue();
@@ -1146,7 +1146,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-compact-enforcement-first',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1242,7 +1242,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-dispatch-custody',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1334,7 +1334,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-1',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1404,7 +1404,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('resolves Agent composition at the next-turn boundary before fresh static prompt contributions', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-composition-boundary' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-composition-boundary' },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1495,7 +1495,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
 
   it('clears the active composition tool selection when turn completion aborts', async () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
-      overrides: { sessionId: 'session-composition-abort' } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      overrides: { sessionId: 'session-composition-abort' },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1561,7 +1561,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-1',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1626,7 +1626,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-context-fallback-log-privacy',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',
@@ -1687,7 +1687,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     const session = createMutableApiSessionClientFixture<Metadata>({
       overrides: {
         sessionId: 'session-1',
-      } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+      },
     });
     session.__setMetadata(createTestMetadata({
       permissionMode: 'default',

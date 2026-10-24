@@ -135,7 +135,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
                         ...(typeof input === 'object' && input !== null ? input : {}) });
                     replyMutations.push(input);
                     if (replyTransportUnavailable) throw new Error('reply transport unavailable');
-                    return { v: 1, ok: true };
+                    return { v: 1, ok: true, progress: { v: 1, mode: 'wait', disposition: 'observing' } } as const;
                 },
                 releaseSessionMessageReplySourceTurn: async (input: unknown) => { releasedSourceTurns.push(input); return { v: 1, ok: true }; },
                 bindExecutionRunPendingInput: (_binding: { consume: (input: ExecutionRunAdmittedPendingInputV1) => boolean }) => ({
@@ -541,7 +541,9 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
         const controller = internals.controllers.get('run-1')!;
         const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'workingTree' },
             repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
-        internals.runs.set('run-1', { ...internals.runs.get('run-1')!, intent: 'scm_diff_summary', modelId,
+        const retained = internals.runs.get('run-1')!;
+        internals.runs.set('run-1', { ...retained, intent: 'scm_diff_summary',
+            ...(modelId ? { launch: { ...retained.launch, modelId } } : {}),
             ...(effectiveModelId ? { effectiveEngine: { agentId: TEST_BACKEND_ID, modelId: effectiveModelId } } : {}), intentInput: {
             source: comparison.source, comparison, outputs: ['walkthrough'], sourceKey: comparison.id,
             metadata: { source: comparison.source, sourceKey: comparison.id },

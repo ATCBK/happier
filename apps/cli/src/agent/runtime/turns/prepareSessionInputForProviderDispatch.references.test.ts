@@ -58,7 +58,8 @@ async function assertAgentImageOrder(prepared: Awaited<ReturnType<typeof prepare
   const exec = createSdkExecFixture();
   const base = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
   const ctx = { ...base, agentRuntime: { ...base.agentRuntime, inputFiles } };
-  const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/inline-reference-fixture', launchEnv: {}, happierSessionId: 'session' });
+  const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/inline-reference-fixture', launchEnv: {},
+    permissionMode: 'default', happierSessionId: 'session' });
   try {
     await operations.sendProviderTurnPrompt(text, { structuredInput: prepared.structuredInput });
     const row = exec.written.find(value => value !== null && typeof value === 'object' && Reflect.get(value, 'type') === 'user');

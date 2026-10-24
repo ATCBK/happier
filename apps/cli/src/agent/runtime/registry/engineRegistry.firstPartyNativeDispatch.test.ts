@@ -226,7 +226,6 @@ describe('first-party native Agent production dispatch', () => {
                         commit: null,
                         generations: new Map(),
                         rejectedGenerations: new Map(),
-                        isCurrent: async () => true,
                     },
                     connectedAccounts: createUnboundConnectedAccountsFixture(),
                 });

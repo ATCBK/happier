@@ -241,7 +241,7 @@ describe('native inactive Agent session controls', () => {
         native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
       const result = await routeSessionCatalogControl({ ...commonRouteParams('vendor-catalog-session'),
         operation: 'vendorPlugins', resolveAdapter: async () => adapter });
-      const parsed = getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result);
+      const parsed = getActionSpec('session.vendor_plugin_catalog.list').outputSchema!.parse(result);
       expect(parsed).toMatchObject({ vendorPlugins: [{
         v: 1, backendId: fixture.agentId, agentId: fixture.agentId,
         vendorPluginRef: 'plugin://mail@curated', name: 'mail', displayName: 'Mail',
@@ -265,7 +265,7 @@ describe('native inactive Agent session controls', () => {
       native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
     const result = await routeSessionCatalogControl({ ...commonRouteParams('external-catalog-session'),
       operation: 'vendorPlugins', resolveAdapter: async () => adapter });
-    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result)).toEqual({
+    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema!.parse(result)).toEqual({
       vendorPlugins: populated ? [{ v: 1, backendId: fixture.agentId, agentId: fixture.agentId,
         vendorPluginRef: 'plugin://review@acme', name: 'review', displayName: 'Review', description: 'Review changes',
         installed: false, enabled: false, mentionable: false }] : [],
@@ -283,7 +283,7 @@ describe('native inactive Agent session controls', () => {
       native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
     const result = await routeSessionCatalogControl({ ...commonRouteParams('unavailable-catalog-session'),
       operation: 'vendorPlugins', resolveAdapter: async () => adapter });
-    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result)).toEqual({
+    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema!.parse(result)).toEqual({
       unsupported: true, vendorPlugins: [], diagnostic: outcome === 'unsupported'
         ? 'acme_catalog_unsupported' : 'native_vendor_plugin_catalog_kind_mismatch',
     });

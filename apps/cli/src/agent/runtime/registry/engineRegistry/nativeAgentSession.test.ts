@@ -5358,7 +5358,7 @@ describe('native Agent session host adapter', () => {
         await controls.setGoal('Ship direct facets', { status: 'active', tokenBudget: 1000 });
         await controls.clearGoal();
         const vendorCatalog = await controls.listVendorPlugins();
-        expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(vendorCatalog)).toEqual({
+        expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema!.parse(vendorCatalog)).toEqual({
             vendorPlugins: [{
                 v: 1, backendId: agentId, agentId,
                 vendorPluginRef: 'plugin://gmail', name: 'gmail', displayName: 'Gmail',
@@ -12273,7 +12273,7 @@ describe('native Agent session host adapter', () => {
             expect(events.map((event) => event.sequence)).toEqual([1]);
             releaseCleanup();
             await vi.waitFor(() => expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]));
-            expect(mutations.map(({ action, turnId }) => [action, turnId])).toEqual([
+            expect(mutations.map((mutation) => [mutation.action, 'turnId' in mutation ? mutation.turnId : null])).toEqual([
                 ['begin', 'turn-1'], ['complete', 'turn-1'],
                 ...(next === 'successor' ? [['begin', 'turn-2']] : []),
             ]);

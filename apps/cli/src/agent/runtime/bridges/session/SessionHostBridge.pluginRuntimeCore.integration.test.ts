@@ -280,7 +280,7 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
         currentSessionPresentation: presentation.bindCurrentSession, transcriptSession: {}, messageBuffer: {}, mcpServers: {},
         permissionHandler: { cancelByPluginTurn: async () => undefined }, getPermissionMode: () => 'safe-yolo', memoryRecallGuidanceEnabled: false } as never);
       if (!created) throw new Error('Expected native runtime');
-      const operations = (created as { operations: NonNullable<HostSessionRuntimeHookRuntime['operations']> }).operations;
+      const operations = created.operations;
       disposeRuntime = operations.resetOrDisposeRuntime;
       await operations.sendTurnPrompt('recipient catalog admitted', { turnId: 'recipient-turn', localId: 'recipient-input', userMessageSeq: 1 });
       expect(upstreamRequests).toEqual([{ model: model.descriptor.id, input: 'recipient catalog admitted' }]);

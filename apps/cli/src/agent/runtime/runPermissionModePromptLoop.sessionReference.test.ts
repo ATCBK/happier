@@ -147,7 +147,7 @@ async function runOneStructuredInputPrompt(params: Readonly<{
       async enqueueAgentMessageCommitted() {
         return { persisted: true, delivered: false };
       },
-    } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+    },
   });
   session.__setMetadata(createTestMetadata({
     permissionMode: 'default',
@@ -600,7 +600,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
           async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
           },
-        } as Partial<Parameters<typeof runPermissionModePromptLoop>[0]['session']>,
+        },
       });
       session.__setMetadata({
         ...createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }),

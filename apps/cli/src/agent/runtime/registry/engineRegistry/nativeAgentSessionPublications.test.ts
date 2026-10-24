@@ -2,17 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { readAcpSessionModeIntentFromMetadata } from '@happier-dev/agents';
 import type { Metadata } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { AgentSessionModesSnapshot } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createSessionRuntimeModelsPublisher } from '@/agent/runtime/controls/sessionRuntimeModelsPublisher';
 import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
 
 describe('createNativeAgentSessionPublications', () => {
   it.each(['plan', 'build'] as const)('completes an accepted native mode only when the saved selection still matches (%s)', async (selectedMode) => {
-    let metadata: Metadata = {
-      path: '/tmp/workspace', host: 'test-host',
+    let metadata: Metadata = createTestMetadata({
+      path: '/tmp/workspace',
       sessionModeOverrideV1: { v: 1, modeId: selectedMode, updatedAt: 10 },
       acpSessionModeOverrideV1: { v: 1, modeId: selectedMode, updatedAt: 10 },
-    };
+    });
     const publications = createNativeAgentSessionPublications({
       agentId: 'claude', signal: new AbortController().signal,
       isCurrent: () => true, supportsInFlightSteer: false,
@@ -34,8 +35,8 @@ describe('createNativeAgentSessionPublications', () => {
 
   it('refuses mode completion if the runtime retires before the publisher applies it', async () => {
     let current = true;
-    let metadata: Metadata = { path: '/tmp/workspace', host: 'test-host',
-      sessionModeOverrideV1: { v: 1, modeId: 'plan', updatedAt: 10 } };
+    let metadata: Metadata = createTestMetadata({ path: '/tmp/workspace',
+      sessionModeOverrideV1: { v: 1, modeId: 'plan', updatedAt: 10 } });
     const publications = createNativeAgentSessionPublications({
       agentId: 'claude', signal: new AbortController().signal,
       isCurrent: () => current, supportsInFlightSteer: false,

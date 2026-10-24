@@ -49,9 +49,12 @@ describe('createSessionMetadata', () => {
             expect(shared).not.toHaveProperty('branch');
             const opened = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: shared, ownerMetadata: owner.ownerMetadata });
             expect(opened).toHaveProperty('branch', branchName);
-            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...opened },
+            // Runtime Metadata carries the reopened checkout placement and branch observation.
+            const openedRuntime = { path: opened.path, branch: opened.branch,
+                ...(typeof opened.machineId === 'string' ? { machineId: opened.machineId } : {}) };
+            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...openedRuntime },
                 next: { ...createTestMetadata(), branch: 'process-default' }, mode: 'attach', nowMs: 1 })).toHaveProperty('branch', branchName);
-            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...opened },
+            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...openedRuntime },
                 next: { ...createTestMetadata(), path: '/replacement-checkout' }, mode: 'attach', nowMs: 1,
                 attachMetadataIdentityPolicy: 'replace_with_runtime_identity' })).not.toHaveProperty('branch');
         }

@@ -38,6 +38,7 @@ import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
@@ -47,6 +48,7 @@ describe('createActionToolExecutorBridge', () => {
     const queries: unknown[] = [];
     const approvals: unknown[] = [];
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       // Machine RPC and approval Artifact persistence are system boundaries.
       languageIntelligenceQuery: async args => { queries.push(args); return { status: 'loading' }; },
       languageIntelligenceRestart: async args => { queries.push(args); return { status: 'unavailable', reason: 'session_unavailable' }; },
@@ -114,6 +116,7 @@ describe('createActionToolExecutorBridge', () => {
     const requests: unknown[] = [];
     let approval: unknown;
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       workspaceFilesSearch: async input => { requests.push(input); return { ok: true, files: [], hasMore: false, coverage: 'complete' }; },
       workspaceFilesReplacePreview: async input => { requests.push(input); return { ok: true, files: [], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' }; },
       machineProcessesAction: async ({ input }) => { requests.push(input); return { row: null }; },

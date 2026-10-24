@@ -328,8 +328,8 @@ describe('resumeBackendControllerForResumableRun', () => {
       controllers: missingControllers,
       createRuntime: () => createTestExecutionRunHostRuntime({
         readResumeSupport: async () => true,
-        provisionRuntime: async ({ resumeRuntimeId } = {}) => {
-          expect(resumeRuntimeId).toBe('vendor_session_1');
+        provisionRuntime: async (opts) => {
+          expect(opts?.resumeRuntimeId).toBe('vendor_session_1');
           if (source === 'materialized') throw new ExecutionRunConnectedServicesError(
             'Restore the native conversation or start a new conversation from the saved result.',
             'provider_session_state_unavailable_for_resume',

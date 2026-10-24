@@ -95,7 +95,9 @@ describe('AcpBackend startup timeout retry safety', () => {
       const backend = new AcpBackend({ agentName: 'missing-configured-agent', cwd: dir,
         command: join(dir, 'absent-agent'), args: [], transportHandler: createAcpTestTransportHandler() });
       const daemonEvents = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection', 'exit', 'beforeExit'] as const;
-      const priorListeners = new Map(daemonEvents.map(event => [event, new Set(process.listeners(event))] as const));
+      // The base emitter view accepts the event union; per-event overloads do not.
+      const processEvents: NodeJS.EventEmitter = process;
+      const priorListeners = new Map(daemonEvents.map(event => [event, new Set(processEvents.listeners(event))] as const));
       const shutdowns: DaemonShutdownRequest[] = [];
       const daemon = createDaemonShutdownController();
       void daemon.resolvesWhenShutdownRequested.then(request => { shutdowns.push(request); });
@@ -122,8 +124,8 @@ describe('AcpBackend startup timeout retry safety', () => {
         await backend.dispose();
         environment.restore();
         for (const event of daemonEvents) {
-          for (const listener of process.listeners(event)) {
-            if (!priorListeners.get(event)?.has(listener)) process.removeListener(event, listener);
+          for (const listener of processEvents.listeners(event)) {
+            if (!priorListeners.get(event)?.has(listener)) processEvents.removeListener(event, listener as (...args: unknown[]) => void);
           }
         }
       }
