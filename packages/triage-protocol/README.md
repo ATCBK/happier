@@ -9,7 +9,7 @@ credentials, source materialization, host registries, UI, or persistence.
 
 ## Importing the contract
 
-The package exposes only three entry points:
+The package exposes explicit versioned entry points:
 
 - `@happier-dev/triage-protocol` re-exports V1.
 - `@happier-dev/triage-protocol/v1` exports the V1 schemas, types, contribution
@@ -26,6 +26,39 @@ The package exposes only three entry points:
   (`buildMaximalSchemaValue`, `deriveMaximumEncodedBytes`,
   `deriveMaximumEncodedBytesByLabel`, `encodedJsonBytes`) for source-plugin
   tests.
+- `@happier-dev/triage-protocol/ci/v1` exports hosted-CI identity, lifecycle,
+  run, job, evidence, mounted-operation and 27 Action operand/result schemas.
+- `@happier-dev/triage-protocol/ci/testing/v1` exports
+  `createForgeCiConformanceVectorsV1`, including native attempts/steps and a
+  GitLab pipeline without either optional capability.
+- `/releases/v1` and `/releases/testing/v1` hold the separate release contract
+  and its vectors. Existing root imports continue to export the source V1 ABI.
+
+The CI and Releases additions describe 0.3 development-source Developer Preview
+contracts, not an npm publication. Shared CI identities, states, annotations and
+failure summaries are defined once in `@happier-dev/channels-protocol/v1` and
+re-exported unchanged here; the remaining CI and Releases schemas stay in this
+package. Provider clients, credentials, runtime controllers and UI remain outside
+these protocol packages.
+
+```ts
+import { ForgeCiRunV1Schema } from '@happier-dev/triage-protocol/ci/v1';
+import { createForgeCiConformanceVectorsV1 } from '@happier-dev/triage-protocol/ci/testing/v1';
+const run = ForgeCiRunV1Schema.parse(createForgeCiConformanceVectorsV1().github.run);
+```
+
+Release consumers use the distinct release entry points and the same canonical
+repository, failure, conditional-read, paging and file-download contracts:
+
+```ts
+import { ForgeReleaseV1Schema } from '@happier-dev/triage-protocol/releases/v1';
+import { createForgeReleaseV1Fixture } from '@happier-dev/triage-protocol/releases/testing/v1';
+const release = ForgeReleaseV1Schema.parse(createForgeReleaseV1Fixture());
+```
+
+These schemas confer no publication or filesystem authority. Provider Actions
+and the host's current account, approval and opaque-destination admission remain
+authoritative; an indeterminate write is not permission to replay it.
 
 For a source plugin, import declarations from `/v1` and validate its manifest
 declaration with the testing entry point:
@@ -70,15 +103,45 @@ current Account's admitted data access on every invocation.
 
 Sources may bind the safe `readPullRequestStatus` role for a declared
 `pullRequest` workflow kind. It accepts the existing exact-instance
-`TriageGetInputV1` and returns `TriagePullRequestStatusResultV1`: named checks,
-nullable counts, review decisions and reviewer verbs, mergeability/blocker,
-and head/base branches with optional diff counts. Unknown or partial reads
-remain explicit; they are not zero checks or an approval. This detail read
-cannot conclude entry absence or replace `get`/`scan` observations.
+`TriageGetInputV1` and returns `TriagePullRequestStatusResultV1`. The public
+`TriagePullRequestStatusV1Schema` is the successful arm of that same closed
+result, suitable for embedding in another admitted source read.
 
-The Session tab requests it only when a PR is expanded, through Triage's own
-safe Action and the source's existing admitted readers. Sources that leave
-the optional role unbound continue to provide their existing entry details.
+Check rows retain provider-established `required` evidence; missing or null
+means unknown. Reviewer rows require a bounded source-native `id`, independent
+of their display name or order. The existing merge object carries draft,
+native state, queue requirements and membership, native auto-merge and viewer
+capabilities when established. Branch evidence includes the observed head
+revision. Unknown counts, partial reads and truncation remain explicit; an
+empty list or conflict-free head does not establish readiness. Exact fields
+and bounds remain owned by [the schema](src/v1/pullRequestStatus.ts).
+
+An existing retained producer uses the public helper after successful ingress:
+
+```ts
+import { reconcileTriagePullRequestStatusV1 } from '@happier-dev/triage-protocol/v1';
+
+const { value, checkedAtMs } = reconcileTriagePullRequestStatusV1(previous, next);
+```
+
+Pass `null` unless `previous` belongs to the same admitted Account, plugin
+generation, configured source, credential, repository, PR and head. Equal facts
+retain the previous status and nested identities; check/reviewer rows are keyed
+by `id`, including across reorder. Only the enclosing `observedAtMs` is ignored
+for semantic sharing. `checkedAtMs` always equals `next.observedAtMs`, even
+when `value.observedAtMs` belongs to the retained object. Domain timestamps and
+permission, head, failure or completeness changes still publish. A consumer
+must retain the last successful clock on refresh failure and invent neither a
+value nor a clock before first success.
+
+This remains **0.3 development source** with automated/package and loaded-runtime
+verification pending. The additions follow the undeployed source
+[direct-cut rule](../../docs/compatibility.md#sdk-protocol-evolution); older
+strict consumers are not assumed to accept the new shape. The shared Session Resource lifecycle and final header
+composition are separate integration work. The optional role cannot conclude
+entry absence or replace `get`/`scan`; sources that omit it retain their existing
+entry details. See [source presentation and merge ownership](../../docs/triage-sources.md#detail-panels-and-cross-source-fix-links)
+for the provider-owned Action boundary.
 
 ## Optional task writes (0.3 development source)
 
@@ -106,7 +169,8 @@ exported from `/v1` beside the task write contracts.
 
 ## Evolving the ABI
 
-V1 is the only supported epoch. Keep shared source fields and schemas in this
+Each explicit domain V1 subpath owns its wire epoch separately from package
+SemVer; `/v1` and `/testing/v1` keep their existing source epoch. Keep shared source fields and schemas in this
 package, and keep provider-specific implementation details in the contributing
 plugin. Do not add `default`, `current`, `latest`, legacy, or compatibility
 aliases. A breaking or independently-versioned shared contract requires a new
