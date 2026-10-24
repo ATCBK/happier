@@ -13,7 +13,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { storage } from '@/sync/domains/state/storage';
 import { createLocalServiceInventoryState } from '@/sync/domains/local/services/inventory/store';
-import { invalidateLocalServiceLauncherStore, readLocalServiceLauncherStore, publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
+import { getLocalServiceLauncherState, invalidateLocalServiceLauncherStore, readLocalServiceLauncherStore, publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
 import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
@@ -105,10 +105,15 @@ describe('Project Services source feed plus actual native binding', () => {
   });
 
   it.each(['watch', 'home-reconnect', 'home-reconnect-invalid', 'daemon-restart', 'visibility'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
-    home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
-      path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
-        { id: 'source', revokedAt: null, replacedByMachineId: null },
-      ])) : null });
+    let holdCensus = false;
+    let censusReads = 0;
+    const census = createDeferred<Response>();
+    const machineRows = () => Response.json([{ id: 'source', revokedAt: null, replacedByMachineId: null }]);
+    home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path => {
+      if (path !== '/v1/machines?includeRevoked=true') return null;
+      censusReads++;
+      return holdCensus ? census.promise : machineRows();
+    } });
     const serverId = home.home.id;
     const scope = { serverId, accountId: 'artifact-account' };
     const source = { id: 'source-ref', machineId: 'source', serverId, rootPath: '/source', createdAtMs: 1 };
@@ -146,10 +151,12 @@ describe('Project Services source feed plus actual native binding', () => {
     let presented = true;
     const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, { active: presented, children });
     let rowPublications = 0;
+    let feedCommits = 0;
     const hook = await renderHook(() => {
       const feeds = useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
         workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' });
       React.useLayoutEffect(() => { rowPublications++; }, [feeds.launcherState?.targetsById, feeds.launcherState?.rowIdsByTargetId]);
+      React.useLayoutEffect(() => { feedCommits++; });
       return feeds;
     }, { wrapper });
     const readRows = () => buildLocalServiceRows({ inventoryRows: [],
@@ -161,6 +168,7 @@ describe('Project Services source feed plus actual native binding', () => {
       if (recovery === 'watch') {
         await flushHookEffects();
         const before = rowPublications;
+        const commitsBefore = feedCommits;
         const countReads = (bindings: boolean) => remote.mock.calls.filter(([request]) =>
           request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT
             && Boolean(request.payload.projection) === bindings).length;
@@ -178,6 +186,7 @@ describe('Project Services source feed plus actual native binding', () => {
           });
         }
         expect(rowPublications - before).toBe(0);
+        expect(feedCommits - commitsBefore).toBe(0);
         expect(countReads(false) - sourceReads).toBe(75);
         expect(countReads(true) - bindingReads).toBe(0);
         expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } });
@@ -221,10 +230,25 @@ describe('Project Services source feed plus actual native binding', () => {
         await vi.waitFor(() => expect(watches).toHaveLength(2));
       }
       running = true;
+      const previousCensuses = censusReads;
+      holdCensus = recovery === 'watch';
       await act(async () => { watches.at(-1)!({ protocolVersion: 1, changed: true,
         snapshot: { v: 1, machineId: source.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] } }); });
+      if (recovery === 'watch') {
+        const key = { ...(await readCatalogBinding(serverId)), machineId: source.machineId,
+          scope: 'workspace' as const, workspaceRoot: source.rootPath, projection: 'managed_bindings' as const };
+        await vi.waitFor(() => expect(getLocalServiceLauncherState(key).targetsById.get(actual.id)?.serviceState).toBe('healthy'));
+        await vi.waitFor(() => expect(censusReads).toBe(previousCensuses + 1));
+        // The native publication is already present; fresh Machine/topology admission
+        // gates its Project projection. No timer or additional launcher read is needed.
+        expect(readRows()[0]?.status).toBe('stopped');
+        const beforeAdmission = feedCommits;
+        await act(async () => { census.resolve(machineRows()); });
+        await vi.waitFor(() => expect(readRows()[0]?.status).toBe('running'));
+        expect(feedCommits - beforeAdmission).toBe(1);
+      }
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
-    } finally { reopenedLauncher.resolve(); await hook.unmount(); }
+    } finally { census.resolve(machineRows()); reopenedLauncher.resolve(); await hook.unmount(); }
   });
   it.each([false, true])('isolates failed candidate reads from present SOURCE custody, while absence requires the full census (present=%s)', async hostPresent => {
     home = await createPlainArtifactHomeFixture('https://project-services-copy-binding.test', { handleRequest: async path =>
@@ -295,7 +319,7 @@ describe('Project Services source feed plus actual native binding', () => {
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject(expected));
     } finally { await hook.unmount(); }
   });
-  it.each(['retry', 'watch'] as const)('recovers a failed cold launcher through the real %s path', async recovery => {
+  it.each(['retry', 'watch', 'daemon-restart'] as const)('recovers a failed cold launcher through the real %s path', async recovery => {
     home = await createPlainArtifactHomeFixture('https://project-services-recovery.test', { handleRequest: async path =>
       path === '/v2/account/settings' ? new Response(JSON.stringify({ content: { t: 'plain', v: {} }, version: 0 })) : null });
     await home.hydrateAccountSettings();
@@ -321,13 +345,18 @@ describe('Project Services source feed plus actual native binding', () => {
     try {
       await vi.waitFor(() => expect(hook.getCurrent().launcherState?.refreshStatus).toBe('error'));
       await vi.waitFor(() => expect(watches).toBe(1));
+      const unavailableRequests = remote.mock.calls.length;
+      await flushHookEffects();
+      expect(remote.mock.calls).toHaveLength(unavailableRequests);
       available = true;
       await act(async () => {
         if (recovery === 'retry') await hook.getCurrent().refresh!();
+        else if (recovery === 'daemon-restart') clearMachineRequestReachabilityForMachine(
+          { serverId: home!.home.id, accountId: 'artifact-account' }, 'source');
         else rejectWatch(Object.assign(new Error('deadline'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE }));
       });
       await vi.waitFor(() => expect(hook.getCurrent().launcherState).toMatchObject({ refreshStatus: 'idle', updatedAt: 2 }));
-      expect(hook.getCurrent().inventoryState.generatedAt).toBe(recovery === 'retry' ? 2 : 3);
+      expect(hook.getCurrent().inventoryState.generatedAt).toBe(recovery === 'watch' ? 3 : 2);
       expect(alert).not.toHaveBeenCalled();
     } finally { await hook.unmount(); }
   });
@@ -396,6 +425,56 @@ describe('Project Services source feed plus actual native binding', () => {
         expect(hook.getCurrent().launcherState!.refreshStatus).toBe('idle');
       }
     } finally { releaseBinding(); await hook.unmount(); }
+  });
+  it.each(['retry', 'daemon-restart'] as const)('recovers a failed Project census with unchanged native snapshots (%s)', async recovery => {
+    let censusAvailable = false;
+    let censusReads = 0;
+    home = await createPlainArtifactHomeFixture('https://project-services-census-recovery.test', { handleRequest: async path => {
+      if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
+      if (path !== '/v1/machines?includeRevoked=true') return null;
+      censusReads++;
+      return censusAvailable ? Response.json([{ id: 'source', revokedAt: null, replacedByMachineId: null }])
+        : new Response('', { status: 503 });
+    } });
+    await home.hydrateAccountSettings();
+    const serverId = home.home.id;
+    const scope = { serverId, accountId: 'artifact-account' };
+    const source = { id: 'source-ref', machineId: 'source', serverId, rootPath: '/source', createdAtMs: 1 };
+    storage.getState().activateProjectAccountRowsScope(scope);
+    storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+      workspaceRefs: [source], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+    const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-service', source: 'managed_service', machineId: source.machineId,
+      workspaceId: source.id, workspace: { serverId, machineId: source.machineId, workspaceId: source.id, rootPath: source.rootPath },
+      declaration: { workspaceRefId: source.id, selection: { kind: 'manifest', name: 'web' } }, cwd: source.rootPath,
+      title: 'web', confidence: 'high', state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [] });
+    remote.mockImplementation(async ({ method, machineId, payload }: {
+      method: string; machineId: string; payload: { projection?: 'managed_bindings' };
+    }) => {
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(() => {});
+      return { protocolVersion: 1, snapshot: method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT
+        ? { v: 1, machineId, updatedAt: 1, targets: payload.projection ? [] : [declaration] }
+        : { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
+      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }));
+    const row = () => buildLocalServiceRows({ inventoryRows: [],
+      launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()], sessionId: null, scope: 'workspace' })[0];
+    try {
+      await vi.waitFor(() => expect(row()).toMatchObject({ status: 'unavailable', primaryAction: null }));
+      await flushHookEffects();
+      const unavailableRequests = remote.mock.calls.length;
+      const unavailableCensuses = censusReads;
+      await flushHookEffects();
+      expect(remote.mock.calls).toHaveLength(unavailableRequests);
+      expect(censusReads).toBe(unavailableCensuses);
+      censusAvailable = true;
+      await act(async () => {
+        if (recovery === 'retry') await hook.getCurrent().refresh!();
+        else clearMachineRequestReachabilityForMachine(scope, source.machineId);
+      });
+      await vi.waitFor(() => expect(row()).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
+      expect(censusReads).toBe(unavailableCensuses + 1);
+    } finally { await hook.unmount(); }
   });
   it('shows the typed daemon refusal through Refresh without exposing the transport message', async () => {
     home = await createPlainArtifactHomeFixture('https://project-services-refusal.test', { handleRequest: async path =>

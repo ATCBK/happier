@@ -10,6 +10,7 @@ import { getLocalServiceLauncherState, readLocalServiceLauncherStore, subscribeL
     type LocalServiceLauncherStoreKeyInput } from '@/sync/domains/local/services/launch/sharedStore';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { readUiWorkspaceSyncChildMachineFacts } from '@/sync/ops/workspaceSyncChildMachineFacts';
+import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import { presentLocalServiceActionFailure, readLocalServiceActionFailureReason, readLocalServiceActionOutcome } from './localServiceActionOutcome';
@@ -128,6 +129,13 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const declarations = React.useMemo(() => sourceTargets.filter(target => target.declaration && target.declaration.workspaceRefId === input.workspaceRefId
         && target.declaration.selection.kind === 'manifest'), [input.workspaceRefId, sourceTargets]);
     const [change, observeAgain] = React.useReducer((value: number) => value + 1, 0);
+    React.useEffect(() => {
+        if (!canObserve || !binding || !input.machineId) return;
+        // Project admission can fail independently of healthy native snapshots. Reconnect
+        // must renew that observation even when the launcher has no changed facts to publish.
+        return subscribeMachineRpcRecovery({ machineId: input.machineId, serverId: input.serverId,
+            expectedAccountId: binding.accountId }, () => observeAgain());
+    }, [binding, canObserve, input.machineId, input.serverId]);
     const subscriptions = React.useMemo(() => new Map<string, Readonly<{ key: LocalServiceLauncherStoreKeyInput; dispose: () => void }>>(),
         [binding, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows]);
     React.useEffect(() => {
@@ -164,14 +172,11 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                         const disposeLauncher = subscribeLocalServiceLauncherStore(key, () => {
                             const next = getLocalServiceLauncherState(key);
                             const observed = previous.updatedAt !== null || previous.refreshStatus === 'error';
-                            const changed = next.targetsById !== previous.targetsById
-                                || next.refreshError !== previous.refreshError;
                             previous = next;
                             // This observation awaits initial hydration below. Restarting it on
                             // that same read would discard its admitted Machine census and result.
-                            // A scan timestamp alone changes no binding and must not restart
-                            // that census either; otherwise idle scans can keep it loading.
-                            if (observed && changed) observeAgain();
+                            // The store publishes only changed native facts or availability.
+                            if (observed) observeAgain();
                         }, {
                             ...(input.launcherSnapshotClient ? { snapshotClient: input.launcherSnapshotClient } : {}),
                             ...(input.inventorySnapshotClient ? { inventorySnapshotClient: input.inventorySnapshotClient } : {}),
@@ -241,6 +246,9 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             if (!refreshed.has(key.machineId)) refreshed.set(key.machineId,
                 await refreshLocalServiceMachine({ ...key, serverId: key.serverId, accountId: binding.accountId, isCurrent: binding.isCurrent }));
         }
+        // A successful explicit scan can be unchanged. Retry also renews the Project
+        // census, whose earlier failure may have prevented any native subscription.
+        if (binding?.isCurrent() && [...refreshed.values()].some(Boolean)) observeAgain();
     }, [binding, subscriptions]);
     return { state, refresh, binding };
 }

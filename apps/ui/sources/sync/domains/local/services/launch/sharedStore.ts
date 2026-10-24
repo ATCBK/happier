@@ -1,4 +1,5 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
+import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import {
     type LocalServiceLauncherSnapshotClientInput,
     type LocalServiceLauncherSnapshotClientResult,
@@ -9,6 +10,7 @@ import {
     applyLocalServiceLauncherSnapshot,
     createLocalServiceLauncherState,
     failLocalServiceLauncherRefresh,
+    readLocalServiceLauncherSnapshotTime,
 } from './store';
 import type { LocalServiceLauncherSnapshot, LocalServiceLauncherState } from './types';
 import {
@@ -124,7 +126,11 @@ const store = createSharedSubscriptionStore<
     normalizeInput,
     storeKey,
     defaultSnapshotClient,
+    // A launcher read can fail while inventory remains healthy and unchanged. Its own
+    // demand must recover on the same authenticated reconnect, without a scan delta.
+    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({ ...input, expectedAccountId: input.accountId }, () => recover(true)),
     beginRefresh: (state, input) => {
+        if (state.updatedAt !== null) return state;
         const normalized = normalizeInput(input);
         return applyLocalServiceLauncherRefreshStarted(state, {
             machineId: normalized.machineId,
@@ -136,9 +142,10 @@ const store = createSharedSubscriptionStore<
         if (getLocalServiceInventoryState(input).refreshState === 'error') {
             // A retired inventory watch cannot prove that an old absence or lifetime is
             // current. Keep the same rows and daemon timestamp, with existing stale UI.
-            return failRefresh({ ...state, targetsById: new Map([...state.targetsById].map(([id, target]) =>
-                [id, { ...target, state: 'stale' as const, actions: [] }])) }, normalized, 'request_failed');
+            return failLocalServiceLauncherRefresh(state, { machineId: normalized.machineId,
+                sessionId: normalized.sessionId ?? undefined, reasonCode: 'request_failed', stale: true });
         }
+        const receivedAt = readLocalServiceLauncherSnapshotTime(state);
         const result = await snapshotClient({
             machineId: normalized.machineId,
             serverId: normalized.serverId,
@@ -154,7 +161,7 @@ const store = createSharedSubscriptionStore<
         const current = getLocalServiceLauncherState(input);
         return result.ok
             ? applyLocalServiceLauncherSnapshot(current, result.snapshot)
-            : current.updatedAt !== state.updatedAt ? current : failRefresh(current, normalized, result.reason);
+            : readLocalServiceLauncherSnapshotTime(current) !== receivedAt ? current : failRefresh(current, normalized, result.reason);
     },
     failRefresh: (state, input) => (
         failRefresh(state, normalizeInput(input), 'request_failed')

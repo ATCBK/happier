@@ -45,7 +45,15 @@ describe('local service launcher UI store', () => {
         const repeated = applyLocalServiceLauncherSnapshot(loaded, structuredClone(snapshot));
         expect(repeated).toBe(loaded);
         const tick = applyLocalServiceLauncherSnapshot(loaded, { ...snapshot, updatedAt: 2_000 });
-        expect(tick.updatedAt).toBe(2_000);
+        expect(tick).toBe(loaded);
+        const { applyLocalServiceLauncherRefreshStarted, failLocalServiceLauncherRefresh, snapshotFromLocalServiceLauncherState } = await import('./store');
+        expect(snapshotFromLocalServiceLauncherState(tick)?.updatedAt).toBe(2_000);
+        // A no-change receipt still orders delayed replies, without publishing a new row state.
+        expect(applyLocalServiceLauncherSnapshot(tick, { ...snapshot, updatedAt: 1_500, targets: [] })).toBe(tick);
+        const failed = failLocalServiceLauncherRefresh(applyLocalServiceLauncherRefreshStarted(tick, { machineId: snapshot.machineId }),
+            { machineId: snapshot.machineId, reasonCode: 'request_failed', stale: true });
+        expect(snapshotFromLocalServiceLauncherState(failed)?.updatedAt).toBe(2_000);
+        expect(applyLocalServiceLauncherSnapshot(failed, { ...snapshot, updatedAt: 1_500, targets: [] })).toBe(failed);
         expect(tick.targetIds).toBe(loaded.targetIds);
         expect(tick.targetsById).toBe(loaded.targetsById);
         expect(selectLocalServiceLaunchTargets(tick)).toBe(targets);

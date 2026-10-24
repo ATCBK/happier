@@ -19,7 +19,7 @@ import {
     resetLocalServiceLauncherStoreForTests,
     subscribeLocalServiceLauncherStore,
 } from './sharedStore';
-import { selectLocalServiceLaunchTargets } from './store';
+import { readLocalServiceLauncherSnapshotTime, selectLocalServiceLaunchTargets } from './store';
 import { buildLocalServiceRows } from '../serviceRow';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { resetLocalServiceInventoryStoreForTests } from '../inventory/sharedStore';
@@ -130,12 +130,12 @@ describe('shared local-service launcher store', () => {
         expect(rpc.machine).toHaveBeenCalledTimes(closedCalls);
         // A covering current publication is useful cached truth, not demand.
         publishLocalServiceLauncherSnapshot(key, { ...snapshot, updatedAt: 3_000 });
-        expect(getLocalServiceLauncherState(key).updatedAt).toBe(3_000);
+        expect(readLocalServiceLauncherSnapshotTime(getLocalServiceLauncherState(key))).toBe(3_000);
         expect(rpc.machine).toHaveBeenCalledTimes(closedCalls);
         const readsBeforeReopen = rpc.launcher.mock.calls.length;
         rpc.launcher.mockResolvedValue({ protocolVersion: 1, snapshot: { ...snapshot, updatedAt: 4_000 } });
         const reopen = subscribeLocalServiceLauncherStore(key, () => {});
-        await vi.waitFor(() => expect(getLocalServiceLauncherState(key).updatedAt).toBe(4_000));
+        await vi.waitFor(() => expect(readLocalServiceLauncherSnapshotTime(getLocalServiceLauncherState(key))).toBe(4_000));
         expect(rpc.launcher).toHaveBeenCalledTimes(readsBeforeReopen + 1);
         reopen();
         expect(watchSignals.every(signal => signal.aborted)).toBe(true);
@@ -163,7 +163,7 @@ describe('shared local-service launcher store', () => {
             publishLocalServiceLauncherSnapshot(key, { ...snapshot, updatedAt: 2_000 });
             stale.resolve();
             await pending;
-            expect(getLocalServiceLauncherState(key).updatedAt).toBe(2_000);
+            expect(readLocalServiceLauncherSnapshotTime(getLocalServiceLauncherState(key))).toBe(2_000);
             expect(getLocalServiceLauncherState(key).refreshStatus).toBe('idle');
             expect(buildLocalServiceRows({ inventoryRows: [], launchTargets: selectLocalServiceLaunchTargets(getLocalServiceLauncherState(key)),
                 sessionId: 'session-a', scope: 'machine' })[0]?.status).toBe('running');
@@ -366,7 +366,7 @@ describe('shared local-service launcher store', () => {
         });
         await flushMicrotasks();
         expect(selectLocalServiceLaunchTargets(getLocalServiceLauncherState(key))).toEqual(snapshot.targets);
-        expect(getLocalServiceLauncherState(key).updatedAt).toBe(2_000);
+        expect(readLocalServiceLauncherSnapshotTime(getLocalServiceLauncherState(key))).toBe(2_000);
         unsubscribe();
     });
 
