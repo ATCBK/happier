@@ -13,6 +13,7 @@ import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAre
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
 import { useDesktopWindowDragMouseProps } from '@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion';
 import { Icon } from '@/components/ui/icons/Icon';
+import { HEADER_BAND_SUBTITLE_TEXT } from '@/components/ui/layout/headerBand';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { useStackHeaderActionsClaimed, useStackHeaderActionsPublisher } from '@/components/navigation/stackHeaderActions';
 
@@ -107,8 +108,12 @@ export const Header = React.memo((props: HeaderProps) => {
                         pointerEvents="box-none"
                         style={[styles.centerContainer, !hasLeading && styles.centerContainerAtPageEdge]}
                     >
-                        {title}
-                        {subtitle && <Text style={subtitleStyle} numberOfLines={1}>{subtitle}</Text>}
+                        {subtitle ? (
+                            <View testID="desktop-route-header-title-stack" style={styles.titleStack}>
+                                {title}
+                                <Text style={subtitleStyle} numberOfLines={1}>{subtitle}</Text>
+                            </View>
+                        ) : title}
                     </View>
 
                     <View pointerEvents="box-none" style={styles.rightContainer}>
@@ -318,11 +323,16 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         textAlign: 'center',
         color: theme.colors.chrome.header.foreground,
     },
+    // A name with its qualifier under it (a Project and its repository): one stack, the name above.
+    titleStack: {
+        flexShrink: 1,
+        minWidth: 0,
+        alignItems: Platform.OS === 'ios' ? 'center' : 'flex-start',
+    },
     subtitle: {
-        ...Typography.variant('body'),
+        ...HEADER_BAND_SUBTITLE_TEXT,
         textAlign: Platform.OS === 'ios' ? 'center' : 'left',
-        marginTop: theme.space.s2,
-        color: theme.colors.chrome.header.foreground,
+        color: theme.colors.text.secondary,
     },
     shadow: {
         ...shadowLevelStyle(theme.colors.shadowLevels[3]),
