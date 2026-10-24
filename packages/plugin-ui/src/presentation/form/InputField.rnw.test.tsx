@@ -135,6 +135,26 @@ describe('one typed field decides how a fixed choice is drawn, for every form', 
     } finally { view.unmount(); }
   });
 
+  it('spans a framed field\'s choice box under its label on a phone, and keeps the desktop cap where the form is wide', () => {
+    const five = ['a', 'b', 'c', 'd', 'e'].map((value) => ({ value, label: value.toUpperCase() }));
+    const view = mountThroughReactNativeWeb(
+      <HappierInputField field={metric} value={undefined} options={five} onChange={() => {}} theme={theme} testID="metric" />,
+    );
+    try {
+      const handler = (node: Element) => Reflect.get(node, '__reactLayoutHandler') as ((event: unknown) => void) | undefined;
+      const frame = view.container.querySelector<HTMLElement>('[data-testid="metric"]')!;
+      expect(handler(frame), 'a framed field measures the room its control has beneath the label').toBeDefined();
+      const box = () => view.container.querySelector<HTMLElement>('[data-testid="metric.trigger"]')!.firstElementChild as HTMLElement;
+      act(() => handler(frame)!({ nativeEvent: { layout: { x: 0, y: 0, width: 640, height: 80 } } }));
+      expect(box().style.maxWidth).not.toBe('');
+      expect(box().style.alignSelf).not.toBe('stretch');
+      // A phone dialog: the box spans the field like its text inputs, so its menu covers the row edge to edge.
+      act(() => handler(frame)!({ nativeEvent: { layout: { x: 0, y: 0, width: 288, height: 80 } } }));
+      expect(box().style.alignSelf).toBe('stretch');
+      expect(box().style.maxWidth).toBe('');
+    } finally { view.unmount(); }
+  });
+
   it('keeps a list for choices that explain themselves, carry long labels, number five or more, or take several values', () => {
     const described = two.map((option) => ({
       ...option,

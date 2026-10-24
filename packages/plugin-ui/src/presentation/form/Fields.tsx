@@ -27,6 +27,8 @@ import {
   useHappierNativeMinimumInteractiveTargetSize,
 } from '../../environment/interactiveTarget.js';
 import { HappierLabel } from '../content/Foundation.js';
+import { isHappierPageRowNarrow } from '../layout/pageMetrics.js';
+import { HappierPageRowFieldLayoutContext, type HappierPageRowFieldLayout } from '../layout/pageRowField.js';
 import {
   HappierItemGroupBehavior,
   useHappierItemGroupItemBehavior,
@@ -297,8 +299,19 @@ function combineAccessibilityHints(...hints: readonly (string | undefined)[]): s
 /** How far a field that cannot be used right now (disabled, or waiting on its choices) recedes. */
 export const HAPPIER_FIELD_DISABLED_OPACITY = 0.5;
 
+/** A framed field's control sits beneath its label, so on a narrow form it spans the field like every stacked control. */
+const HAPPIER_STACKED_FIELD_LAYOUT: HappierPageRowFieldLayout = Object.freeze({ maxWidthPx: null, stacked: true });
+
 export function HappierField(props: HappierFieldProps) {
   const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
+  // A field inside a page row takes that row's placement. A free-standing one (a dialog's form) measures its own
+  // room: wide, its select keeps the desktop field width; narrow, it spans the field as its text inputs do.
+  const rowLayout = useContext(HappierPageRowFieldLayoutContext);
+  const [narrow, setNarrow] = useState(false);
+  const handleLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const next = isHappierPageRowNarrow(event.nativeEvent.layout.width);
+    setNarrow(current => (current === next ? current : next));
+  }, []);
   const generatedIssueId = useId();
   const generatedDescriptionId = useId();
   const issue = props.issue || undefined;
@@ -319,6 +332,7 @@ export function HappierField(props: HappierFieldProps) {
       <HappierFieldScopeContext.Provider value>
       <View
         testID={props.testID}
+        {...(rowLayout === null ? { onLayout: handleLayout } : {})}
         style={[{ gap: props.theme.spacing.xsmall, opacity: props.disabled ? HAPPIER_FIELD_DISABLED_OPACITY : 1 }, props.style]}
       >
         <HappierLabel theme={props.theme}>
@@ -332,7 +346,10 @@ export function HappierField(props: HappierFieldProps) {
             {description}
           </HappierText>
         ) : null}
-        {props.children}
+        {rowLayout === null
+          // One stable provider, so a field crossing the width keeps its control mounted (and an open menu open).
+          ? <HappierPageRowFieldLayoutContext.Provider value={narrow ? HAPPIER_STACKED_FIELD_LAYOUT : null}>{props.children}</HappierPageRowFieldLayoutContext.Provider>
+          : props.children}
         {issue ? (
           <HappierValidationMessage
             message={issue}
