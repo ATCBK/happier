@@ -166,6 +166,15 @@ export const SessionMessageReplyReadResultV1Schema = lazyZodSchema(() => z.discr
     returnRecipient: z.optional(ParticipantExecutionRunRecipientRoutingIdentityV1Schema), sidechainId: z.optional(z.string().check(z.minLength(1))) }),
 ]));
 export type SessionMessageReplyReadResultV1 = z.infer<typeof SessionMessageReplyReadResultV1Schema>;
+/** Exact demand, never a receiver inventory. HTTP body limits own request size. */
+export const SessionMessageReplyReadBatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  requests: z.array(z.strictObject({ sessionId: asProtocolZod(SessionIdSchema), localId: PendingLocalIdSchema })),
+}));
+export const SessionMessageReplyReadBatchResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  results: z.array(z.strictObject({ sessionId: asProtocolZod(SessionIdSchema), localId: PendingLocalIdSchema,
+    reply: SessionMessageReplyReadResultV1Schema })),
+}));
+export type SessionMessageReplyReadBatchResponseV1 = z.infer<typeof SessionMessageReplyReadBatchResponseV1Schema>;
 export const SessionMessageReplyPendingPageV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   entries: z.array(z.strictObject({ requestLocalId: PendingLocalIdSchema, progress: SessionMessageReplyProgressV1Schema,
