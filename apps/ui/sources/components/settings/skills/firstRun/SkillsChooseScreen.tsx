@@ -25,6 +25,7 @@ import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/
 import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
 import { useSkillPlaces } from '../useSkillPlaces';
 import { useSkillsFirstRun, type SkillsFirstRun } from './useSkillsFirstRun';
+import { useSkillSourceNames } from '../useSkillSourceNames';
 
 
 function formatDay(ms: number): string {
@@ -51,6 +52,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
 ) {
   const { library, firstRun } = props;
   const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
+  const sourceNameFor = useSkillSourceNames();
   const router = useRouter();
   const { theme } = useUnistyles();
   // A skill added from a machine names that machine, as the rail and homepage do.
@@ -169,7 +171,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
                     }
                     facts={{
                       presentation: 'row',
-                      source: skillSource(item, names.machineName, pluginUiProjection?.installedPackagesById),
+                      source: skillSource(item, names.machineName, pluginUiProjection?.installedPackagesById, sourceNameFor(item)),
                       trust: item.trust,
                       cost: { tokensWhenUsed: item.cost.bodyTokens },
                       ...(item.lastUsedAt !== undefined

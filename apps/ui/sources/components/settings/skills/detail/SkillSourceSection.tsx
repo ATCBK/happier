@@ -37,6 +37,7 @@ function sourceRow(
   machineName: (machineId: string) => string,
   homeDir: string | undefined,
   pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>,
+  registrySourceName?: string,
 ): Readonly<{
   title: string;
   subtitle?: string;
@@ -44,6 +45,9 @@ function sourceRow(
   mono?: boolean;
 }> | null {
   const provenance = read.provenance;
+  const source = skillSource(read, machineName, undefined, registrySourceName);
+  const sourceTitle = source?.kind === 'registry' || source?.kind === 'git' ? source.label
+    : source?.kind === 'link' ? source.host : undefined;
   switch (provenance.kind) {
     case 'written':
       return {
@@ -80,31 +84,30 @@ function sourceRow(
         icon: 'desktop',
       };
     case 'wellKnown': {
-      const source = skillSource(read, machineName);
       return {
-        title: source?.kind === 'link' ? source.host : provenance.indexUrl,
+        title: sourceTitle ?? provenance.indexUrl,
         subtitle: skillSourceVerification(read),
         icon: 'link',
       };
     }
     case 'registry': {
       const ref = provenance.registry.ref;
-      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir);
+      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir, undefined, registrySourceName);
       const at =
         ref.kind === 'gitTree'
           ? `${ref.path ? `${ref.path} ` : ''}@${ref.commit.slice(0, 7)}`
           : ref.version;
       return {
-        title: ref.kind === 'gitTree' ? ref.repo : provenance.registry.sourceId,
+        title: sourceTitle ?? provenance.registry.sourceUrl,
         subtitle: `${at} · ${t('capabilities.skillDetail.source.added', { date: formatDay(provenance.registry.importedAt) })}`,
         icon: 'github-logo',
       };
     }
     case 'link': {
       const ref = provenance.ref;
-      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir);
+      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir, undefined, registrySourceName);
       return {
-        title: provenance.url,
+        title: source?.kind === 'registry' ? source.label : provenance.url,
         subtitle:
           ref.kind === 'gitTree' ? `@${ref.commit.slice(0, 7)}` : ref.version,
         icon: 'link',
@@ -124,6 +127,7 @@ export function SkillSourceSection(
     updatePolicy: 'manual' | 'auto' | 'pinned';
     machineName: (machineId: string) => string;
     pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>;
+    registrySourceName?: string;
     checkNow: () => void;
     checking: boolean;
     checkedAt: number | null;
@@ -141,7 +145,7 @@ export function SkillSourceSection(
   const foundOn = read.provenance.kind === 'machine' ? read.provenance.machineId : null;
   // The folder is shown the way the machine's person writes it (~/...), from that machine's own home.
   const homeDir = useMachine(foundOn ?? '', foundOn !== null)?.metadata?.homeDir ?? undefined;
-  const source = sourceRow(read, props.machineName, homeDir, props.pluginSource);
+  const source = sourceRow(read, props.machineName, homeDir, props.pluginSource, props.registrySourceName);
   // Imported bundles are copies of a folder; a skill written here or shipped with Happier has no outside to miss.
   const importedCopy =
     read.provenance.kind === 'registry' ||

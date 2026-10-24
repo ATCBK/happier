@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createSkillSourceNameResolver } from './skillSource';
 import {
   SkillListItemV1Schema,
   type SkillListItemV1,
@@ -154,7 +155,20 @@ describe('Skills collection model', () => {
     expect(groupSkillsByFolder(items, folders)?.map((group) => [group.title, group.rows.map((row) => row.skillId)]))
       .toEqual([['Client work', ['off', 'd']], ['Writing', ['b']], [null, ['a', 'lost']]]);
     expect(groupSkillsByFolder([skill('a'), skill('lost', { folderId: 'gone' })], folders)).toBeNull();
-    expect(groupSkillsByFolder(items, null)).toBeNull();
+    expect(groupSkillsByFolder(items, null)?.map((group) => [group.id, group.rows.map((row) => row.skillId)]))
+      .toEqual([['c', ['off', 'd']], ['gone', ['lost']], ['w', ['b']], [null, ['a']]]);
+    expect(groupSkillsByFolder(items, { v: 1, folders: [] })).toBeNull();
+  });
+
+  it('keeps section order through unavailable names and recovery, independently of row cohort or title order', () => {
+    const folders = { v: 1 as const, folders: [
+      { id: 'a', name: 'Writing', parentId: null }, { id: 'z', name: 'Client work', parentId: null },
+    ] };
+    const items = [skill('z-first', { folderId: 'z' }), skill('a-second', { folderId: 'a' }), skill('unfiled')];
+    const order = (names: typeof folders | null) => groupSkillsByFolder(items, names)?.map(group => group.id);
+    expect(order(folders)).toEqual(['a', 'z', null]);
+    expect(order(null)).toEqual(order(folders));
+    expect(order(folders)).toEqual(['a', 'z', null]);
   });
 
   it('groups In use / Off by rules: no rule turning it on is Off (D4)', () => {
@@ -378,5 +392,22 @@ describe('Skills collection model', () => {
         name,
       ),
     ).toEqual({ kind: 'machine', machineName: 'name:mbp' });
+  });
+
+  it('uses the registry source name for a retained skill before falling back to a raw host', () => {
+    const item = skill('private', { provenance: { kind: 'registry', registry: {
+      sourceId: 'registry:team', format: 'happier-catalog', sourceUrl: 'https://skills.example.test:8443/catalog.json',
+      itemId: 'private', importedAt: 1, ref: { kind: 'gitTree', repo: 'https://skills.example.test:8443/team.git',
+        path: 'private', commit: 'a'.repeat(40), treeSha: 'b'.repeat(40) },
+    } } });
+    const sourceName = createSkillSourceNameResolver([{ id: 'registry:team', title: 'Team playbook', url: item.provenance.kind === 'registry' ? item.provenance.registry.sourceUrl : '' }]);
+    expect(skillSource(item, id => id, null, sourceName(item)))
+      .toEqual({ kind: 'registry', label: 'Team playbook' });
+    expect(skillSource(item, id => id, null))
+      .toEqual({ kind: 'git', label: 'skills.example.test:8443' });
+    expect(sourceName({ provenance: { kind: 'wellKnown', indexUrl: 'https://skills.example.test:8443/catalog.json', name: 'private', digest: `sha256:${'a'.repeat(64)}` } }))
+      .toBe('Team playbook');
+    expect(sourceName({ provenance: { kind: 'wellKnown', indexUrl: 'https://skills.example.test:8443/another.json', name: 'private', digest: `sha256:${'a'.repeat(64)}` } }))
+      .toBeUndefined();
   });
 });

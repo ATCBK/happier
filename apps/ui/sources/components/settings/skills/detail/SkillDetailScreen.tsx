@@ -57,6 +57,7 @@ import {
   lintSkillMarkdown,
 } from './SkillInstructionsSection';
 import { SkillSourceSection } from './SkillSourceSection';
+import { useSkillSourceNames } from '../useSkillSourceNames';
 import { SKILL_DRAFT_TEMPLATE } from './skillDraftTemplate';
 import { skillTextFile } from './skillFileContent';
 import {
@@ -119,6 +120,7 @@ function hostOwnedNote(provenance: SkillProvenanceV1): string | undefined {
 function SavedSkill(props: Readonly<{ skillId: string }>) {
   const { skillId } = props;
   const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
+  const sourceNameFor = useSkillSourceNames();
   const router = useRouter();
   const detail = useSkillDetail(skillId);
   const places = useSkillPlaces();
@@ -154,6 +156,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
   });
   const { read, listItem } = detail;
   const provenance = read?.provenance ?? listItem?.provenance;
+  const registrySourceName = provenance ? sourceNameFor({ provenance }) : undefined;
   // Built-in and plugin Skills are host-owned: list, read and copy only.
   const hostOwned = provenance ? isReadOnlySkillProvenanceV1(provenance) : false;
   const [removing, setRemoving] = React.useState(false);
@@ -168,14 +171,14 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
   const facts = React.useMemo(
     () => ({
       ...(provenance
-        ? { source: skillSource({ provenance }, places.names.machineName, pluginUiProjection?.installedPackagesById) }
+        ? { source: skillSource({ provenance }, places.names.machineName, pluginUiProjection?.installedPackagesById, registrySourceName) }
         : {}),
       ...(read || listItem ? { trust: (read ?? listItem)!.trust } : {}),
       ...(read || listItem
         ? { cost: { tokensWhenUsed: (read ?? listItem)!.cost.bodyTokens } }
         : {}),
     }),
-    [listItem, places.names.machineName, pluginUiProjection?.installedPackagesById, provenance, read],
+    [listItem, places.names.machineName, pluginUiProjection?.installedPackagesById, provenance, read, registrySourceName],
   );
   const statuses = React.useMemo(
     (): readonly CapabilityStatus[] =>
@@ -366,6 +369,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
             testID="skill.detail.source"
             read={read}
             pluginSource={facts.source?.kind === 'plugin' ? facts.source : undefined}
+            registrySourceName={registrySourceName}
             updatePolicy={listItem?.updatePolicy ?? 'manual'}
             machineName={places.names.machineName}
             checkNow={() => {

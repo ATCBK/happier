@@ -26,6 +26,7 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useSkillSourceNames } from '../useSkillSourceNames';
 
 import { readSkillText } from '../detail/skillFileContent';
 import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
@@ -83,6 +84,7 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
 ) {
   const { library, updates } = props;
   const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
+  const sourceNameFor = useSkillSourceNames();
   const router = useRouter();
   // A skill added from a machine names that machine, as the rail and homepage do.
   const { names } = useSkillPlaces();
@@ -214,6 +216,7 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
               item={item}
               machineName={names.machineName}
               installedPlugins={pluginUiProjection?.installedPackagesById}
+              registrySourceName={sourceNameFor(item)}
               diff={diffs.get(item.skillId)?.revision === item.revision ? diffs.get(item.skillId)! : null}
               applyState={updates.applies.get(item.skillId) ?? null}
               onToggleDiff={(open) =>
@@ -253,6 +256,7 @@ function ReadyRow(
     item: SkillListItemV1;
     machineName: (machineId: string) => string;
     installedPlugins: Parameters<typeof skillSource>[2];
+    registrySourceName?: string;
     diff: SkillUpdateDiffState | null;
     applyState: SkillUpdateApplyState | null;
     onToggleDiff: (open: boolean) => void;
@@ -305,7 +309,7 @@ function ReadyRow(
         }
         facts={{
           presentation: 'row',
-          source: skillSource(item, props.machineName, props.installedPlugins),
+          source: skillSource(item, props.machineName, props.installedPlugins, props.registrySourceName),
           trust: item.trust,
           ...(cost
             ? cost.to === cost.tokens

@@ -3,9 +3,7 @@ import { isReadOnlySkillProvenanceV1, type SkillListItemV1 } from '@happier-dev/
 import { resolveSkillPlanKindV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
 
-import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 import type { HomeOrbitBody } from '@/components/atmosphere/orbit/homeOrbitScene';
-import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import {
   projectReachOnMachines,
   type ReachMachine,
@@ -33,49 +31,7 @@ export function skillDisplayName(name: string | null | undefined, skillId: strin
 /** The collection offers a search field only once it no longer fits at a glance (the Machines rule). */
 export const SKILLS_SEARCH_THRESHOLD = 8;
 
-/** Where a skill came from, in one place (P6 §4.1 "Rows"). */
-export function skillSource(
-  item: Pick<SkillListItemV1, 'provenance'>,
-  machineName: (machineId: string) => string,
-  installedPlugins?: PluginUiProjectionModel['installedPackagesById'] | null,
-): CapabilitySource | undefined {
-  const provenance = item.provenance;
-  switch (provenance.kind) {
-    case 'written':
-    case 'upload':
-      return { kind: 'you' };
-    case 'first_party':
-      return { kind: 'happier' };
-    case 'plugin': {
-      const pluginName = installedPlugins?.[provenance.pluginId]?.displayName;
-      // Source facts are optional while the canonical plugin metadata is unavailable.
-      return pluginName ? { kind: 'plugin', pluginName } : undefined;
-    }
-    case 'machine':
-      return {
-        kind: 'machine',
-        machineName: machineName(provenance.machineId),
-      };
-    case 'wellKnown':
-      return { kind: 'link', host: hostOf(provenance.indexUrl) };
-    case 'registry':
-      if (provenance.registry.ref.kind === 'wellKnown') return skillSource({ provenance: provenance.registry.ref }, machineName);
-      return {
-        kind: 'git',
-        label:
-          repositoryLabel(provenance.registry.ref.kind === 'gitTree' ? provenance.registry.ref.repo : undefined) ??
-          repositoryLabel(provenance.registry.sourceUrl) ??
-          // Outside GitHub the person knows a source by where it lives, never by its internal id.
-          hostOf(provenance.registry.sourceUrl),
-      };
-    case 'link': {
-      if (provenance.ref.kind === 'wellKnown') return skillSource({ provenance: provenance.ref }, machineName);
-      const repository = repositoryLabel(provenance.url);
-      if (repository) return { kind: 'git', label: repository };
-      return { kind: 'link', host: hostOf(provenance.url) };
-    }
-  }
-}
+export { skillSource } from './skillSource';
 
 /** Publisher verification is distinct from the content pin Happier computes for every index item. */
 export function skillSourceVerification(item: Pick<SkillListItemV1, 'provenance'>): string | undefined {
@@ -86,23 +42,6 @@ export function skillSourceVerification(item: Pick<SkillListItemV1, 'provenance'
   return ref?.kind === 'wellKnown'
     ? t(ref.publishedDigest ? 'capabilities.skillDetail.source.verifiedByDigest' : 'capabilities.skillDetail.source.noDigestPublished')
     : undefined;
-}
-
-/** "owner/repo" for a GitHub URL; null for any other link. */
-function repositoryLabel(url: string | undefined): string | null {
-  if (!url) return null;
-  const match = url.match(
-    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)/i,
-  );
-  return match ? `${match[1]}/${match[2]!.replace(/\.git$/i, '')}` : null;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
 
 export type SkillsRailGroups = Readonly<{
@@ -124,6 +63,7 @@ export function groupSkillsByUse(
  * Folder groups (IR-83): when any skill is filed in a folder the personal folder tree knows, the list
  * groups by folder through the library's one grouping rule (shared with the prompt collection), and
  * Off rows stay in place with their "Off" summary. `null` when no skill has a folder: In use / Off stand.
+ * Unknown folder names do not unfile retained items; a received tree can confirm a folder's deletion.
  */
 export function groupSkillsByFolder(
   items: readonly SkillListItemV1[],
@@ -131,12 +71,12 @@ export function groupSkillsByFolder(
 ): readonly Readonly<{ id: string | null; title: string | null; rows: readonly SkillListItemV1[] }>[] | null {
   const names = new Map((folders?.folders ?? []).map((folder) => [folder.id, folder.name]));
   const filed = (item: SkillListItemV1) =>
-    item.folderId !== null && names.has(item.folderId) ? item.folderId : null;
+    item.folderId !== null && (folders == null || names.has(item.folderId)) ? item.folderId : null;
   if (!items.some((item) => filed(item) !== null)) return null;
   return groupRowsByFolder(
     items.map((item) => {
       const id = filed(item);
-      return { folder: id === null ? null : { id, title: names.get(id) ?? null }, row: item };
+      return { folder: id === null ? null : { id, title: names.get(id) ?? t('common.unavailable') }, row: item };
     }),
   );
 }
