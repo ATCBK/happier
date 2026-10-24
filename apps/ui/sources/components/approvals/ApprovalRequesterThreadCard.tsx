@@ -177,7 +177,6 @@ export const ApprovalRequesterThreadCard = React.memo(
               layout={phone ? 'stacked' : 'inline'}
               onOpenPage={openPage}
               openPageLabel={t('detailPages.approval.requester.thread.review')}
-              declineLabel={t('detailPages.approval.requester.thread.decline')}
             />
             </View>
           </View>

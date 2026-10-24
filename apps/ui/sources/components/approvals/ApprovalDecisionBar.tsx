@@ -17,6 +17,8 @@ type ApprovalDecisionAction = Omit<HappierDecisionAction, 'label'> & Readonly<{ 
 export type ApprovalDecisionBarProps = Omit<HappierDecisionBarProps, 'Button' | 'approve' | 'reject' | 'dismiss'> & Readonly<{
   /** The approved Action declares it cannot be undone: the approval reads as destructive and says so once. */
   irreversible?: boolean;
+  /** Where the surface has no room under the buttons (an Inbox row), it carries the sentence itself. */
+  hideIrreversibleNote?: boolean;
   approve?: ApprovalDecisionAction;
   reject?: ApprovalDecisionAction;
   dismiss?: ApprovalDecisionAction;
@@ -39,12 +41,12 @@ function IrreversibleApprovalDecisionButton(props: HappierDecisionButtonProps) {
 }
 
 /** Localized host defaults; request-specific consequence labels remain with their existing owners. */
-export function ApprovalDecisionBar({ approve, reject, dismiss, irreversible, ...props }: ApprovalDecisionBarProps) {
+export function ApprovalDecisionBar({ approve, reject, dismiss, irreversible, hideIrreversibleNote, ...props }: ApprovalDecisionBarProps) {
   const bar = <HappierDecisionBar {...props} Button={irreversible ? IrreversibleApprovalDecisionButton : ApprovalDecisionButton}
     approve={approve ? { ...approve, label: approve.label ?? t('approvals.approve') } : undefined}
     reject={reject ? { ...reject, label: reject.label ?? t('approvals.reject') } : undefined}
     dismiss={dismiss ? { ...dismiss, label: dismiss.label ?? t('approvals.dismiss') } : undefined} />;
-  if (!irreversible || !approve) return bar;
+  if (!irreversible || !approve || hideIrreversibleNote) return bar;
   return <View style={styles.withNote}>
     <Text variant="meta" style={styles.note} testID="approvals.irreversible-note">{t('approvals.irreversibleNote')}</Text>
     {bar}

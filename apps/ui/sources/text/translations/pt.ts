@@ -2103,7 +2103,7 @@ export const pt: TranslationStructure = {
     fieldStatus: "Estado",
     fieldAction: "Ação",
     approve: "Aprovar",
-    reject: "Rejeitar",
+    reject: "Negar",
     stopWaiting: "Parar de esperar",
     waitingForYou: 'Aguardando sua aprovação',
     review: 'Revisar',

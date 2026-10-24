@@ -67,7 +67,8 @@ export function ApprovalInlineDecisionBar(props: Readonly<{
   /** Where a request that needs its own page is decided; also the wording-free fallback for the primary action. */
   onOpenPage: () => void;
   openPageLabel: string;
-  declineLabel: string;
+  /** A request kind's own word for declining (a private draft); otherwise the bar's "Deny". */
+  declineLabel?: string;
   /** A request kind's own word for approving ("Post"); otherwise the Action's declared verb. */
   approveLabel?: string;
 }>) {

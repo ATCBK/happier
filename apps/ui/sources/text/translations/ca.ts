@@ -1901,7 +1901,7 @@ export const ca: TranslationStructure = {
         fieldStatus: 'Estat',
         fieldAction: 'Acció',
         approve: 'Aprova',
-        reject: 'Rebutja',
+        reject: 'Denega',
         stopWaiting: 'Deixa d’esperar',
         waitingForYou: 'Esperant la teva aprovació',
         review: 'Revisa',

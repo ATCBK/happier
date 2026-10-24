@@ -3020,6 +3020,8 @@ describe('ApprovalDetailScreen', () => {
     // The decision is offered on the card itself; the standalone page is only a link away.
     expect(screen.findByTestId('approval-requester-thread-review')).toBeNull();
     expect(screen.findByTestId('approval-requester-thread-open')).not.toBeNull();
+    // The refusal reads the bar's one word, not a per-surface variant.
+    expect(decisionButton(screen, 'approval-requester-thread-decline')?.props.title).toBe('approvals.reject');
     await act(async () => {
       await screen.pressByTestIdAsync('approval-requester-thread-approve');
     });

@@ -1894,7 +1894,7 @@ export const pl: TranslationStructure = {
     fieldStatus: "Stan",
     fieldAction: "Akcja",
     approve: "Zatwierdź",
-    reject: "Odrzuć",
+    reject: "Odmów",
     stopWaiting: "Przestań czekać",
     waitingForYou: 'Czeka na Twoje zatwierdzenie',
     review: 'Przejrzyj',

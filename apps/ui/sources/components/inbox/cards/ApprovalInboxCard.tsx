@@ -26,21 +26,20 @@ import { InboxRelativeTime } from '../InboxRelativeTime';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { readApprovalQuickActions } from '@/components/approvals/approvalQuickActions';
 import { readActionApprovalReview } from '@/components/approvals/actionApprovalReview';
+import { ApprovalDecisionBar } from '@/components/approvals/ApprovalDecisionBar';
 import {
   alertApprovalFailure,
   useApprovalDecisionHandler,
 } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
 
 /**
  * A simple approval's one-shot answer from its row (lab coordination P4): a quiet Deny and a bordered
  * Allow once, through the same decision owner the approval page uses. Only the shared review owner
  * offers it (`readApprovalQuickActions`); anything it cannot show whole stays behind Review.
  */
-function ApprovalQuickDecision(
+function ApprovalInboxDecision(
   props: Readonly<{
     artifact: DecryptedArtifact;
     approval: ApprovalRequest;
@@ -75,37 +74,15 @@ function ApprovalQuickDecision(
     );
   };
   return (
-    <View style={styles.quickActions}>
-      <RoundButton
-        testID={`inbox.approval.${props.artifact.id}.deny`}
-        size="small"
-        display="inverted"
-        title={t('inbox.work.quickDecision.deny')}
-        disabled={deciding !== null}
-        loading={deciding === 'reject'}
-        onPress={() => run('reject')}
-      />
-      <RoundButton
-        testID={`inbox.approval.${props.artifact.id}.allow_once`}
-        size="small"
-        display={irreversible ? 'destructive' : 'secondary'}
-        title={approveVerb ?? t('inbox.work.quickDecision.allowOnce')}
-        accessibilityHint={irreversible ? t('approvals.irreversibleNote') : undefined}
-        disabled={deciding !== null}
-        loading={deciding === 'approve'}
-        onPress={() => run('approve')}
-      />
-    </View>
+    <ApprovalDecisionBar size="small" disabled={deciding !== null} irreversible={irreversible} hideIrreversibleNote
+      approve={{ testID: `inbox.approval.${props.artifact.id}.allow_once`,
+        label: approveVerb ?? t('inbox.work.quickDecision.allowOnce'), busy: deciding === 'approve',
+        onPress: () => run('approve') }}
+      reject={{ testID: `inbox.approval.${props.artifact.id}.deny`,
+        busy: deciding === 'reject',
+        onPress: () => run('reject') }} />
   );
 }
-
-const styles = StyleSheet.create((theme) => ({
-  quickActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s4,
-  },
-}));
 
 export const ApprovalInboxCard = React.memo(
   (
@@ -211,6 +188,10 @@ export const ApprovalInboxCard = React.memo(
         ? actionTitle
         : null,
       props.showHome === true && sessionTitle ? homeName : null,
+      // The row has no room under its buttons: it says once, calmly, what its destructive verb means.
+      parsedApproval?.family === 'built_in' && readActionApprovalReview(parsedApproval.request).irreversible
+        ? t('approvals.irreversibleNote')
+        : null,
     ].filter(isFact);
     const quickActions = React.useMemo(
       () =>
@@ -225,7 +206,7 @@ export const ApprovalInboxCard = React.memo(
         : null;
     const quickDecision =
       quickApproval && serverId ? (
-        <ApprovalQuickDecision
+        <ApprovalInboxDecision
           artifact={props.artifact}
           approval={quickApproval}
           sessionId={sessionId}

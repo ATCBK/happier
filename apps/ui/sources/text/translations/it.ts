@@ -1880,7 +1880,7 @@ export const it: TranslationStructure = {
     fieldStatus: "Stato",
     fieldAction: "Azione",
     approve: "Approva",
-    reject: "Rifiuta",
+    reject: "Nega",
     stopWaiting: "Smetti di attendere",
     waitingForYou: 'In attesa della tua approvazione',
     review: 'Rivedi',

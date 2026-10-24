@@ -1634,7 +1634,7 @@ const enApprovals = {
   fieldStatus: 'Status',
   fieldAction: 'Action',
   approve: 'Approve',
-  reject: 'Reject',
+  reject: 'Deny',
   stopWaiting: 'Stop waiting',
   waitingForYou: 'Waiting for your approval',
   review: 'Review',
@@ -1657,16 +1657,16 @@ const enApprovals = {
   linkRemoved: 'This link no longer exists',
   unsafeDetailsTitle: 'These details cannot be shown safely',
   unsafeDetailsBody:
-    'Happier could not display this request exactly as it was sent, so it cannot be approved. Reject it, or ask for it to be sent again.',
+    'Happier could not display this request exactly as it was sent, so it cannot be approved. Deny it, or ask for it to be sent again.',
   approveUnavailableHint:
     'Approval is unavailable while these details cannot be shown safely.',
   irreversibleNote: "This can't be undone.",
   dismiss: "Dismiss",
-  dismissHint: "Closes the request without approving or rejecting it.",
+  dismissHint: "Closes the request without approving or denying it.",
   confirmApproveTitle: 'Approve request?',
   confirmApproveBody: 'This will run the requested action.',
-  confirmRejectTitle: 'Reject request?',
-  confirmRejectBody: 'This will reject the request.',
+  confirmRejectTitle: 'Deny request?',
+  confirmRejectBody: 'This will deny the request.',
   proposedComments: ({ count }: { count: number }) =>
     `${count} proposed ${count === 1 ? 'comment' : 'comments'}`,
   generation: ({ generation }: { generation: string }) =>

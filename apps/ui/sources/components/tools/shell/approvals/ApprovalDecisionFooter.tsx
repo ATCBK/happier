@@ -14,7 +14,7 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
     decisionDisabled?: boolean;
     approveDisabled?: boolean;
     approveLabel?: string;
-    /** The refusal's own word ("Deny"); defaults to Reject. */
+    /** The refusal's own word (a request type's label); defaults to the bar's "Deny". */
     rejectLabel?: string;
     approveAccessibilityHint?: string;
     /** The approved Action declares it cannot be undone. */
