@@ -15,7 +15,6 @@ export {
     type PluginUiPolicyEvaluationContextInput,
     type PluginUiSessionPolicyFacts,
 } from './policy/context';
-export { createPluginUiProjectPolicyEvaluationContext } from './policy/projectContext';
 export {
     evaluatePluginUiPolicy,
     isPluginUiPolicyVisible,
