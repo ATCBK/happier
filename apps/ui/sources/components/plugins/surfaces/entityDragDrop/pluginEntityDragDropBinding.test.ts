@@ -70,6 +70,12 @@ describe('mounted plugin entity bridge', () => {
             const carry = runtime.begin(sourceId)!; carry.move({ x: 20, y: 20 });
             expect(await carry.release()).toEqual({ status: 'applied' });
         }
+        const foreignScope = { serverId: 'other-home', accountId: 'other-account' };
+        runtime.registerSource({ id: 'foreign-session', scope: foreignScope, isCurrent: () => true,
+            getItem: () => ({ kind: 'session', scope: foreignScope, address: { serverId: foreignScope.serverId, sessionId: 's1' } }) });
+        const foreign = runtime.begin('foreign-session')!;
+        foreign.move({ x: 20, y: 20 });
+        expect(await foreign.release()).toMatchObject({ status: 'refused', reason: { code: 'scope-mismatch' } });
         expect(admitted).toHaveLength(3);
         expect(admitted).toEqual(expect.arrayContaining([expect.objectContaining({ action: { pluginId: authorPlugin.manifest.id, localId: 'add' } })]));
         binding.dispose(); await activation.unwind();
