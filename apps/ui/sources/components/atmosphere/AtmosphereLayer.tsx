@@ -24,7 +24,7 @@ import { useAtmosphere } from './useAtmosphere';
 import { useAtmospherePictureCatalog } from './useAtmospherePictureCatalog';
 import { useSetting } from '@/sync/store/hooks';
 import { atmospherePageRgb } from './atmospherePage';
-import { atmospherePaneSpan, atmospherePictureFrame, atmosphereSceneRect } from './atmosphereGeometry';
+import { atmosphereBandSpan, atmospherePaneSpan, atmospherePictureFrame, atmosphereSceneRect } from './atmosphereGeometry';
 
 /**
  * The atmosphere's page backing, mounted once at the bottom of the shell, under every plane (plan §4.4).
@@ -139,6 +139,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
   const scene = atmosphereSceneRect(panes.map(pane => pane.rect)) ?? geometry.rect;
   const bands = projections.map(pane => ({ ...pane.rect, height: pane.band || geometry.band }));
   const bandScene = atmosphereSceneRect(bands)!;
+  const bandSpan = atmosphereBandSpan(bandScene, props.windowFrame);
   const renderGroup = React.useMemo(() => ({}), []);
   const frame = atmospherePictureFrame(layout, props.windowFrame, scene);
   const [ready, setReady] = React.useState(false);
@@ -314,7 +315,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
                   resettlePaused={resettlePaused}
                   source={record}
                   size={{ width: bandScene.width, height: bandScene.height }}
-                  span={atmospherePaneSpan(bandScene, bandScene)}
+                  span={bandSpan}
                   style={{ marginTop: bandScene.y - pane.rect.y, marginLeft: bandScene.x - pane.rect.x }}
                   renderGroup={renderGroup}
                   {...job}
