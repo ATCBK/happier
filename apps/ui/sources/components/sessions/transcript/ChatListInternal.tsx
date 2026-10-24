@@ -963,6 +963,8 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         if (typeof configuredLimit !== 'number' || !Number.isFinite(configuredLimit)) return undefined;
         return { limit: Math.max(1, Math.trunc(configuredLimit)) };
     }, []);
+    // The Session-surface key remounts this owner. A passive reset would erase
+    // readiness already published by the warm renderer's child layout effects.
     const [firstListPaintObserved, setFirstListPaintObserved] = React.useState(false);
     const [nativeViewportPaintObserved, setNativeViewportPaintObservedState] = React.useState(false);
     const nativeViewportPaintObservedRef = React.useRef(false);
@@ -1075,7 +1077,6 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
             : renderWindowIndexMapRef.current?.resolveRendererTargetForDisplayIndex(displayIndex) ?? null;
     }, [resolveRestoreAnchorRendererTargetFromLoadedItems]);
     React.useEffect(() => {
-        setFirstListPaintObserved(false);
         updateNativeViewportPaintObserved(false);
         updateNativeEntryRestorePaintReleased(false);
         nativeVisibleWindowSnapshotRef.current = null;
