@@ -24,7 +24,7 @@ point the PRs & Issues plugin declares. The development implementation includes:
 
 | Source | What it brings |
 | --- | --- |
-| GitHub | Pull requests and issues |
+| GitHub | Pull requests and issues; opt-in Dependabot and code-scanning findings in 0.3 development source |
 | GitLab | Merge requests and issues |
 | Bitbucket | Pull requests |
 | Azure DevOps | Pull requests |
@@ -64,7 +64,7 @@ what decides which actions apply:
 
 - **Pull request**
 - **Issue**
-- **Error issue** — a group from Sentry or PostHog rather than a tracker
+- **Error issue** — a finding such as an error group or security alert
 - **Other** — anything a source declares that is none of the above
 
 <Callout>
@@ -72,6 +72,42 @@ what decides which actions apply:
   or an error group can start a session, but it has no branch to check out, so
   there is nothing to prepare a worktree from.
 </Callout>
+
+## GitHub security findings in development
+
+The 0.3 development source adds Dependabot and code-scanning findings to the
+existing GitHub connection. Their page composition and live-provider journey
+are under integration; this is not a stable-release availability claim.
+
+Each family is opt-in and uses the connection's existing repository selection.
+Existing connections leave both disabled. Choosing All may require walking your
+accessible repository inventory; selected repositories avoid that work. Findings
+retain their native open, fixed or dismissed state, including history. Medium
+and low severity findings remain visible. They are excluded from Tasks
+completion because only GitHub can establish that a security finding is fixed.
+
+Alert access and repository code access are separate permissions. GitHub's
+[Dependabot endpoints](https://docs.github.com/en/rest/dependabot/alerts) use
+the Dependabot alerts repository permission, while its
+[code-scanning endpoints](https://docs.github.com/en/rest/code-scanning/code-scanning)
+use Code scanning alerts. Read operations need read access; dismissing or
+reopening needs write access and permission for the actual user. Classic and
+OAuth credentials follow each endpoint's documented scopes. A denied family
+does not make readable findings from another family disappear.
+
+A scanning location identifies a file at its recorded commit. Reading its code
+also needs the appropriate
+[Contents access](https://docs.github.com/en/rest/repos/contents). If code is
+unavailable, the path, line range and commit remain useful evidence. A missing
+Dependabot patched version means no patch was supplied. The associated fix-PR
+read opens the existing update PR; it does not request a new update. When no PR
+is reported, use the alert's GitHub page to inspect the available update options.
+
+Dismissal hides a finding rather than fixing it. Reopening is a separate native
+transition, and an unknown result needs a confirming read before another write.
+Agents use the same Actions with approval by default. Fix uses the existing
+configured Agent, Session choice and compose/send policy; advisory and code
+text enter as source evidence, not instructions that can change those choices.
 
 ## What you can do with one
 

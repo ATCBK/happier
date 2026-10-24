@@ -27,6 +27,29 @@ the new default.
 The existing tokenization budgets still govern large files and long lines.
 Content remains readable when highlighting is skipped.
 
+## AI code suggestions (0.3 development)
+
+The unreleased 0.3 development editor includes opt-in AI suggestions. In
+**Settings → Source control**, under **Editor · AI suggestions**, choose an existing provider
+connection and a compatible model before enabling **Suggest code**. Enabling
+it sends context from the open file to that provider. It does not add other
+files, clipboard content or repository history.
+
+Choose **While typing** or **On request**; on request uses Alt+\\. The delay
+presets change how long the editor waits after typing, rather than setting a
+model timeout. Excluded-file patterns and disabled language ids apply before
+the machine resolves credentials or sends a request. The defaults exclude
+`.env*`, secrets directories and `secrets.*` files. Patterns support `*`, `**`
+and `?`, with `/` as the separator.
+
+The usage row shows requests on this device today for the signed-in Account,
+and cost only when the provider reports it. Usage counts do not collect source
+text or enable training or telemetry. A quiet editor status links back to
+settings when suggestions are off, sign-in is needed, the provider rate-limits
+requests or the selected model is unavailable. No source is substituted
+automatically. This work remains under integration and is not part of the
+current stable release.
+
 ## Replace in files and blame (0.3 development)
 
 The unreleased Files & Editor work brings replacement review into **Text in
@@ -34,8 +57,10 @@ files** and line attribution into the File page. These surfaces are under
 integration and are not part of the current stable release.
 
 Replacement reviews a proposed change per file and per match before writing.
-Files with unsaved editor drafts are skipped. If a file changes after preview,
-replacement leaves it alone and reports that result. Undo restores replaced
+Files already holding unsaved editor drafts are excluded from replacement. If a selected file
+changes on disk or acquires an editor draft after preview, replacement refuses
+the whole selection before writing. Refresh the preview before trying again.
+Undo restores replaced
 regions only while the file still matches the successful replacement. Literal
 replacement keeps dollar signs literal; regex replacement uses JavaScript
 capture syntax. Both operate within individual lines and preserve existing
@@ -541,10 +566,12 @@ agent's tool call, so it shows the edit location rather than individual keystrok
 </Callout>
 
 Language servers run on the Machine holding the workspace, not on the device
-where you read it. Opening a file does not start one. The first explicit hover,
+where you read it. View and Changes stay on demand: the first explicit hover,
 Go to definition, Find references or **Check problems** starts the managed
-server. The last open document closing stops it. A large project can take time
-and substantial Machine memory to load; a loading answer is not an empty result.
+server. Entering Edit counts as an explicit first use and starts an available
+server so editing suggestions can become ready. The last open document closing
+stops it. A large project can take time and substantial Machine memory to load;
+a loading answer is not an empty result.
 
 TypeScript and JavaScript use the bundled native TypeScript server. It is a
 managed dependency, not a program from the workspace, and automatic package
@@ -553,9 +580,23 @@ Machine. With a capable server, hover supplies signatures and documentation,
 F12 opens definitions, and Shift+F12 lists references. Definition targets outside
 the workspace remain non-navigable paths rather than widening file-read access.
 
-Diagnostics begin only after **Check problems**. Problems concerns open
-documents, not a project-wide type check. While checking or loading, no confirmed
-problem count is shown. **Ask to fix** prepares context in the existing composer;
+The editing-intelligence extension also adds code suggestions, snippets and
+auto-import edits, parameter help, type-definition lookup and implementation
+lookup. Each depends on the selected server's capabilities; syntax highlighting
+alone does not provide them. A missing capability leaves the rest of the editor
+usable.
+
+Formatting and organizing imports are explicit operations. In Edit, their edits
+belong to the draft and its Undo history; they do not save the file. Applying a
+reviewed edit set to a saved file checks its content hash and returns Undo data.
+If the file changed since preview, refresh the preview before applying it again.
+
+Problems offers **Open files** and **Whole project**. Use **Check the whole
+project** in Problems or the File menu to request a project check; choosing its
+scope alone does not start one. A project check uses the language server's
+workspace diagnostics or its declared project checker, and can be cancelled.
+There are no automatic project checks. While checking or loading, no confirmed
+problem count is shown. **Ask to fix** prepares context in the existing composer in either scope;
 problems in unsaved text require saving successfully before that context is made.
 On phones, the integration uses tap-to-name in reading views and caret commands
 in Edit; long-press selection and comments remain separate.
@@ -568,11 +609,31 @@ two unrelated symbols can share a name, and a declaration can be missed when
 its syntax is not recognized. A partial search does not establish that all
 references were found. Connect to the file's Machine to search its saved files.
 
-In the active file, `@` uses an existing server's authoritative symbols when
-available, otherwise an approximate outline from syntax highlighting, including
-Markdown headings. It does not start a server. The baseline does not resolve
-types or imports, and can omit declarations. Its active-editor connection is
-still being integrated with Search.
+The **Symbols** search scope asks a capable language server for symbols across
+the project. Each new query cancels the previous one, and selecting a result
+opens its file at the symbol. Without that capability, or while its Machine is
+unavailable, the active file's
+approximate outline remains available, including Markdown headings. This
+baseline does not resolve types or imports and can omit declarations.
+
+When the language server supports call hierarchy, the References panel and
+phone sheet offer a **Calls** tab with **Incoming** and **Outgoing** calls.
+Choose a result to open the caller or called function in its file.
+
+#### Language Actions for agents
+
+Agents use the same language features through the
+[Action reference](/plugins/api/host-actions). Session-bound tools use the
+Session's Machine and workspace unless given an explicit target. Queries read
+saved file text, include its content hash and refuse conflicting unsaved editor
+changes. A project diagnostics query is explicit too; it is not a background
+check after every edit.
+
+For `code.format.apply` and `code.imports.organize`, request a preview first,
+then apply its reviewed file edits. Preview is a safe read; apply asks automated
+callers for approval by default. A present user's apply needs no extra prompt
+unless their Action settings require one. Changing those settings changes the
+approval policy, not the file-version check.
 
 #### When language features are unavailable
 

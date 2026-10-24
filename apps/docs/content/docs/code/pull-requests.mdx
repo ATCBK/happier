@@ -156,6 +156,46 @@ reviewer flow.
 See [Diffs and review](/code/diffs#walk-through-changes) for the implemented reading
 workflow and its current limits.
 
+## Fix in a session: development integration
+
+Unreleased 0.3 source is integrating one configured **Fix in a session** flow
+for pull requests, hosted CI failures and selected local output. It uses the
+same configured action, profile and compose-or-send choice across entry points,
+not a separate CI launcher. An existing Session keeps its Agent. Compose leaves
+an unsent draft; an unavailable composer does not silently send it instead.
+
+Provider text and selected output are quoted as evidence, not instructions
+that can choose permissions or approve actions. A pending approval or uncertain
+send is not confirmation that the Agent received or finished the work, and
+does not authorize another send.
+
+Linking an existing PR uses its exact URL and checks it against the selected
+Session's accepted checkout. It does not create another PR. The shared bound-PR
+status, Git/Project card integration and removable Companion glance are still
+being integrated; loaded-runtime validation is pending. This section describes
+development work, not availability in a released or installed build.
+
+### PR watch integration
+
+The developing watch flow offers Notify after a proven PR open/link, with Off,
+Analyse, Address and Auto-fix choices. The Account default is Notify, with a
+three-round fixing allowance and an explicit Never stop choice. Defaults do not
+silently change a watch you already configured. The shared continuation and phone
+journey are still being integrated; this is not a released watch-availability
+claim.
+
+Address and Auto-fix are not restricted to particular Agents. Their task
+instructions bind work to the PR branch, prohibit force-push and merging, and
+route replies through Happier's marked reply Actions. Happier does not intercept
+or restrict native `git`/`gh` shell commands to enforce those instructions.
+Existing Action and Session approvals still apply. Auto-fix preparation uses the
+existing fast-forward-only pull path; an unresolved checkout, branch, remote,
+conflict or approval holds preparation instead of guessing another target.
+
+The local-reproduction control opens the existing workflow/job form. Opening it
+does not run a command, reset a watch allowance or answer its continuation
+question. Optional workflow hints are included only when already known.
+
 ## Related
 
 - [Git](/code/git) — branches, commits and remotes.
