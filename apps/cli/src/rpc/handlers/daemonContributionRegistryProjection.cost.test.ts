@@ -8,6 +8,7 @@ import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSh
     verifyPluginUiArtifactFileSetIntegrityV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { ScmStatusSnapshotResponse } from '@happier-dev/protocol/scm';
 import { readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { definePlugin } from '@happier-dev/plugin-sdk';
@@ -61,7 +62,7 @@ describe('bundled daemon contribution describe cost', () => {
             files: { 'daemon.mjs': "export function activate() { throw new Error('authored SCM activation failed'); }" },
         }] });
         const runtime = fixture.registry;
-        const retained: { invokeStatus?: () => Promise<unknown> } = {};
+        const retained: { invokeStatus?: () => Promise<ScmStatusSnapshotResponse> } = {};
         try {
             expect(runtime.activatedPluginIds.has(pluginId)).toBe(false);
             expect(runtime.activatedPluginIds.has(failedPluginId)).toBe(false);

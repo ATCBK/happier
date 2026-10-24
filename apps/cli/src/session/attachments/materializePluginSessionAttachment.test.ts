@@ -10,6 +10,7 @@ import { ApiMachineClient } from '@/api/apiMachine';
 import { createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 
 describe('plugin Session attachment materialization', () => {
@@ -28,7 +29,8 @@ describe('plugin Session attachment materialization', () => {
       // Real daemon startup attaches the prepared data-plane after construction.
       // It shares method ids with the host-local attachment upload lifecycle.
       machine.setRPCHandlers({
-        spawnSession: async () => ({ type: 'error', errorMessage: 'No fixture Session launch' }),
+        spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+          errorMessage: 'No fixture Session launch' }),
         stopSession: async () => true,
         requestShutdown() {},
         preparedMachineTransfer: { request: preparedTransfers.requestPreparedTransfer },

@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { API_TOKEN_FULL_GRANT_V1, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, FeaturesResponseSchema, normalizeActionsSettingsV1, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, FeaturesResponseSchema, accountSettingsParse, normalizeActionsSettingsV1, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { projectSessionSummaryV1, SessionStatusActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -481,7 +481,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
     daemonPost.mockResolvedValue({ ok: true, result: { kind: 'not_found' } });
     await withPublishedAccountDaemon(async ({ credentials, serverId, serverApiUrl, daemonTarget }) => {
       const executor = createCliActionExecutorFromCredentials({ credentials, serverId, serverApiUrl, pluginActionExecutionOwner,
-        actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({}), getAccountSettings: () => ({}) } });
+        actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({}), getAccountSettings: () => accountSettingsParse({}) } });
       const result = await executor.execute('wait', {
         target: { kind: 'action_operation', serverId, machineId: daemonTarget.machineId, operationId: 'operation-1' },
         condition: { kind: 'terminal' },

@@ -168,9 +168,9 @@ describe('runner skill resolution', () => {
     expect(materializations).toBe(3);
   });
   it.each([
-    ['upload', 'source-b', false], ['upload', 'declared-b', false], ['upload', 'declared-b', true],
-    ['link', 'source-b', false], ['link', 'declared-b', false], ['registry', 'declared-b', false], ['folder-link', 'declared-b', false],
-    ['upload', 'declared-b', true, 'win32'],
+    ['upload', 'source-b', false, undefined], ['upload', 'declared-b', false, undefined], ['upload', 'declared-b', true, undefined],
+    ['link', 'source-b', false, undefined], ['link', 'declared-b', false, undefined], ['registry', 'declared-b', false, undefined],
+    ['folder-link', 'declared-b', false, undefined], ['upload', 'declared-b', true, 'win32'],
   ] as const)('delivers %s sibling source folders (declared %s, renamed %s) through Add and runner wiring', async (kind, declaredName, rename, platform) => {
     const f = await fixture(platform);
     const md = (name: string, body = '') => `---\nname: ${name}\n---\n${body}`;
@@ -510,7 +510,8 @@ describe('runner skill resolution', () => {
       store: {
         list: async () => ({ items: [], coverage: 'complete' }),
         read: async id => { const artifact = persisted.get(id);
-          return artifact ? { id, header: artifact.header, body: artifact.body, owned: true, revision: artifact.revision } : null; },
+          return artifact ? { id, header: artifact.header, body: typeof artifact.body === 'string' ? artifact.body : null,
+            owned: true, revision: artifact.revision } : null; },
         create: async () => { throw new Error('No create requested'); },
         update: async () => { throw new Error('No update requested'); },
         delete: async ({ artifactId }) => { persisted.delete(artifactId); },

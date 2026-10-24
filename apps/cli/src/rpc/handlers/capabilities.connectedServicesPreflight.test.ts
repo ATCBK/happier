@@ -70,7 +70,7 @@ const malformedSelectionModules = [
 ] as const;
 // The real UI inventory graph is shared across native cases. Loading it inside
 // a timed operation can leave its import pending across the next module reset.
-const { probeAgentModelsForActions } = await import('../../../../ui/sources/sync/ops/actions/agentInventoryActionDeps');
+const { probeAgentModelsForActions } = await import('../../../../ui/sources/sync/ops/actions/agentInventoryProbe');
 const { parseCapabilitiesInvokeResponse } = await import('../../../../ui/sources/sync/api/capabilities/capabilitiesProtocol');
 const { createCliActionInventoryDeps } = await import('@/session/actions/cliActionDeps/createCliActionInventoryDeps');
 const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');

@@ -8,6 +8,7 @@ import { registerScmHandlers } from '@/rpc/handlers/scm';
 import axios from 'axios';
 import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
@@ -214,8 +215,9 @@ describe('executeScmDiffSummaryAction', () => {
                 expect(prepared?.instructions).toContain('yarn test');
                 expect(prepared?.instructions).toContain('no claim that it passed');
                 expect(prepared?.instructions).not.toContain('User instructions:\nPull request drafting evidence:');
+                const preparedModel = ProviderBoundModelRefSchema.safeParse(prepared.modelSelection);
                 const run: ExecutionRunProfileStartParams = { ...start, ...prepared, sessionId, runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain',
-                    modelSelection: prepared?.modelSelection ?? start.modelSelection ?? undefined,
+                    modelSelection: (preparedModel.success ? preparedModel.data : undefined) ?? start.modelSelection ?? undefined,
                     backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
                     backendId: 'codex', instructions: typeof prepared.instructions === 'string' ? prepared.instructions : '', startedAtMs: 1,
                     intent: 'scm_diff_summary' as const, retentionPolicy: 'resumable' as const,

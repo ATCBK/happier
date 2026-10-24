@@ -43,7 +43,7 @@ describe('Session spawn Home admission', () => {
     // Home admission must also reach the actual spawn owner's capability gate.
     // A Home HTTP absence is a genuine boundary refusal; no native Session is created.
     vi.spyOn(axios, 'get').mockResolvedValue({ status: 404, data: {} });
-    const spawnInput = { ...input, creationKey,
+    const spawnInput = { ...input,
       sessionCreationTag: deriveSessionCreationTagV1({ callerCreationNamespace: 'plugin:acme.channels', creationKey }),
       actionCaller: { kind: 'plugin' as const, pluginId: 'acme.channels' }, signal: lifetime.signal };
     await expect(deps.sessionSpawnNew(spawnInput)).resolves.toMatchObject({

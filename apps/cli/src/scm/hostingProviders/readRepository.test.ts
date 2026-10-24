@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import type { RpcHandler } from '@/api/rpc/types';
+import type { ScmHostingRepositorySummary } from '@happier-dev/plugin-sdk/scm';
 import { createScmHostingProviderRegistry } from './registry';
 
 const selector = {
@@ -28,7 +29,8 @@ function handler(supported = true) {
                 getRepository: async ({ owner, repositoryName }) => {
                     const response = await fetch(`https://forge.test/api/${owner}/${repositoryName}`);
                     if (!response.ok) throw new Error('private provider diagnostic');
-                    return await response.json();
+                    // Raw provider JSON on purpose: the host validator owns its admission.
+                    return await response.json() as ScmHostingRepositorySummary | null;
                 },
             },
         } : {} } }],

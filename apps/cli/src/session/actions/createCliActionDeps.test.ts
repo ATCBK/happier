@@ -1165,6 +1165,7 @@ describe('createCliActionDeps hook dispatch', () => {
       token: credentials.token,
       credentials,
       serverId: 'home-1',
+      serverHttpBaseUrl: 'https://home-1.example.test',
       sessionId: 'session-1',
       mode: 'plain',
       ctx: null,

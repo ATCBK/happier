@@ -47,7 +47,7 @@ describe('registry HTTP boundary',()=>{
     await http.getText('https://github.com/redirect',{source});
     expect(observations.map(item=>item.authorization)).toEqual(['Bearer value','Bearer value','Bearer value',null,null,null,'Bearer value',null]);
   });
-  it.each([{status:403,headers:{'x-ratelimit-remaining':'0','x-ratelimit-reset':'2000000000'},state:'rate_limited'},
+  it.each<{status:number;headers:Record<string,string>;state:string}>([{status:403,headers:{'x-ratelimit-remaining':'0','x-ratelimit-reset':'2000000000'},state:'rate_limited'},
     {status:403,headers:{},state:'auth_failed'},{status:429,headers:{'retry-after':'2'},state:'rate_limited'}])('classifies HTTP $status with $state without empty success',async({status,headers,state})=>{
     const http=createRegistryHttpV1({fetch:async()=>new Response(null,{status,headers})});
     expect(await http.getJson(`https://registry-${status}-${state}.example/index`)).toMatchObject({ok:false,status:{state}});

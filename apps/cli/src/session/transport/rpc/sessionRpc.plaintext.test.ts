@@ -653,7 +653,8 @@ describe('execution wait transport recovery', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sockets).toHaveLength(2);
     expect(sockets[1]?.emitted[0]?.data.params).toMatchObject({ runId: 'run-original', condition: 'change', after: running });
-    expect(vi.mocked(io).mock.calls.every(([, options]) => options?.auth?.clientPurpose === 'scoped-rpc')).toBe(true);
+    expect(vi.mocked(io).mock.calls.every(([, options]) => typeof options?.auth === 'object'
+        && options.auth.clientPurpose === 'scoped-rpc')).toBe(true);
     sockets[1]?.delayedAck?.({ ok: true, result: { ok: true, status: 'succeeded', disposition: 'snapshot', result: terminal.result } });
     await vi.advanceTimersByTimeAsync(0);
     expect(snapshots).toEqual([running, terminal.result]);

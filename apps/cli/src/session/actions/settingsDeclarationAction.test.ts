@@ -9,7 +9,7 @@ describe('headless settings conditional writes', () => {
     it('refuses a captured App draft target before reading or mutating Home settings', async () => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'post');
-        const action = createCliSettingsDeclarationAction({ serverId: 'home-a' });
+        const action = createCliSettingsDeclarationAction({ serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test' });
         for (const actionId of ['settings.get', 'settings.set'] as const) {
             expect(await action({ actionId, input: { anchor: 'appearance.atmosphereSource',
                 ...(actionId === 'settings.set' ? { value: 'none' } : {}), target: { kind: 'public_profile_draft', serverId: 'home-a' } },
@@ -35,7 +35,7 @@ describe('headless settings conditional writes', () => {
     it('refuses a read-only reset before reading or writing Account material', async () => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'post');
-        const action = createCliSettingsDeclarationAction({ serverId: 'home-a' });
+        const action = createCliSettingsDeclarationAction({ serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test' });
         expect(await action({ actionId: 'settings.reset', input: { anchor: 'homeAdministration.serverSettings.HAPPIER_CANONICAL_SERVER_URL',
             target: { kind: 'home', serverId: 'home-a' } },
             context: { surface: 'cli' } })).toMatchObject({ ok: false, errorCode: 'setting_read_only' });

@@ -9,7 +9,7 @@ import { createStopSession } from '@/daemon/sessions/stopSession';
 import { createSessionRunnerRespawnManager } from '@/daemon/processSupervision/sessionRunnerRespawn';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type { TrackedSession } from '@/daemon/types';
-import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createMachineSessionSpawnRpcHandler } from '../sessionLifecycleActions';
@@ -58,7 +58,8 @@ describe('Session startup operation custody', () => {
             requestId: 'refused-open', phase: 'refused', request: { kind: 'create', sessionId, cwd: '/project' },
             providerSessionId: null } });
         if (request.operation.kind !== 'session.open.attest') throw new Error('Wrong attestation operation');
-        expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked: refused, retainedAgent: binding, runner,
+        expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked: refused, retainedAgent: binding,
+          runner: { ...runner, snapshotIdentity: 'refused-startup-runner' },
           ...request.operation, updateMarker: async () => true })).not.toBeNull();
         return { type: 'success', sessionId };
       },
@@ -191,7 +192,8 @@ describe('Session startup operation custody', () => {
                         cwd: '/project', source: options.nativeForkSource }, providerSessionId: null } });
                   if (request.operation.kind !== 'session.open.attest') throw new Error('Wrong operation');
                   expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked: refused, retainedAgent: binding,
-                    runner, ...request.operation, updateMarker: async () => true })).not.toBeNull();
+                    runner: { ...runner, snapshotIdentity: 'refused-fork-runner' }, ...request.operation,
+                    updateMarker: async () => true })).not.toBeNull();
                   return { type: 'success', sessionId };
                 },
                 awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()] }),
@@ -317,7 +319,7 @@ describe('Session startup operation custody', () => {
         spawnSession: async options => { captured = options; return { type: 'success', sessionId: 'fork-child' }; },
         awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),
         stopSession: async () => { throw new Error('Successful startup must not retire its runner'); },
-        refused: () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, errorMessage: 'unavailable' } as const),
+        refused: (): SpawnSessionResult => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, errorMessage: 'unavailable' }),
         run: ({ spawnSession }) => spawnSession({ directory: '/project' }),
       }) }) });
     try {
