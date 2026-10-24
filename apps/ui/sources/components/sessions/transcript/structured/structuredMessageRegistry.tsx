@@ -234,15 +234,16 @@ const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry
         schema: ScmDiffSummaryGenerateOutputSchema,
         // Only a saved publication is a receipt (it carries `scmResultUpdate` beside the payload);
         // baselines, refusals and discussion keep the ordinary prose path.
-        render: (_payload, params) => {
-            const receipt = readScmDiffSummaryPublicationReceipt(params.message.meta);
+        render: (payload, params) => {
+            const receipt = readScmDiffSummaryPublicationReceipt(payload, params.message.meta?.scmResultUpdate);
             return receipt ? (
                 <ScmResultReceiptCard receipt={receipt} sessionId={params.sessionId} serverId={params.serverId}
-                    canNavigate={params.interaction.permissionDisabledReason !== 'public'} />
+                    canNavigate={params.interaction.permissionDisabledReason !== 'public'}
+                    canControl={params.interaction.canSendMessages === true} />
             ) : null;
         },
-        projectFindText: (_payload, params) => {
-            const receipt = readScmDiffSummaryPublicationReceipt(params.message.meta);
+        projectFindText: (payload, params) => {
+            const receipt = readScmDiffSummaryPublicationReceipt(payload, params.message.meta?.scmResultUpdate);
             return receipt ? projectScmResultReceiptFindText(receipt) : null;
         },
     },

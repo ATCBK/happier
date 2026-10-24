@@ -4,7 +4,9 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
-import { ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit';
 import { createTestSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -82,6 +84,37 @@ beforeEach(() => {
 });
 
 describe('StructuredMessageBlock', () => {
+    it.each(['render', 'Find'] as const)('admits a large SCM output once for %s and validates only its separate publication carrier', mode => {
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'large-comparison', resultId: 'saved-large', revision: 2,
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'large-comparison' },
+            comparison: { id: 'large-comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
+                inventory: { state: 'complete', reasons: [], files: Array.from({ length: 214 }, (_, index) => ({
+                    path: `src/file-${index}.ts`, changeKind: 'modified', binary: false, generated: false, lockfile: false,
+                    evidence: { state: 'available', unifiedDiff: `@@ -1 +1 @@\n-before ${index}\n+after ${index}\n` }, occurrences: [],
+                })) } },
+            requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'complete', value: {
+                title: 'Large saved explanation', intro: '', stops: [], otherChangeRefs: [],
+            } } }, analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+        });
+        const message = { kind: 'agent-text' as const, id: 'large-publication', localId: null, createdAt: 1, text: 'Walkthrough saved.',
+            meta: { happier: { kind: 'scm_diff_summary.v1', payload },
+                scmResultUpdate: { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'created' }] } } };
+        // Call-through instruments the real admission owner; neither parser is replaced.
+        const outputAdmissions = vi.spyOn(createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema), 'safeParse');
+        const publicationAdmissions = vi.spyOn(ScmDiffSummaryPublicationReceiptSchema, 'safeParse');
+        try {
+            const projected = mode === 'render'
+                ? renderStructuredMessage({ message, sessionId: 's1', interaction: editableInteraction, onJumpToAnchor: () => {} })
+                : projectStructuredMessageFindText(message);
+            expect(projected).not.toBeNull();
+            expect(outputAdmissions).toHaveBeenCalledTimes(1);
+            expect(publicationAdmissions).toHaveBeenCalledTimes(1);
+        } finally {
+            outputAdmissions.mockRestore();
+            publicationAdmissions.mockRestore();
+        }
+    });
+
     it.each(['pending', 'complete'] as const)('keeps the published SCM %s notice readable as transcript prose rather than an unavailable plugin', state => {
         const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'comparison', summaryMarkdown: 'Captured changes.',
             metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison' },
@@ -117,6 +150,51 @@ describe('StructuredMessageBlock', () => {
         expect(href).toContain('details=scmReview');
         expect(href).toContain('cmp-7');
         expect(href).toContain('walkthrough');
+
+        for (const publicationCarrier of [
+            undefined,
+            { status: 'invalid_output' },
+            { status: 'published', canUndo: true, outputs: [] },
+            { status: 'published', canUndo: true, outputs: [{ kind: 'commitPlan', change: 'created' }] },
+            { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'updated' }],
+                updateNotice: { kind: 'generation', revision: 4, affectedStopIds: [] } },
+        ]) {
+            const rejected = { ...message, meta: { ...message.meta, scmResultUpdate: publicationCarrier } };
+            expect(renderStructuredMessage({ message: rejected, sessionId: 's1', interaction: editableInteraction, onJumpToAnchor: () => {} })).toBeNull();
+            expect(projectStructuredMessageFindText(rejected)).toBeNull();
+        }
+        const malformed = { ...message, meta: { ...message.meta,
+            happier: { kind: 'scm_diff_summary.v1', payload: { ...payload, revision: -1 } } } };
+        await screen.update(<StructuredMessageBlock message={malformed} sessionId="s1" interaction={editableInteraction} onJumpToAnchor={() => {}} />);
+        expect(screen.findAllHostsByTestId('scm-result-receipt')).toHaveLength(0);
+        expect(screen.findByTestId('structured-message-unavailable')).toBeTruthy();
+        expect(projectStructuredMessageFindText(malformed)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'structured-unavailable-title' }),
+        ]));
+    });
+
+    it('says what an update changed from the owner facts, never inferring a merge from vanished stops', async () => {
+        const stop = (id: string, title: string) => ({ id, title, explanationMarkdown: 'Why.', changeRefs: [] as string[] });
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'cmp-8', resultId: 'saved-2', revision: 4,
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'cmp-8' },
+            comparison: { id: 'cmp-8', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
+                inventory: { state: 'complete', reasons: [], files: [] } },
+            requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'complete', value: {
+                title: 'Kept title', intro: '', stops: [stop('intro', 'Intro'), stop('checkout', 'Checkout'), stop('tests', 'Tests')],
+                otherChangeRefs: [] } } },
+            analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        const message = (notice: Record<string, unknown>) => ({ kind: 'agent-text' as const, id: 'notice-updated', localId: null, createdAt: 1,
+            text: 'Walkthrough updated.', meta: { happier: { kind: 'scm_diff_summary.v1', payload },
+                scmResultUpdate: { status: 'published', canUndo: true, titleEditKept: true,
+                    updateNotice: { revision: 4, ...notice }, outputs: [{ kind: 'walkthrough', change: 'updated' }] } } });
+        const facts = (notice: Record<string, unknown>) => projectStructuredMessageFindText(message(notice))
+            ?.find((block) => block.id === 'structured-scm-receipt:facts')?.text;
+
+        expect(facts({ kind: 'generation', affectedStopIds: ['checkout', 'tests', 'mechanical'] }))
+            .toBe('stops 2–3 changed · 1 stop removed · your title edit kept');
+        expect(facts({ kind: 'edit', affectedStopIds: ['checkout', 'mechanical'], mergedStopIds: ['checkout', 'mechanical'] }))
+            .toBe('2 stops merged into stop 2 · your title edit kept');
+        expect(facts({ kind: 'undo', affectedStopIds: ['checkout'] })).toBe('last change undone · your title edit kept');
     });
 
     it('renders a persisted structured snapshot without resolving current daemon content', async () => {

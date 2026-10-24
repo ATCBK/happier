@@ -18,7 +18,7 @@ export function useScmResultReceiptUndo(params: Readonly<{
     canControl: boolean;
     /** An existing binding can immediately rule out a stale receipt; transcript rows need no key. */
     requestKey?: string | null;
-}>): Readonly<{ onUndo?: () => Promise<void>; undoing: boolean; error: string | null; failure: ReceiptUndoFailure | null }> {
+}>): Readonly<{ onUndo?: () => Promise<void>; undoing: boolean; undone: boolean; error: string | null; failure: ReceiptUndoFailure | null }> {
     const { receipt, sessionId, serverId, canControl, requestKey } = params;
     const { binding } = useServerCredentialAccountScopeBinding(serverId);
     const scope = binding?.isCurrent() ? binding.scope : null;
@@ -43,6 +43,8 @@ export function useScmResultReceiptUndo(params: Readonly<{
     [sessionId, scope?.serverId, scope?.accountId, isCurrent]);
     const [undoing, setUndoing] = React.useState(false);
     const [failed, setFailed] = React.useState<Readonly<{ key: string; failure: ReceiptUndoFailure }> | null>(null);
+    // This receipt's own Undo landed; a later edit elsewhere does not read as an Undo here.
+    const [undoneKey, setUndoneKey] = React.useState<string | null>(null);
     const pending = React.useRef(false);
     const enabled = Boolean(canControl && receipt.publication.canUndo && (!saved || (saved.canUndo && saved.revision === revision
         && !isScmCommitPlanApplicationLocked(saved.application))) && operations && isCurrent());
@@ -77,7 +79,7 @@ export function useScmResultReceiptUndo(params: Readonly<{
             }
             const response = await operations.undo({ cwd, resultId, expectedRevision: revision });
             if (!isCurrent()) return;
-            if (response.success) applySavedScmDiffSummaryResult(key, response.result);
+            if (response.success) { applySavedScmDiffSummaryResult(key, response.result); setUndoneKey(receiptKey); }
             else fail(response);
         } catch (failure) {
             if (isCurrent()) fail({ success: false, errorCode: 'result_unavailable',
@@ -85,6 +87,6 @@ export function useScmResultReceiptUndo(params: Readonly<{
         } finally { pending.current = false; setUndoing(false); }
     }, [enabled, getSnapshot, isCurrent, operations, scope, cwd, resultId, revision, receiptKey, sessionId, identity]);
     const failure = failed?.key === receiptKey && isCurrent() ? failed.failure : null;
-    return { onUndo: enabled && !undoing ? undo : undefined, undoing,
+    return { onUndo: enabled && !undoing ? undo : undefined, undoing, undone: undoneKey === receiptKey && isCurrent(),
         error: failure?.error ?? null, failure };
 }
