@@ -22,7 +22,7 @@ import { useMachineDisplayNamesById, useSessionSelector } from '@/sync/store/hoo
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
+import { useOpenDiscussion } from '@/components/discussions/useOpenDiscussion';
 import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 import { buildDiscussionAccountMentionPayload } from '@/components/discussions/discussionComposerDocument';
 import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
@@ -123,7 +123,6 @@ export const SessionReadinessChecklist = React.memo(function SessionReadinessChe
     }) : null;
     return { accountId: profile?.id ?? null, name, botName: session ? getSessionName(session, props.scope.serverId) : null };
   }));
-  const router = useRouter();
   const openRepair = useOpenSessionReadinessRepair(props.scope);
   const { repair, guidance, cause } = props.presentation;
   // Someone else's Bot: name who can fix it, and offer to ask them in a Discussion about this Bot.
@@ -131,21 +130,24 @@ export const SessionReadinessChecklist = React.memo(function SessionReadinessChe
   const fixLine = guidance && ownerName
     ? t('session.collaboration.readiness.ownerNamed', { name: ownerName })
     : guidance;
-  const askOwner = React.useCallback(() => {
+  const prepareNewDraft = React.useCallback((draftId: string) => {
     if (!ownerName || !owner.accountId) return;
     const reference = buildDiscussionAccountMentionPayload(owner.accountId, ownerName);
     const mention = formatInlineReferenceTokenV1(reference);
     const reason = joinHappierFacts(owner.botName, cause);
     seedDiscussionDraft({
       scope: props.scope,
+      address: { kind: 'newDiscussion', draftId },
       title: t('session.collaboration.readiness.askTitle', { bot: owner.botName ?? t('session.collaboration.readiness.facts.agent') }),
       text: `${mention} ${t('session.collaboration.readiness.askBody', { reason })}`,
       mentions: [{ ...reference, start: 0, end: mention.length, tokenText: mention }],
     });
-    router.push(buildDiscussionRouteHref({
-      target: { kind: 'new', address: { serverId: props.scope.serverId }, anchor: { kind: 'session', sessionId: props.sessionId } },
-    }) as never);
-  }, [cause, owner.accountId, owner.botName, ownerName, props.scope, props.sessionId, router]);
+  }, [cause, owner.accountId, owner.botName, ownerName, props.scope]);
+  const anchor = React.useMemo(() => ({ kind: 'session' as const, sessionId: props.sessionId }), [props.sessionId]);
+  const { openNewDiscussion } = useOpenDiscussion({ address: props.scope, anchor, sourceSurface: 'collaboration', prepareNewDraft });
+  const askOwner = React.useCallback(() => {
+    if (ownerName && owner.accountId) openNewDiscussion();
+  }, [openNewDiscussion, owner.accountId, ownerName]);
   const offerAsk = Boolean(guidance && ownerName);
   if (checks.length === 0) return null;
   return (
