@@ -3,7 +3,7 @@ import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vital
 import { useMachineProcesses } from '../processes/useMachineProcesses';
 import { useMachineStorageSummary } from '../storage/useMachineStorageSummary';
 import type { MachineStorageHookInput } from '../storage/useMachineStorage';
-import { attributeMachineUsage, type MachineAttributedUsage } from './machineUsageAttribution';
+import { attributeMachineUsage, type MachineAttributedUsage } from '@happier-dev/protocol/machines/resources/machineUsageAttribution';
 
 export type MachineVitalsAttributionState = Readonly<{
     processes: ReturnType<typeof useMachineProcesses>;

@@ -9,7 +9,7 @@ import type {
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
 import { selectMachineProcessesLeftBehind } from '@/sync/domains/machines/processes/selectMachineProcessesLeftBehind';
-import { attributeMachineUsage, type MachineUsageFacts } from '@/sync/domains/machines/resources/machineUsageAttribution';
+import { attributeMachineUsage, type MachineUsageFacts } from '@happier-dev/protocol/machines/resources/machineUsageAttribution';
 
 /**
  * The Processes tab's one presentation model (plan 30 §10, lab `rp`): what rows the tree shows, in which
