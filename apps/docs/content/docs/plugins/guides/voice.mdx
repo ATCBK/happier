@@ -147,6 +147,43 @@ The ordinary `SelectionTiles` wrapper also forwards bare `mark`, translated
 `badge`, per-option `testID`, option footers, density, tile sizing, column bounds,
 minimum tile width and subtitle lines to the same shared tile owner.
 
+### Show the current conversation
+
+In 0.3 development source, same-realm surfaces can compose the host's live
+presentation without choosing its lifecycle or recovery:
+
+```tsx
+import { VoicePresence, VoiceMark, VoiceStatusLine, VoiceTransport } from '@happier-dev/plugin-ui/components';
+
+export function CurrentConversation() {
+  return <VoicePresence target={{ kind: 'global' }}>
+    <VoiceMark size={24} />
+    <VoiceStatusLine size="pill" />
+    <VoiceTransport size="pill" />
+  </VoicePresence>;
+}
+```
+
+The binding adds no layout and starts no microphone. The mark is visual; Start
+still uses the ordinary conversation Action described below. Mute, End, recovery
+and dismissal use the current host attempt and normal approval policy. `target`
+chooses only an idle Start intent; it cannot retarget an active call.
+
+Inside the binding, `useVoiceAttempt()` returns read-only presentation facts,
+including the host's failure sentence, recovery label/icon and exact Agent/Home/
+machine target when available. Raw provider errors, prompts, transcripts and
+credential configuration are omitted. The public
+`VoiceAttemptPresentationSchema` at `@happier-dev/plugin-sdk/voice` validates this
+closed shape. A hidden host or `presented={false}` withdraws presentation demand.
+Use `fallback` for a host without the same-realm binding; hosted-web frames do
+not gain live Voice rendering through this API.
+
+Providers may decline preparation or throw a safe `code`. For example,
+`agent_signed_out` selects the host's Agent sign-in recovery in either path;
+credential-unavailable codes retain credential review. Use the public failure
+taxonomy for supported host kinds, and leave labels, routes and retry policy to
+the host. These additions are development source, not published-host availability.
+
 ### Dictate into your own input
 
 The public `TextField` accepts `dictation` to place the host's Dictation control

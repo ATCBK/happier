@@ -106,6 +106,80 @@ Use `context.ui.notify(...)` instead when the intent belongs to the current
 present-user invocation rather than the notification system; it does not fall
 back to the notification service.
 
+## Add native notification buttons
+
+In Developer Preview source, a category can declare buttons with plugin-chosen
+ids and labels. Labels use the same literal or `{ key, fallback }` form as other
+manifest copy. Ids may be any nonempty string and must be unique within the
+category; they are not restricted to a host vocabulary such as Allow or Deny.
+
+Declare the `reviews` page and `accept-review` Action in the same plugin, then
+add these buttons to its category:
+
+```ts
+buttons: [
+  {
+    id: 'Review details',
+    label: { key: 'review.open', fallback: 'Review details' },
+    effect: { kind: 'open', page: { pageId: 'reviews', subPath: 'pending' } },
+  },
+  {
+    id: 'Accept this review',
+    label: { key: 'review.accept', fallback: 'Accept review' },
+    effect: {
+      kind: 'action',
+      invocation: {
+        action: { pluginId: 'acme.reviews', localId: 'accept-review' },
+        input: {},
+      },
+    },
+  },
+],
+```
+
+Here `acme.reviews` is the declaring plugin's id. An open effect selects an
+exact plugin page and optional subpage; omitting `page` opens the notification's
+own destination. An Action effect uses the shared closed `{ action, input }`
+binding. `input` is required strict JSON and may be null, a scalar, an array or
+an object. It must match the Action's input schema at execution.
+
+To address a different item on each send, override the input for a declared
+Action button without changing its effect:
+
+```ts
+await context.services.notifications.send({
+  clientRequestId: 'review-42-revision-2',
+  categoryId: 'document-review-ready',
+  itemId: 'review-42',
+  type: 'decision',
+  title: 'Review 42 is ready',
+  page: { pageId: 'reviews', subPath: '42' },
+  buttonInputs: {
+    'Accept this review': { reviewId: '42', expectedRevision: 2 },
+  },
+});
+```
+
+`buttonInputs` keys must identify declared Action buttons. An override replaces
+that button's entire default input; it cannot change its Action, label or
+navigation. The overrides travel in the native push payload, so never put
+credentials or secrets in them. Reusing a
+`clientRequestId` with changed overrides conflicts with the earlier send.
+
+The host registers native categories under plugin-qualified ids and resolves
+their labels for the active language. Plugin buttons open the app and re-admit
+the notification's saved Home and Account for the pressing person. Execution goes through the normal
+Action front door, input schema and policy. If an Action needs approval or
+confirmation, or cannot execute, the host opens the notification's exact page for
+review. It does not replace the Action with a prompt or treat the press as a
+Session permission response. Cached launch responses only navigate.
+
+Keep the target Action's own currentness checks, such as `expectedRevision`,
+for changes that must reject stale or repeated requests. A notification button
+does not add authority or promise exactly-once effects. Native OS presentation
+and signed iOS/Android delivery remain release checks; source availability does
+not certify a device build.
+
 ## Keep an Inbox item up to date
 
 In current development source, a send can also create or update a private
@@ -133,8 +207,8 @@ Types `update` (the default) and `mention` arrive quietly. Types `decision`,
 `approval`, and `blocked` are eligible for interruptions under the Account's
 attention preferences and quiet hours. A notice does not grant authority to
 approve a request. Use the owning Action for that decision. Without `itemId`,
-the service keeps its existing channel-only behavior; `type`, `page`, and
-`resolved` require an item. An older host rejects unsupported item fields
+the service keeps its existing channel-only behavior; `type` still selects
+attention policy, while `page` and `resolved` require an item. An older host rejects unsupported item fields
 instead of reporting that it saved an Inbox notice.
 
 Item types control attention delivery. Preview formatting and disclosure remain

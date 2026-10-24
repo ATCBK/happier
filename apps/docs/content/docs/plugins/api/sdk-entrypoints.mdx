@@ -23,12 +23,21 @@ the public surface; it does not create a separate stability tier per export.
 - Import a final domain path when you need an explicit type annotation or a
   value that lives outside the root. Most host services are called through
   `context.services`; their type-only paths remain useful for annotations.
+- Import SCM identity and pull-request types from `/scm`, including
+  `ProtocolScmHostingProviderKind`, `ScmHostingRepositoryIdentityV1` and
+  `ScmPullRequestSummary`. Their composable
+  `ScmHostingRepositoryIdentityV1ProtocolSchema` and
+  `ScmPullRequestSummaryProtocolSchema` values live on `/protocol` for declaring
+  feature schemas, in both Node and browser bundles.
 - The table's namespace examples identify a type-heavy module without forcing a
   runtime import. In production code, import the specific type or value you
   need from the same path.
 - `host/*` paths are intentionally public to Happier host packages, not to
   installed plugins. `ui/build` exposes build-realm toolchain compatibility
   facts, and `ui/client` is only for a hosted-web client.
+  Hosts recover captured Action read observers through
+  `readPluginActionReadObserver` on `/host/registration`; plugin authors declare
+  `observeRead` beside their Action handler instead.
 - A normal target or contributor imports a feature-owned protocol package. Only
   a reusable feature-protocol package imports the browser-safe `/protocol`
   schema constructors and `/contributions` contribution constructors.
@@ -158,8 +167,8 @@ or a second Resource owner. Its exports serve three related author workflows:
    Resource contribution types, and `PluginDynamicResourceRuntime` when a
    plugin publishes bytes through a declared packaged or dynamic Resource. The
    host owns byte admission, digest/currentness, and `readResource` as the
-   snapshot authority. `ResourcesService` is the daemon invocation-service
-   type for describing, reading, and watching one declared Resource.
+   snapshot authority. `ResourcesService` describes, reads, and watches a
+   declared Resource in its admitted invocation context.
 2. **Prompt assets:** `PromptAsset*` types describe external prompt assets and
    their mutation contracts. In 0.3 development source, registry discovery and
    library skill changes instead use the typed host Actions; the retired
@@ -175,6 +184,13 @@ This naming guide keeps the established `./resources` contract intact while
 making the prompt-asset and UI-consumer vocabulary explicit. Do not introduce a
 new import alias or import `/resources` into client UI merely to obtain its host
 Resource API.
+
+In unreleased 0.3 source, await `ResourcesService.watch(...)` to receive its
+`Disposable`. A dynamic producer's `observe` callback can also return its
+disposable asynchronously. Subscription admission waits for attachment;
+failure rejects rather than reporting a live watch, and cancellation or
+authority retirement disposes an attachment that finishes late. Check the
+installed SDK contract before using this development-source signature.
 
 ## How published names are shaped
 

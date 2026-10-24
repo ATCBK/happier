@@ -21,6 +21,12 @@ work and `@happier-dev/plugin-sdk/scm/backend` for repository work. Keep host
 credentials, account selection, process policy, and workspace lifecycle with
 the host-provided context/services rather than creating a parallel registry.
 
+In the unreleased 0.3 SDK, repository identity and pull-request annotations use
+`ProtocolScmHostingProviderKind`, `ScmHostingRepositoryIdentityV1` and
+`ScmPullRequestSummary` from `@happier-dev/plugin-sdk/scm`. Feature protocols
+compose the corresponding `ScmHostingRepositoryIdentityV1ProtocolSchema` and
+`ScmPullRequestSummaryProtocolSchema` from `@happier-dev/plugin-sdk/protocol`.
+
 ## Commit publication in development
 
 <Callout type="info">

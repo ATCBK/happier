@@ -15,6 +15,42 @@ Happier ships binary installers and must work without a system Node.js runtime o
 - `spawn(request, options?)` for a disposable process handle
 - `clients.spawn(spec, options?)` for JSON-RPC, JSON stream, framed byte, or loopback WebSocket clients
 
+## Local workflow integration (0.3 development source)
+
+The GitHub plugin declares the user-installed `act` tool through `systemTools`.
+Inspection resolves it on the accepted checkout's primary Machine and uses only
+`--version` and `--help`. Workflow execution delegates to the ordinary
+`projects.compute.exec` Action with `execution: 'primary'`; it does not use a
+second process or log transport. Person Run calls compute directly through the
+host client; the agent/MCP local-run Action retains default approval. The rendered
+form still requires integration and runtime validation; this is not released availability.
+
+The safe `github/actions/local-form` open operation carries an explicit producer-known
+`seed.target`: `{kind: 'session', sessionId}` for Session entries, or
+`{kind: 'project', projectId}` for workflow/job entries. It opens the existing
+details pane (`github-local-act` or `github-local-act-project`) with that seed,
+without reading navigation state or starting a command. The compute Action's
+direct policy skips confirmation for a present person's own UI invocation;
+agents/MCP/automation retain default approval and explicit Settings choices still
+win. The plugin adds no confirmation. Its form state reads the bound Machine's
+canonical display name through `readMachineDisplayName({serverId,machineId})`,
+without a new store or listing the Account's Machines.
+
+Saved Secret references require user-maintained `environmentVariables`
+declarations in that checkout's `.happier/project.json`. The local-run flow does
+not edit the file. Workflow-only declarations can use `required: false` to avoid
+requiring those secrets for every ad-hoc command. An explicitly selected existing
+Machine-local secret file is a separate option. The flow does not export a
+Connected Account token or implicitly acquire a GitHub CLI token.
+
+Local runs use explicit Linux image mappings and architecture. They are hints,
+not hosted CI results: a local pass does not clear CI or authorize a push.
+Reviewed argv disables inherited default secret/env/var/input files and keeps
+act's native secret masking enabled. Masking does not protect transformed values
+or malicious workflow code. `--rm=true --reuse=false` requests container cleanup;
+forced termination can interrupt it, so physical process exit does not prove
+that containers were removed.
+
 ## Rules
 
 - Reference declared managed executables; do not construct ambient executable paths.

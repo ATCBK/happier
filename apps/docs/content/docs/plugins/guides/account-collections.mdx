@@ -199,6 +199,14 @@ The server remains the enforcement owner. Planning against these numbers avoids
 a rejected batch; it does not replace the typed `collection_quota_incompatible`
 failure you must still handle.
 
+In 0.3 development source, both Account realms report a private envelope that
+exceeds the existing encoded limit as `collection_quota_incompatible`, before
+issuing a write. Its `PluginError.details` uses the same shape as a server size
+refusal: `{ dimension: 'maxRowEncodedBytes', effectiveMaximum }`. This also
+applies to `measureBatch()`. Split retained entries only after a known size
+refusal; a malformed value or failed encryption remains an invalid-value error
+and is not a reason to split. The private-envelope limit is unchanged.
+
 ## Failure, retry, and rollback
 
 A migration failure rejects that candidate's preparation or transition; do not

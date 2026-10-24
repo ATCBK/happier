@@ -266,6 +266,13 @@ host; it does not create a separate service or account namespace:
 }
 ```
 
+In 0.3 development source, a producer can add
+`"ui": { "category": "cloud-machines" }` to this descriptor. The setup catalog
+preserves that presentation hint for bundled and installed plugins. Omit it to
+keep the host's existing service classification. It grants no authentication,
+Machine availability, permission or HostAccess authority; those still come
+from the normal declaration and admission owners.
+
 In an ordinary author module, put the same descriptor (without its `id`) and
 runtime under `connectedAccountDescriptors.forge`; `definePlugin(...)`
 generates the matching activation binding:

@@ -78,6 +78,30 @@ Prefer stable error codes over parsing text. See
 [Diagnostics](/plugins/testing/diagnostics) for the public guard and the
 diagnostic workflow.
 
+In **unreleased 0.3 development source**, an Action's single host confirmation
+can include reviewed input operands alongside its static consequence:
+
+```ts
+confirmation: {
+  title: 'Merge this pull request?',
+  body: 'This merge cannot be undone.',
+  inputFields: [
+    { path: 'skippedRequirements.[].label', title: 'Skipping' },
+  ],
+}
+```
+
+Each path must resolve in the Action's declared input schema. Use dot-separated
+paths and `[]` for array members; a path may belong to only one input union arm.
+Titles accept the same literal or `{ key, fallback }` text as other Action
+declarations. The host reads values from the admitted input bound to this
+confirmation, using its existing approval operand presenter. Missing operands
+add no line. Declared confidential values stay redacted. This works through the
+same native and hosted UI Action path; no plugin dialog or executable text
+template is needed. The public `ActionConfirmationInputField` type is available
+from `@happier-dev/plugin-sdk/actions`. Check the generated API for the target
+SDK/host before using this declaration; older strict declarations reject it.
+
 For a mounted UI that writes Account KV or Collections directly, current 0.3
 development source provides `hostApi.admitAction(action, input, { signal })`.
 Await it before calling your existing domain writer. It returns `false` when
