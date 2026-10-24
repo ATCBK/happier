@@ -663,6 +663,9 @@ export type CanonicalPluginReactNativeHostApiAdapter = Readonly<{
      * in order. An identical snapshot is not republished.
      */
     pushSurfaceContext: (surface: SurfaceContext) => void;
+    /** Fence this exact adapter before permanent cleanup can notify observers. */
+    retire: () => void;
+    isCurrent: () => boolean;
     dispose: () => void;
 }>;
 
@@ -837,11 +840,13 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
     /** Consumes the mount controller's currentness fact; this adapter does not own it. */
     isCurrent?: () => boolean;
 }>): CanonicalPluginReactNativeHostApiAdapter {
-    const isCurrent = params.isCurrent;
+    let retired = false;
+    let disposed = false;
+    const isCurrent = () => !retired && !disposed && params.isCurrent?.() !== false;
     const transport = createPluginReactNativeHostRequestTransport({
         requestSurface: params.requestSurface,
         handleRequest: params.handleRequest,
-        ...(isCurrent ? { isRequestSurfaceCurrent: () => isCurrent() } : {}),
+        isRequestSurfaceCurrent: isCurrent,
     });
     // Derived from the canonical vocabulary so a method added to the owner and
     // to `PluginUiHostApi` is advertised here without touching this file.
@@ -856,12 +861,11 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
     let currentSurface = params.surface;
     const selectedInputs = createSelectedActionInputCustody();
     const contextWatchers = new Set<(surface: SurfaceContext) => void>();
-    let disposed = false;
     let subscriptionSequence = 0;
     const disposables = new Set<() => void>();
 
     function assertActive(signal?: AbortSignal): void {
-        if (disposed || params.isCurrent?.() === false) {
+        if (!isCurrent()) {
             throwHostApiError('stale_surface');
         }
         throwIfAborted(signal);
@@ -905,7 +909,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
      * `unsupported_method`: that is a capability verdict, not currentness.
      */
     function admitFireAndForget(method: PluginUiHostMethodV1): boolean {
-        if (disposed || params.isCurrent?.() === false) return false;
+        if (!isCurrent()) return false;
         if (resolveNegotiatedMethods().includes(method)) return true;
         if (resolveStructuralMethods().includes(method)) return false;
         throwHostApiError('unsupported_method', [`host_api_method_not_installed:${method}`]);
@@ -1541,8 +1545,11 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 }
             }
         },
+        retire: () => { retired = true; },
+        isCurrent,
         dispose: () => {
             if (disposed) return;
+            retired = true;
             disposed = true;
             selectedInputs.dispose();
             for (const dispose of [...disposables]) dispose();

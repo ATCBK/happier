@@ -3,7 +3,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -14,17 +14,65 @@ afterEach(standardCleanup);
 
 function createLifetime() {
     const controller = new AbortController();
+    const listeners = new Set<() => void>();
     return {
         isCurrent: () => !controller.signal.aborted,
         onRetire: (listener: () => void) => {
+            listeners.add(listener);
             controller.signal.addEventListener('abort', listener);
-            return { dispose: () => controller.signal.removeEventListener('abort', listener) };
+            return { dispose: () => { listeners.delete(listener); controller.signal.removeEventListener('abort', listener); } };
         },
         retire: () => controller.abort(),
+        readRetirementCount: () => listeners.size,
     };
 }
 
 describe('physical surface renderer mount', () => {
+    it.each(['reveal', 'retire', 'unmount'] as const)('keeps Suspense detachment separate from physical %s and observes actual retirement', async ending => {
+        const lifetime = createLifetime();
+        const suspended = createDeferred<void>();
+        let hidden = false;
+        let current: ReturnType<typeof useUiSurfaceRendererMount> | undefined;
+        function Renderer() {
+            current = useUiSurfaceRendererMount({ lifetime, interactionEnabled: true, focusEligible: true });
+            return null;
+        }
+        function Gate(): null {
+            if (hidden) throw suspended.promise;
+            return null;
+        }
+        const render = () => React.createElement(React.Suspense, { fallback: React.createElement('View', { testID: 'suspended' }) },
+            React.createElement(Renderer), React.createElement(Gate));
+        const screen = await renderScreen(render());
+        const mounted = current!;
+        hidden = true;
+        await screen.update(render());
+        expect(screen.findByTestId('suspended')).toBeTruthy();
+        expect(lifetime.isCurrent()).toBe(true);
+        if (ending !== 'reveal') {
+            if (ending === 'retire') lifetime.retire();
+            else await screen.unmount();
+            expect(mounted.signal.aborted).toBe(true);
+            expect(mounted.isCurrent()).toBe(false);
+            if (ending === 'retire') await screen.unmount();
+            expect(lifetime.readRetirementCount()).toBe(0);
+            await React.act(async () => { suspended.resolve(); });
+            return;
+        }
+        expect(lifetime.readRetirementCount()).toBe(1);
+        hidden = false;
+        await React.act(async () => { suspended.resolve(); });
+        await screen.update(render());
+        expect(screen.findByTestId('suspended')).toBeNull();
+        expect(current!.signal).toBe(mounted.signal);
+        expect(mounted.isCurrent()).toBe(true);
+        expect(mounted.signal.aborted).toBe(false);
+        await screen.unmount();
+        expect(mounted.isCurrent()).toBe(false);
+        expect(mounted.signal.aborted).toBe(true);
+        expect(lifetime.readRetirementCount()).toBe(0);
+    });
+
     it.each(['web', 'ios', 'android'] as const)('keeps a retained %s renderer current across hide/reveal and retires it only on unmount', async platform => {
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });

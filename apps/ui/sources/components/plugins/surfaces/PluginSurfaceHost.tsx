@@ -80,6 +80,7 @@ import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { resolveNegotiatedPluginSurfaceHostApiMethods } from '@/components/plugins/hostApi/negotiatedMethods';
 import { useUiSurfaceRendererMount } from '@/components/plugins/hostApi/useUiSurfaceRendererMount';
+import { useUiSurfaceOwnerLifetime } from '@/components/plugins/hostApi/useUiSurfaceOwnerLifetime';
 import { PluginHostedWebPane } from '@/components/plugins/hostedWeb/PluginHostedWebPane';
 import {
     PluginHostedWebUnavailable,
@@ -782,9 +783,7 @@ function DeclarativePluginSurfaceWithDocumentSource(
             hostApiAdapter.publishResourceSubscriptionEvent(event);
         });
     }, [hostApiAdapter, props.controller]);
-    React.useLayoutEffect(() => () => {
-        hostApiAdapter?.dispose();
-    }, [hostApiAdapter]);
+    useUiSurfaceOwnerLifetime(hostApiAdapter);
     // The document adapter keeps its adopted document for the same Account and
     // occurrence. A replaced controller (new facts, reconnect) is therefore not
     // a new scope: currentness follows the latest controller through this
@@ -1869,9 +1868,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         props.subPath,
     ]);
 
-    React.useLayoutEffect(() => () => {
-        canonicalHostApiAdapter.dispose();
-    }, [canonicalHostApiAdapter]);
+    useUiSurfaceOwnerLifetime(canonicalHostApiAdapter);
 
     return (
         <PluginReactNativeSurface

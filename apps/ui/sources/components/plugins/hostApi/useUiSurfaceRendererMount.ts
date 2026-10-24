@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { createUiSurfaceMountIdentity } from './createUiSurfaceMountIdentity';
+import { useUiSurfaceOwnerLifetime } from './useUiSurfaceOwnerLifetime';
 
 type RendererLifetime = Readonly<{
     isCurrent: () => boolean;
@@ -15,25 +16,34 @@ export function useUiSurfaceRendererMount(input: Readonly<{
     interactionEnabled: boolean;
     focusEligible: boolean;
 }>) {
-    const mount = React.useMemo(() => ({
-        identity: input.instanceId === null ? null : createUiSurfaceMountIdentity(input.instanceId),
-        controller: new AbortController(),
-    }), [input.instanceId, input.lifetime, input.mountKey]);
+    const mount = React.useMemo(() => {
+        const mounted = {
+            identity: input.instanceId === null ? null : createUiSurfaceMountIdentity(input.instanceId),
+            controller: new AbortController(),
+            retired: false,
+            retirement: null as ReturnType<RendererLifetime['onRetire']> | null,
+        };
+        return Object.assign(mounted, {
+            isCurrent: () => !mounted.retired && !mounted.controller.signal.aborted && input.lifetime.isCurrent(),
+            retire: () => { mounted.retired = true; },
+            dispose: () => {
+                mounted.retired = true;
+                mounted.retirement?.dispose();
+                mounted.retirement = null;
+                mounted.controller.abort();
+            },
+        });
+    }, [input.instanceId, input.lifetime, input.mountKey]);
     const eligibility = React.useRef(input);
     eligibility.current = input;
-    const isCurrent = React.useCallback(() => (
-        !mount.controller.signal.aborted && input.lifetime.isCurrent()
-    ), [input.lifetime, mount]);
+    const isCurrent = mount.isCurrent;
     const isFocusEligible = React.useCallback(() => (
         isCurrent() && eligibility.current.interactionEnabled && eligibility.current.focusEligible
     ), [isCurrent]);
+    useUiSurfaceOwnerLifetime(mount);
     React.useLayoutEffect(() => {
-        const retirement = input.lifetime.onRetire(() => mount.controller.abort());
-        if (!input.lifetime.isCurrent()) mount.controller.abort();
-        return () => {
-            retirement.dispose();
-            mount.controller.abort();
-        };
+        mount.retirement ??= input.lifetime.onRetire(mount.dispose);
+        if (!input.lifetime.isCurrent()) mount.dispose();
     }, [input.lifetime, mount]);
     return { identity: mount.identity, signal: mount.controller.signal, isCurrent, isFocusEligible };
 }
