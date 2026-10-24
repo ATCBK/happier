@@ -235,6 +235,35 @@ describe('ProfilesList', () => {
         expect(selectedRowIds(await render('page'))).toEqual([]);
     });
 
+    it('draws a page row\'s status as the shared status glyph at the end of the row, not as words in its line', async () => {
+        profilesListState.groups = {
+            favoriteIds: new Set<string>(),
+            favoriteProfiles: [],
+            customProfiles: [
+                { id: 'mine', name: 'Mine', isBuiltIn: false, compatibility: {}, compatibilityByTargetKey: {}, environmentVariables: [] },
+                { id: 'quiet', name: 'Quiet', isBuiltIn: false, compatibility: {}, compatibilityByTargetKey: {}, environmentVariables: [] },
+            ],
+            sharedProfiles: [],
+            builtInProfiles: [],
+        };
+        const { ProfilesList } = await import('./ProfilesList');
+        const screen = await renderScreen(
+            <ProfilesList
+                presentation="page"
+                customProfiles={[]}
+                favoriteProfileIds={[]}
+                onFavoriteProfileIdsChange={() => {}}
+                selectedProfileId={null}
+                machineId={null}
+                getProfileStatus={(profile) => profile.id === 'mine' ? { status: 'off', label: 'Disabled' } : null}
+            />,
+        );
+        const row = (id: string) => screen.findAll((node) => node.props?.testID === `profiles-list-row:${id}` && node.props?.title !== undefined)[0];
+        expect(row('mine')?.props.rightElement.props).toMatchObject({ status: 'off', label: 'Disabled' });
+        expect(row('mine')?.props.subtitle).toBe('Subtitle');
+        expect(row('quiet')?.props.rightElement ?? null).toBeNull();
+    });
+
     it('lets a page row open its profile, with its operations on the profile page instead of on the row', async () => {
         profilesListState.groups = {
             favoriteIds: new Set<string>(),

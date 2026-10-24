@@ -26,6 +26,7 @@ import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import type { ProfileEnabledById } from '@/sync/domains/profiles/profileEnablement';
 import { Icon } from '@/components/ui/icons/Icon';
+import { CollectionStatusGlyph, type CollectionRowStatus } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 
 
 export interface ProfilesListProps {
@@ -49,6 +50,8 @@ export interface ProfilesListProps {
 
     getProfileDisabled?: (profile: AIBackendProfile) => boolean;
     getProfileSubtitleExtra?: (profile: AIBackendProfile) => string | null;
+    /** A page row's status (a pending migration, turned off): the shared glyph at the row's end, its word in the tooltip. */
+    getProfileStatus?: (profile: AIBackendProfile) => Readonly<{ status: CollectionRowStatus; label: string }> | null;
     profileEnabledById?: ProfileEnabledById | null;
     includeDisabledProfiles?: boolean;
 
@@ -333,8 +336,12 @@ export function ProfilesList(props: ProfilesListProps) {
         );
     }, [isDefaultEnvironmentFavorite, isPage, selectedIndicatorColor, theme.colors.text.secondary, toggleFavorite]);
 
+    const getProfileStatus = props.getProfileStatus;
     const renderProfileRightElement = React.useCallback((profile: AIBackendProfile, displayName: string, isSelected: boolean, isFavorite: boolean) => {
-        if (isPage) return null;
+        if (isPage) {
+            const state = getProfileStatus?.(profile);
+            return state ? <CollectionStatusGlyph status={state.status} label={state.label} /> : null;
+        }
         const entry = actionsByProfileId.get(profile.id);
         const actions = entry?.actions ?? [];
         const compactActionIds = entry?.compactActionIds ?? ['favorite'];
@@ -373,6 +380,7 @@ export function ProfilesList(props: ProfilesListProps) {
         );
     }, [
         actionsByProfileId,
+        getProfileStatus,
         isMobile,
         isPage,
         props,
