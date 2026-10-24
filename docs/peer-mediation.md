@@ -87,6 +87,19 @@ from the descriptor. Relay URLs and direct-address hints only help reach that en
 stand in for its authenticated identity. Diagnostics may describe a proven native path as `Direct`
 or `Secure relay`, while an unproven path stays `unknown`.
 
+In current 0.3 development source, native Machine loopback tunnels retain their
+listener when the authenticated connection closes. A subsequent authorized local
+connection obtains its fresh witness, where required, then re-dials the same
+EndpointId if needed. Concurrent local requests share that replacement; no
+background dial or application keep-alive extends the target's ten-second
+pre-application custody window. Tunnel creation still authenticates the remote
+identity before publishing the port. Failed replacement dials close that local
+connection and report `transport-unavailable` through native tunnel status;
+in-flight application streams are never replayed. The same owner serves broker
+HTTP and private control, raw finite transfers, workspace sync and TCP tunnels;
+workspace sync retains its one-local-stream rule. Existing processes must load
+the rebuilt native library to consume this correction.
+
 Browser Iroh carries **Home HTTP, Socket.IO, and finite Machine transfers in the current development
 source**. Finite transfers prefer `happier/machine/1` with the canonical signed route grant;
 the production direct-import/direct-export path passed in loaded Chromium
@@ -307,6 +320,11 @@ current clients select their operation's route without probing an older daemon.
 The UI machine-RPC preflight rejects a loopback advertisement whose `expiresAt`
 has passed before requesting a grant. Fresh Machine presence and a new grant do
 not by themselves renew that advertisement; the existing per-method server fallback applies.
+In current 0.3 development source, `productionRoute.ts#resolveProductionMachineRpcDirectRoute`
+also requires an already observed desktop daemon status matching the target Machine,
+Account and Home before considering loopback RPC. A browser or native client without
+that same-host proof uses the Home baseline with `loopback_locality_unproven`, without
+probing the advertised port or minting a direct grant. A loopback URL alone proves no locality.
 The daemon's existing 20-second Machine heartbeat also republishes the live
 listener's advertisement. `startPeerMediationLoopback` renews its expiry at half
 the existing lifetime (the maximum enabled flow's grant-policy TTL), preserving
@@ -347,14 +365,18 @@ reach it. The daemon remains the projection authority.
 
 In 0.3 development, Machine RPC fallback preserves the outcome of the whole invocation.
 Route preparation failures and bound direct refusals before handler execution may use the
-authenticated relay. Once direct HTTP is issued, a lost, unreadable or mismatched response
-is `outcomeUnknown` and does not replay the payload through the relay. The daemon's
+authenticated relay. Once direct HTTP is issued for a mutation, a lost, unreadable or
+mismatched response is `outcomeUnknown` and does not replay the payload through the relay.
+For read-only RPCs classified by `actionSpecs.ts#isReadOnlyMachineRpcMethod`, a wrong
+content type, invalid envelope or mismatched request/method instead uses the existing
+Home baseline with a typed local fallback reason. Cancellation and captured Account
+retirement still prevent that fallback. The daemon's
 `handler_unavailable` response is also ambiguous because it can follow a handler exception.
 Direct command receipts do not cover relay replay. A later unsent attempt cannot erase an
 earlier unresolved dispatch; a proven pre-effect refusal, including relay method unavailability,
 retains its no-effect meaning.
 
-Before selecting a direct Machine RPC route, the 0.3 development client checks the
+After proving same-host eligibility, the 0.3 development client checks the
 advertised endpoint through its existing harmless `OPTIONS` ingress, using the
 caller's remaining setup deadline and cancellation signal. A failed connection at
 this stage falls back through the normal per-method relay policy without sending
