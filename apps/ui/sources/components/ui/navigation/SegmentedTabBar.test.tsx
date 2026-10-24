@@ -947,6 +947,39 @@ describe('SegmentedTabBar measured overflow', () => {
     });
 });
 
+describe('SegmentedTabBar value choice that no longer fits', () => {
+    const STRATEGIES: ReadonlyArray<SegmentedTab<'order' | 'balance' | 'least' | 'most'>> = [
+        { id: 'order', label: 'In order' },
+        { id: 'balance', label: 'Balance' },
+        { id: 'least', label: 'Least used' },
+        { id: 'most', label: 'Most left' },
+    ];
+
+    it('becomes one field select of every option, showing the chosen value, instead of hiding options behind More', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const onSelectTab = vi.fn();
+        const screen = await renderScreen(
+            <SegmentedTabBar role="radiogroup" segmentSizing="content" overflow={{ label: 'More' }} tabs={STRATEGIES}
+                activeTabId="balance" onSelectTab={onSelectTab} testIDPrefix="strategy" accessibilityLabel="Strategy" />,
+        );
+        layOut(screen, 240);
+        for (const tab of STRATEGIES) expect(screen.findHostByTestId(`strategy:${tab.id}`)).toBeNull();
+        expect(screen.findHostByTestId('strategy:more')).toBeNull();
+        const select = requireTab(screen, 'strategy:select');
+        expect(select.props.accessibilityLabel).toBe('Strategy, Balance');
+        const menu = screen.root.findByType(DropdownMenu);
+        expect(menu.props.items.map((item: { id: string }) => item.id)).toEqual(['order', 'balance', 'least', 'most']);
+        expect(menu.props.selectedId).toBe('balance');
+        act(() => { menu.props.onSelect('least'); });
+        expect(onSelectTab).toHaveBeenCalledWith('least');
+
+        layOut(screen, 1200);
+        for (const tab of STRATEGIES) expect(screen.findHostByTestId(`strategy:${tab.id}`)).toBeTruthy();
+        expect(screen.findHostByTestId('strategy:select')).toBeNull();
+    });
+});
+
 describe('SegmentedTabBar measured overflow on the track', () => {
     it('fits the segments inside the track padding, dropping glyphs before any label is cut short', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');

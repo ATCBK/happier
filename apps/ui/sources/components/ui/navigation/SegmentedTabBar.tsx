@@ -33,6 +33,8 @@ import { INSTRUMENT_SPRINGS } from '@/components/instrument/motion/motionTokens'
 import { useMotionPreferences } from '@/components/instrument/motion/useMotionPreferences';
 import { isTouchPrimaryPointer, resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { Icon } from '@/components/ui/icons/Icon';
 
 import { resolveSegmentedTabFit } from './segmentedTabFit';
@@ -120,6 +122,8 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
     tabs: ReadonlyArray<SegmentedTab<T>>;
     activeTabId: T;
     onSelectTab: (tabId: T) => void;
+    /** Wraps each visible tab, whole (a reorder row around a strip tab); the bar keeps its selection and keys. */
+    wrapTab?: (tabId: T, tab: React.ReactElement) => React.ReactNode;
     /** Optional testID prefix – tabs get `${testIDPrefix}:${tab.id}` */
     testIDPrefix?: string;
     /** Compact mode with reduced padding and smaller font */
@@ -135,7 +139,9 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
     /**
      * Fit the row to its measured width instead of scrolling or squeezing (D44): glyphs drop first,
      * then the trailing tabs that no longer fit move behind one More menu, which keeps their
-     * selected state. Selection, focus and the chosen tab are unchanged by a resize.
+     * selected state. Selection, focus and the chosen tab are unchanged by a resize. A value choice
+     * (`role="radiogroup"`) never hides options behind More: one that no longer fits becomes one
+     * bordered field select of every option, which always shows the chosen value.
      */
     overflow?: Readonly<{ label: string; testID?: string }>;
     /**
@@ -219,6 +225,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 'auto',
         maxWidth: '100%',
         flexGrow: 0,
+        // A fitting bar's container spans the row to measure it; the track itself still hugs its segments.
+        alignSelf: 'flex-start',
     },
     innerPills: {
         backgroundColor: 'transparent',
@@ -265,6 +273,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.selected,
         shadowOpacity: 0,
         elevation: 0,
+    },
+    measureClip: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+        overflow: 'hidden',
     },
     measureLayer: {
         position: 'absolute',
@@ -349,6 +365,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     tabSurfaceContent: {
         paddingHorizontal: HAPPIER_SEGMENTED_METRICS.segmentPaddingHorizontalPx,
+    },
+    // A content-sized glyph segment hugs its glyph (lab `clviews`' Projects/Recent pair): two thirds of a
+    // label's padding, so the pair sits beside a column title without crowding it.
+    tabSurfaceIconContent: {
+        paddingHorizontal: Math.round(HAPPIER_SEGMENTED_METRICS.segmentPaddingHorizontalPx * 2 / 3),
     },
     // The chosen segment has no ring: its fill and shadow carry the selection.
     tabActive: {
@@ -526,6 +547,8 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
     const visibleTabs = React.useMemo(() => (overflow ? props.tabs.slice(0, fit.visibleCount) : props.tabs), [fit.visibleCount, overflow, props.tabs]);
     const hiddenTabs = React.useMemo(() => (overflow ? props.tabs.slice(fit.visibleCount) : []), [fit.visibleCount, overflow, props.tabs]);
     const activeHidden = hiddenTabs.some((tab) => isHappierTabSelected(props.activeTabId, tab.id));
+    // A value choice must always show its value, so it never parks options behind More.
+    const asSelect = valueChoice && overflow != null && hiddenTabs.length > 0;
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     // The consumer's room grant takes effect only where a finger is the pointer: under a mouse or a
     // trackpad the control keeps its dense padding-driven height (32 for labels), which is what the
@@ -635,7 +658,10 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
             {overflow ? (
                 // The tabs' natural widths, with and without glyphs, measured off-screen so the visible
                 // row can decide what fits without first drawing a row that does not.
-                <View style={styles.measureLayer} pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                // The clip keeps those copies out of the page's scrollable width (a bar near a column's edge
+                // otherwise let the whole pane scroll sideways).
+                <View style={styles.measureClip} pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <View style={styles.measureLayer}>
                     {props.tabs.map((tab) => {
                         // The selected tab draws its label in the active weight, which is wider: measured
                         // regular, the row that "fits" would cut the selected name short ("Overvi…").
@@ -660,7 +686,18 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                         <PlainTabCaption tab={{ id: OVERFLOW_KEY, label: overflow.label }} icon={false} active={false} measuring more />
                     </View>
                 </View>
+                </View>
             ) : null}
+            {asSelect ? (
+                <SegmentedValueSelect
+                    tabs={props.tabs}
+                    activeTabId={props.activeTabId}
+                    onSelectTab={props.onSelectTab}
+                    disabled={disabled}
+                    accessibilityLabel={props.accessibilityLabel}
+                    testID={props.testIDPrefix ? `${props.testIDPrefix}:select` : undefined}
+                />
+            ) : (
             <View
                 style={[
                     styles.inner,
@@ -696,7 +733,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                     const webKeyDownProps = Platform.OS === 'web'
                         ? ({ onKeyDown: (event: any) => handleTabKeyDown(tabIndex, event) } as Record<string, unknown>)
                         : {};
-                    return (
+                    const tabNode = (
                         <Pressable
                             key={tab.id}
                             ref={(node) => {
@@ -713,7 +750,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                             onFocus={(event) => setFocusedTabId(isHappierFocusVisible(event?.target) ? tab.id : null)}
                             onBlur={() => setFocusedTabId((current) => (current === tab.id ? null : current))}
                             {...webKeyDownProps}
-                            onLayout={slidingThumb ? (event) => handleTabLayout(tab.id, event) : undefined}
+                            onLayout={slidingThumb && !props.wrapTab ? (event) => handleTabLayout(tab.id, event) : undefined}
                             style={[
                                 styles.tabFrame,
                                 contentSized ? styles.tabFrameContent : null,
@@ -736,7 +773,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     compact ? styles.tabSurfaceCompact : null,
                                     iconOnly ? (compact ? styles.tabSurfaceIconCompact : styles.tabSurfaceIcon) : null,
                                     tabSurfaceTarget,
-                                    contentSized ? styles.tabSurfaceContent : null,
+                                    contentSized ? (iconOnly ? styles.tabSurfaceIconContent : styles.tabSurfaceContent) : null,
                                     showOwnActiveSurface && !pills && !plain ? (inherited ? styles.thumbOutlined : styles.tabActive) : null,
                                     plain ? styles.plainSurface : null,
                                     plain && showOwnActiveSurface ? styles.plainActive : null,
@@ -788,6 +825,12 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                             </View>
                         </Pressable>
                     );
+                    // A wrapped tab is measured at its wrapper, the item that sits in the row, so the thumb lands on it.
+                    return props.wrapTab ? (
+                        <View key={tab.id} onLayout={slidingThumb ? (event) => handleTabLayout(tab.id, event) : undefined}>
+                            {props.wrapTab(tab.id, tabNode)}
+                        </View>
+                    ) : tabNode;
                 })}
                 {overflow && hiddenTabs.length > 0 ? (
                     <SegmentedTabOverflowMore
@@ -802,7 +845,68 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                     />
                 ) : null}
             </View>
+            )}
         </View>
+    );
+}
+
+/** A value choice too wide for its row: the page's bordered field select over the same options. */
+function SegmentedValueSelect<T extends string>(props: Readonly<{
+    tabs: ReadonlyArray<SegmentedTab<T>>;
+    activeTabId: T;
+    onSelectTab: (tabId: T) => void;
+    disabled: boolean;
+    accessibilityLabel?: string;
+    testID?: string;
+}>) {
+    const { theme } = useUnistyles();
+    const [open, setOpen] = React.useState(false);
+    const [focusVisible, setFocusVisible] = React.useState(false);
+    const field = React.useMemo(() => resolveFieldBoxColors(theme, 'idle'), [theme]);
+    const items = React.useMemo(() => props.tabs.map((tab) => ({
+        id: tab.id,
+        title: tab.label,
+        subtitle: tab.unavailableReason,
+        checked: isHappierTabSelected(props.activeTabId, tab.id),
+        disabled: tab.disabled === true,
+        testID: props.testID ? `${props.testID}:${tab.id}` : undefined,
+    })), [props.activeTabId, props.tabs, props.testID]);
+    const activeTab = props.tabs.find((tab) => isHappierTabSelected(props.activeTabId, tab.id)) ?? null;
+    const name = [props.accessibilityLabel, activeTab?.label].filter(Boolean).join(', ');
+    return (
+        <DropdownMenu
+            open={open}
+            onOpenChange={setOpen}
+            items={items}
+            selectedId={activeTab?.id ?? null}
+            onSelect={(id) => { setOpen(false); props.onSelectTab(id as T); }}
+            placement="bottom"
+            trigger={({ toggle }) => (
+                <Pressable
+                    testID={props.testID}
+                    disabled={props.disabled}
+                    onPress={toggle}
+                    onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
+                    onBlur={() => setFocusVisible(false)}
+                    style={[HAPPIER_FOCUS_RING_DELEGATED_STYLE, props.disabled ? stylesheet.innerDisabled : null]}
+                    accessibilityRole="button"
+                    accessibilityLabel={name || undefined}
+                    accessibilityState={{ expanded: open, disabled: props.disabled }}
+                    {...(Platform.OS === 'web' ? ({ 'aria-haspopup': 'listbox', 'aria-expanded': open } as Record<string, unknown>) : {})}
+                >
+                    <View style={happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus })}>
+                        {renderDropdownItemTriggerRightElement({
+                            detail: activeTab?.label ?? null,
+                            open,
+                            detailColor: theme.colors.text.primary,
+                            chevronColor: theme.colors.text.secondary,
+                            field,
+                            fieldSpan: 'row',
+                        })}
+                    </View>
+                </Pressable>
+            )}
+        />
     );
 }
 
@@ -811,7 +915,7 @@ const OVERFLOW_KEY = '\u0000more';
 
 /** A page tab's caption: its glyph (when the row has room), label and quiet count. */
 function PlainTabCaption(props: Readonly<{
-    tab: Pick<SegmentedTab, 'label' | 'icon' | 'count' | 'id'>;
+    tab: Pick<SegmentedTab, 'label' | 'icon' | 'count' | 'id'> & Partial<Pick<SegmentedTab, 'badge'>>;
     icon: boolean;
     active: boolean;
     /** The words are drawn (false: the glyph stands alone for a tab that is not chosen). */
@@ -836,6 +940,8 @@ function PlainTabCaption(props: Readonly<{
                     {props.tab.count && props.count !== false ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
                 </Text>
             )}
+            {/* A segment's badge ("Recommended") is part of its width: measured without it, a row "fit" and then wrapped. */}
+            {props.segmented && props.tab.badge ? <StatusPill variant="info" hideDot label={props.tab.badge} /> : null}
         </View>
     );
     return props.measuring

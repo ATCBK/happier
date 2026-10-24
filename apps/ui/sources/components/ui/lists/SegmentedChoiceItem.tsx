@@ -1,7 +1,9 @@
 import * as React from 'react';
-import { resolveHappierSegmentedChoiceRow } from '@happier-dev/plugin-ui/presentation';
+import { HappierPageRowFieldLayoutContext, resolveHappierSegmentedChoiceRow } from '@happier-dev/plugin-ui/presentation';
 
-import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SegmentedTabBar, type SegmentedTabBarProps } from '@/components/ui/navigation/SegmentedTabBar';
+
+import { t } from '@/text';
 
 import { Item, type ItemProps } from './Item';
 
@@ -38,7 +40,8 @@ export type SegmentedChoiceItemProps<T extends string> = Omit<ItemProps, 'rightE
 
 /**
  * A row choosing between two to four short, always-visible options. On a configuration page the
- * control sits beside the label and moves beneath it when the row is too narrow for both.
+ * control sits beside the label and moves beneath it when the row is too narrow for both; beneath,
+ * options that still do not fit the row become one field select (a phone's "In / order" wrap).
  *
  * A value choice, so it announces a radio group whose chosen option is checked; the bar it draws is
  * the one segmented control, whose default tab semantics belong to view switches.
@@ -71,7 +74,7 @@ export function SegmentedChoiceItem<T extends string>(props: SegmentedChoiceItem
             showChevron={false}
             accessoryLayout={accessoryLayout}
             rightElement={
-                <SegmentedTabBar<T>
+                <SegmentedChoiceBar<T>
                     tabs={tabs}
                     activeTabId={value}
                     onSelectTab={onChange}
@@ -89,4 +92,11 @@ export function SegmentedChoiceItem<T extends string>(props: SegmentedChoiceItem
             }
         />
     );
+}
+
+/** The bar fits its row once the row has moved it beneath the label (see the tab bar's `overflow`). */
+function SegmentedChoiceBar<T extends string>(props: SegmentedTabBarProps<T>) {
+    const stacked = React.useContext(HappierPageRowFieldLayoutContext)?.stacked === true;
+    const overflow = React.useMemo(() => (stacked ? { label: t('common.more') } : undefined), [stacked]);
+    return <SegmentedTabBar<T> {...props} overflow={overflow} />;
 }

@@ -200,5 +200,30 @@ describe('SegmentedChoiceItem', () => {
         expect(await placement('menu')).toBe('inline');
         expect(await placement('item')).toBe('stacked');
     });
+    it('turns into a field select of the same options when its stacked row is too narrow for every option', async () => {
+        const { SegmentedChoiceItem } = await import('./SegmentedChoiceItem');
+        const { act } = await import('react-test-renderer');
+        const onChange = vi.fn();
+        const strategies = [
+            { id: 'order', label: 'In order' },
+            { id: 'balance', label: 'Balance' },
+            { id: 'least', label: 'Least used' },
+            { id: 'most', label: 'Most left' },
+        ] as const;
+        const screen = await renderScreen(<SegmentedChoiceItem<(typeof strategies)[number]['id']>
+            title="Strategy" options={strategies} value="balance" onChange={onChange} testIDPrefix="strategy"
+        />);
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        // A 300 pt phone row: every box spans it, except a box holding one caption, which is 110 pt wide.
+        const layOutRow = () => act(async () => {
+            for (const node of screen.root.findAll(candidate => typeof candidate.type === 'string' && typeof candidate.props.onLayout === 'function')) {
+                const captions = node.findAll(child => String(child.type) === 'Text');
+                node.props.onLayout(layout(captions.length === 1 ? 110 : 300));
+            }
+        });
+        await layOutRow();
+        await layOutRow();
+        for (const option of strategies) expect(screen.findByTestId(`strategy:${option.id}`)).toBeNull();
+        expect(screen.findByTestId('strategy:select')?.props.accessibilityLabel).toBe('Strategy, Balance');
+    });
 });
-
