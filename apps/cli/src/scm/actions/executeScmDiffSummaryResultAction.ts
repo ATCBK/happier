@@ -61,7 +61,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   const outputs: readonly ScmDiffSummaryOutputKind[] = params.actionId === 'scm.diffSummary.refine'
     ? [ScmDiffSummaryRefineInputSchema.parse(input).output]
     : params.actionId === 'scm.diffSummary.addOutputs' ? ScmDiffSummaryAddOutputsInputSchema.parse(input).outputs
-      : [];
+      : discuss?.startNew ? [] : result.output.requestedOutputs ?? [];
   const stopIds = 'stopIds' in input ? input.stopIds : undefined;
   const reviewExplanation = params.actionId === 'scm.diffSummary.refine' ? ScmDiffSummaryRefineInputSchema.parse(input).reviewExplanation : undefined;
   const caller = params.actionContext?.actionCaller;
@@ -77,7 +77,10 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   if (stopIds && selectedStops?.length !== stopIds.length) return { success: false, errorCode: 'invalid_edit', error: 'Selected stops are unavailable in the saved revision.' };
   const comparison = result.output.comparison;
   if (!comparison) return { success: false, errorCode: 'result_unavailable', error: 'Captured comparison evidence is unavailable.' };
-  const selectedRefs = selectedStops ? new Set(selectedStops.flatMap(stop => stop.changeRefs)) : null;
+  // A conversation's stop is context, not a restriction on a later requested merge.
+  // Explicit targeted refinements retain their exact selected-output contract.
+  const targetedStops = discuss ? undefined : selectedStops;
+  const selectedRefs = targetedStops ? new Set(targetedStops.flatMap(stop => stop.changeRefs)) : null;
   const scopedComparison = scopeScmDiffSummaryComparison(comparison, selectedRefs);
   const userInstructions = params.actionId === 'scm.diffSummary.refine' ? ScmDiffSummaryRefineInputSchema.parse(input).instructions : discuss?.message;
   const outputLanguage = input.outputLanguage ?? result.generator?.outputLanguage;
@@ -91,10 +94,11 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
       ? `Add the requested outputs: ${outputs.join(', ')}. Use the saved comparison and existing outputs. Publish the requested structured outputs.`
       : '';
   const citations = (await store.readStoredScope(scope))?.reviewFindingCitations ?? [];
-  const evidenceContext = `Saved result ${result.resultId}, revision ${result.revision}.\n${JSON.stringify(presentScmDiffSummaryModelContext(selectedStops
-    ? { comparisonId: comparison.id, title: result.output.outputs?.walkthrough?.value?.title, stops: selectedStops, files: scopedComparison.inventory.files }
-    : { comparisonId: comparison.id, outputs: result.output.outputs }, scopedComparison, citations))}`;
+  const evidenceContext = `Saved result ${result.resultId}, revision ${result.revision}.\n${JSON.stringify(presentScmDiffSummaryModelContext(targetedStops
+    ? { comparisonId: comparison.id, title: result.output.outputs?.walkthrough?.value?.title, stops: targetedStops, files: scopedComparison.inventory.files }
+    : { comparisonId: comparison.id, outputs: result.output.outputs, ...(selectedStops ? { selectedStopIds: stopIds } : {}) }, scopedComparison, citations))}`;
   const message = buildDiffSummaryPrompt({ metadata: result.output.metadata ?? { source: comparison.source, sourceKey: comparison.id }, comparison: scopedComparison, outputs,
+      ...(discuss ? { conversation: true } : {}),
       instructions: userInstructions, taskInstructions: [taskInstructions, findingCitationInstructions].filter(Boolean).join('\n'), evidenceContext, outputLanguage,
       ...(reviewExplanation ? { reviewExplanation: true } : {}),
       files: scopedComparison.inventory.files.map(file => ({ path: file.path, changeKind: file.changeKind,
@@ -165,7 +169,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   // Pending admits the exact recipient before its existing target reconciler
   // resumes a retained runtime. Native provisioning is not input admission.
   const inputId = randomUUID();
-  const begun = await store.beginInput({ ...scope, inputId, expectedRevision: input.expectedRevision, outputs, ...(stopIds ? { stopIds } : {}),
+  const begun = await store.beginInput({ ...scope, inputId, expectedRevision: input.expectedRevision, outputs, ...(stopIds && !discuss ? { stopIds } : {}),
     ...(explanationRequest ? { reviewExplanation: explanationRequest } : {}) });
   if (!begun.success) return begun;
   const sent = await (sessionId

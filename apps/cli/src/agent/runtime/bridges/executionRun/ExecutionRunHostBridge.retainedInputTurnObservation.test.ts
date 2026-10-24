@@ -14,6 +14,8 @@ import { createTestExecutionRunHostRuntime } from './testkit';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 import { createExecutionRunRpcActionDeps } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
 import { finishExecutionRun } from './finishExecutionRun';
+import { publishExecutionRunTurn } from './publishExecutionRunTurn';
+import { stopExecutionRun } from './executionRunStop';
 import { ScmDiffSummaryProfile } from './kinds/scmDiffSummary/ScmDiffSummaryProfile';
 import { readOrCreateSavedScmResult } from './kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
@@ -157,6 +159,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
         runs: Map<string, ExecutionRunState>;
         controllers: Map<string, ExecutionRunBackendController>;
         voiceAgentManager: VoiceAgentManager;
+        finishRun: import('./executionRunFinishRun').FinishExecutionRun;
         emitPublicStateUpdated(runId: string): void;
         registerRunOccurrence: RegisterExecutionRunOccurrence;
         createSessionOwnedRunScope(runId: string): import('@/agent/runtime/registry/engineRegistryTypes').ExecutionRunHostRunScopeBinding | null;
@@ -206,6 +209,26 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
 }
 
 describe('ExecutionRunHostBridge retained exact input observation', () => {
+    it('keeps the SCM baseline in public Run state without writing an empty transcript row', async () => {
+        const { internals, attachment, transcriptPublications } = composeRetainedRun();
+        const comparison = ScmComparisonSchema.parse({ id: 'baseline-comparison', source: { kind: 'workingTree' },
+            repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
+        internals.runs.set('run-1', { ...internals.runs.get('run-1')!, intent: 'scm_diff_summary', intentInput: {
+            comparison, outputs: ['walkthrough'], source: comparison.source, sourceKey: comparison.id,
+            metadata: { source: comparison.source, sourceKey: comparison.id },
+        } });
+        try {
+            const controller = internals.controllers.get('run-1')!;
+            expect(await publishExecutionRunTurn({ runId: 'run-1', turnId: 'baseline', rawText: '', finishedAtMs: 2,
+                started: true, controller, controllers: internals.controllers, runs: internals.runs, parentProvider: 'test.agent',
+                sendAcp: async (_provider, body, options) => { transcriptPublications.push({ body, meta: options?.meta }); },
+            })).toBe(true);
+            expect(transcriptPublications.filter(item => item.body.type === 'message')).toEqual([]);
+            expect(internals.runs.get('run-1')).toMatchObject({ latestToolResult: { success: true, comparison,
+                outputs: { walkthrough: { state: 'pending' } } }, structuredMeta: { kind: 'scm_diff_summary.v1' } });
+        } finally { await attachment.release(); }
+    });
+
     it('publishes a saved-result receipt instead of native JSON and preserves the next prose discussion', async () => {
         const { internals, attachment, acceptInput, emitRuntimeEvent, transcriptPublications, replyMutations } = composeRetainedRun();
         const comparison = ScmComparisonSchema.parse({ id: 'receipt-comparison', source: { kind: 'workingTree' },
@@ -246,6 +269,8 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             const receipt = readScmDiffSummaryPublicationReceipt(receipts[0]?.meta);
             expect(receipt?.output).toEqual(internals.runs.get('run-1')?.structuredMeta?.payload);
             expect(receipt?.publication.outputs).toEqual([{ kind: 'walkthrough', change: 'created' }]);
+            expect(receipt?.publication.updateNotice).toMatchObject({ kind: 'generation', revision: receipt?.output.revision,
+                affectedStopIds: [] });
             await terminalProjection;
             expect(replyMutations).toMatchObject([{ requestLocalId: 'write-reading', operation: {
                 kind: 'fulfill', outcome: { kind: 'answer', result: { sessionId: 'session-1' } },
@@ -731,7 +756,7 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             if (failure === 'outcomeUnknown') await manager.waitForOutput('run-1', { kind: 'review_walkthrough', comparisonId: comparison.id });
         } finally { await attachment?.release(); }
     });
-    it.each(['ready', 'stopped-during-publication'] as const)('publishes a validated cache result without an unnecessary initial input and preserves %s attachment lifecycle', async (outcome) => {
+    it.each(['ready', 'cancelled-before-attachment'] as const)('publishes a validated cache result without an unnecessary initial input and preserves %s attachment lifecycle', async (outcome) => {
         const { manager, internals, attachment, admittedParts } = composeRetainedRun();
         const readyArtifacts: unknown[] = [];
         const runtime = internals.controllers.get('run-1')!.backend;
@@ -742,13 +767,19 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             requestedOutputs: ['summary'], outputs: { summary: { state: 'complete', value: { summaryMarkdown: 'Saved explanation.' } } },
             analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
             metadata: { source: comparison.source, sourceKey: comparison.id } };
+        let stopDuringPublication: Promise<unknown> | undefined;
         const started = await startExecutionRun({ params: { sessionId: 'session-1', intent: 'scm_diff_summary',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: getAgentStaticModels('claude', { catalogOnly: true })[0]!.id, instructions: '',
             intentInput: { cachedOutput, comparison, outputs: ['summary'], metadata: cachedOutput.metadata }, permissionMode: 'read_only', retentionPolicy: 'resumable',
-            runClass: 'long_lived', ioMode: 'streaming' }, parentProvider: 'claude', sendAcp: async (_provider, event) => {
-                if (event.type === 'message' && outcome === 'stopped-during-publication') {
-                    const run = [...internals.runs.values()].find((run) => run.sidechainId === event.sidechainId);
-                    if (run) await manager.stop(run.runId);
+            runClass: 'long_lived', ioMode: 'streaming' }, parentProvider: 'claude', sendAcp: async () => {},
+            onPublicStateUpdated: runId => {
+                if (outcome === 'cancelled-before-attachment' && !stopDuringPublication
+                    && internals.runs.get(runId)?.structuredMeta?.kind === 'scm_diff_summary.v1') {
+                    // Cache publication is Run state, not an empty transcript message.
+                    // Exercise the reached cancellation owner, without coupling this
+                    // publication race to the manager's preceding history recovery.
+                    stopDuringPublication = stopExecutionRun({ runId, runs: internals.runs, controllers: internals.controllers,
+                        voiceAgentManager: internals.voiceAgentManager, getNowMs: () => 2, finishRun: internals.finishRun.bind(manager) });
                 }
             },
             streamedTranscriptSession: null, createRuntime: () => runtime, getNowMs: () => 2,
@@ -764,7 +795,8 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             }, voiceAgentManager });
         try {
             await internals.controllers.get(started.runId)?.provisioningPromise;
-            if (outcome === 'stopped-during-publication') {
+            await stopDuringPublication;
+            if (outcome === 'cancelled-before-attachment') {
                 expect(internals.runs.get(started.runId)?.status).toBe('cancelled');
                 await new Promise<void>((resolve) => setTimeout(resolve, 0));
                 expect(readyArtifacts).toEqual([]);

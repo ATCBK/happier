@@ -90,6 +90,7 @@ describe('initial generation context', () => {
         edit: { kind: 'renameWalkthrough', title: 'My saved title' } });
       if (!edited.success) throw new Error(edited.error);
       let prompt = '';
+      let initialSummary: string | undefined;
       let beforeTurn: unknown;
       let completion: unknown;
       const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
@@ -111,6 +112,8 @@ describe('initial generation context', () => {
           prompt = admitted.instructions ?? '';
           const current = { ...start(admitted.intentInput), sessionId: null, runId: 'seeded-discussion', instructions: prompt };
           const initial = await ScmDiffSummaryProfile.onStarted!({ start: current, rawText: '', finishedAtMs: 2 });
+          // Binding the saved result prepares context; only a changed saved revision emits a receipt.
+          initialSummary = initial?.summary;
           if (!request.localInputId) throw new Error('Seeded discussion must carry its admitted input identity');
           await ScmDiffSummaryProfile.onBeforeRetainedInput!({ start: current, localId: request.localInputId });
           beforeTurn = await scmDiffSummaryResultStore.read(scope);
@@ -125,6 +128,7 @@ describe('initial generation context', () => {
         stopIds: ['authorization'], message: 'Why is this allowed?', startNew: true },
       { surface: 'cli', bypassApprovals: true, executionRunTargetMachineId: 'machine' });
       expect(response).toMatchObject({ ok: true, result: { success: true, runId: 'seeded-discussion', seededFromRunId: 'retired-generator' } });
+      expect(initialSummary ?? '').toBe('');
       expect(await scmDiffSummaryResultStore.read(scope)).toEqual(beforeTurn);
       expect(completion).toBeNull();
       expect(prompt).toContain('Answer the user in prose');
@@ -846,16 +850,22 @@ describe('ScmDiffSummaryProfile', () => {
     expect(completed?.toolResultMeta).toMatchObject({ scmResultUpdate: { status: 'published', canUndo: true,
       outputs: [{ kind: 'walkthrough', change: 'created' }] } });
     const scope = { cwd: '/repo', sessionId: 'sess-1', resultId: saved.resultId! };
-    await scmDiffSummaryResultStore.beginInput({ ...scope, inputId: 'refine', outputs: ['walkthrough'] });
+    const edited = await scmDiffSummaryResultStore.edit({ ...scope, expectedRevision: saved.revision!,
+      edit: { kind: 'renameWalkthrough', title: 'My title' } });
+    if (!edited.success) throw new Error(edited.error);
+    await scmDiffSummaryResultStore.beginRefinement({ ...scope, expectedRevision: edited.result.revision,
+      inputId: 'refine', output: 'walkthrough' });
     const updated = await ScmDiffSummaryProfile.onTurnComplete?.({ start: start({ ...input(['walkthrough']), resultId: saved.resultId }),
       previousStructuredMeta: completed?.structuredMeta, inputIds: ['refine'], turnId: 'refined-turn', finishedAtMs: 3,
-      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: '', stops: [], otherChangeRefs: ['c1'] } }) });
+      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: 'Refined explanation', stops: [], otherChangeRefs: ['c1'] } }) });
     expect(updated?.toolResultMeta).toMatchObject({ scmResultUpdate: { status: 'published', canUndo: true,
-      outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
-    await scmDiffSummaryResultStore.beginInput({ ...scope, inputId: 'unchanged', outputs: ['walkthrough'] });
+      outputs: [{ kind: 'walkthrough', change: 'updated' }], titleEditKept: true,
+      updateNotice: { kind: 'generation', revision: edited.result.revision + 1, affectedStopIds: [] } } });
+    const refined = ScmDiffSummaryGenerateOutputSchema.parse(updated?.toolResultOutput);
+    await scmDiffSummaryResultStore.beginRefinement({ ...scope, expectedRevision: refined.revision!, inputId: 'unchanged', output: 'walkthrough' });
     const unchanged = await ScmDiffSummaryProfile.onTurnComplete?.({ start: start({ ...input(['walkthrough']), resultId: saved.resultId }),
       previousStructuredMeta: updated?.structuredMeta, inputIds: ['unchanged'], turnId: 'unchanged-turn', finishedAtMs: 4,
-      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: '', stops: [], otherChangeRefs: ['c1'] } }) });
+      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: 'Refined explanation', stops: [], otherChangeRefs: ['c1'] } }) });
     expect(unchanged?.toolResultMeta?.scmResultUpdate).toBeUndefined();
   });
 

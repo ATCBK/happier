@@ -45,6 +45,8 @@ export function buildDiffSummaryPrompt(params: Readonly<{
   taskInstructions?: string;
   comparison?: ScmComparison;
   outputs?: readonly ScmDiffSummaryOutputKind[];
+  /** Retained conversation may answer in prose or publish an explicitly requested edit. */
+  conversation?: boolean;
   reviewExplanation?: boolean;
 }>): string {
   const fileList = params.files
@@ -70,7 +72,8 @@ export function buildDiffSummaryPrompt(params: Readonly<{
     : '';
 
   const outputs = params.outputs ?? ['summary'];
-  const discussion = outputs.length === 0;
+  const structured = outputs.length > 0;
+  const discussion = !structured || params.conversation === true;
   const language = ScmDiffSummaryOutputLanguageSchema.safeParse(params.outputLanguage);
   const shape = params.reviewExplanation ? ['  "reviewExplanations": [{ "stopId": string, "markdown": string }]'] : [
     ...(outputs.includes('summary') ? ['  "summaryMarkdown": string,', '  "risks"?: string[],', '  "testImpact"?: string,', '  "suggestedPrBody"?: string,'] : []),
@@ -86,8 +89,12 @@ export function buildDiffSummaryPrompt(params: Readonly<{
     discussion ? 'Discuss the saved changes.' : 'SCM diff summary generator.',
     '',
     ...(discussion ? [
-      'Answer the user in prose using the saved result and captured evidence as context.',
-      'This is a discussion, not a request to regenerate or edit saved outputs. Do not return structured result JSON.',
+      'Answer the user in prose using the saved result and captured evidence as context, unless they explicitly request a saved-output change.',
+      ...(structured ? [
+        'When the user requests a saved-output change, return ONLY valid JSON for the changed output keys in this shape. Omit unchanged outputs:',
+        '{', ...shape, '}',
+        'An ordinary question is not a request to rewrite saved outputs. Answer it in prose without structured result JSON.',
+      ] : ['This is a discussion, not a request to regenerate or edit saved outputs. Do not return structured result JSON.']),
       'Do not verify or fix findings, change review decisions, or look up review tools unless the user explicitly asks.',
     ] : [
       'You MUST return ONLY valid JSON in this shape:',
@@ -97,11 +104,11 @@ export function buildDiffSummaryPrompt(params: Readonly<{
     ]),
     '',
     'Rules:',
-    ...(!discussion ? ['- summaryMarkdown must be concise markdown.',
+    ...(structured ? ['- summaryMarkdown must be concise markdown.',
       '- do not include markdown fences.'] : []),
     '- mention unavailable evidence or shared/unknown attribution when relevant.',
     '- do not invent files or tests not shown in the evidence.',
-    ...(!discussion ? [
+    ...(structured ? [
       '- return only the requested output keys. Do not include executable patches, commands or acceptance.',
       params.reviewExplanation ? '- return one explanation per requested stop ID; do not return walkthrough, summary, commitPlan or provenance.'
         : '- assign each comparison change alias exactly once to a walkthrough stop or otherChangeRefs; for commitPlan assign each once to a group or leftOutChangeRefs.',
@@ -123,7 +130,7 @@ export function buildDiffSummaryPrompt(params: Readonly<{
     '- Cite findings or describe settled review context only when real review findings are supplied to this run. Otherwise make no claim that anything was reviewed.',
     '- Resolved review context explains prior decisions; outdated threads do not establish settled context. Partial or failed review is not clean review.',
     language.success ? `Prose language: ${language.data}` : 'Prose language: follow the requesting user\'s language.',
-    ...(!discussion ? ['- The prose language applies to summaryMarkdown, risks, testImpact, suggestedPrBody, all walkthrough prose, commitPlan.groups[].message (subject and body), and rationale. Preserve Conventional Commit type/scope tokens as identifiers.'] : []),
+    ...(structured ? ['- The prose language applies to summaryMarkdown, risks, testImpact, suggestedPrBody, all walkthrough prose, commitPlan.groups[].message (subject and body), and rationale. Preserve Conventional Commit type/scope tokens as identifiers.'] : []),
     '- Translate prose only. Preserve JSON keys, references, identifiers, paths, code and enum values.',
     ...(params.taskInstructions ? ['Host task:', params.taskInstructions] : []),
     '',

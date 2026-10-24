@@ -408,8 +408,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     if (explanationInputId && explanationInputId !== initialInputId) {
       await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: explanationInputId });
     }
-    if (!cached.success || shouldBypassCache(input)) return { status: 'succeeded', summary: oldRunId
-      ? 'A new conversation was seeded from the saved result and captured evidence.' : 'Captured changes are ready for analysis.',
+    if (!cached.success || shouldBypassCache(input)) return { status: 'succeeded', summary: '', transcriptMaterialization: 'none',
       toolResultOutput: currentResult.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: currentResult.output } };
     const comparison = ScmComparisonSchema.safeParse(input.comparison);
     const metadata = ScmDiffSummaryMetadataSchema.safeParse(input.metadata);
@@ -424,7 +423,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     if (!published.success) throw new Error(published.error);
     await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: initialInputId });
     return { status: result.success ? 'succeeded' : 'failed',
-      summary: 'Diff summary restored from cache.', toolResultOutput: published.result.output,
+      summary: '', transcriptMaterialization: 'none', toolResultOutput: published.result.output,
       toolResultMeta: { cache: 'hit' }, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: published.result.output } };
   },
   buildInitialInputContext: ({ start, structuredMeta }) => {
@@ -469,7 +468,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       preserveUndo: true, inputId: localId, output: ScmDiffSummaryGenerateOutputSchema.parse({ ...saved.result.output,
         analysis: { ...saved.result.output.analysis, parts: readDiffSummaryPartProgress(admittedInput) } }) });
     if (!published.success) return null;
-    return { status: 'succeeded', summary: 'The next diff analysis part was admitted.', toolResultOutput: published.result.output,
+    return { status: 'succeeded', summary: '', transcriptMaterialization: 'none', toolResultOutput: published.result.output,
       structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: published.result.output }, updatedIntentInput: admittedInput };
   },
   onTurnComplete: async (params) => {

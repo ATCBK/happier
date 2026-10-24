@@ -64,9 +64,17 @@ function publicationCompletion(result: ScmDiffSummaryResultResponse, previous: S
       : [{ kind, change: before === undefined ? 'created' as const : 'updated' as const }];
   }) : [];
   const receipt = outputs.length ? ScmDiffSummaryPublicationReceiptSchema.parse({ status: 'published', outputs,
-    canUndo: result.result.canUndo }) : undefined;
+    canUndo: result.result.canUndo,
+    ...(result.result.updateNotice?.revision === result.result.revision ? { updateNotice: result.result.updateNotice } : {}),
+    ...(outputs.some(output => output.kind === 'walkthrough') && result.result.walkthroughProvenance?.titleEdited
+      && previous.outputs?.walkthrough?.value?.title === result.result.output.outputs?.walkthrough?.value?.title
+      ? { titleEditKept: true } : {}),
+  }) : undefined;
   const walkthrough = receipt?.outputs.length === 1 && receipt.outputs[0]?.kind === 'walkthrough' ? receipt.outputs[0] : undefined;
   return { ...(original ?? { status: 'succeeded' as const, summary: 'Walkthrough updated.' }),
+    // Progress and unchanged values are metadata; the one publication receipt owns success prose.
+    ...(result.result.output.success ? { summary: '' } : {}),
+    ...(result.result.output.success && !receipt ? { transcriptMaterialization: 'none' as const } : {}),
     ...(receipt ? { summary: walkthrough ? `Walkthrough ${walkthrough.change === 'created' ? 'written' : 'updated'}.` : 'Change analysis saved.',
       toolResultMeta: { ...original?.toolResultMeta, scmResultUpdate: receipt } } : {}),
     toolResultOutput: result.result.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result.result.output } };

@@ -11,6 +11,8 @@ import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/pr
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { readMessageDisplayText } from '@happier-dev/session-core/messages';
 import { SessionMessageMetaSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
+import { deriveWorkflowReplacementId } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { publishSavedScmDiffSummaryTurn } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
 
 const cwd = '/saved/repository';
 beforeEach(() => {
@@ -50,6 +52,61 @@ function createScmResultActionExecutor(scmActionExecute: NonNullable<ActionExecu
 }
 
 describe('saved SCM result Action boundary', () => {
+  it('refines the full current reading from a stop conversation and publishes an update receipt', async () => {
+    const stops = ['one', 'two', 'three', 'four'].map(id => ({ id, title: id,
+      explanationMarkdown: `Explanation ${id}`, changeRefs: [] }));
+    const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output: ScmDiffSummaryGenerateOutputSchema.parse({
+      ...output, outputs: { ...output.outputs, walkthrough: { state: 'complete', value: {
+        title: 'Original', intro: 'Intro', stops, otherChangeRefs: [],
+      } } },
+    }) });
+    const edited = await scmDiffSummaryResultStore.edit({ cwd, resultId: saved.resultId, expectedRevision: saved.revision,
+      edit: { kind: 'renameWalkthrough', title: 'My title' } });
+    if (!edited.success) throw new Error(edited.error);
+    let inputId = '';
+    let prompt = '';
+    const executor = createScmResultActionExecutor(({ actionId, input, context, executeCanonicalAction }) =>
+      executeScmActionOperation({ actionId, input, actionContext: context, executeCanonicalAction,
+        workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] } }), {
+      executionRunGet: async () => ({ run }),
+      sessionSendMessage: async request => {
+        inputId = request.localId!; prompt = request.message;
+        return { status: 'accepted', localId: inputId };
+      },
+    });
+    expect(await executor.execute('scm.diffSummary.discuss', { cwd, resultId: saved.resultId,
+      expectedRevision: edited.result.revision, stopIds: ['one'], message: 'Merge stops two and three.' },
+    { surface: 'cli', bypassApprovals: true })).toMatchObject({ ok: true, result: { success: true } });
+    for (const stop of stops) expect(prompt).toContain(stop.explanationMarkdown);
+    expect(prompt).not.toContain('not a request to regenerate or edit saved outputs');
+    const pending = await scmDiffSummaryResultStore.readInput({ cwd, resultId: saved.resultId, inputIds: [inputId] });
+    expect(pending).toMatchObject({ baseRevision: edited.result.revision, outputs: ['summary', 'walkthrough'] });
+    expect(pending?.stopIds).toBeUndefined();
+    const merged = { title: 'Model title', intro: 'Intro', stops: [stops[0], {
+      id: 'two', title: 'Merged', explanationMarkdown: 'Combined explanation', changeRefs: [],
+    }, stops[3]], otherChangeRefs: [] };
+    const complete = await publishSavedScmDiffSummaryTurn({ start: { ...run, sessionId: 'session', backendId: 'codex',
+      instructions: '', intentInput: { cwd, comparison: output.comparison, resultId: saved.resultId, outputs: ['walkthrough'] } },
+      turnId: 'conversation-refinement', inputIds: [inputId], previousStructuredMeta: { kind: 'scm_diff_summary.v1', payload: edited.result.output },
+      rawText: JSON.stringify({ walkthrough: merged }), finishedAtMs: 10,
+    }, () => null);
+    expect(complete?.toolResultMeta).toMatchObject({ scmResultUpdate: { status: 'published', canUndo: true,
+      outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
+    expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
+      result: { revision: edited.result.revision + 1, output: { outputs: { summary: output.outputs?.summary,
+        walkthrough: { value: { title: 'My title', stops: merged.stops } } } } } });
+    const latest = await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId });
+    if (!latest.success) throw new Error(latest.error);
+    expect(await executor.execute('scm.diffSummary.discuss', { cwd, resultId: saved.resultId,
+      expectedRevision: latest.result.revision, message: 'Why were these grouped?' },
+    { surface: 'cli', bypassApprovals: true })).toMatchObject({ ok: true, result: { success: true } });
+    expect(await publishSavedScmDiffSummaryTurn({ start: { ...run, sessionId: 'session', backendId: 'codex', instructions: '',
+      intentInput: { cwd, comparison: output.comparison, resultId: saved.resultId, outputs: ['walkthrough'] } },
+      turnId: 'conversation-question', inputIds: [inputId], previousStructuredMeta: { kind: 'scm_diff_summary.v1', payload: latest.result.output },
+      rawText: 'They describe one change in behavior.', finishedAtMs: 11,
+    }, () => null)).toBeNull();
+    expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toEqual(latest);
+  });
   it('sends a suggested stop question to the retained Ask recipient without rewriting the reading', async () => {
     const question = 'Why keep the selection across refresh?';
     const reading = { title: 'Selection', intro: '', stops: [{ id: 'selection', title: 'Keep selection',
@@ -157,13 +214,13 @@ describe('saved SCM result Action boundary', () => {
       rpcSessionAuthorization: { kind: 'session.write', sessionId: 'session' },
     };
     const accepted: string[] = [];
+    const sent: Parameters<NonNullable<ActionExecutorDeps['sessionSendMessage']>>[0][] = [];
     const executor = createScmResultActionExecutor(({ actionId, input, context, executeCanonicalAction }) =>
       executeScmActionOperation({ actionId, input, actionContext: context, executeCanonicalAction,
         workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] } }), {
       executionRunGet: async () => ({ run }),
       sessionSendMessage: async request => {
-        expect(request.context).toMatchObject(context);
-        expect(request.actionCaller).toEqual(context.actionCaller);
+        sent.push(request);
         accepted.push(request.sessionId);
         return { status: 'accepted', localId: request.localId };
       },
@@ -178,6 +235,11 @@ describe('saved SCM result Action boundary', () => {
       success: true, runId: run.runId, inputId: expect.any(String),
     } });
     expect(accepted).toEqual(['session']);
+    expect(sent[0]?.context).toMatchObject({ ...context,
+      actionRequestId: deriveWorkflowReplacementId(['action.child', context.actionRequestId,
+        'scm.diffSummary.discuss', 'session.message.send', 0]),
+    });
+    expect(sent[0]?.actionCaller).toEqual(context.actionCaller);
   });
   it('preserves separately admitted Session continuation behind a Machine saved-result host', async () => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });

@@ -370,7 +370,7 @@ export function advanceDiffSummaryAnalysis(params: ExecutionRunProfileTurnComple
   const nextLocalId = `scm-analysis-part:${params.start.runId}:${params.turnId}`;
   if (next) state.expectedInputId = nextLocalId;
   else delete state.expectedInputId;
-  return { status: 'succeeded', summary: complete ? 'Diff summary generated.' : next ? 'Diff analysis is continuing.' : 'Diff analysis is incomplete.',
+  return { status: 'succeeded', summary: '',
     toolResultOutput: result, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result },
     updatedIntentInput: { ...input, scmAnalysis: state },
     ...(next ? { nextInput: { instructions: next, intentInput: { ...input, scmAnalysis: state }, localId: nextLocalId } } : {}),

@@ -86,6 +86,8 @@ export type ExecutionRunProfileBoundedCompleteResult = Readonly<{
   toolResultOutput: unknown;
   toolResultMeta?: Record<string, unknown>;
   structuredMeta?: ExecutionRunStructuredMeta;
+  /** Metadata-only progress still updates Run state without creating a transcript row. */
+  transcriptMaterialization?: 'none';
   /** A distinct next input, admitted by the incumbent host on this same Run. */
   nextInput?: Readonly<{ instructions: string; intentInput: unknown; localId: string }>;
   updatedIntentInput?: unknown;

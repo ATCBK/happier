@@ -90,7 +90,7 @@ export async function publishExecutionRunTurn(args: Readonly<{
       };
     }
   }
-  if (run.sessionId !== null && profile.transcriptMaterialization !== 'none') {
+  if (run.sessionId !== null && profile.transcriptMaterialization !== 'none' && completion.transcriptMaterialization !== 'none') {
     await args.sendAcp(args.parentProvider, {
       type: 'message', message: completion.summary, sidechainId: run.sidechainId,
     }, { meta: {

@@ -102,15 +102,18 @@ function conflict(stored: Stored, revision: number) {
 function withRevision(output: ScmDiffSummaryGenerateOutput, resultId: string, revision: number) {
   return ScmDiffSummaryGenerateOutputSchema.parse({ ...output, resultId, revision });
 }
-function preserveReviewExplanations(incoming: NonNullable<ScmDiffSummaryModelOutput['walkthrough']>,
-  previous: ScmDiffSummaryModelOutput['walkthrough']) {
-  return { ...incoming, stops: incoming.stops.map(stop => {
-    const original = previous?.stops.find(saved => saved.id === stop.id);
-    const sameSelection = original && original.changeRefs.length === stop.changeRefs.length
-      && stop.changeRefs.every(ref => original.changeRefs.includes(ref));
-    return sameSelection && original.reviewExplanations
-      ? { ...stop, reviewExplanations: original.reviewExplanations } : stop;
-  }) };
+function preserveWalkthroughEdits(incoming: NonNullable<ScmDiffSummaryModelOutput['walkthrough']>, result: ScmDiffSummaryResult) {
+  const previous = result.output.outputs?.walkthrough?.value;
+  const previousById = new Map(previous?.stops.map(stop => [stop.id, stop]));
+  const editedStopIds = new Set(result.walkthroughProvenance?.stops.filter(stop => stop.titleEdited).map(stop => stop.stopId));
+  return { ...incoming, ...(previous && result.walkthroughProvenance?.titleEdited ? { title: previous.title } : {}),
+    stops: incoming.stops.map(stop => {
+      const original = previousById.get(stop.id);
+      const sameSelection = original && original.changeRefs.length === stop.changeRefs.length
+        && stop.changeRefs.every(ref => original.changeRefs.includes(ref));
+      return { ...stop, ...(original && editedStopIds.has(stop.id) ? { title: original.title } : {}),
+        ...(sameSelection && original.reviewExplanations ? { reviewExplanations: original.reviewExplanations } : {}) };
+    }) };
 }
 /** Saved domain state. Every machine/session writer rereads under the existing filesystem exclusion owner. */
 export function createScmDiffSummaryResultStore(options: Readonly<{ directory: string }>): ScmDiffSummaryResultStore {
@@ -549,13 +552,11 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
             }
             const firstIndex = current.stops.findIndex((stop) => pending.stopIds!.includes(stop.id));
             const stops = current.stops.flatMap((stop, index) => index === firstIndex
-              ? incoming.stops.map((refined) => stored.result.walkthroughProvenance?.stops.some(provenance => provenance.stopId === refined.id && provenance.titleEdited)
-                ? { ...refined, title: selected.find((original) => original.id === refined.id)!.title } : refined)
+              ? incoming.stops
               : pending.stopIds!.includes(stop.id) ? [] : [stop]);
             normalized = { walkthrough: { ...current, stops } };
           }
-          if (normalized.walkthrough) normalized = { ...normalized, walkthrough: preserveReviewExplanations(
-            normalized.walkthrough, stored.result.output.outputs?.walkthrough?.value) };
+          if (normalized.walkthrough) normalized = { ...normalized, walkthrough: preserveWalkthroughEdits(normalized.walkthrough, stored.result) };
           const next = updated(stored, replaceValues(stored, normalized, pending.outputs, input.outputEnvelope));
           next.inputs = next.inputs.filter((request) => request.inputId !== input.inputId);
           return { success: true, result: (await save(next)).result };
