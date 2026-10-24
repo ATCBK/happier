@@ -506,6 +506,7 @@ describe('buildLocalServiceRows', () => {
             sessionId: 'session-a', scope: 'workspace',
         });
         expect(rows.find((row) => row.id === 'preview:app')?.primaryAction?.kind).toBe('open');
+        expect(rows.filter(row => row.status === 'running').map(row => row.id)).toEqual(['inventory:live']);
         expect(selectLocalServiceRunningCount(rows)).toBe(1);
     });
 

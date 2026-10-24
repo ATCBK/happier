@@ -71,7 +71,7 @@ const SOURCE_LABEL_KEYS: Readonly<Record<LocalServiceLaunchTarget['source'], Tra
     recent: 'localServices.source.recent',
 };
 
-function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
+function resolveStatus(target: LocalServiceLaunchTarget, inventoryRow: LocalServiceInventoryRow | undefined): ServiceRowStatus {
     if (target.unavailableReason === 'project_service_binding_pending') return 'loading';
     if (target.unavailableReason === 'project_service_binding_unavailable') return 'unavailable';
     if (target.state === 'stale') return 'stale';
@@ -91,7 +91,12 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
     }
     switch (target.state) {
         case 'available':
-            return 'running';
+            // Launcher availability is not generally liveness. Scanned targets carry
+            // the daemon's listening observation even before inventory metadata arrives;
+            // managed targets carry their native lifetime (or an observed inventory binding).
+            return target.source === 'inventory_entry'
+                || (target.source === 'managed_service' && (isLocalServiceStateRunningV1(target.serviceState) || inventoryRow?.state === 'listening'))
+                ? 'running' : 'unavailable';
         case 'starting':
             return 'starting';
         case 'unavailable':
@@ -339,7 +344,7 @@ export function buildLocalServiceRows(input: Readonly<{
     const mapped = input.launchTargets.map((target, index) => {
         const inventoryId = inventoryIdFromTarget(target);
         const inventoryRow = inventoryId ? inventoryById.get(inventoryId) : undefined;
-        const status = resolveStatus(target);
+        const status = resolveStatus(target, inventoryRow);
         const processLabel = readProcessLabel(inventoryRow, target);
         // The inventory's numeric port is the authority; the target's subtitle is the fallback.
         const portLabel = (inventoryRow ? resolveLocalServicePortLabel(inventoryRow) : null)
@@ -476,16 +481,14 @@ export function groupLocalServiceRowsBySection(rows: readonly ServiceRow[]): Rea
 }
 
 /**
- * Actual running user services: a listener the scan observed, or a supervised service whose actual
- * lifetime is running regardless of readiness (a queue worker has no listener). Openable access and startable suggestions
- * are not evidence, so the header's count never contradicts the "Running" group it sits above.
+ * Count the same liveness projection the rows render. Inventory enriches and groups rows;
+ * a delayed metadata snapshot must not veto the daemon launcher observation a row already shows.
+ * Access-only targets and startable suggestions are classified by the row owner above, not here.
  */
 export function selectLocalServiceRunningCount(rows: readonly ServiceRow[]): number {
-    const running = new Set<string>();
+    let running = 0;
     for (const row of rows) {
-        if (row.internal) continue;
-        if (row.listeningListenerKey) running.add(row.listeningListenerKey);
-        else if (row.target.source === 'managed_service' && isLocalServiceStateRunningV1(row.target.serviceState) && row.status === 'running') running.add(row.id);
+        if (!row.internal && row.status === 'running') running++;
     }
-    return running.size;
+    return running;
 }
