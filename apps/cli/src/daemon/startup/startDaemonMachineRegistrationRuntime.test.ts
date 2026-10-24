@@ -48,8 +48,9 @@ import { startDaemonMachineRegistrationRuntime } from './startDaemonMachineRegis
 
 function createParams() {
   const shutdown = new Promise<void>(() => {});
+  let machineId = 'machine-1';
   return {
-    api: {} as unknown as ApiClient,
+    api: { setLocalMachineId: vi.fn() } as unknown as ApiClient,
     credentials: {
       token: 'token-1',
     } satisfies Pick<Credentials, 'token'>,
@@ -66,8 +67,8 @@ function createParams() {
     resolvePositiveIntEnv: vi.fn((_raw: string | undefined, fallback: number) => fallback),
     resolvesWhenShutdownRequested: shutdown,
     initialPreflightMachineRegistration: null,
-    resolveMachineId: () => 'machine-1',
-    setMachineId: vi.fn(),
+    resolveMachineId: () => machineId,
+    setMachineId: vi.fn((resolvedMachineId: string) => { machineId = resolvedMachineId; }),
     isShuttingDown: () => false,
     bootstrapRuntime: {} as Parameters<typeof startDaemonMachineRegistrationRuntime>[0]['bootstrapRuntime'],
     onMachineSyncRuntime: vi.fn(),
@@ -85,7 +86,8 @@ describe('startDaemonMachineRegistrationRuntime', () => {
   });
 
   it('passes a lazy shared endpoint-readiness wake source into machine registration', () => {
-    startDaemonMachineRegistrationRuntime(createParams());
+    const params = createParams();
+    startDaemonMachineRegistrationRuntime(params);
 
     expect(createLoopbackReadinessProbeMock).not.toHaveBeenCalled();
     expect(endpointSupervisor.start).not.toHaveBeenCalled();
@@ -111,5 +113,22 @@ describe('startDaemonMachineRegistrationRuntime', () => {
     expect(endpointSupervisor.start).toHaveBeenCalledTimes(1);
     expect(endpointSupervisor.reportFailure).toHaveBeenCalledWith({ errorMessage: 'connect ECONNREFUSED' });
     expect(endpointSupervisor.invalidate).toHaveBeenCalledTimes(1);
+
+    const publishMachineId = startDaemonMachineRegistrationMock.mock.calls[0]?.[0]?.setMachineId;
+    publishMachineId?.('machine-rotated');
+    expect(params.api.setLocalMachineId).toHaveBeenCalledWith('machine-rotated');
+    expect(params.setMachineId).toHaveBeenCalledWith('machine-rotated');
+  });
+
+  it('does not move the API identity when the daemon-state owner rejects a Machine transition', () => {
+    const params = createParams();
+    params.setMachineId.mockImplementation(() => undefined);
+
+    startDaemonMachineRegistrationRuntime(params);
+    const publishMachineId = startDaemonMachineRegistrationMock.mock.calls[0]?.[0]?.setMachineId;
+    publishMachineId?.('machine-rejected');
+
+    expect(params.setMachineId).toHaveBeenCalledWith('machine-rejected');
+    expect(params.api.setLocalMachineId).not.toHaveBeenCalled();
   });
 });

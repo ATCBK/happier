@@ -175,6 +175,7 @@ vi.mock('@/api/api', () => ({
   ApiClient: {
     create: vi.fn(async () => ({
       machineSyncClient: () => harness.apiMachine,
+      setLocalMachineId: vi.fn(),
       setServerFeaturesSnapshotProvider: vi.fn(),
       setPeerMediationObservabilityRuntimeActionContextProvider:
         harness.setPeerMediationObservabilityRuntimeActionContextProvider,

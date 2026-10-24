@@ -153,7 +153,15 @@ export function startDaemonMachineRegistrationRuntime(
     resolvesWhenShutdownRequested: params.resolvesWhenShutdownRequested,
     initialPreflightMachineRegistration: params.initialPreflightMachineRegistration,
     resolveMachineId: params.resolveMachineId,
-    setMachineId: params.setMachineId,
+    setMachineId: resolvedMachineId => {
+      params.setMachineId(resolvedMachineId);
+      // The daemon-state owner may reject publication during quiescence or
+      // after losing custody. Keep the API identity aligned only with an
+      // accepted canonical Machine transition.
+      if (params.resolveMachineId() === resolvedMachineId) {
+        params.api.setLocalMachineId(resolvedMachineId);
+      }
+    },
     isShuttingDown: params.isShuttingDown,
     ...(params.isQuiescing ? { isQuiescing: params.isQuiescing } : {}),
     machineRegistrationRetryWakeSource,
