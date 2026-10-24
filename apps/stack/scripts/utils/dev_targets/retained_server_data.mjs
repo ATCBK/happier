@@ -116,10 +116,12 @@ export async function importRetainedServerData({ archivePath, dataDir, stackBase
   });
 }
 
-async function runRetainedServerDataCommand(options) {
+async function remoteDataCommand({ target, stackBaseDir, commandArgs, env }, runCommand) {
   let out = '';
-  const result = await runDevTargetCommand({
-    ...options,
+  const result = await runCommand({
+    target, stackBaseDir, env,
+    commandArgs: ['node', WORKER_SCRIPT, ...commandArgs],
+    dependencyAdmission: 'skip', workspacePreparation: 'skip', provenance: 'skip',
     persistOutput: false,
     lineFilter: ({ stream, line }) => {
       if (stream !== 'stdout') return true;
@@ -127,16 +129,11 @@ async function runRetainedServerDataCommand(options) {
       return false;
     },
   });
-  return { ...result, out };
-}
-
-async function remoteDataCommand({ target, stackBaseDir, commandArgs, env }, runCommand) {
-  const result = await runCommand({ target, stackBaseDir, env, commandArgs: ['node', WORKER_SCRIPT, ...commandArgs], dependencyAdmission: 'skip', workspacePreparation: 'skip', provenance: 'skip' });
   if (result?.code !== 0) throw new Error(`[dev-targets] retained server data operation failed on ${target.name} (exit ${result?.code ?? 'unknown'})`);
-  return result;
+  return { ...result, out: typeof result.out === 'string' ? result.out : out };
 }
 
-export async function ensureRemoteServerDataReady({ target, stackName, stackBaseDir, syncStackBaseDir = stackBaseDir, config, env = process.env }, { runCommand = runRetainedServerDataCommand } = {}) {
+export async function ensureRemoteServerDataReady({ target, stackName, stackBaseDir, syncStackBaseDir = stackBaseDir, config, env = process.env }, { runCommand = runDevTargetCommand } = {}) {
   if (env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK) {
     const placement = (config ?? (await loadDevTargetsConfig({ stackName, env })).config).runtimePlacement?.server;
     if (placement?.mode !== 'prefer-target' || placement.target !== target.name || !env.HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE) {
@@ -164,7 +161,7 @@ export async function ensureRemoteServerDataReady({ target, stackName, stackBase
 }
 
 export async function moveRetainedServerData({ target, stackName, stackBaseDir, syncStackBaseDir = stackBaseDir, config, env = process.env, persistPlacement }, {
-  runCommand = runRetainedServerDataCommand, transferFile = transferRuntimeFile,
+  runCommand = runDevTargetCommand, transferFile = transferRuntimeFile,
 } = {}) {
   const previous = config.runtimePlacement?.server;
   if (previous?.mode === 'prefer-target') {

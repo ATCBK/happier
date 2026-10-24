@@ -171,3 +171,16 @@ test('retained tree checksums distinguish file membership from metadata-shaped f
   await writeFile(join(folded, 'a'), `payload${JSON.stringify(['b', 'file', mode])}tail`);
   assert.notEqual(await fingerprintRetainedServerData(original), await fingerprintRetainedServerData(folded));
 });
+
+test('readiness consumes worker JSON from a streaming supervisor transport', async t => {
+  const { options, dependencies, sourceDir } = await setup(t);
+  await rm(sourceDir, { recursive: true });
+  const runCommand = async transportOptions => {
+    const result = await dependencies.runCommand(transportOptions);
+    for (const line of result.out.trim().split('\n')) {
+      transportOptions.lineFilter?.({ stream: 'stdout', line });
+    }
+    return { code: result.code };
+  };
+  assert.deepEqual(await ensureRemoteServerDataReady(options, { runCommand }), { retainedRemoteData: false });
+});
