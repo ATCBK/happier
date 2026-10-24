@@ -45,6 +45,30 @@ The root Session screen keeps the controls that affect how you work day to day:
 
 This keeps the root screen focused on common workflow choices instead of mixing them with large advanced settings groups.
 
+## Session list organization (development integration)
+
+The 0.3 Session-list redesign is being integrated. Its new settings contract is
+development-only; the visual controls and final list presentation are not yet a
+released workflow.
+
+One saved layout choice replaces independent active/inactive grouping and ordering
+controls: Projects is the default, while Recent uses meaningful activity and day
+headings. Switching layouts keeps the saved Project order for a return to Projects.
+Pins and custom Sections are intended to remain available in both views; Section
+bands in Recent are still being integrated.
+
+One attention-placement choice controls Needs-you and Working together. The default
+mirrors a Session in its attention shelf and original place. Top placement suppresses
+the original occurrence, except when a lead needs to stay beside its visible
+children. In-place placement creates no attention shelf. Unread, completed or failed
+status alone does not create a Needs-you request.
+
+Row context defaults on, showing Project, machine and checkout information when the
+surrounding group does not already explain it. The leading mark defaults to an
+automatic choice, with Agent, Project, combined, avatar and no-mark choices. Explicit
+avatar, Agent-logo and no-mark preferences survive an upgrade. Density, tags and
+Hide inactive remain separate preferences.
+
 ## Permission mode timing (development)
 
 In 0.3 development source, choosing a permission mode **from the next prompt**
@@ -376,6 +400,14 @@ Session settings also includes controls for how the message composer behaves and
 
 These settings change the app input experience. They do not change provider permissions, model behavior, or transcript storage.
 
+In 0.3 development source, composer placement is a device-local preference,
+separate from the account's density and wrap/scroll choices. The prompt-library
+button participates in that placement preference rather than having a separate
+account toggle. Protected controls and controls with pending work can remain
+shown without changing the saved preference. Older `collapsed` layout values
+are read as automatic physical layout with the new default control placement;
+they do not recreate the old collapsed membership.
+
 ### Enter to Send
 
 **Enter to Send** controls what the Return/Enter key does in the composer.
@@ -430,15 +462,16 @@ You can change the setting at any time from **Settings → Session → Mobile se
 
 ### Input layout
 
-The input layout controls decide how composer action chips are shown.
+The input layout controls the physical flow of composer action chips.
 
 The layout can:
 
 - wrap chips across rows when there is enough room
-- use horizontally scrollable chip rows on narrower layouts
-- collapse controls into the action menu when you want the most compact composer
+- use horizontally scrollable chip rows
 
-Primary controls and secondary controls stay separated in wrap and scroll layouts. In collapsed layout, those controls move into the action menu.
+Primary controls and secondary controls stay separated in wrap and scroll layouts.
+In 0.3 development builds, placement controls which chips are shown, in +, or
+hidden; changing wrap/scroll does not move controls between those places.
 
 Chip density controls whether chips prefer labels, icons, or automatic label hiding.
 
@@ -464,7 +497,7 @@ The goal of the split is simple:
 
 If you are looking for a setting and no longer see it inline on the root Session screen, it most likely moved into one of the dedicated sub-screens rather than being removed.
 
-## Related guides
+## Related
 
 - [Session handoff](/sessions/session-handoff)
 - [New session shortcuts](/sessions/new-session-shortcuts)
