@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -12,6 +12,7 @@ import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
 import { withWorkspaceBuildResources } from './workspace_build_admission.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { adoptInstalledDependencies } from '../dev_targets/remote_dependency_bootstrap.mjs';
+import { admitWorkerDiskBudget } from '../dev_targets/worker_disk_budget.mjs';
 import { beginPendingSourceStart } from '../../runtime/shared/pending_source_start.mjs';
 import { recordStackRuntimeStart, withStackRuntimeStartClaim } from '../stack/runtime_state.mjs';
 
@@ -270,6 +271,162 @@ test('registered patch paths outside the conventional directory remain install i
   assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true);
 });
 
+test('worker clean install keeps the prior tree outside synchronized source on the same device', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-worker-refresh-location-' });
+  const installDir = fixture.path('repo');
+  const scratchRoot = fixture.path('scratch');
+  const nodeModules = join(installDir, 'node_modules');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_DEV_TARGET_EXECUTION: '1', TMPDIR: scratchRoot };
+  await mkdir(nodeModules, { recursive: true });
+  await mkdir(scratchRoot);
+  await writeFile(join(installDir, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await writeFile(join(nodeModules, 'retained.js'), 'original installed bytes');
+  const original = await lstat(nodeModules);
+  await withDependencyRefresh({ installDir, env: { ...env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
+  await withDependencyRefresh({ installDir, env }, async () => {
+    assert.equal(isDependencyRefreshLockActive({ installDir, env }), true);
+    assert.deepEqual((await readdir(installDir)).filter(name => name.startsWith('.node_modules-refresh-')), [],
+      'the synchronized source root must never contain the prior tree');
+    const [aside] = await readdir(scratchRoot);
+    assert.ok(aside, 'the existing worker scratch root owns the prior tree');
+    const retained = join(scratchRoot, aside, 'node_modules');
+    assert.equal((await lstat(retained)).dev, original.dev, 'rename must remain on the installed tree device');
+    assert.equal((await lstat(retained)).ino, original.ino, 'moving the tree must preserve its inode');
+    await mkdir(nodeModules);
+    await writeFile(join(nodeModules, '.modules.yaml'), 'nodeLinker: hoisted\n');
+  });
+  assert.deepEqual(await readdir(scratchRoot), [], 'successful installation removes the prior tree');
+});
+
+test('cold worker refresh installs without a prior dependency tree', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-cold-' });
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1' };
+  const result = await withDependencyRefresh({ installDir: fixture.root, env }, async () => {
+    await mkdir(fixture.path('node_modules'));
+    await writeFile(fixture.path('node_modules', '.modules.yaml'), 'nodeLinker: hoisted\n');
+  });
+  assert.equal(result.refreshed, true);
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, env })).required, false);
+});
+
+test('worker refresh rejects different-device scratch and uses an external same-device sibling', async t => {
+  if (process.platform !== 'linux') return t.skip('requires a second writable filesystem');
+  const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-device-' });
+  const other = await stat('/dev/shm').catch(() => null);
+  if (!other || other.dev === (await stat(fixture.root)).dev) return t.skip('no second filesystem');
+  const scratch = await createTempFixture(t, { prefix: 'hstack-refresh-device-', parentDir: '/dev/shm' });
+  const installDir = fixture.path('repo');
+  const nodeModules = join(installDir, 'node_modules');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_DEV_TARGET_EXECUTION: '1', TMPDIR: scratch.root };
+  await mkdir(nodeModules, { recursive: true });
+  await writeFile(join(installDir, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  const original = await lstat(nodeModules);
+  await withDependencyRefresh({ installDir, env: { ...env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
+  await withDependencyRefresh({ installDir, env }, async () => {
+    assert.deepEqual(await readdir(scratch.root), [], 'different-device scratch must remain unused');
+    const aside = (await readdir(fixture.root)).find(name => name.startsWith('hstack-dependency-refresh-'));
+    assert.ok(aside, 'the source sibling must own the prior tree');
+    const retained = await lstat(fixture.path(aside, 'node_modules'));
+    assert.equal(retained.dev, original.dev);
+    assert.equal(retained.ino, original.ino);
+    await mkdir(nodeModules);
+    await writeFile(join(nodeModules, '.modules.yaml'), 'nodeLinker: hoisted\n');
+  });
+  assert.deepEqual((await readdir(fixture.root)).filter(name => name.startsWith('hstack-dependency-refresh-')), []);
+});
+
+test('worker refresh uses the existing ignored temp path when external placement is unavailable', async t => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) return t.skip('requires POSIX directory permissions');
+  const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-ignored-' });
+  const installDir = fixture.path('repo');
+  const nodeModules = join(installDir, 'node_modules');
+  const scratchRoot = join(installDir, 'authored-scratch');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: installDir,
+    HAPPIER_DEV_TARGET_EXECUTION: '1', TMPDIR: scratchRoot };
+  await mkdir(nodeModules, { recursive: true });
+  await mkdir(scratchRoot);
+  await writeFile(join(installDir, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await withDependencyRefresh({ installDir, env: { ...env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
+  const original = await lstat(nodeModules);
+  await chmod(fixture.root, 0o555);
+  try {
+    await withDependencyRefresh({ installDir, env }, async () => {
+      assert.deepEqual(await readdir(scratchRoot), [], 'authored scratch inside the source must remain unused');
+      const parent = join(installDir, '.project', 'tmp');
+      const [aside] = (await readdir(parent)).filter(name => name.startsWith('hstack-dependency-refresh-'));
+      assert.ok(aside, 'the fallback is below the existing .project/tmp sync exclusion');
+      const retained = await lstat(join(parent, aside, 'node_modules'));
+      assert.equal(retained.dev, original.dev);
+      assert.equal(retained.ino, original.ino);
+      await mkdir(nodeModules);
+      await writeFile(join(nodeModules, '.modules.yaml'), 'nodeLinker: hoisted\n');
+    });
+    assert.deepEqual(await readdir(join(installDir, '.project', 'tmp')), []);
+  } finally { await chmod(fixture.root, 0o755); }
+});
+
+test('worker disk maintenance reaps abandoned refresh asides at every placement without touching other siblings', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-reaping-' });
+  const repoDir = fixture.path('repo'), scratchRoot = fixture.path('scratch');
+  const cacheBaseDir = fixture.path('cache'), procRoot = fixture.path('proc');
+  await mkdir(repoDir);
+  await mkdir(scratchRoot);
+  await mkdir(cacheBaseDir);
+  await mkdir(procRoot);
+  const old = new Date(Date.now() - 48 * 3600000);
+  const abandoned = [];
+  for (const parent of [scratchRoot, fixture.root, join(repoDir, '.project', 'tmp')]) {
+    const aside = join(parent, 'hstack-dependency-refresh-abandoned');
+    await mkdir(join(aside, 'node_modules'), { recursive: true });
+    await utimes(join(aside, 'node_modules'), old, old);
+    await utimes(aside, old, old);
+    abandoned.push(aside);
+  }
+  const unrelated = fixture.path('hstack-unrelated');
+  await mkdir(unrelated);
+  await utimes(unrelated, old, old);
+  const result = await admitWorkerDiskBudget({ repoDir, cacheBaseDir, scratchRoot, procRoot,
+    commandClass: 'dependency-install', maintenance: true,
+    observeFilesystem: () => ({ device: 'fixture', availableBytes: 1e9, totalBytes: 2e9 }) });
+  assert.equal(result.reclamation.reduce((sum, step) => sum + step.reclaimedRoots, 0), 3);
+  for (const aside of abandoned) await assert.rejects(lstat(aside), { code: 'ENOENT' });
+  await lstat(unrelated);
+});
+
+for (const failurePhase of ['install', 'ready', 'metadata']) test(`failed worker clean install restores tree and marker (${failurePhase})`, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-worker-refresh-rollback-' });
+  const scratch = await createTempFixture(t, { prefix: 'hstack-refresh-rollback-scratch-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1', TMPDIR: scratch.root };
+  const nodeModules = fixture.path('node_modules');
+  const marker = join(nodeModules, '.happier-stack-dependencies-ready');
+  await mkdir(nodeModules);
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await writeFile(join(nodeModules, 'retained.js'), 'original installed bytes');
+  await withDependencyRefresh({ installDir: fixture.root, env: { ...env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
+  const admitted = await readFile(marker, 'utf8');
+  const original = await lstat(nodeModules);
+  const failure = new Error('installer boundary failed');
+  await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env,
+    onDependenciesReady: failurePhase === 'ready' ? async () => { throw failure; } : null,
+  }, async () => {
+    await assert.rejects(lstat(nodeModules), { code: 'ENOENT' });
+    await mkdir(nodeModules);
+    await writeFile(join(nodeModules, 'partial.js'), 'incomplete replacement');
+    if (failurePhase === 'install') throw failure;
+    if (failurePhase !== 'metadata') await writeFile(join(nodeModules, '.modules.yaml'), 'nodeLinker: hoisted\n');
+  }), error => failurePhase === 'metadata' ? error.code === 'HAPPIER_DEPENDENCIES_NEED_REFRESH' : error === failure);
+  assert.equal(await readFile(join(nodeModules, 'retained.js'), 'utf8'), 'original installed bytes');
+  assert.equal(await readFile(marker, 'utf8'), admitted, 'rollback preserves the original admission, including stale status');
+  assert.equal((await lstat(nodeModules)).ino, original.ino, 'rollback restores the renamed tree');
+  await assert.rejects(lstat(join(nodeModules, 'partial.js')), { code: 'ENOENT' });
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, env })).required, true);
+  assert.deepEqual((await readdir(fixture.root)).filter(name => name.startsWith('.node_modules-refresh-')), []);
+  assert.deepEqual(await readdir(scratch.root), [], 'rollback removes the external aside after restoring the original');
+});
+
 test('worker pnpm admission cleans an unproven tree once and binds proof to installed metadata', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-worker-pnpm-lineage-' });
   const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1' };
@@ -311,6 +468,7 @@ test('worker pnpm admission cleans an unproven tree once and binds proof to inst
   assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env, onDependenciesReady: async () => {} }, refresh)).refreshed, false);
   assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env }, refresh)).refreshed, false);
   assert.equal(installs, 1, 'an unchanged proven pnpm installation stays warm');
+  assert.deepEqual((await readdir(fixture.root)).filter(name => name.startsWith('.node_modules-refresh-')), [], 'successful replacement removes its prior tree');
   assert.deepEqual(await adoptInstalledDependencies({ repoDir: fixture.root, env }), { refreshed: false, reason: 'up-to-date' });
   let queuedAdoption;
   await withDependencyRefreshLock({ installDir: fixture.root, env }, async () => {

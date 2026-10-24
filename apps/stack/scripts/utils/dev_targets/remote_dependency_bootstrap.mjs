@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { execPnpm } from '../../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
-import { assertDependenciesReady, inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { assertDependenciesReady, inspectDependencyRefresh, isDependencyRefreshDisabled, prepareDependencyVersion, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';
 import { isYarnWorkspace } from '../proc/workspace_package_manifests.mjs';
@@ -33,7 +33,7 @@ function resolveInitialInstallEnv(env) {
   return resolved;
 }
 
-async function installInitialDependencies({ repoDir, env }) {
+async function installInitialDependencies({ repoDir, env, stdio = 'inherit' }) {
   const installEnv = resolveInitialInstallEnv(env);
   for (const path of [
     installEnv.XDG_CACHE_HOME,
@@ -47,17 +47,39 @@ async function installInitialDependencies({ repoDir, env }) {
     cwd: repoDir,
     env: installEnv,
     preferPath: true,
-    stdio: 'inherit',
+    stdio,
   });
 }
 
-async function prepareInitialUiOutputs({ repoDir, env, force }) {
+async function prepareInitialUiOutputs({ repoDir, env, force, stdio = 'inherit', quiet = false }) {
   const installEnv = resolveInitialInstallEnv(env);
-  const runPnpm = (args, postinstallEnv = installEnv) => execPnpm(args, { cwd: repoDir, env: postinstallEnv, preferPath: true, stdio: 'inherit' });
+  const runPnpm = (args, postinstallEnv = installEnv) => execPnpm(args, { cwd: repoDir, env: postinstallEnv, preferPath: true, stdio });
   await ensureUiPostinstallOutputs(join(repoDir, 'apps', 'ui'), repoDir, {
-    force, env: installEnv,
+    force, env: installEnv, quiet,
     runPostinstall: async (postinstallEnv) => runPnpm(['--filter', '@happier-dev/app', 'run', '--silent', 'postinstall:real'], postinstallEnv),
     restoreDependencies: async () => runPnpm(['install', '--force', ...REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS.slice(1)]),
+  });
+}
+
+// The explicit --prepare-version command consumes this owner. Existing default
+// bootstrap consumers keep their installed-tree contract until their owners
+// pin root and package-local resolution together at the integration boundary.
+export async function prepareRemoteDependencyVersion({
+  repoDir = resolve(process.cwd()), env = process.env, signal, diagnosticsToStderr = false,
+} = {}) {
+  const stdio = diagnosticsToStderr ? ['inherit', 2, 2] : 'inherit';
+  return await prepareDependencyVersion({ installDir: repoDir,
+    componentDir: join(repoDir, 'apps/stack'), env, signal,
+    installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE }, async ({ installDir, env: prepareEnv, signal: prepareSignal }) => {
+    await installInitialDependencies({ repoDir: installDir, env: prepareEnv, stdio });
+    prepareSignal?.throwIfAborted();
+    await prepareInitialUiOutputs({ repoDir: installDir, env: prepareEnv, force: true,
+      stdio, quiet: diagnosticsToStderr });
+    prepareSignal?.throwIfAborted();
+    const { ensureServerGeneratedProviderOutputs } = await import('../proc/pm.mjs');
+    await ensureServerGeneratedProviderOutputs(join(installDir, 'apps/server'), installDir, {
+      env: prepareEnv, signal: prepareSignal, quiet: diagnosticsToStderr,
+    });
   });
 }
 
@@ -157,7 +179,7 @@ export async function bootstrapRemoteDependencies({
       });
       return { refreshed: false, reason: 'up-to-date' };
     } catch (error) {
-      if (error?.code !== 'HAPPIER_DEPENDENCIES_NEED_REFRESH') throw error;
+      if (error?.code !== 'HAPPIER_DEPENDENCIES_NEED_REFRESH' || isDependencyRefreshDisabled(env)) throw error;
     }
     // Source validation does not consume the Stack owner's compiled closure.
     // Typecheck compilers read published declarations and prepare their own
@@ -215,6 +237,10 @@ export async function bootstrapRemoteDependencies({
 
 const entryPath = String(process.argv[1] ?? '').trim();
 if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
+  const prepareVersion = process.argv.includes('--prepare-version');
+  if (prepareVersion && process.argv.includes('--adopt-installed')) {
+    throw new Error('--prepare-version and --adopt-installed select different installation owners');
+  }
   if (process.argv.includes('--adopt-installed')) {
     const adoptRepo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
     await adoptInstalledDependencies(adoptRepo ? { repoDir: resolve(adoptRepo.slice('--repo-dir='.length)) } : {});
@@ -225,10 +251,14 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
   const repo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
   const placement = process.argv.slice(2).find(value => value.startsWith('--execution-placement='));
   const buildMode = process.argv.slice(2).find(value => value.startsWith('--default-build-mode='));
+  if (prepareVersion && placement !== '--execution-placement=remote') {
+    throw new Error('--prepare-version requires --execution-placement=remote');
+  }
   if (placement === '--execution-placement=remote') {
     const repoDir = repo ? resolve(repo.slice('--repo-dir='.length)) : process.cwd();
     const manifest = JSON.parse(await readFile(join(repoDir, 'package.json'), 'utf8'));
     if (isYarnWorkspace(manifest)) {
+      if (prepareVersion) throw new Error('--prepare-version requires a pnpm workspace');
       // The predecessor's executable owns Yarn installation and its admission
       // format. The executor retains placement; it does not replace that owner.
       const sourceBootstrap = join(repoDir, 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs');
@@ -248,8 +278,16 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
     // Cold bootstrap must load only dependency-free process boundaries. The
     // containing SSH process group owns cancellation of this synchronous child.
     execFileSync(process.execPath, [fileURLToPath(new URL('../../../../../scripts/ci/setup-pnpm.mjs', import.meta.url)), repoDir], {
-      cwd: repoDir, env: resolveInitialInstallEnv(process.env), stdio: 'inherit',
+      cwd: repoDir, env: resolveInitialInstallEnv(process.env), stdio: prepareVersion ? ['inherit', 2, 2] : 'inherit',
     });
+  }
+  if (prepareVersion) {
+    const version = await prepareRemoteDependencyVersion({
+      ...(repo ? { repoDir: resolve(repo.slice('--repo-dir='.length)) } : {}), diagnosticsToStderr: true,
+    });
+    process.stdout.write(JSON.stringify({ dependencyRoot: version.dependencyRoot,
+      dependencyIdentity: version.dependencyIdentity }) + '\n');
+    process.exit(0);
   }
   await bootstrapRemoteDependencies({
     ...(repo ? { repoDir: resolve(repo.slice('--repo-dir='.length)) } : {}),

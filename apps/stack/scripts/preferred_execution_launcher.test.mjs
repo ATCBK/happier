@@ -5492,6 +5492,19 @@ test('native launcher bootstraps dependency-consuming commands and leaves source
   assert.match(raw.stdout, /raw-search/);
   assert.doesNotMatch(raw.stdout, /remote_dependency_bootstrap\.mjs/);
 
+  for (const flag of ['HAPPIER_STACK_SKIP_REFRESH_DEPS', 'HAPPIER_STACK_DISABLE_REFRESH_DEPS']) {
+    for (const explicit of [false, true]) {
+      const result = spawnSync('/bin/sh', [launcher, '--target=mac2',
+        ...(explicit ? [`--env=${flag}=1`] : []), '--', 'vitest', 'run', 'owner.test.ts'], {
+        cwd: repoRoot, env: { ...env, [flag]: explicit ? '0' : '1' }, encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const beforeBootstrap = result.stdout.split('remote_dependency_bootstrap.mjs')[0].replaceAll("'\"'\"'", "'");
+      const assignments = [...beforeBootstrap.matchAll(new RegExp(`export ${flag}='([^']*)'`, 'g'))];
+      assert.equal(assignments.at(-1)?.[1], '1', 'no-refresh policy must reach bootstrap, including explicit overrides');
+    }
+  }
+
   const provenanceLines = (await readFile(
     join(stackDir, 'dev-target-command-load-native', 'provenance.jsonl'),
     'utf8',
@@ -5515,6 +5528,7 @@ test('native launcher bootstraps dependency-consuming commands and leaves source
     'targeted-validation',
     'targeted-validation',
     'source-search',
+    ...Array(4).fill('full-validation'),
   ]);
   assert.equal(provenanceLines.filter((entry) => entry.phase === 'completed').length, admittedClasses.length);
   assert.equal(provenanceLines.every((entry) => entry.schemaVersion === 1), true);

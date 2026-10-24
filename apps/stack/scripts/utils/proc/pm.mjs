@@ -13,7 +13,7 @@ import { expandHome } from '../paths/canonical_home.mjs';
 import { applyStackInfraProcessKind } from './stack_process_kind.mjs';
 export { applyStackInfraProcessKind };
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { inspectDependencyRefresh, resolveDependencyInstallRoot, resolveLockedInstallEnv, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, isDependencyRefreshDisabled, resolveDependencyInstallRoot, resolveLockedInstallEnv, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -760,8 +760,7 @@ async function ensureComponentDependenciesInstalled(
   if (await pathExists(nodeModules)) {
     const skipRefresh =
       refreshExisting === false ||
-      String(env?.HAPPIER_STACK_SKIP_REFRESH_DEPS ?? '').trim() === '1' ||
-      String(env?.HAPPIER_STACK_DISABLE_REFRESH_DEPS ?? '').trim() === '1';
+      isDependencyRefreshDisabled(env);
     if (skipRefresh) {
       if (onDependenciesReady) {
         throw new Error(`[local] cannot run ${label} dependency-ready actions while dependency refresh is disabled`);

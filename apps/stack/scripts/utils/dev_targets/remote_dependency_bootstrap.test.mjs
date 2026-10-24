@@ -616,6 +616,27 @@ if (args[0] === 'install') {
   assert.equal((await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'install').length, 5);
 });
 
+for (const flag of ['HAPPIER_STACK_SKIP_REFRESH_DEPS', 'HAPPIER_STACK_DISABLE_REFRESH_DEPS']) {
+  for (const validationKind of ['source-test', 'typecheck']) test(`remote no-refresh admission preserves tree (${flag}, ${validationKind})`, async t => {
+    const { root, env: fixtureEnv } = await setupPrismaFreshness(t);
+    const env = { ...fixtureEnv, [flag]: '1' };
+    const marker = join(root, 'node_modules', '.happier-stack-dependencies-ready');
+    const admitted = await readFile(marker, 'utf8');
+    await bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind, env, signal: t.signal });
+    assert.equal(await readFile(marker, 'utf8'), admitted, 'warm no-refresh validation remains read-only');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# changed dependency inputs\n');
+    await assert.rejects(bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind, env,
+      signal: t.signal, installInitialDependencies: async () => assert.fail('no-refresh policy must prevent installation'),
+    }), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+    assert.equal(await readFile(marker, 'utf8'), admitted);
+    await rm(join(root, 'node_modules'), { recursive: true });
+    await assert.rejects(bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind, env,
+      signal: t.signal, installInitialDependencies: async () => assert.fail('no-refresh policy must also prevent a cold installation'),
+    }), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+    await assert.rejects(stat(join(root, 'node_modules')), { code: 'ENOENT' });
+  });
+}
+
 for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local validation never mutates stale dependencies under ${policy} policy`, {
   skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
 }, async t => {

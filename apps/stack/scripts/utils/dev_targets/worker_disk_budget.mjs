@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { reapHistoricalTempRoots } from './historical_temp_roots.mjs';
+import { DEPENDENCY_REFRESH_ASIDE_PREFIX, resolveDependencyRefreshAsideParents } from '../proc/dependency_refresh.mjs';
 import { getHappierTempRootForUid, prepareHappierTempDirOwnerCleanup, readHappierTempDirOwnerForDirectory,
   readHappierTempDirOwnerLiveness } from '../../../../../packages/cli-common/tempDirOwnership.mjs';
 
@@ -105,6 +106,21 @@ export async function inspectWorkerDiskBudget({ repoDir, cacheBaseDir, commandCl
   return { admitted, commandClass, filesystems, reason: admitted ? 'ready' : 'worker write filesystem exhausted' };
 }
 
+async function reapWorkerScratch(repoDir, scratchRoot, procRoot, ownerUid) {
+  const result = directory(scratchRoot) ? reapHistoricalTempRoots(scratchRoot, procRoot, { ownerUid })
+    : { reclaimedBytes: 0, reclaimedRoots: 0, retainedRoots: 0, observationUnavailable: null };
+  for (const parent of await resolveDependencyRefreshAsideParents(repoDir, { scratchRoot })) {
+    if (parent === scratchRoot || !directory(parent) || lstatSync(parent).uid !== ownerUid) continue;
+    // Only refresh-owned siblings are eligible here; the canonical reaper still
+    // decides age, inode identity and live-process custody before deleting.
+    const candidateNames = readdirSync(parent).filter(name => name.startsWith(DEPENDENCY_REFRESH_ASIDE_PREFIX));
+    const sweep = reapHistoricalTempRoots(parent, procRoot, { ownerUid, candidateNames });
+    for (const key of ['reclaimedBytes', 'reclaimedRoots', 'retainedRoots']) result[key] += sweep[key];
+    result.observationUnavailable ??= sweep.observationUnavailable;
+  }
+  return result;
+}
+
 export async function admitWorkerDiskBudget({ repoDir, cacheBaseDir, commandClass, scratchRoot = tmpdir(), procRoot = '/proc', ownerUid = process.getuid(), observeFilesystem = observeWorkerFilesystem, maintenance = false }) {
   const options = { repoDir, cacheBaseDir, commandClass, scratchRoot, observeFilesystem };
   const initial = await inspectWorkerDiskBudget(options);
@@ -115,7 +131,7 @@ export async function admitWorkerDiskBudget({ repoDir, cacheBaseDir, commandClas
   if ((!initial.admitted || maintenance) && process.platform === 'linux') {
     const steps = [
       ['runtime-build', () => reapRuntimeBuildStaging(cacheBaseDir, scratchRoot, procRoot, ownerUid)],
-      ['scratch', () => directory(scratchRoot) ? reapHistoricalTempRoots(scratchRoot, procRoot, { ownerUid }) : { reclaimedBytes: 0, reclaimedRoots: 0 }],
+      ['scratch', () => reapWorkerScratch(repoDir, scratchRoot, procRoot, ownerUid)],
     ];
     for (const [kind, run] of steps) {
       reclamation.push({ kind, ...await run() });
