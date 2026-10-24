@@ -93,8 +93,13 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
             createMachineFixture({ id: 'machine-a', activeAt: Date.now(), isShared: false }),
             createMachineFixture({ id: 'machine-b', activeAt: Date.now(), isShared: false }),
         ], true, { sourceServerId: serverId });
-        const hook = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useConnectedServiceLegacyOperationAdmission(); });
+        await flushHookEffects();
+        const beforeRenders = renders;
         await act(async () => { recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
+        expect(renders).toBe(beforeRenders);
+        expect(runControlMock).not.toHaveBeenCalled();
         runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
         await hook.getCurrent()('github', 'quota_read');
         expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-b');
@@ -149,8 +154,7 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
             expect(runControlMock).toHaveBeenCalledTimes(1);
             heldReply.resolve(reply);
             await expect(pending).resolves.toBeUndefined();
-            // The same real owner may inspect changing inventory, but its
-            // consumer only observes a changed elected target/lifetime.
+            // Invocation-time admission does not subscribe a passive caller to fleet changes.
             expect(renders - beforeRenders).toBe(0);
         } finally {
             heldReply.resolve(reply);

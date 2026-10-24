@@ -13,7 +13,6 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
-import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 
 function resolveQualifiedService(
@@ -43,26 +42,7 @@ export function useConnectedAccountOperationAdmission(): (
     const activeServerGeneration = activeServer.generation;
     const store = getStorage();
     const { binding } = useServerCredentialAccountScopeBinding(serverId);
-    const scope = binding?.isCurrent() ? binding.scope : null;
-    // Subscribe to the elected target, not every detail of every visible Machine.
-    // The shared presence owner still delivers lease, custody and reachability changes.
-    const readMachines = React.useCallback(() => (
-        resolveVisibleMachinesForActiveServerFromState(store.getState())
-    ), [store, serverId]);
-    const readMachineId = React.useCallback((nowMs: number) => {
-        const resolveScopeId = captureServerProfileScopeResolver();
-        let firstSelectableId = '';
-        for (const candidate of readMachines()) {
-            // Account service/configuration reads require owned custody, not Machine Use or Manage.
-            if (candidate.isShared !== false || !isMachineSelectableForFleet(scope, candidate, nowMs, resolveScopeId)) continue;
-            if (candidate.active === true) return candidate.id;
-            if (!firstSelectableId) firstSelectableId = candidate.id;
-        }
-        return firstSelectableId;
-    }, [readMachines, scope]);
-    const targets = React.useMemo(() => [{ serverId }], [serverId]);
-    const machineId = useMachinePresenceSnapshot(readMachines, readMachineId, targets);
-    const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, machineId, serverId]);
+    const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, binding, serverId]);
     React.useEffect(() => {
         if (lifetime.controller.signal.aborted) lifetime.controller = new AbortController();
         const controller = lifetime.controller;
@@ -75,7 +55,19 @@ export function useConnectedAccountOperationAdmission(): (
         operation: BuiltInLegacyConnectedAccountOperation,
         signal?: AbortSignal,
     ) => {
-        if (!serverId || !machineId) {
+        // A refresh admission is an invocation, not a displayed Machine fact.
+        // Resolve the current owned target only when asked; passive quota readers
+        // must not subscribe to fleet presence or its expiry clock for this callback.
+        const scope = binding?.isCurrent() ? binding.scope : null;
+        const resolveScopeId = captureServerProfileScopeResolver();
+        const nowMs = Date.now();
+        let machineId = '';
+        for (const candidate of resolveVisibleMachinesForActiveServerFromState(store.getState())) {
+            if (candidate.isShared !== false || !isMachineSelectableForFleet(scope, candidate, nowMs, resolveScopeId)) continue;
+            if (!machineId) machineId = candidate.id;
+            if (candidate.active === true) { machineId = candidate.id; break; }
+        }
+        if (!serverId || !scope || !machineId) {
             throw admissionError(
                 'connected_account_service_identity_unsupported',
             );
@@ -95,7 +87,7 @@ export function useConnectedAccountOperationAdmission(): (
             },
         });
         assertConnectedAccountOperationTransportV1(result, service, expectedTransport);
-    }, [activeServerGeneration, lifetime, machineId, serverId]);
+    }, [activeServerGeneration, binding, lifetime, serverId, store]);
 }
 
 export function useConnectedServiceLegacyOperationAdmission(): (
