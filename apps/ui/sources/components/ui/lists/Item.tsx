@@ -262,6 +262,12 @@ export interface ItemProps {
      */
     rightElementOutsidePressable?: boolean;
     /**
+     * Render `leftElement` as a sibling of the row Pressable, before it. Use this when the leading
+     * slot holds its own controls (a reorder handle, a radio): each keeps its own activation and
+     * the row never nests one button inside another on React Native Web.
+     */
+    leftElementOutsidePressable?: boolean;
+    /**
      * Where the right accessory sits. `inline` (default) keeps it beside the
      * label; `stacked` always places it under the label at full width (visual pickers, text areas);
      * `adaptive` moves it under the label only when the row is too narrow for both (segmented controls,
@@ -713,6 +719,7 @@ export const Item = React.memo<ItemProps>((props) => {
         showChevron = true,
         keepChevronWithRightElement = false,
         rightElementOutsidePressable = false,
+        leftElementOutsidePressable = false,
         rightElementYields = false,
         accessoryLayout = 'inline',
         accessoryMaxWidth = 'half',
@@ -788,9 +795,9 @@ export const Item = React.memo<ItemProps>((props) => {
     // Handle long press for copy functionality
     const handlePressIn = React.useCallback(() => {
         longPressConsumedRef.current = false;
-        if (rightElementOutsidePressable && rightElement) setIsSplitPrimaryPressed(true);
+        if ((rightElementOutsidePressable && rightElement) || (leftElementOutsidePressable && leftElement)) setIsSplitPrimaryPressed(true);
         onPressIn?.();
-    }, [onPressIn, rightElement, rightElementOutsidePressable]);
+    }, [leftElement, leftElementOutsidePressable, onPressIn, rightElement, rightElementOutsidePressable]);
     const handlePressOut = React.useCallback(() => {
         setIsSplitPrimaryPressed(false);
     }, []);
@@ -1297,7 +1304,7 @@ export const Item = React.memo<ItemProps>((props) => {
         );
     }, [accessibilityExpanded, chevronSize, showAccessory, theme.colors.text.secondary]);
 
-    // A sheet row's hairline is the sheet's: its divider colour, from the row's text to its trailing inset
+    // A sheet row's hairline is the sheet's: its divider colour, from the row's text to the sheet's trailing edge
     // (`happierPageRowDividerInset`). A page row outside a sheet (a bare or columned section) draws the same
     // page hairline in the page divider colour.
     const flatDividerColor = pageSheet?.rowDividerColor ?? (isPageRow ? theme.colors.border.subtle : null);
@@ -1359,8 +1366,9 @@ export const Item = React.memo<ItemProps>((props) => {
         );
     }, [isWeb]);
 
-    const renderRowContent = React.useCallback((options?: Readonly<{ includeRightAccessory?: boolean }>) => {
+    const renderRowContent = React.useCallback((options?: Readonly<{ includeRightAccessory?: boolean; includeLeftAccessory?: boolean }>) => {
         const includeRightAccessory = options?.includeRightAccessory ?? true;
+        const includeLeftAccessory = options?.includeLeftAccessory ?? true;
         // A split primary remains a bounded horizontal label/value band. Its independent
         // operation stacks outside this band, so only content containing that operation stacks.
         const stackContentAccessory = stackAccessory && includeRightAccessory;
@@ -1368,7 +1376,7 @@ export const Item = React.memo<ItemProps>((props) => {
         <>
             <View style={[styles.labelBand, alignsToFirstLine ? styles.containerAlignStart : null, stackContentAccessory ? styles.labelBandStacked : null]}>
             {/* Left Section */}
-            {leftAccessory || (isPageRow && reservesLeadingColumn) ? (
+            {includeLeftAccessory && (leftAccessory || (isPageRow && reservesLeadingColumn)) ? (
                 <View
                     style={iconContainerStyle}
                     // An empty reserved column is layout only.
@@ -1672,13 +1680,15 @@ export const Item = React.memo<ItemProps>((props) => {
         && sharedItemBehavior.accessoryPlacement === 'outside'
         && rightAccessory,
     );
+    const splitLeftElementOutsidePressable = Boolean(isInteractive && leftElementOutsidePressable && leftAccessory);
+    const splitRow = splitRightElementOutsidePressable || splitLeftElementOutsidePressable;
 
     const paintColor = useHappierMaterialColorResolver();
     const pressableBackground = RNStyleSheet.flatten(pressableStyle)?.backgroundColor;
     const resolveInteractiveRowStyle = React.useCallback((pressed: boolean) => {
         const backgroundColor = (() => {
             if (pressed && isIOS && !isWeb) return theme.colors.surface.pressedOverlay;
-            if (pressed && splitRightElementOutsidePressable) return theme.colors.surface.pressed;
+            if (pressed && splitRow) return theme.colors.surface.pressed;
             if (showSelectedBackground) return theme.colors.surface.selected;
             // Web-only hover affordance for interactive rows (no hover when disabled).
             if (isWeb && hoverFill && isHovered && !disabled && !loading) return hoverBackgroundColor;
@@ -1712,7 +1722,7 @@ export const Item = React.memo<ItemProps>((props) => {
         pressableBackground,
         rowPosition,
         showSelectedBackground,
-        splitRightElementOutsidePressable,
+        splitRow,
         theme.colors.surface.pressed,
         theme.colors.surface.pressedOverlay,
         theme.colors.surface.selected,
@@ -1755,11 +1765,18 @@ export const Item = React.memo<ItemProps>((props) => {
         }
         : null;
 
-    if (splitRightElementOutsidePressable) {
+    if (splitRow) {
+        // Leading controls outside the row's own activation: they sit before it in one label band.
+        const withOutsideLeading = (primary: React.ReactElement) => splitLeftElementOutsidePressable ? (
+            <View style={[styles.labelBand, alignsToFirstLine ? styles.containerAlignStart : null, stackAccessory ? styles.labelBandStacked : null]}>
+                <View style={[iconContainerStyle, alignsToFirstLine ? containerPadding : null]}>{leftAccessory}</View>
+                {primary}
+            </View>
+        ) : primary;
         return (
             <>
                 <View style={[containerCore, style, resolveInteractiveRowStyle(isSplitPrimaryPressed)]} onLayout={measuresRowWidth ? handleRowLayout : undefined}>
-                    <Pressable
+                    {withOutsideLeading(<Pressable
                         ref={assignPressableRef}
                         testID={testID}
                         {...{ dataSet }}
@@ -1823,10 +1840,13 @@ export const Item = React.memo<ItemProps>((props) => {
                         } : undefined}
                     >
                         <View style={[styles.splitPressableInner, containerPadding, stackAccessory ? styles.splitPressableInnerStacked : null]}>
-                            {renderRowContent({ includeRightAccessory: false })}
+                            {renderRowContent({
+                                includeRightAccessory: !splitRightElementOutsidePressable,
+                                includeLeftAccessory: !splitLeftElementOutsidePressable,
+                            })}
                         </View>
-                    </Pressable>
-                    <View
+                    </Pressable>)}
+                    {splitRightElementOutsidePressable ? <View
                         style={[
                             styles.rightSection,
                             // A stacked page operation sits above the row's bottom padding.
@@ -1841,7 +1861,7 @@ export const Item = React.memo<ItemProps>((props) => {
                         importantForAccessibility={sharedItemBehavior.secondaryActionsEnabled ? 'auto' : 'no-hide-descendants'}
                     >
                         {rightAccessory}
-                    </View>
+                    </View> : null}
                 </View>
                 {bottom}
                 {dividerNode}
