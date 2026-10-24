@@ -4,7 +4,8 @@ import { ProviderCatalogProbeModelV1Schema } from '@happier-dev/protocol/provide
 import { ProviderModelLoadStateV1Schema } from '@happier-dev/protocol/providers/runtimeState/v1';
 import type { BundledProviderCatalogParserV1, ProviderCatalogParserV1, ProviderCatalogProbeModelV1, ProviderModelLoadStateV1 } from '@happier-dev/protocol';
 import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
-import { ANTHROPIC_EFFORT_LEVELS, buildAnthropicModelOptions, normalizeAnthropicModelDisplayName } from '@happier-dev/protocol/providers/anthropic-models';
+import { ANTHROPIC_EFFORT_LEVELS, normalizeAnthropicModelDisplayName } from '@happier-dev/protocol/providers/anthropic-models';
+import { buildProviderReasoningModelOptions } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 import type { AnthropicEffortLevel } from '@happier-dev/protocol/providers/anthropic-models';
 
 export type ParsedProviderCatalogResponse = Readonly<{
@@ -182,7 +183,7 @@ function parseAnthropicModels(input: unknown): ParsedProviderCatalogResponse {
       const contextWindowTokens = optionalOwnContextWindowTokens(row);
       const effort = readAnthropicEffortCapability(row);
       const modelOptions = effort?.supported
-        ? buildAnthropicModelOptions({ supportedLevels: effort.levels })
+        ? buildProviderReasoningModelOptions({ supportedLevels: effort.levels })
         : [];
       return {
         id,

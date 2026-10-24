@@ -59,16 +59,6 @@ describe('parseProviderCatalogResponse', () => {
               { value: 'xhigh', name: 'XHigh' },
               { value: 'max', name: 'Max' },
             ],
-          }, {
-            id: 'ultracode',
-            name: 'Ultracode',
-            description: 'Maximum coding effort. Forces XHigh Thinking effort while enabled.',
-            type: 'boolean',
-            currentValue: 'false',
-            overridesWhenOn: {
-              optionIds: ['reasoning_effort'],
-              forcedValue: 'xhigh',
-            },
           }],
         },
         { id: 'claude-sonnet-4-6' },
@@ -89,6 +79,13 @@ describe('parseProviderCatalogResponse', () => {
     expect(parseProviderCatalogResponse('anthropic-models', {
       data: [{ id: 'glm-4.6', display_name: 'GLM 4.6' }],
     }).models).toEqual([{ id: 'glm-4.6', name: 'GLM 4.6' }]);
+
+    const thirdParty = parseProviderCatalogResponse('anthropic-models', {
+      data: [{ id: 'third-party-model', capabilities: { effort: { supported: true,
+        high: { supported: true }, xhigh: { supported: true } } } }],
+    }).models[0];
+    expect(thirdParty?.modelOptions?.map(option => option.id)).toEqual(['reasoning_effort']);
+    expect(thirdParty?.modelOptions?.[0]?.options?.map(option => option.value)).toEqual(['high', 'xhigh']);
   });
 
   it('rejects malformed Anthropic context and effort capability facts', () => {
