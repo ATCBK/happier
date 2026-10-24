@@ -123,14 +123,30 @@ function notifyServerFeaturesSnapshotChanged(): void {
     }
 }
 
+function reconcileServerRequirements(serverUrl: string | null, snapshot: ServerFeaturesSnapshot): void {
+    // A pending or retryable observation does not retract accepted protocol
+    // support. Conclusive replacement still withdraws incompatible/absent
+    // requirements before subscribers can admit another stored-content read.
+    if (!serverUrl || isServerFeaturesProbeRetryable(snapshot)) return;
+    recordAccountStoredContentServerRequirements({
+        serverUrl,
+        requirements: snapshot.status === 'ready'
+            ? snapshot.features.capabilities.accountStoredContentCompatibility
+            : undefined,
+    });
+}
+
 function writeServerFeaturesSnapshot(
     cacheKey: string,
     snapshot: ServerFeaturesSnapshot,
     ttlMs: number,
+    // Presentation priming carries no fresh server observation authority.
+    serverUrl: string | null = null,
 ): ServerFeaturesSnapshot {
     const previous = cache.get(cacheKey);
     const retained = retainServerFeaturesSnapshot(previous?.kind === 'success' ? previous.value : undefined, snapshot);
     transientRetryAtByProjectionKey.delete(`public\u0000${cacheKey}`);
+    reconcileServerRequirements(serverUrl, retained);
     cache.setSuccess(cacheKey, retained, { ttlMs });
     if (previous?.kind !== 'success' || retained !== previous.value) notifyServerFeaturesSnapshotChanged();
     return retained;
@@ -154,6 +170,7 @@ function writeActiveProjectionSnapshot(
     cacheKey: string,
     snapshot: ServerFeaturesSnapshot,
     ttlMs: number,
+    serverUrl: string | null,
 ): ServerFeaturesSnapshot {
     const projectionCache = getActiveProjectionCache(projection);
     const retryKey = `${projection}\u0000${cacheKey}`;
@@ -168,21 +185,24 @@ function writeActiveProjectionSnapshot(
     }
     transientRetryAtByProjectionKey.delete(retryKey);
     if (projection === 'public') {
-        const retained = writeServerFeaturesSnapshot(cacheKey, snapshot, ttlMs);
+        const retained = writeServerFeaturesSnapshot(cacheKey, snapshot, ttlMs, serverUrl);
         persistPublicSnapshot(cacheKey);
         return retained;
     }
     const previous = authenticatedCache.get(cacheKey);
     const retained = retainServerFeaturesSnapshot(previous?.kind === 'success' ? previous.value : undefined, snapshot);
+    reconcileServerRequirements(serverUrl, retained);
     authenticatedCache.setSuccess(cacheKey, retained, { ttlMs });
     return retained;
 }
 
 function writeEndpointServerFeaturesSnapshot(
     cacheKey: string,
+    serverUrl: string,
     snapshot: ServerFeaturesSnapshot,
     ttlMs: number,
 ): void {
+    reconcileServerRequirements(serverUrl, snapshot);
     endpointCache.setSuccess(cacheKey, snapshot, { ttlMs });
 }
 
@@ -384,7 +404,8 @@ async function getServerFeaturesSnapshotWithRetry(
     return await projectionCache.runDedupe(cacheKey, async ({ signal, isCurrent }): Promise<ServerFeaturesSnapshot> => {
         const publishSnapshot = (value: ServerFeaturesSnapshot, key = cacheKey): ServerFeaturesSnapshot => {
             return isCurrent()
-                ? writeActiveProjectionSnapshot(projection, key, value, getCacheTtlMs(value))
+                ? writeActiveProjectionSnapshot(projection, key, value, getCacheTtlMs(value),
+                    isExplicitServerRequest ? explicitServerUrl : activeSnapshot.serverUrl)
                 : value;
         };
         const cachedEntry2 = projectionCache.get(cacheKey);
@@ -407,13 +428,6 @@ async function getServerFeaturesSnapshotWithRetry(
                 let response: Response;
                 let descriptorObservation: 'exact' | 'public' = 'public';
                 try {
-                    const probedServerUrl = isExplicitServerRequest
-                        ? explicitServerUrl!
-                        : activeSnapshot.serverUrl;
-                    recordAccountStoredContentServerRequirements({
-                        serverUrl: probedServerUrl,
-                        requirements: undefined,
-                    });
                     if (isExplicitServerRequest) {
                         const transport = params?.scopedTransport ?? (explicitServerProfile
                             ? await resolveExplicitServerFeatureTransport({
@@ -661,13 +675,6 @@ async function getServerFeaturesSnapshotWithRetry(
                     features: parsed,
                     serverIdentityId,
                 };
-                recordAccountStoredContentServerRequirements({
-                    serverUrl: isExplicitServerRequest
-                        ? explicitServerUrl!
-                        : activeSnapshot.serverUrl,
-                    requirements:
-                        parsed.capabilities.accountStoredContentCompatibility,
-                });
                 const published = publishSnapshot(value);
                 // Learning a stable server identity can synchronously change
                 // the active/profile scope key. Publish the same observed
@@ -926,7 +933,7 @@ export async function probeServerFeaturesAtUrl(
 
     const observe = (observerSignal: AbortSignal) => endpointCache.runDedupe(cacheKey, async ({ signal, isCurrent }): Promise<ServerFeaturesSnapshot> => {
         const publishSnapshot = (value: ServerFeaturesSnapshot): ServerFeaturesSnapshot => {
-            if (isCurrent()) writeEndpointServerFeaturesSnapshot(cacheKey, value, getCacheTtlMs(value));
+            if (isCurrent()) writeEndpointServerFeaturesSnapshot(cacheKey, endpointUrl, value, getCacheTtlMs(value));
             return value;
         };
         const cachedEntry2 = endpointCache.get(cacheKey);
@@ -938,10 +945,6 @@ export async function probeServerFeaturesAtUrl(
             return publishSnapshot(value);
         }
 
-        recordAccountStoredContentServerRequirements({
-            serverUrl: endpointUrl,
-            requirements: undefined,
-        });
         const request = serverHttp.createServerFetchAtEndpoint({
             endpointUrl,
             runtimeOrigin,
@@ -996,10 +999,6 @@ export async function probeServerFeaturesAtUrl(
             features: parsed,
             serverIdentityId,
         };
-        recordAccountStoredContentServerRequirements({
-            serverUrl: endpointUrl,
-            requirements: parsed.capabilities.accountStoredContentCompatibility,
-        });
         return publishSnapshot(value);
     }, { signal: observerSignal });
     return await waitForServerFeaturesSnapshot(observe, input.timeoutMs, input.signal);
