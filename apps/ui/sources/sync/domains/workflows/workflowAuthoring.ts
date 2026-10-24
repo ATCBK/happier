@@ -25,7 +25,7 @@ import {
   createWorkflowEditorDraft,
   type WorkflowEditorDraft,
 } from './workflowEditorDraft';
-import { walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { updateWorkflowBlock, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
 /**
  * The canonical definition ↔ editor projection.
@@ -49,6 +49,23 @@ export function buildWorkflowDefinitionCandidate(draft: WorkflowEditorDraft): un
 }
 
 export type WorkflowDraftValidation = WorkflowValidationResult;
+
+/** Explicit editor repair only: the caller selects the step and saves through the existing definition Action. */
+export function repairWorkflowPullRequestInput(params: Readonly<{
+  definition: WorkflowDefinitionV1;
+  stepId: string;
+}>): WorkflowDefinitionV1 | null {
+  const declaration = params.definition.inputs.find(input => input.name === 'prUpdate');
+  if (declaration !== undefined && declaration.valueType !== 'json') return null;
+  const step = walkWorkflowBlocks(params.definition.blocks).find(block => block.id === params.stepId);
+  if (step?.kind !== 'step' || step.inputMode === 'none') return null;
+  const selected = updateWorkflowBlock(params.definition, params.stepId, block => block.kind !== 'step'
+    || block.input.some(input => input.kind === 'input' && input.name === 'prUpdate' && (input.path?.length ?? 0) === 0)
+    ? block : { ...block, input: [...block.input, { kind: 'input', name: 'prUpdate' }] });
+  return declaration === undefined
+    ? { ...selected, inputs: [...selected.inputs, { name: 'prUpdate', valueType: 'json', required: true }] }
+    : selected;
+}
 
 export function validateWorkflowEditorDraft(
   draft: WorkflowEditorDraft,
@@ -463,37 +480,6 @@ export function buildWorkflowRunStartInputs(
     .filter((field): field is WorkflowRunInputFieldState & { value: JsonValue } => field.value !== undefined)
     .map((field) => [field.definition.name, field.value] as const);
   return entries.length === 0 ? undefined : Object.fromEntries(entries);
-}
-
-/**
- * Binds immutable trigger evidence to declared inputs **by name**.
- *
- * Evidence is never interpolated into prompt text: an Automation occurrence
- * resolves the same named input map the Run-now sheet fills, and the resolved
- * values are recorded in the frozen Run envelope.
- */
-export function bindWorkflowTriggerEvidenceInputs(params: Readonly<{
-  inputs: readonly WorkflowInputDefinition[];
-  evidence: Readonly<Record<string, JsonValue>>;
-}>): Readonly<{
-  values: Readonly<Record<string, JsonValue>>;
-  unbound: readonly string[];
-}> {
-  const values: Record<string, JsonValue> = {};
-  const unbound: string[] = [];
-  for (const definition of params.inputs) {
-    const supplied = params.evidence[definition.name];
-    if (supplied !== undefined) {
-      values[definition.name] = supplied;
-      continue;
-    }
-    if (definition.default !== undefined) {
-      values[definition.name] = definition.default;
-      continue;
-    }
-    if (definition.required) unbound.push(definition.name);
-  }
-  return { values, unbound };
 }
 
 // ---------------------------------------------------------------------------

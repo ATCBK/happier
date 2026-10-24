@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowDefinitionV1Schema, type WorkflowBlock, type WorkflowStep } from '@happier-dev/protocol/workflows/workflowV1';
 
 import {
-  bindWorkflowTriggerEvidenceInputs,
   buildWorkflowEditorDraftFromDefinition,
   buildWorkflowRunStartInputs,
   firstBlockingWorkflowIssue,
@@ -11,6 +10,7 @@ import {
   listWorkflowProducerOptions,
   listWorkflowStepOverriddenFields,
   projectWorkflowRunInputFields,
+  repairWorkflowPullRequestInput,
   resolveEffectiveWorkflowStepExecution,
   resolveWorkflowExportBlockedReason,
   resolveWorkflowIssueBlockId,
@@ -22,7 +22,7 @@ import {
   workflowIssuesForBlock,
 } from './workflowAuthoring';
 import { createWorkflowEditorDraft, type WorkflowEditorDraft } from './workflowEditorDraft';
-import { collectWorkflowBlockIds, createWorkflowBlock, setWorkflowDefaultField, setWorkflowInputs, setWorkflowStepExecutionField, setWorkflowStepText } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { collectWorkflowBlockIds, createWorkflowBlock, setWorkflowDefaultField, setWorkflowInputs, setWorkflowStepExecutionField, setWorkflowStepText, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
 const CLAUDE_AGENT_TARGET = {
   kind: 'agent' as const,
@@ -49,6 +49,32 @@ function draftWith(blocks: readonly WorkflowBlock[]): WorkflowEditorDraft {
 }
 
 describe('draft validation through the canonical validator', () => {
+  it.each([false, true])('explicitly repairs the selected nested=%s PR step without rewriting authored content', nested => {
+    const selected = step('selected', '  Keep these authored bytes\n');
+    const loop = createWorkflowBlock('loop', new Set<string>());
+    if (loop.kind !== 'loop') throw new Error('Expected loop fixture');
+    const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {},
+      blocks: [nested ? { ...loop, body: [selected] } : selected, step('literal')],
+    });
+    const repaired = repairWorkflowPullRequestInput({ definition, stepId: 'selected' });
+    expect(repaired?.inputs).toEqual([{ name: 'prUpdate', valueType: 'json', required: true }]);
+    expect(walkWorkflowBlocks(repaired?.blocks ?? []).find(block => block.id === 'selected'))
+      .toMatchObject({ document: selected.document, input: [{ kind: 'input', name: 'prUpdate' }] });
+    expect(repaired?.blocks[1]).toBe(definition.blocks[1]);
+    expect(definition.inputs).toEqual([]);
+    expect(walkWorkflowBlocks(definition.blocks).find(block => block.id === 'selected')).toMatchObject({ input: [] });
+    if (!repaired) throw new Error('Expected explicit repair');
+    expect(repairWorkflowPullRequestInput({ definition: repaired, stepId: 'selected' })).toBe(repaired);
+  });
+  it('does not reinterpret incompatible declared inputs or select a different step during repair', () => {
+    const definition = WorkflowDefinitionV1Schema.parse({ version: 1,
+      inputs: [{ name: 'prUpdate', valueType: 'string', required: true }], defaults: {}, blocks: [step('literal')],
+    });
+    expect(repairWorkflowPullRequestInput({ definition, stepId: 'literal' })).toBeNull();
+    expect(repairWorkflowPullRequestInput({ definition: { ...definition, inputs: [] }, stepId: 'missing' })).toBeNull();
+    expect(repairWorkflowPullRequestInput({ definition: { ...definition, inputs: [],
+      blocks: [step('no-input', '', { inputMode: 'none' })] }, stepId: 'no-input' })).toBeNull();
+  });
   it('keeps portable role declarations in the current draft admitted by Run now', () => {
     const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [],
       defaults: { engine: { role: 'portable_builder' } }, blocks: [step('build')],
@@ -395,15 +421,6 @@ describe('declared inputs and the Run-now sheet', () => {
     expect(buildWorkflowRunStartInputs(projectWorkflowRunInputFields({ inputs: [], values: {} }))).toBeUndefined();
   });
 
-  it('binds trigger evidence by name and reports unbound required inputs', () => {
-    const bound = bindWorkflowTriggerEvidenceInputs({ inputs, evidence: { topic: 'release' } });
-    expect(bound.values).toEqual({ topic: 'release', depth: 2 });
-    expect(bound.unbound).toEqual([]);
-
-    const missing = bindWorkflowTriggerEvidenceInputs({ inputs, evidence: {} });
-    expect(missing.unbound).toEqual(['topic']);
-    expect(missing.values).toEqual({ depth: 2 });
-  });
 });
 
 describe('save eligibility', () => {
