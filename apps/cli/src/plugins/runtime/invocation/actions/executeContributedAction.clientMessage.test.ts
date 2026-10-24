@@ -29,7 +29,8 @@ describe('committed client Message Action delivery', () => {
         .map(plugin => ({ ...plugin, manifest: normalizePluginManifestV2(PLUGIN_MANIFEST) })), diagnosticsByPluginId: {},
     }, provenance: 'first_party' }));
     const executeClientAction = createClientActionMachineRpcExecutor(() => ({
-      hasConnectedClientRpcHandler: () => true,
+      // A reconnect advertisement is incomplete; the live answering route still exists.
+      hasConnectedClientRpcHandler: () => false,
       // Substitute only the Machine-to-UI network hop. The real producer's
       // serialized DTO must pass the answering client's exact closed schema.
       callConnectedClientRpc: async (_method, raw, options) => {

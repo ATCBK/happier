@@ -1,8 +1,8 @@
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { UiContributedActionExecuteResponseV1Schema, type UiContributedActionExecuteRequestV1, type UiContributedActionExecuteResponseV1 } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 
 type ClientActionMachineRpc = Readonly<{
-  hasConnectedClientRpcHandler(method: string): boolean;
   callConnectedClientRpc(
     method: string,
     params: unknown,
@@ -23,7 +23,9 @@ export function createClientActionMachineRpcExecutor(
 ): (request: UiContributedActionExecuteRequestV1, options: Readonly<{ signal?: AbortSignal }>) => Promise<UiContributedActionExecuteResponseV1> {
   return async (request, options) => {
     const client = getMachineClient();
-    if (!client || !client.hasConnectedClientRpcHandler(RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE)) {
+    // Positive reconnect advertisements cannot prove absence. The authenticated
+    // live RPC registry selects the responder; this owner settles its receipt.
+    if (!client) {
       return unavailable();
     }
     let issued = false;
@@ -39,9 +41,11 @@ export function createClientActionMachineRpcExecutor(
       if (!response.ok) {
         // Canonical method refusal proves the server routed no handler even
         // when the outbound request had already been issued.
-        return !issued || response.errorCode === 'RPC_METHOD_NOT_AVAILABLE'
+        return !issued || response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+          || response.errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
           ? unavailable() : unknownOutcome();
       }
+      if (isRpcMethodNotFoundResult(response.result)) return unavailable();
       const parsed = UiContributedActionExecuteResponseV1Schema.safeParse(response.result);
       return parsed.success ? parsed.data : unknownOutcome();
     } catch {
