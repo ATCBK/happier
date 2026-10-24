@@ -4,7 +4,9 @@ import {
   type ReachProjectionV1,
 } from '@happier-dev/protocol/reach/projectReachV1';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
-import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
+import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
+import { useActiveServerAccountScope, useMachineDisplayById } from '@/sync/store/hooks';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { formatMachineDisplayNameParts, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
@@ -96,18 +98,17 @@ export function useReachMachines(): Readonly<{
     () => (serverId && accountId ? { serverId, accountId } : null),
     [serverId, accountId],
   );
-  const inventory = useAllProfileMachineInventorySnapshots();
+  const profileScope = useActiveServerAccountScope();
+  const { binding } = useServerCredentialAccountScopeBinding(serverId);
+  const displays = useMachineDisplayById();
   const machines = React.useMemo(
-    () =>
-      inventory.flatMap((row) =>
-        row.kind === 'resolved' &&
-        scope &&
-        row.accountId === scope.accountId &&
-        areServerProfileIdentifiersEquivalent(row.profileId, scope.serverId)
-          ? row.machines
-          : [],
-      ),
-    [inventory, scope],
+    () => scope && profileScope && binding?.isCurrent()
+      && scope.accountId === binding.scope.accountId && scope.accountId === profileScope.accountId
+      && areServerProfileIdentifiersEquivalent(scope.serverId, binding.scope.serverId)
+      && areServerProfileIdentifiersEquivalent(scope.serverId, profileScope.serverId)
+      ? Object.values(displays).filter(isPersistentMachine).sort((left, right) => left.id.localeCompare(right.id))
+      : [],
+    [displays, profileScope, scope, binding],
   );
   const machineIds = React.useMemo(
     () => machines.map((machine) => machine.id),
