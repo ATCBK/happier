@@ -60,7 +60,10 @@ export function useProjectAccountRows<T>(select?: (rows: ProjectAccountRowsSnaps
 /** The complete opened checkout census, shared by subscriptions and pure projections. */
 export function readProjectAccountWorkspaceRefs(state: Parameters<typeof readCurrentProjectAccountRows>[0]): readonly WorkspaceRefV1[] | undefined {
     const rows = readCurrentProjectAccountRows(state);
-    return rows?.status === 'ready' && rows.coverage === 'complete' ? rows.workspaceRefs : undefined;
+    // The producer retains complete rows only during refresh or a known transient failure;
+    // authority/mode failures revoke that snapshot rather than being cached by this reader.
+    return rows?.coverage === 'complete' && (rows.status === 'ready' || rows.status === 'loading' || rows.status === 'error')
+        ? rows.workspaceRefs : undefined;
 }
 /** Demand only the opened checkout facts; unrelated Project records retain the selected identity. */
 export function useProjectAccountWorkspaceRefs(enabled: boolean): readonly WorkspaceRefV1[] | undefined {
