@@ -228,8 +228,8 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
             accountId: 'walkthrough-account', machineId: catalogMachineId, automaticTarget,
             targets: (['codex', 'claude'] as const).map(agentId => ({ backendTarget: { kind: 'backend' as const, backendId: agentId },
                 // The Machine's catalog owns cost tiers; its first model is the low-cost automatic default.
-                models: [...getAgentStaticModels(agentId).map((model, index) => index === 0 ? { ...model, costTier: 'low' as const } : model),
-                    ...(agentId === 'codex' ? boundary.discoveredModels : [])],
+                models: getAgentStaticModels(agentId).map((model, index) => index === 0 ? { ...model, costTier: 'low' as const } : model),
+                ...(agentId === 'codex' ? { discoveredModels: boundary.discoveredModels } : {}),
                 catalogModels: getAgentStaticModels(agentId, { catalogOnly: true }),
                 agentFormats: getAgentCore(agentId)?.structuredOutput?.formats })) })).handle;
     }
@@ -340,24 +340,30 @@ async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: str
 }
 
 describe('SessionWalkthroughView retained offline reading through real Account marks', () => {
-    it('names the saved producer from the same Machine catalog as the picker without another acquisition', async () => {
+    it.each(['complete', 'writing'] as const)('names the %s reading from the admitted Run model and the picker catalog without another acquisition', async state => {
         boundary.discoveredModels = [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', capabilities: { structuredOutput: 'supported' } }];
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {
+            runId: 'label-generator', callId: 'label-call', sidechainId: 'label-sidechain', intent: 'scm_diff_summary',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
+            runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 100,
+            resolvedSelection: { source: 'inherited', modelId: 'gpt-6-luna' },
+        } });
         const comparison = { id: 'label-comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/repo/exact' },
             endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } };
         boundary.savedSessionId = 'producer-catalog-label';
         boundary.savedResult = ScmDiffSummaryResultSchema.parse({ resultId: 'producer-label-result', revision: 1, canUndo: false,
-            generator: { backendTarget: { kind: 'backend', backendId: 'codex' }, modelId: 'gpt-6-luna' },
-            output: { success: true, resultId: 'producer-label-result', revision: 1, sourceKey: comparison.id, comparison,
-                producer: { kind: 'generation', modelId: 'gpt-6-luna' },
+            generator: { backendTarget: { kind: 'backend', backendId: 'codex' } },
+            output: { success: true, resultId: 'producer-label-result', revision: 1, sourceKey: comparison.id, comparison, runId: 'label-generator',
+                producer: { kind: 'generation', ...(state === 'complete' ? { modelId: 'gpt-6-luna' } : {}) },
                 metadata: { sourceKey: comparison.id, source: comparison.source }, requestedOutputs: ['walkthrough'],
-                outputs: { walkthrough: { state: 'complete', value: { title: 'Retained reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                outputs: { walkthrough: { state, value: { title: 'Retained reading', intro: '', stops: [], otherChangeRefs: [] } } },
                 analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
         const { screen } = await mount({ kind: 'workingTree' }, 'producer-catalog-label');
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('GPT-6-Luna'));
         expect(screen.getTextContent()).not.toContain('gpt-6-luna');
         expect(boundary.modelCatalogReads).toBe(1);
         expect(generationCalls()).toEqual([]);
-    }, 120_000);
+    });
     it.each([
         { name: 'an empty Ask', initialText: '', suggested: false },
         { name: 'Ask with an existing draft', initialText: 'My pending question', suggested: false },

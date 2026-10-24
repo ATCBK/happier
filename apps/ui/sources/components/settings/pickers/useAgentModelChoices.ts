@@ -71,6 +71,8 @@ export function useAgentModelChoices(params: Readonly<{
     defaultBackendTarget?: BackendTargetRefV2 | null;
     /** A mounted result still observes its selected model when its picker is hidden. */
     observeSelection?: boolean;
+    /** A saved result observes its producer without changing the next-generation selection. */
+    observedValue?: string;
 }>) {
     const [open, setOpen] = React.useState(false);
     const [discoveryTargetKey, setDiscoveryTarget] = React.useState<string | null>(null);
@@ -94,6 +96,7 @@ export function useAgentModelChoices(params: Readonly<{
         mergedBackendProjectionById: daemon.inputs?.mergedBackendProjectionById,
     }), [enabledAgentIds, acpCatalog, backendEnabledByTargetKey, daemon.inputs]);
     const selected = decodeScmDiffSummaryModelOverride(params.value);
+    const catalogValue = params.value || params.observedValue || '';
     const purpose = params.purpose ?? 'walkthrough';
     const [summaryCatalog, setSummaryCatalog] = React.useState<Readonly<{
         lifetime: ServerAccountScopeLifetime;
@@ -127,7 +130,7 @@ export function useAgentModelChoices(params: Readonly<{
                 const requestedDiscoveryTarget = pendingDiscoveryTarget.current;
                 pendingDiscoveryTarget.current = null;
                 const catalog = await readScmDiffSummaryModelCatalogForMachine(account, machineId, abort.signal,
-                    { discoveryTargetKey: requestedDiscoveryTarget, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
+                    { discoveryTargetKey: requestedDiscoveryTarget, modelSelector: decodeScmDiffSummaryModelOverride(catalogValue) });
                 if (!abort.signal.aborted && catalogLifetime.isCurrent()) {
                     if (catalog) setSummaryCatalog({ lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog });
                     setCatalogReadFailed(catalog === null);
@@ -136,7 +139,7 @@ export function useAgentModelChoices(params: Readonly<{
             finally { account?.dispose(); }
         })();
         return () => { abort.abort(); account?.dispose(); };
-    }, [purpose, observing, params.machineId, params.value, summaryServerId, daemon.inputs, backendEnabledByTargetKey, catalogRefresh, discoveryTargetKey, catalogLifetime]);
+    }, [purpose, observing, params.machineId, catalogValue, summaryServerId, daemon.inputs, backendEnabledByTargetKey, catalogRefresh, discoveryTargetKey, catalogLifetime]);
     const executableCatalog = summaryCatalog && summaryCatalog.machineId === params.machineId && summaryCatalog.serverId === summaryServerId
         && summaryCatalog.lifetime === catalogLifetime && summaryCatalog.lifetime.isCurrent() ? summaryCatalog.catalog : null;
     // Why an Agent could not list models, by target: the Machine's typed observation, never a path or native message.

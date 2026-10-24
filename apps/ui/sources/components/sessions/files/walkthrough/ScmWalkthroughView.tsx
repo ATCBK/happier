@@ -10,6 +10,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId, resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { selectScmDiffSummaryProducerModel } from '@/sync/domains/scm/diffSummary/state';
 import { getPreferredLanguage, t } from '@/text';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 
@@ -219,13 +220,10 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const reviewStatus = review ? <ReviewWalkthroughSteps progress={review.progress} phone={phone} /> : null;
 
     const { theme } = useUnistyles();
-    const producerTarget = viewModel?.latestRun?.backendTarget ?? saved?.generator?.backendTarget;
+    const { backendTarget: producerTarget, modelId: producerModelId, selection: producerSelection } = selectScmDiffSummaryProducerModel(viewModel);
     const markAgentId = resolveExecutionRunAgentMarkId(producerTarget, theme);
     // Who wrote the reading, by name ("Opus 5.5 read all 14"): the model when the result records it, else the
     // Agent beside its mark ("Codex read all 2"), and only then the generic "The model".
-    const producerModelId = viewModel?.producer?.modelId
-        ?? (viewModel?.producer?.kind !== 'review' ? saved?.generator?.modelId : undefined);
-    const producerSelection = viewModel?.latestRun?.resolvedSelection ?? saved?.generator;
     const producerLabel = React.useMemo(() => {
         if (producerModelId) return resolveRunNativeModelLabel(producerTarget, modelChoices.catalogProfiles, producerSelection)(producerModelId) ?? producerModelId;
         try { return resolveExecutionRunBackendLabel(producerTarget); } catch { return null; }

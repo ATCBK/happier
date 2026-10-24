@@ -2,11 +2,15 @@ import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { bindExternalActionExecutionAuthorizationHttpPathV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
+import { ScmDiffSummaryModelSelectorSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { createExternalActionAccountHttpBoundary } from './externalActionAccountHttpBoundary';
 import type { HomeGovernanceHarness } from './homeGovernanceHarness';
 
 const MODEL_CATALOG_ACTION_ID: ActionId = 'agents.models.list';
-type CatalogTarget = Pick<Parameters<typeof buildScmDiffSummaryModelProfiles>[0], 'backendTarget' | 'models' | 'catalogModels' | 'agentFormats'>;
+type CatalogTarget = Pick<Parameters<typeof buildScmDiffSummaryModelProfiles>[0], 'backendTarget' | 'models' | 'catalogModels' | 'agentFormats'> & Readonly<{
+    /** Native discovery is requested for the selected Agent, as at settingsCatalogServices. */
+    discoveredModels?: Parameters<typeof buildScmDiffSummaryModelProfiles>[0]['models'];
+}>;
 
 /**
  * The executing Machine's Summary model catalog, served as the canonical exact-Machine
@@ -26,15 +30,21 @@ export async function createScmDiffSummaryModelCatalogHttpBoundary(params: Reado
     const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: params.serverUrl,
         serverIdentityId: params.serverIdentityId, accountId: params.accountId, machineId: params.machineId,
         tokenEpoch: params.tokenEpoch ?? 0, actionId: MODEL_CATALOG_ACTION_ID,
-        execute() {
-            const byTarget = params.targets.map(target => buildScmDiffSummaryModelProfiles(target));
+        execute(input) {
+            const selector = ScmDiffSummaryModelSelectorSchema.safeParse(input && typeof input === 'object' && 'modelSelector' in input ? input.modelSelector : null);
+            const discoveryTargetKey = input && typeof input === 'object' && 'discoveryTargetKey' in input ? input.discoveryTargetKey : null;
+            const byTarget = params.targets.map(target => {
+                const targetKey = buildBackendTargetKeyV2(target.backendTarget);
+                const discover = discoveryTargetKey === targetKey || (selector.success && selector.data.backendTargetKey === targetKey);
+                return buildScmDiffSummaryModelProfiles({ ...target, models: [...target.models, ...(discover ? target.discoveredModels ?? [] : [])] });
+            });
             const automaticTarget = params.automaticTarget;
             const automaticIndex = automaticTarget === undefined ? 0 : params.targets.findIndex(target =>
                 automaticTarget !== null && buildBackendTargetKeyV2(target.backendTarget) === buildBackendTargetKeyV2(automaticTarget));
             return { items: [], scmDiffSummaryCatalog: { profiles: byTarget.flat(), automaticProfiles: byTarget[automaticIndex] ?? [],
                 discoveryTargetKeys: params.targets.map(target => buildBackendTargetKeyV2(target.backendTarget)) } };
         } });
-    const paths = ['/v1/machines', bindExternalActionExecutionAuthorizationHttpPathV1(MODEL_CATALOG_ACTION_ID),
+    const paths = ['/v1/machines', '/v1/machines/read-batch', bindExternalActionExecutionAuthorizationHttpPathV1(MODEL_CATALOG_ACTION_ID),
         `/v1/actions/${MODEL_CATALOG_ACTION_ID}`] as const;
     return {
         paths, handle: boundary.handle,

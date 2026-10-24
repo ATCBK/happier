@@ -164,6 +164,19 @@ export type ScmDiffSummaryViewModel = Readonly<{
     savedResult: ScmDiffSummaryResult | null;
 }>;
 
+/** Recorded authorship wins; a generation still writing can use its admitted Run selection. */
+export function selectScmDiffSummaryProducerModel(viewModel: Pick<ScmDiffSummaryViewModel, 'producer' | 'latestRun' | 'savedResult'> | null | undefined) {
+    const saved = viewModel?.savedResult;
+    return {
+        backendTarget: viewModel?.latestRun?.backendTarget ?? saved?.generator?.backendTarget,
+        selection: viewModel?.latestRun?.resolvedSelection ?? saved?.generator,
+        modelId: viewModel?.producer?.modelId
+            ?? (viewModel?.producer?.kind !== 'review' ? saved?.generator?.modelId
+                ?? viewModel?.latestRun?.resolvedSelection?.modelSelection?.modelId
+                ?? viewModel?.latestRun?.resolvedSelection?.modelId : undefined),
+    };
+}
+
 /** The presentation receives a typed recovery reason, never an RPC code as its copy key. */
 export type ScmDiffSummaryFailurePresentation =
     | Readonly<{ reason: 'invalidRequest'; messageKey: 'walkthrough.generationFailure.invalidRequest'; nextAction: 'reviewRequest'; nextActionKey: 'walkthrough.generationFailure.reviewRequest' }>

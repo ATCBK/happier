@@ -1,11 +1,13 @@
 import * as React from 'react';
 import type { SessionExecutionRunLaunchUnavailableReason } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import type { ScmDiffSummaryOutputKind } from '@happier-dev/protocol';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { getStorage, useSetting } from '@/sync/domains/state/storage';
 import { useScmWalkthroughStates, type ScmWalkthroughRestoration, type ScmWalkthroughSelection } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
-import { resolveScmDiffSummaryModelSelection, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
+import { encodeScmDiffSummaryModelOverride, resolveScmDiffSummaryModelSelection, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 import { scmComparisonSourceOf } from '@/sync/domains/scm/diffSummary/selection';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import {
@@ -17,7 +19,7 @@ import {
 import { createScmDiffSummaryResultOperations, type ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { t } from '@/text';
-import { SCM_DIFF_SUMMARY_DISABLED_FAILURE } from '@/sync/domains/scm/diffSummary/state';
+import { SCM_DIFF_SUMMARY_DISABLED_FAILURE, selectScmDiffSummaryProducerModel } from '@/sync/domains/scm/diffSummary/state';
 import { scmComparisonKey } from './filesComparison';
 import { useScmDiffSummaryModelChoices } from '@/components/settings/sourceControl/useScmDiffSummaryModelChoices';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
@@ -63,13 +65,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const explainEnabled = useSetting(SCM_DIFF_SUMMARY_SETTING_KEYS.enabled) !== false;
     const storedModel = useSetting(SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride);
     const [model, setModel] = React.useState(typeof storedModel === 'string' ? storedModel : '');
-    const modelChoices = useScmDiffSummaryModelChoices({ value: model, machineId: machine?.machineId,
-        serverId, observeSelection: Boolean(scope && machineReachable && comparison) });
     React.useEffect(() => { setModel(typeof storedModel === 'string' ? storedModel : ''); }, [binding, storedModel]);
-    const selected = resolveScmDiffSummaryModelSelection({ storedValue: model, catalogProfiles: modelChoices.catalogProfiles });
-    // An unset choice is resolved by host admission, including the Session's applied model.
-    // The Account catalog can validate an explicit choice, but cannot decide inheritance.
-    const modelAvailable = model.trim() === '' || (selected.success && modelChoices.selectionAvailable);
     const [starting, setStarting] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [inputObservation, setInputObservation] = React.useState<Readonly<{ hostKey: string; runId: string; inputId: string; resultId: string }> | null>(null);
@@ -86,6 +82,19 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const viewModel = viewModels[0] ?? null;
     const { retryRestore, machineReachability } = restoration;
     const restoreState = !comparison ? 'idle' : viewModel ? 'ready' : restoration.restoreState;
+    const producer = selectScmDiffSummaryProducerModel(viewModel);
+    const observedSelection = ProviderBoundModelRefSchema.safeParse(producer.backendTarget && producer.modelId
+        && !producer.selection?.modelSelection?.providerConnectionId && !viewModel?.latestRun?.resolvedSelection?.teamCredentialModel
+        ? { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(producer.backendTarget)), providerConnectionId: null, modelId: producer.modelId } : null);
+    const observedValue = observedSelection.success ? encodeScmDiffSummaryModelOverride({ backendTargetKey: observedSelection.data.agentTargetKey,
+        modelId: observedSelection.data.modelId }) : undefined;
+    const modelChoices = useScmDiffSummaryModelChoices({ value: model, observedValue, machineId: machine?.machineId,
+        serverId, observeSelection: Boolean(scope && machineReachable && comparison && restoreState === 'ready'
+            && (!viewModel?.savedResult || observedValue || model.trim())) });
+    const selected = resolveScmDiffSummaryModelSelection({ storedValue: model, catalogProfiles: modelChoices.catalogProfiles });
+    // An unset choice is resolved by host admission, including the Session's applied model.
+    // The Account catalog can validate an explicit choice, but cannot decide inheritance.
+    const modelAvailable = model.trim() === '' || (selected.success && modelChoices.selectionAvailable);
     const capturedComparison = viewModel?.comparison ?? null;
     const cwd = capturedComparison?.repository.rootPath ?? machine?.basePath ?? null;
     const operations = React.useMemo(() => scope ? createScmDiffSummaryResultOperations({ ...host,
