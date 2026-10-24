@@ -219,6 +219,10 @@ export const PromptCollectionRail = React.memo(function PromptCollectionRail(pro
         >
             <PromptCollectionReadState kind={props.kind} collection={collection} />
             {route?.kind === 'draft' ? <PromptCollectionDraftRow kind={props.kind} /> : null}
+            {/* Known to be empty (never while it is still being read): one line, like the MCP and Skills rails. */}
+            {collection.status === 'ready' && !collection.stale && collection.total === 0 && route?.kind !== 'draft' ? (
+                <EmptyState testID={`${copy.testID}.railEmpty`} layout="line" title={copy.emptyTitle} />
+            ) : null}
             {collection.total > 0 && rows.length === 0 ? (
                 <Item title={t('common.noMatches')} mode="info" />
             ) : null}

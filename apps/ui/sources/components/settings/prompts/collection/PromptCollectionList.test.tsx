@@ -143,6 +143,19 @@ describe('PromptCollectionIndex', () => {
         expect(screen.findByTestId('promptLibrary.collection.doc.empty-scene')).not.toBeNull();
     });
 
+    it('says an empty rail is empty once the collection is known, as the MCP and Skills rails do', async () => {
+        const { PromptCollectionRail } = await import('./PromptCollectionList');
+        const screen = await renderInCollectionLayout(<PromptCollectionRail kind="template" />, 'split');
+        expect(screen.findByTestId('promptLibrary.collection.template.railEmpty')).toBeNull();
+
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 6,
+                record: { key: 'invocations', value: { v: 1, entries: [] } } }], tombstones: [], diagnostics: [] },
+                rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        });
+        expect(screen.findByTestId('promptLibrary.collection.template.railEmpty')).not.toBeNull();
+    });
+
     it('retains known templates during revalidation but withdraws them when access is refused', async () => {
         const screen = await renderIndex('stacked');
         await act(async () => {
