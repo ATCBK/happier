@@ -550,6 +550,23 @@ describe('plugin states take the container they are mounted in (lab 5 host primi
     unsized.unmount();
   });
 
+  it('draws one quiet line, not a centred column, in a line container (an inspector section, a narrow column)', () => {
+    for (const element of [
+      <LoadingState key="loading" testID="state" title="Loading conversations" />,
+      <EmptyState key="empty" testID="state" title="No conversations" />,
+      <ErrorState key="error" testID="state" title="Could not load" />,
+    ]) {
+      const mount = mountInHost(element, { stateSize: 'line' });
+      const title = mount.container.querySelector('[data-testid="state"]')?.textContent ?? '';
+      expect(title).toMatch(/Loading conversations|No conversations|Could not load/u);
+      expect(measureOf(mount, title.trim()), 'a line has no centred measure').toBeNull();
+      mount.unmount();
+    }
+    const explicit = mountInHost(<EmptyState title="No conversations" size="pane" />, { stateSize: 'line' });
+    expect(measureOf(explicit, 'No conversations'), 'an explicit size still wins').toBe('272px');
+    explicit.unmount();
+  });
+
   it('draws a Daybreak scene through the host renderer in the glyph\'s place, and keeps text in a line', () => {
     const requests: HappierSceneRenderRequest[] = [];
     const host: Partial<PluginUiPresentationHost> = {

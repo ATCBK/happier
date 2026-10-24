@@ -248,9 +248,10 @@ export type PluginUiPresentationHost = Readonly<{
    * The container the surface is mounted in, as Happier's own states size themselves (`pane` in a
    * session sidebar tab, `phone` on a phone surface, `details` in a details drawer). A plugin state
    * that passes no `size` takes this one, so a plugin tab's empty and loading states match the host's
-   * without every author passing it.
+   * without every author passing it. `line` is a column whose states are one quiet line among its rows
+   * (a section of an inspector such as Session Info, a narrow companion column).
    */
-  stateSize?: HappierStateSize;
+  stateSize?: HappierStateSize | 'line';
   /** The page's app details pane; absent where the surface is not placed in a pane host. */
   detailsPane?: PluginUiDetailsPaneHost;
   /** The pane header of the tab this surface fills; absent where it has none. */

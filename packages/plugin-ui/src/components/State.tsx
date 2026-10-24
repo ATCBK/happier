@@ -62,7 +62,7 @@ const STATE_STALE_TRANSLATION_KEY = 'happier.plugin-ui.state.stale';
  * The size a state is drawn at: the author's, else the container the host mounted the surface in
  * (a session sidebar tab is a `pane`), else the unsized centred column.
  */
-function useStateSize(size: HappierStateSize | undefined): HappierStateSize | undefined {
+function useStateSize(size: HappierStateSize | undefined): HappierStateSize | 'line' | undefined {
   const hostSize = useOptionalPluginUiPresentationHost()?.stateSize;
   return size ?? hostSize;
 }
@@ -222,8 +222,11 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
   const theme = usePluginTheme();
   const palette = useOptionalHappierUiPalette(theme);
   const chrome = useHappierPageChrome();
-  const stateSize = useStateSize(props.size);
-  const scene = useStateScene(props.scene, props.layout ?? 'centered', stateSize, props.testID);
+  const resolvedSize = useStateSize(props.size);
+  // A line container makes an unplaced state its one quiet line; an explicit layout or size still wins.
+  const layout = props.layout ?? (resolvedSize === 'line' ? 'line' : 'centered');
+  const stateSize = resolvedSize === 'line' ? undefined : resolvedSize;
+  const scene = useStateScene(props.scene, layout, stateSize, props.testID);
   const pageSheetInsetPx = useHappierColumnEdgeRemainder(HAPPIER_EMPTY_STATE_FRAME.page.marginHorizontal);
   const unavailableReason = resolveAuthorText(
     translate,
@@ -231,7 +234,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
     props.actionUnavailableReasonKey,
   );
 
-  if (props.layout === 'line') {
+  if (layout === 'line') {
     return (
       <HappierStateLine
         testID={props.testID}
@@ -259,7 +262,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
     </View>
   ) : primaryAction ?? props.secondaryAction;
   const add = props.variant === 'add';
-  const page = props.layout === 'page';
+  const page = layout === 'page';
   const size = page ? undefined : stateSize;
   const state = (
     <HappierInfoState testID={add || page ? undefined : props.testID} action={action} size={size}>
