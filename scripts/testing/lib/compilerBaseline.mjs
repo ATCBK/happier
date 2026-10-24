@@ -23,6 +23,14 @@ export function compilerReportPackage(report, rootDir) {
   return packagePath;
 }
 
+export function compilerDiagnosticFromLine(line, cwd, rootDir) {
+  const match = /^(.+)\((\d+),(\d+)\): error TS(\d+): (.+)$/u.exec(line);
+  if (!match) return null;
+  const file = portable(relative(rootDir, resolve(cwd, portable(match[1]))));
+  if (!path(file)) throw new Error('compiler diagnostic is outside repository source');
+  return { file, line: Number(match[2]), column: Number(match[3]), code: Number(match[4]), message: match[5] };
+}
+
 export function diagnosticsFromCompilerReport(report, rootDir) {
   if (!object(report) || typeof report.cwd !== 'string' || typeof report.project !== 'string'
     || typeof report.stdout !== 'string' || typeof report.stderr !== 'string'
@@ -34,11 +42,9 @@ export function diagnosticsFromCompilerReport(report, rootDir) {
   const output = report.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '');
   for (const line of output.split(/\r?\n/u)) {
     if (!line.trim()) continue;
-    const match = /^(.+)\((\d+),(\d+)\): error TS(\d+): (.+)$/u.exec(line);
-    if (match) {
-      const file = portable(relative(rootDir, resolve(report.cwd, portable(match[1]))));
-      if (!path(file)) throw new Error('compiler diagnostic is outside repository source');
-      rows.push({ package: packagePath, file, line: Number(match[2]), column: Number(match[3]), code: Number(match[4]), message: match[5] });
+    const diagnostic = compilerDiagnosticFromLine(line, report.cwd, rootDir);
+    if (diagnostic) {
+      rows.push({ package: packagePath, ...diagnostic });
     } else if (/^\s+\S/u.test(line) && rows.length) {
       rows.at(-1).message += ` ${line.trim()}`;
     } else {

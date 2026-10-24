@@ -8,6 +8,7 @@ import { exitWithCommandResult, runCommand, spawnForegroundCommand } from '../..
 import { prepareTypeScriptProjectBuildFromArgs, verifyTypeScriptProjectCoverage } from './prepareTypeScriptProjectBuild.mjs';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import { prepareReferencedTypecheckDeclarations } from './prepareReferencedTypecheckDeclarations.mjs';
+import { createTypecheckDiagnosticRun } from './typecheckDiagnostics.mjs';
 import {
   resolveTypeScriptCliInvocation,
   shouldRouteTypeScriptCliThroughHstack,
@@ -65,12 +66,13 @@ function compilerProjects(args) {
   return projects.map((project) => ({ args: [...sharedArgs, '--project', project], project }));
 }
 
-async function runCompiler(invocation, project, isCancelled) {
+async function runCompiler(invocation, project, isCancelled, captureDiagnostics = false) {
   const options = { ownedProcessGroup: true, cwd: process.cwd(), stdio: 'inherit', env: process.env };
   const diagnosticReportDir = process.env.HAPPIER_TYPECHECK_REPORT_DIR;
-  const compilerArgs = [...invocation.argsPrefix, ...project.args, ...(invocation.argsSuffix ?? []), ...(diagnosticReportDir ? ['--pretty', 'false'] : [])];
+  const capture = Boolean(diagnosticReportDir) || captureDiagnostics;
+  const compilerArgs = [...invocation.argsPrefix, ...project.args, ...(invocation.argsSuffix ?? []), ...(capture ? ['--pretty', 'false'] : [])];
   const execute = async (command, args) => {
-    if (!diagnosticReportDir) return await runCommand(command, args, options);
+    if (!capture) return await runCommand(command, args, options);
     const child = spawnForegroundCommand(command, args, { ...options, stdio: ['inherit', 'pipe', 'pipe'] });
     const stdout = [];
     const stderr = [];
@@ -148,6 +150,11 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
       baseline: (inventory ?? uiInventory)?.baseline,
       projectPaths: projects.map(({ project }) => project).filter(Boolean), cwd: process.cwd() });
     const producers = cancelled ? [] : await prepareReferencedTypecheckDeclarations(projects, process.cwd(), inventory);
+    let diagnostics;
+    if (!cancelled) {
+      try { diagnostics = await createTypecheckDiagnosticRun({ projects }); }
+      catch { process.stderr.write('[typecheck-delta] unavailable: initialization failed; compiler verdict unchanged\n'); }
+    }
     for (const project of [...producers, ...projects]) {
       if (cancelled) break;
       // Output paths belong to the authored config; finite projections inherit
@@ -157,7 +164,8 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
       // to the existing classifier instead of charging it to the CLI consumer.
       const invocation = resolveTypeScriptCliInvocation({ args: project.args, admissionArgs: project.authoredArgs, repoRoot,
         workspaceDir: process.cwd(), processExecPath: process.execPath, prepareWorkspaceDeclarations: false });
-      const projectResult = await runCompiler(invocation, project, () => cancelled);
+      const projectResult = await runCompiler(invocation, project, () => cancelled, diagnostics?.enabled);
+      diagnostics?.record(project, projectResult);
       if (projectResult.error || projectResult.signal || projectResult.status == null) {
         result = projectResult;
         break;
@@ -165,6 +173,15 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
       if (projectResult.status !== 0) {
         result = projectResult;
         if (producers.includes(project)) break;
+      }
+    }
+    if (!cancelled && diagnostics?.enabled) {
+      try {
+        const reports = await diagnostics.publish();
+        for (const report of reports) process.stderr.write(`[typecheck-delta] ${report.package}: ${report.baseline ? `${report.newInTouchedPaths} new in touched paths` : 'baseline unavailable (first run or changed project set)'}; ${report.total} diagnostics, ${report.globalDiagnostics} global; ${report.path}\n`);
+        if (!reports.length) process.stderr.write('[typecheck-delta] unavailable: no complete diagnostic result; previous baseline retained\n');
+      } catch {
+        process.stderr.write('[typecheck-delta] unavailable: snapshot failed; compiler verdict unchanged\n');
       }
     }
     if (!cancelled && !result.error && !result.signal && Number.isInteger(result.status) && result.status > 0) {

@@ -675,6 +675,26 @@ for (const status of [0, 1, 7]) {
   });
 }
 
+test('package diagnostic delta reaches the runner without changing compiler output or failure status', async t => {
+  const diagnostic = "source.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n";
+  const setup = await fixture(t, { exitCode: 2, compilerBody: `process.stdout.write(${JSON.stringify(diagnostic)});` });
+  await writeFile(join(setup.root, '.gitignore'), 'node_modules/\n');
+  await writeFile(join(setup.root, 'tsconfig.json'), '{"compilerOptions":{"noEmit":true}}');
+  await writeFile(join(setup.root, 'source.ts'), 'export const value = 1;\n');
+  const git = (...args) => spawnSync('git', args, { cwd: setup.root, encoding: 'utf8' });
+  assert.equal(git('init', '-q').status, 0);
+  assert.equal(git('add', '.').status, 0);
+  assert.equal(git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture').status, 0);
+  for (const baseline of [false, true]) {
+    const { child, stderr, stdout } = setup.start([runner, '--noEmit', '-p', 'tsconfig.json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.deepEqual(await once(child, 'exit'), [2, null], stderr());
+    assert.equal(stdout().toString(), diagnostic);
+    assert.match(stderr(), baseline ? /0 new in touched paths/ : /baseline unavailable/);
+  }
+  const saved = JSON.parse(await readFile(join(setup.root, 'node_modules/.cache/typecheck/diagnostics.json'), 'utf8'));
+  assert.deepEqual(saved.diagnosticsByPath['source.ts'], [{ line: 1, column: 7, code: 2322 }]);
+});
+
 test('compiler cancellation reaches its native worker process group', { skip: process.platform === 'win32' }, async (t) => {
   const setup = await fixture(t, { tree: true });
   const { child } = setup.start([runner]);

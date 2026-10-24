@@ -9,7 +9,7 @@ import { isWorkspaceBuildStartup } from '../../apps/stack/scripts/utils/proc/wor
 const NATIVE_TYPESCRIPT_PACKAGE_JSON = '@typescript/native/package.json';
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
-function typecheckCompilerOptions(args, workspaceDir) {
+export function typecheckCompilerOptions(args, workspaceDir) {
   // Build graphs and watch/editor tooling retain Microsoft authority. Use the
   // retained API only to read options (including extends), never to check code.
   if (args.some(arg => ['-b', '--build', '-w', '--watch', '--help', '-h', '--version', '-v', '--showconfig'].includes(arg.toLowerCase()))) return;
