@@ -160,9 +160,9 @@ function prepareToolApprovalRequests(requests: Requests, prior?: ApprovalIndex):
 }
 
 /** Share unchanged candidate arrays across publications; never replace producer-owned entries. */
-export function useToolApprovalRequestsIndex(requests: Requests): void {
+export function useToolApprovalRequestsIndex(requests: Requests | undefined): void {
     const previous = React.useRef<ApprovalIndex | undefined>(undefined);
-    previous.current = prepareToolApprovalRequests(requests, previous.current);
+    previous.current = prepareToolApprovalRequests(requests ?? noRequests, previous.current);
 }
 
 /** Exact associations first; fallback input is prepared once per changed ToolCall input. */
