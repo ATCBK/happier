@@ -299,6 +299,8 @@ export function CapabilityEnableDetailsDecisions(props: Readonly<{
     onDismiss?: () => void;
 }>) {
     const { model, choose } = useCapabilityEnableApprovalModel(props);
+    // A canceled request is already answered by the page's Status row; the card, not Details, carries its settled line.
+    if (props.approval.status === 'canceled') return null;
     if (!model.deciding && (props.approval.status === 'open' ? !choose : !model.settled)) return null;
     return <CapabilityEnableDecisionBar model={model} choose={choose ?? (() => undefined)} disabled={props.disabled} onDismiss={props.onDismiss} />;
 }

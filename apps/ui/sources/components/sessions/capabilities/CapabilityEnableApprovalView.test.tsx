@@ -44,7 +44,7 @@ function deferred<T>(): Deferred<T> {
  * decision (the incumbent approval owner's network replay) and the rules write (P2's Action).
  */
 async function mount(
-  options: Readonly<{ approvalStatus?: 'open' | 'approved' | 'rejected' }> = {},
+  options: Readonly<{ approvalStatus?: 'open' | 'approved' | 'rejected' | 'canceled' }> = {},
 ) {
   const { createCapabilityEnableApprovalController } =
     await import('./capabilityEnableApproval');
@@ -193,6 +193,25 @@ describe('CapabilityEnableApproval', () => {
     );
     expect(elsewhere.has('capability-enable-session')).toBe(false);
     expect(elsewhere.has('capability-enable-undo-session')).toBe(false);
+  }, 180_000);
+
+  it('a canceled request settles to its status with no controls, and never claims the item is off, even once it was enabled elsewhere', async () => {
+    const canceled = await mount({ approvalStatus: 'canceled' });
+    expect(canceled.has('capability-enable-settled')).toBe(true);
+    expect(canceled.text()).toContain('approvals.status.canceled');
+    expect(canceled.text()).toContain('Linear');
+    for (const id of [
+      'capability-enable-session',
+      'capability-enable-always',
+      'capability-enable-reject',
+      'capability-enable-undo-session',
+      'capability-enable-undo-always',
+    ]) {
+      expect(canceled.has(id)).toBe(false);
+    }
+    // The card's body (the question and its historical Off line) is not drawn once canceled.
+    expect(canceled.text()).not.toContain('Linear is off in happier.');
+    expect(canceled.text()).not.toContain('Codex wants Linear for this session');
   }, 180_000);
 
   it('binds Details to the same controller: Always is the alternative decision, then the settled line with Undo', async () => {

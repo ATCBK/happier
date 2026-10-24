@@ -123,8 +123,16 @@ export function describeCapabilityEnableSettled(
       break;
   }
   // Decided on another device or by an earlier view of this request: the durable answer, without local Undo.
-  if (input.approvalStatus === 'open' || input.approvalStatus === 'canceled')
-    return null;
+  if (input.approvalStatus === 'open') return null;
+  if (input.approvalStatus === 'canceled') {
+    // Only the request's own outcome: whether the item is on now is not this historical card's to say.
+    return {
+      tone: 'declined',
+      text: t('approvals.status.canceled'),
+      meta: input.itemTitle,
+      action: null,
+    };
+  }
   if (input.approvalStatus === 'rejected') {
     return {
       tone: 'declined',
