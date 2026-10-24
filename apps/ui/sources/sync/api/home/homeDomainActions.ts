@@ -94,6 +94,11 @@ export function homeDomainFailureFromActionFailure(
     actionId?: ActionId,
 ): HomeDomainFailure<string> {
     const code = failure.errorCode ?? '';
+    // Consent ended before dispatch. Preserve its exact Action disposition as
+    // a refusal rather than describing it as an unknown Home/network failure.
+    if (code === 'approval_rejected' || code === 'approval_canceled') {
+        return Object.freeze({ kind: 'forbidden' as const, retryable: false, code });
+    }
     // The shared Action executor emits this only after its mutation dependency
     // was dispatched and the result could not be confirmed. Preserve that
     // uncertainty: presenting it as a definite offline refusal invites a
