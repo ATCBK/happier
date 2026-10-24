@@ -11,6 +11,7 @@ import {
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import { extractVoiceActionsFromAssistantText } from '@happier-dev/protocol/voice/actions';
+import { listVoiceActionBlockSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { canAppendVoiceAgentOutputEventsV1, createVoiceAgentOutputTurnV1, fitVoiceAgentOutputTextV1, ingestVoiceAgentOutputEventV1, VOICE_OUTPUT_INCOMPLETE_TEXT } from '@happier-dev/protocol/voice/outputEvents';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { BackendTargetRefV1, ProviderBoundModelRef, ExecutionRunResumeHandle, VoiceAssistantAction } from '@happier-dev/protocol';
@@ -45,6 +46,7 @@ import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/session
 import type { SessionFollowPreparedContext } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { isSessionProviderInputOutcomeTerminal } from '@/agent/runtime/session/input/providerInputOutcome';
 import { resolveExecutionRunInputAuthority } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { resolveHappierActionPermission } from '@/agent/permissions/happierActionPermission';
 
 export type {
   VoiceAgentCommitResult,
@@ -383,7 +385,7 @@ export class VoiceAgentManager {
     context?: Parameters<ExecutionRunHostRuntime['deliverInput']>[2],
     followContext?: SessionFollowPreparedContext | null,
     durableUserTranscriptLocalId?: string,
-  ): Promise<void> {
+  ) {
     // Human Voice turns enter the same admitted-input boundary as other Runs.
     // Preserve any narrower caller ceiling; never let missing prompt metadata
     // become a null authority at the native tool/permission bridge.
@@ -434,13 +436,29 @@ export class VoiceAgentManager {
       if (unsubscribe) this.unsubscribeBestEffort(unsubscribe);
       throw error;
     }
-    if (result.status === 'admitted') return;
+    if (result.status === 'admitted') return authority;
     settled = true;
     if (unsubscribe) this.unsubscribeBestEffort(unsubscribe);
     throw new VoiceAgentError(
       result.status === 'unsupported' ? 'VOICE_AGENT_UNSUPPORTED' : 'VOICE_AGENT_START_FAILED',
       result.diagnostic.message ?? `Voice prompt was not admitted (${result.status})`,
     );
+  }
+
+  private assertActionBlockPermissions(
+    actions: readonly VoiceAssistantAction[],
+    authority: Extract<ReturnType<typeof resolveExecutionRunInputAuthority>, { ok: true }>,
+  ): void {
+    if (actions.length === 0) return;
+    const specs = listVoiceActionBlockSpecs();
+    for (const action of actions) {
+      const spec = specs.find(spec => spec.bindings?.voiceClientToolName === action.t);
+      // The original input's admitted mode follows blocks outside the native
+      // transport. MCP exposure and auto-approval do not define Action effects.
+      if (!spec || resolveHappierActionPermission({ spec, permissionMode: authority.effectiveCallerPermissionMode }) === 'denied') {
+        throw Object.assign(new Error('permission_denied'), { code: 'permission_denied' });
+      }
+    }
   }
 
   private subscribeToChatBackend(
@@ -1040,13 +1058,14 @@ export class VoiceAgentManager {
             prompt,
           );
           ensureCurrent();
-		      await this.deliverPrompt(voiceAgent, voiceAgent.chatBackend, voiceAgent.chatSessionId, prompt, undefined, followContext);
+		      const authority = await this.deliverPrompt(voiceAgent, voiceAgent.chatBackend, voiceAgent.chatSessionId, prompt, undefined, followContext);
 		      if (voiceAgent.chatBackend.waitForTurnCompletion) {
 		        await voiceAgent.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs());
 		      }
           voiceAgent.chatSessionSeeded = true;
           voiceAgent.welcomed = true;
 		      const extracted = extractVoiceActionsFromAssistantText(voiceAgent.chatBuffer);
+		      this.assertActionBlockPermissions(extracted.actions, authority);
 		      const assistantText = this.normalizeAssistantTextForActions(extracted.assistantText, extracted.actions);
 		      appendVoiceAgentHistoryTurn(voiceAgent.history, {
 		        userText: params.userText,
@@ -1202,7 +1221,7 @@ export class VoiceAgentManager {
         // Follow frontier for content nothing ever consumed.
         if (settleCancelled()) return;
         ensureCurrent();
-        await this.deliverPrompt(
+        const authority = await this.deliverPrompt(
           voiceAgent,
           voiceAgent.chatBackend,
           voiceAgent.chatSessionId,
@@ -1237,6 +1256,7 @@ export class VoiceAgentManager {
         if (settleCancelled()) return;
         const assistantText = voiceAgent.chatBuffer.trim();
         const extracted = extractVoiceActionsFromAssistantText(assistantText);
+        this.assertActionBlockPermissions(extracted.actions, authority);
         const desiredText = this.normalizeAssistantTextForActions(extracted.assistantText, extracted.actions);
         const finalCandidate = { v: 1, kind: 'turn_final', turnId: stream.id, seq: stream.outputSeq, text: desiredText } as const;
         let cleanText = fitVoiceAgentOutputTextV1(stream.outputBudget, finalCandidate, '', VOICE_OUTPUT_INCOMPLETE_TEXT);

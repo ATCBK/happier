@@ -1642,6 +1642,86 @@ describe('VoiceAgentManager', () => {
     } finally { await manager.dispose(); }
   });
 
+  it.each(['ordinary', 'stream', 'narrowed-stream', 'permitted-stream', 'read-stream'] as const)('enforces the admitted permission ceiling for action blocks (%s)', async transport => {
+    const action = transport === 'read-stream'
+      ? { t: 'settings_get', args: { anchor: 'voiceConversations.minSpeechMs' } }
+      : { t: 'settings_set', args: { anchor: 'voiceConversations.minSpeechMs', value: 1100 } };
+    const backend = createDeterministicBackend('voice-settings-actions', { onSend: (request, publish) => {
+      publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant',
+        text: `<voice_actions>${JSON.stringify({ actions: [action] })}</voice_actions>` });
+      publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+    } });
+    const manager = new VoiceAgentManager({ createRuntime: () => backend });
+    try {
+      const started = await manager.start({ backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        chatModelId: 'chat-model', commitModelId: 'chat-model',
+        permissionIntent: transport === 'narrowed-stream' || transport === 'permitted-stream' ? 'default' : 'read-only',
+        idleTtlSeconds: 60, initialContext: '' });
+      if (transport === 'ordinary') {
+        await expect(manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'Change minimum speech' }))
+          .rejects.toMatchObject({ code: 'permission_denied' });
+      } else {
+        const stream = await manager.startTurnStream({ voiceAgentId: started.voiceAgentId, userText: 'Change minimum speech',
+          ...(transport === 'narrowed-stream' ? { causalPermissionAuthority: {
+            kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const,
+          } } : {}),
+        });
+        const events = await readVoiceAgentTurnStreamUntilDone({ manager, voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
+        if (transport === 'permitted-stream' || transport === 'read-stream') {
+          expect(events.some(event => event.t === 'error')).toBe(false);
+          expect(events.some(event => event.t === 'voice_output' && event.output.kind === 'side_effect' && event.output.action.t === action.t)).toBe(true);
+        } else {
+          expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ t: 'error', errorCode: 'permission_denied' })]));
+          expect(events.some(event => event.t === 'voice_output' && event.output.kind === 'side_effect')).toBe(false);
+        }
+      }
+    } finally { await manager.dispose(); }
+  });
+
+  describe.each([
+    { action: { t: 'session_stop', args: { sessionId: 'other-session' } }, read: false },
+    { action: { t: 'settings_invoke', args: { anchor: 'voicePrivacy.forgetVoiceAgentMemory' } }, read: false },
+    { action: { t: 'listServers', args: {} }, read: true },
+    { action: { t: 'invokeAction', args: { action: { pluginId: 'example.plugin', localId: 'test' }, input: {} } }, read: false },
+  ])('semantic Voice Action admission ($action.t)', ({ action, read }) => {
+    it.each(['ordinary', 'narrowed-stream', 'default-stream'] as const)('preserves the Action ceiling through %s output', async transport => {
+      const backend = createDeterministicBackend('voice-semantic-actions', { onSend: (request, publish) => {
+        publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant',
+          text: `<voice_actions>${JSON.stringify({ actions: [action] })}</voice_actions>` });
+        publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+      } });
+      const manager = new VoiceAgentManager({ createRuntime: () => backend });
+      try {
+        const started = await manager.start({ backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          chatModelId: 'chat-model', commitModelId: 'chat-model',
+          permissionIntent: transport === 'ordinary' ? 'read-only' : 'default',
+          idleTtlSeconds: 60, initialContext: '' });
+        const permitted = read || transport === 'default-stream';
+        if (transport === 'ordinary') {
+          const result = manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'Use this Action' });
+          if (permitted) await expect(result).resolves.toMatchObject({ actions: [action] });
+          else await expect(result).rejects.toMatchObject({ code: 'permission_denied' });
+        } else {
+          const stream = await manager.startTurnStream({ voiceAgentId: started.voiceAgentId, userText: 'Use this Action',
+            ...(transport === 'narrowed-stream' ? { causalPermissionAuthority: {
+              kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const,
+            } } : {}),
+          });
+          const events = await readVoiceAgentTurnStreamUntilDone({ manager, voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
+          if (permitted) {
+            expect(events.some(event => event.t === 'error')).toBe(false);
+            expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ t: 'voice_output',
+              output: expect.objectContaining({ kind: 'side_effect', action: expect.objectContaining(action) }),
+            })]));
+          } else {
+            expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ t: 'error', errorCode: 'permission_denied' })]));
+            expect(events.some(event => event.t === 'voice_output' && event.output.kind === 'side_effect')).toBe(false);
+          }
+        }
+      } finally { await manager.dispose(); }
+    });
+  });
+
   it('surfaces the runtime refusal when the host declines the prompt instead of treating it as delivered', async () => {
     // `deliverInput` reports a refusal as a value rather than a throw. If Voice
     // ignored the status it would fall through to an empty chat buffer and report
@@ -1913,7 +1993,7 @@ describe('VoiceAgentManager', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       chatModelId: 'chat-model',
       commitModelId: 'commit-model',
-      permissionIntent: 'read-only',
+      permissionIntent: 'default',
       idleTtlSeconds: 60,
       initialContext: 'CTX',
     });
@@ -2207,7 +2287,7 @@ describe('VoiceAgentManager', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       chatModelId: 'chat-model',
       commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
+      permissionIntent: 'default',
       idleTtlSeconds: 60,
       initialContext: 'CURRENT VOICE CONTEXT',
     });
@@ -2910,7 +2990,7 @@ describe('VoiceAgentManager', () => {
     }) });
     const started = await manager.start({
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model', commitModelId: 'chat-model', permissionIntent: 'read-only',
+      chatModelId: 'chat-model', commitModelId: 'chat-model', permissionIntent: 'default',
       idleTtlSeconds: 60, initialContext: 'CTX',
     });
     let persistedText = '';
@@ -2998,7 +3078,7 @@ describe('VoiceAgentManager', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       chatModelId: 'chat-model',
       commitModelId: 'commit-model',
-      permissionIntent: 'read-only',
+      permissionIntent: 'default',
       idleTtlSeconds: 60,
       initialContext: 'CTX',
     });
@@ -3041,7 +3121,7 @@ describe('VoiceAgentManager', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       chatModelId: 'chat-model',
       commitModelId: 'commit-model',
-      permissionIntent: 'read-only',
+      permissionIntent: 'default',
       idleTtlSeconds: 60,
       initialContext: 'CTX',
     });
