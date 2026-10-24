@@ -304,8 +304,10 @@ type MountedScopeState = MountedScopeInput & Readonly<{
 
 function mountedScopeIdentity(input: MountedScopeInput): string | undefined {
     // This is only a private sharing key, never executable currentness or
-    // mounted caller custody. Exact execution occurrences retain their identity.
-    return input.occurrenceId ?? (input.artifactDigest ? `artifact:${input.artifactDigest}` : undefined);
+    // mounted caller custody. The admitted artifact is the immutable plugin UI
+    // generation shared by page, Composer and other mounts; an execution
+    // occurrence is only the fallback for callers without an artifact identity.
+    return input.artifactDigest ? `artifact:${input.artifactDigest}` : input.occurrenceId;
 }
 
 function isSameMountedScopeInput(state: MountedScopeState, input: MountedScopeInput): boolean {
