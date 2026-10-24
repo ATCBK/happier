@@ -2,9 +2,9 @@ import * as React from 'react';
 import { act } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
-import { createPluginUiRnwSemanticSurfaceAdapter } from '../testing/index.js';
-import { useCollectionSavedViewsControl } from './index.js';
-import { defineUiSurface } from '../surfaceEntry.js';
+import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
+import { Button, useCollectionSavedViewsControl } from '@happier-dev/plugin-ui/components';
+import { defineUiSurface } from '@happier-dev/plugin-ui';
 
 const mounted: PluginUiTestkit[] = [];
 afterEach(async () => { for (const fixture of mounted.splice(0)) await fixture.dispose(); });
@@ -37,6 +37,7 @@ describe('the public controlled collection saved-view presentation', () => {
       const [items, setItems] = React.useState([{ id: 'review', label: 'Review', filter: 'open' }]);
       const [selectedId, setSelectedId] = React.useState<string | null>(null);
       const { control, details } = useCollectionSavedViewsControl({
+        scope: 'account-a',
         items, selectedId, modified: false, labels,
         onSelect: setSelectedId,
         onCreate: async (label) => {
@@ -85,5 +86,47 @@ describe('the public controlled collection saved-view presentation', () => {
     await press(fixture, 'menuitem', 'New space');
     await press(fixture, 'button', 'Cancel');
     expect(writes).toEqual(['open', 'Mine', 'Mine']);
+  });
+
+  it('retires a private name with its Account scope and ignores the retired submission settling later', async () => {
+    let settle: ((accepted: boolean) => void) | undefined;
+    const submissions: string[] = [];
+    function Surface() {
+      const [scope, setScope] = React.useState('account-a');
+      const { control, details } = useCollectionSavedViewsControl({
+        scope, items: [], selectedId: null, modified: false, labels,
+        onSelect: () => undefined,
+        onCreate: (name) => {
+          submissions.push(`${scope}:${name}`);
+          return new Promise<boolean>((resolve) => { settle = resolve; });
+        },
+        onRename: async () => false,
+        onUpdate: () => undefined,
+        onDelete: () => undefined,
+      });
+      return <>{control}{details}<Button title="Switch Account" onPress={() => setScope('account-b')} /></>;
+    }
+    let fixture!: PluginUiTestkit;
+    await act(async () => { fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'saved-views-scope', mountNonce: 'saved-views-scope' },
+      authorPlugin: { id: 'happier.example', version: '0.0.0' },
+      surface: defineUiSurface(() => <Surface />),
+      surfaceContext: createSurfaceContextFixture(),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
+    }); });
+    mounted.push(fixture);
+    await press(fixture, 'button', 'Spaces: No space');
+    await press(fixture, 'menuitem', 'New space');
+    await typeName('Private A');
+    // The button starts the write without waiting for its external acceptance.
+    await press(fixture, 'button', 'Save space');
+    await press(fixture, 'button', 'Switch Account');
+    expect(await fixture.queryByRole('textbox', { name: 'Space name' })).toBeUndefined();
+    await press(fixture, 'button', 'Spaces: No space');
+    await press(fixture, 'menuitem', 'New space');
+    await typeName('Private B');
+    await act(async () => { settle?.(true); });
+    expect(document.querySelector('input')?.value).toBe('Private B');
+    expect(submissions).toEqual(['account-a:Private A']);
   });
 });

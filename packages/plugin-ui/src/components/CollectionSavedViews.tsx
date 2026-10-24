@@ -25,6 +25,8 @@ export type CollectionSavedViewsLabels = Readonly<{
 }>;
 
 export type CollectionSavedViewsControlProps<T extends CollectionSavedViewItem> = Readonly<{
+  /** Stable captured Account authority key, or its bound host facade. */
+  scope: string | object;
   items: readonly T[];
   selectedId: string | null;
   modified: boolean;
@@ -45,6 +47,12 @@ type NameDraft =
   | Readonly<{ kind: 'create'; label: string }>
   | Readonly<{ kind: 'rename'; id: string; label: string }>;
 
+type ControlState = Readonly<{
+  scope: CollectionSavedViewsControlProps<CollectionSavedViewItem>['scope'];
+  draft: NameDraft | null;
+  open: boolean;
+}>;
+
 const VIEW_ITEM_PREFIX = 'view:';
 const VIEWS_RADIO_GROUP = 'views';
 const OPERATION_CREATE = 'operation:create';
@@ -56,22 +64,33 @@ const OPERATION_DELETE = 'operation:delete';
  * Controlled saved-view picker and naming presentation for CollectionToolbar.lens.
  * The caller owns selection, filter comparison, mutation acceptance and notices;
  * Dropdown retains menu focus/dismissal. Only the temporary name draft lives here.
- * Mount this hook inside the caller's Account-scoped keyed body so retiring that
- * authority withdraws private naming drafts as well as its items and callbacks.
+ * The captured scope keys local presentation state, withdrawing private drafts
+ * and an open menu before another Account's items or callbacks can be displayed.
  */
 export function useCollectionSavedViewsControl<T extends CollectionSavedViewItem>(
   props: CollectionSavedViewsControlProps<T>,
 ): Readonly<{ control: React.ReactElement; details: React.ReactElement | null }> {
-  const { items, selectedId, modified, labels, disabled, busy, notices,
+  const { scope, items, selectedId, modified, labels, disabled, busy, notices,
     onSelect, onCreate, onRename, onUpdate, onDelete } = props;
-  const [draft, setDraft] = React.useState<NameDraft | null>(null);
-  const [open, setOpen] = React.useState(false);
+  const [state, setState] = React.useState<ControlState>(() => ({ scope, draft: null, open: false }));
+  // As with PluginUiProvider's bound-host state, retire during render so an old
+  // Account's private name is never painted for the next authority, even once.
+  if (state.scope !== scope) setState({ scope, draft: null, open: false });
+  const { draft, open } = state;
+  const setDraft = React.useCallback((next: React.SetStateAction<NameDraft | null>) => {
+    setState((current) => current.scope !== scope ? current : {
+      ...current, draft: typeof next === 'function' ? next(current.draft) : next,
+    });
+  }, [scope]);
+  const setOpen = React.useCallback((next: boolean) => {
+    setState((current) => current.scope !== scope ? current : { ...current, open: next });
+  }, [scope]);
   const selected = React.useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
   const writable = !disabled && !busy;
-  const cancelDraft = React.useCallback(() => { setDraft(null); }, []);
+  const cancelDraft = React.useCallback(() => { setDraft(null); }, [setDraft]);
   const changeDraft = React.useCallback((label: string) => {
     setDraft((current) => current === null ? current : { ...current, label });
-  }, []);
+  }, [setDraft]);
   const commitDraft = React.useCallback(async () => {
     if (draft === null || busy) return;
     // A rename receives the latest admitted item, preserving a concurrent lens edit.
@@ -81,7 +100,7 @@ export function useCollectionSavedViewsControl<T extends CollectionSavedViewItem
       : target !== undefined && await onRename(target, draft.label);
     // Editing or cancelling during settlement is a newer intent.
     if (applied) setDraft((current) => current === draft ? null : current);
-  }, [busy, draft, items, onCreate, onRename]);
+  }, [busy, draft, items, onCreate, onRename, setDraft]);
 
   const menuItems = React.useMemo((): MenuItem[] => [
     ...(labels.unselected === undefined ? [] : [{
@@ -112,7 +131,7 @@ export function useCollectionSavedViewsControl<T extends CollectionSavedViewItem
       else if (id === OPERATION_UPDATE) onUpdate(selected);
       else if (id === OPERATION_DELETE) onDelete(selected);
     }
-  }, [onDelete, onSelect, onUpdate, selected]);
+  }, [onDelete, onSelect, onUpdate, selected, setDraft]);
   const currentLabel = selected?.label ?? labels.unselected ?? labels.title;
   const control = <>
     <Dropdown
