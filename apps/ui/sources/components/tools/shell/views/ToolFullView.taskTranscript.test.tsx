@@ -177,19 +177,24 @@ const { ToolFullView } = await import('./ToolFullView');
 
 describe('ToolFullView (Task transcript reuse)', () => {
 
-    it('closes nested navigation while preserving the supplied session action authority', async () => {
+    it('closes nested tool details while preserving result navigation and the supplied session action authority', async () => {
         renderedToolSourceSpy.mockClear();
         const actions = {
             respondToPermission: vi.fn(async () => {}), answerUserAction: vi.fn(async () => {}),
             abort: vi.fn(async () => {}), submitMessage: vi.fn(async () => {}),
         };
+        const navigate = vi.fn();
         await renderWithSessionTranscriptSource(React.createElement(ToolFullView, {
             tool: makeToolCall({ name: 'Read', input: { file_path: '/tmp/file' } }), metadata: null,
             messages: [], sessionId: 's1', owningMessageId: 'message-1',
-        }), createTestSessionTranscriptSource({ sessionId: 's1', navigate: vi.fn(), actions }));
+        }), createTestSessionTranscriptSource({ sessionId: 's1', navigate, actions }));
         expect(renderedToolSourceSpy).toHaveBeenCalled();
         const source = renderedToolSourceSpy.mock.calls.at(-1)?.[0];
-        expect(source.navigate).toBeNull();
+        expect(source.navigate).toBeTypeOf('function');
+        source.navigate('/session/s1/message/tool%3Achild?serverId=home');
+        expect(navigate).not.toHaveBeenCalled();
+        source.navigate('/session/s1/details?details=scmReview&view=walkthrough');
+        expect(navigate).toHaveBeenCalledWith('/session/s1/details?details=scmReview&view=walkthrough');
         expect(source.actions).toBe(actions);
     });
 
@@ -367,6 +372,22 @@ describe('ToolFullView (Task transcript reuse)', () => {
         await flushHookEffects();
 
         expect(ensureSidechainMessagesLoadedMock).toHaveBeenCalledWith('s1', 'sidechain_run_123');
+    });
+
+    it('keeps the raw record off a conversation page unless the debug setting is on', async () => {
+        const child: Message = { kind: 'agent-text', id: 'child-msg-debug', localId: null, createdAt: 1000, text: 'Working...', isThinking: false };
+        const screen = await renderScreen(
+            React.createElement(ToolFullView, {
+                tool: makeToolCall({ name: 'Task', input: { operation: 'run', description: 'Explore' }, result: null }),
+                owningMessageId: 'task-message-debug',
+                metadata: null,
+                messages: [child],
+                sessionId: 's1',
+                interaction: { canSendMessages: true, canApprovePermissions: true },
+            }),
+        );
+        expect(renderedMessageViewSpy).toHaveBeenCalledWith(expect.objectContaining({ message: child }));
+        expect(screen.findByTestId('tool-details-debug')).toBeNull();
     });
 
     it('renders Task sidechain messages through MessageView instead of Task renderer in full view', async () => {

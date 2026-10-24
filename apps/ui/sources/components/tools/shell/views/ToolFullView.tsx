@@ -28,6 +28,7 @@ import {
 } from '@/hooks/session/useEnsureSidechainsLoaded';
 import { ChainTranscriptList } from '@/components/sessions/transcript/ChainTranscriptList';
 import { SessionTranscriptSourceProvider, useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { toolDetailsTranscriptSource } from '@/components/sessions/transcript/source/toolDetailsTranscriptSource';
 import { createAppSidechainHistoryLoader } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import { resolveToolTranscriptSidechainId } from './resolveToolTranscriptSidechainId';
 import {
@@ -74,7 +75,7 @@ export function ToolFullView(props: ToolFullViewProps) {
     const source = useSessionTranscriptSource();
     // Full detail is already the tool's destination. Keep its Session actions,
     // but do not stack another full-detail destination from nested tool rows.
-    const detailSource = React.useMemo(() => ({ ...source, navigate: null }), [source]);
+    const detailSource = React.useMemo(() => toolDetailsTranscriptSource(source), [source]);
     return <SessionTranscriptSourceProvider source={detailSource}><ToolFullViewContent {...props} /></SessionTranscriptSourceProvider>;
 }
 
@@ -293,7 +294,9 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                                 <>
                                     {permissionTerminalError}
                                     {permissionFooter}
-                                    {debugSection}
+                                    {/* A conversation page (a Run's or a task's transcript) is the conversation; its raw
+                                        record shows only for people who asked for debug details in Settings. */}
+                                    {toolViewShowDebugByDefault ? debugSection : null}
                                 </>
                             }
                             messageWrapperTestIdPrefix="tool-fullview-transcript-message"
