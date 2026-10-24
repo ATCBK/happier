@@ -39,6 +39,30 @@ function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): N
 }
 
 describe('local service endpoint facts', () => {
+    it.each([1, 4])('shares cold endpoint observations across duplicate rows with concurrency %s and warms every listener', async (concurrency) => {
+        let probes = 0;
+        const enricher = createLocalServiceEndpointEnricher({
+            now: () => 2_000, timeoutMs: 50, concurrency,
+            successTtlMs: 1_000, failureTtlMs: 1_000,
+            probe: async ({ scheme }) => { probes += 1; return scheme === 'http'; },
+        });
+        const entries = Array.from({ length: 120 }, (_, index) => entry({
+            id: `listener-${index}`, port: 5_000 + index % 3,
+            address: index % 2 === 0
+                ? { kind: 'loopback', host: '127.0.0.1', family: 'ipv4' }
+                : { kind: 'wildcard', host: '0.0.0.0', family: 'ipv4' },
+        }));
+        const snapshot = { v: 1 as const, machineId: 'machine-a', generatedAt: 2_000,
+            refreshState: 'idle' as const, entries, diagnostics: [] };
+        const cold = await enricher.enrich(snapshot);
+        expect(cold.entries.every(row => row.endpoint?.scheme === 'http')).toBe(true);
+        // HTTPS then HTTP once per unique endpoint, independent of row count and queued slots.
+        expect(probes).toBe(6);
+        const warm = await enricher.enrich({ ...snapshot, entries: [...entries].reverse() });
+        expect(warm.entries.every(row => row.endpoint?.scheme === 'http')).toBe(true);
+        expect(probes).toBe(6);
+    });
+
     it.each([
         { replacement: 'another process', pid: 202, start: 1_000 },
         { replacement: 'the same PID with a new start time', pid: 101, start: 1_500 },

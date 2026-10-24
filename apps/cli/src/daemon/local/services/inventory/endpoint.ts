@@ -169,6 +169,7 @@ export function createLocalServiceEndpointEnricher(
         entry: NormalizedLocalServiceInventoryEntry,
         resolving = false,
         requestSignal?: AbortSignal,
+        observations?: Map<string, Promise<LocalServiceEndpointFact>>,
     ): Promise<LocalServiceEndpointFact | null> => {
         const signals = [params.signal, requestSignal].filter((signal): signal is AbortSignal => Boolean(signal));
         const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
@@ -183,50 +184,62 @@ export function createLocalServiceEndpointEnricher(
         const cached = readCached(cache, cacheKey, now);
         // An inconclusive cached observation must never refuse an explicit Open.
         if (cached && (!resolving || cached.probeState === 'ready')) return cached;
-        await acquire(signal);
-        try {
-            signal?.throwIfAborted();
-            const probeInput = { host, port: entry.port, ...(resolving ? {} : { timeoutMs }), signal };
-            const httpsReady = await probe({ ...probeInput, scheme: 'https' });
-            const httpReady = httpsReady === true ? false : await probe({ ...probeInput, scheme: 'http' });
-            signal?.throwIfAborted();
-            const scheme: LocalServiceEndpointScheme = httpsReady === true
-                ? 'https'
-                : httpReady === true
-                    ? 'http'
-                    : 'unknown';
-            const value: LocalServiceEndpointFact = scheme === 'unknown'
-                ? {
-                    scheme,
-                    host,
-                    port: entry.port,
-                    probeState: 'unknown',
-                    probedAt: now,
-                    reasonCode: httpsReady === 'inconclusive' || httpReady === 'inconclusive'
-                        ? 'endpoint_probe_inconclusive' : 'endpoint_probe_failed',
-                }
-                : {
-                    scheme,
-                    host,
-                    port: entry.port,
-                    probeState: 'ready',
-                    probedAt: now,
-                };
-            writeCached(cache, cacheKey, {
-                value,
-                expiresAt: now + (scheme === 'unknown' ? params.failureTtlMs : params.successTtlMs),
-            }, maxCacheEntries);
-            return value;
-        } finally {
-            release();
+        const observe = async (): Promise<LocalServiceEndpointFact> => {
+            await acquire(signal);
+            try {
+                signal?.throwIfAborted();
+                const probeInput = { host, port: entry.port, ...(resolving ? {} : { timeoutMs }), signal };
+                const httpsReady = await probe({ ...probeInput, scheme: 'https' });
+                const httpReady = httpsReady === true ? false : await probe({ ...probeInput, scheme: 'http' });
+                signal?.throwIfAborted();
+                const scheme: LocalServiceEndpointScheme = httpsReady === true
+                    ? 'https'
+                    : httpReady === true
+                        ? 'http'
+                        : 'unknown';
+                return scheme === 'unknown'
+                    ? {
+                        scheme,
+                        host,
+                        port: entry.port,
+                        probeState: 'unknown',
+                        probedAt: now,
+                        reasonCode: httpsReady === 'inconclusive' || httpReady === 'inconclusive'
+                            ? 'endpoint_probe_inconclusive' : 'endpoint_probe_failed',
+                    }
+                    : {
+                        scheme,
+                        host,
+                        port: entry.port,
+                        probeState: 'ready',
+                        probedAt: now,
+                    };
+            } finally {
+                release();
+            }
+        };
+        // Share only this operation's observation. Warm reuse remains listener/run
+        // sensitive, so a takeover on a later scan always gets a fresh probe.
+        const endpointKey = JSON.stringify([host, entry.port]);
+        let observation = observations?.get(endpointKey);
+        if (!observation) {
+            observation = observe();
+            observations?.set(endpointKey, observation);
         }
+        const value = await observation;
+        writeCached(cache, cacheKey, {
+            value,
+            expiresAt: value.probedAt + (value.scheme === 'unknown' ? params.failureTtlMs : params.successTtlMs),
+        }, maxCacheEntries);
+        return value;
     };
 
     return {
         resolve: (entry, signal) => classify(entry, true, signal),
         async enrich(snapshot) {
+            const observations = new Map<string, Promise<LocalServiceEndpointFact>>();
             const entries = await Promise.all(snapshot.entries.map(async (entry) => {
-                const endpoint = await classify(entry);
+                const endpoint = await classify(entry, false, undefined, observations);
                 return endpoint ? { ...entry, endpoint } : entry;
             }));
             return { ...snapshot, entries };
