@@ -297,7 +297,11 @@ return vectors and native verification returns pages through that boundary.
 A run drains admitted work and continuations, closes its writer handles and
 exits. The daemon retains wake sources and starts a fresh child for later
 demand; hint idle/rate/backoff deadlines come from the existing hint admission
-owner. Settings retirement and Clear index join terminal process settlement
+owner. The inventory freshness cadence observes Session metadata without
+starting a child when eligible transcript frontiers are unchanged. The work
+pump runs for real changes and the next scheduler deadline; unchanged settings
+reloads do not demand another process. Children drain their own continuations
+and hints that become due before settlement. Settings retirement and Clear index join terminal process settlement
 before deleting files. Daemon SQLite readers do no schema setup or migration;
 the indexer is the writer. A failed child remains visible as an error, and an
 absent child does not erase retained coverage. This describes development
@@ -437,8 +441,9 @@ Fresh discovery can admit new siblings without restarting initial history; only
 an uninterrupted complete inventory proves absence. A directory-delivered named
 write outside a demand's known files requests topology discovery for that demand,
 including when its creation notification was missed. Known files keep the
-incremental path. The configured tick allowance and interval remain unchanged;
-large windows can require substantially longer than thirty minutes.
+incremental path. The configured source allowance still bounds each scheduler
+turn; admitted continuations drain in the same child without interval polling.
+Large windows can require substantially longer than thirty minutes.
 
 The deep database's internal `coverageComplete` bit records retained coverage
 (no budget eviction), not exhausted initial history. Readiness additionally
@@ -592,10 +597,10 @@ surface owner (`FileViewerFindSurface` or the editor's native Find adapter).
 It consumes the seed after mounting and selects the addressed match; seed
 transport alone does not prove the composed loaded Search-to-Find journey.
 
-## Code navigation and document symbols (0.3 development source)
+## Code navigation and symbols (0.3 development source)
 
 The Files & Editor development source implements on-demand language intelligence.
-Opening a file or requesting `@` alone does not start a language server. An
+Opening a file in View or Changes does not start a language server. An
 explicit definition, hover, references or Check problems request activates the
 Machine-side session; files without a capable server retain name-based lookup
 through workspace content search. Those fallback references are labelled text
@@ -610,8 +615,26 @@ controller read may query an already activated, capable server. The single
 answer, or an empty answer from a ready session that is not loading. Cold,
 loading-empty, missing, failed or incapable answers retain the baseline; an
 authoritative empty answer remains empty. Server selection positions become
-1-based file-line anchors through the existing file opener. This is active-file
-outline data, not a workspace symbol index.
+1-based file-line anchors through the existing file opener. This baseline remains
+active-file outline data.
+
+The Symbols scope queries `workspace/symbol` through the File page's existing
+controller (`workspaceSymbol`), also used by `code.symbols.workspace`. This is
+explicit demand and may start the Machine-side server. Every new query cancels
+the previous one. Results retain their own workspace path and symbol line;
+activation uses the canonical file opener. Missing workspace-symbol capability,
+an older daemon or an unavailable Machine retains the active document outline,
+explicitly labelled with its file rather than implying project-wide coverage.
+There is no second index.
+
+The existing References panel and phone sheet also host Calls for servers that
+advertise call hierarchy. Incoming and outgoing queries retain the server's
+opaque item reference and use that same controller. Problems separates open-file
+diagnostics from an explicitly requested project result. Selecting Whole project
+does not run a check; Check the whole project does. The controller owns its
+checking, cancellation, failure and retained result, and no polling is added.
+Ask to fix uses the existing range/context builder in either scope; unopened
+project files are read only when Ask needs their saved text.
 
 Global Search obtains its default folder scope and symbol source from the
 presented File page in the active pane, through the existing
