@@ -19,7 +19,7 @@ import {
     CollectionListGroupLabel,
     collectionListStyles,
 } from '@/components/ui/lists/collection/CollectionList';
-import { StatusDot } from '@/components/ui/status/StatusDot';
+import { CollectionStatusGlyph } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -31,6 +31,7 @@ import {
     HOMES_GROUP_NEW_ROUTE,
     buildHomeCollection,
     describeHomeRow,
+    describeHomeStatus,
     homeCollectionHref,
     homeGroupCollectionHref,
     resolveSelectedHomeCollectionKey,
@@ -160,33 +161,29 @@ export const HomesCollectionList = React.memo(function HomesCollectionList(props
         />
     );
 
-    const homeRows = collection.homes.map((row) => (
-        <Item
-            key={row.id}
-            testID={`settings.homes.row.${row.id}`}
-            title={row.title}
-            subtitle={describeHomeRow(row)}
-            subtitleLeading={(
-                <StatusDot
-                    testID={`settings.homes.row.${row.id}.status`}
-                    color={row.statusKey === 'connected'
-                        ? theme.colors.status.connected
-                        : row.statusKey === 'action_required'
-                            ? theme.colors.status.actionRequired
-                            : row.statusKey === 'error'
-                                ? theme.colors.status.error
-                                : theme.colors.status.disconnected}
-                />
-            )}
-            icon={(
-                <HappierCollectionListMark>
-                    <HomeMark serverUrl={row.serverUrl} size="list" />
-                </HappierCollectionListMark>
-            )}
-            {...rowProps(selectedKey === `home:${row.id}` || selectedKey === `home:${row.profile.id}`)}
-            onPress={() => openHref(router, homeCollectionHref(row.id), rail && onDetailRoute, 'HomesCollectionList.home')}
-        />
-    ));
+    const homeRows = collection.homes.map((row) => {
+        const state = describeHomeStatus(row);
+        return (
+            <Item
+                key={row.id}
+                testID={`settings.homes.row.${row.id}`}
+                title={row.title}
+                subtitle={describeHomeRow(row)}
+                subtitleLines={1}
+                icon={(
+                    <HappierCollectionListMark>
+                        <HomeMark serverUrl={row.serverUrl} size="list" />
+                    </HappierCollectionListMark>
+                )}
+                rightElement={state ? (
+                    <CollectionStatusGlyph testID={`settings.homes.row.${row.id}.status`} status={state.status} label={state.label} />
+                ) : undefined}
+                accessibilityLabel={state ? `${row.title}, ${state.label}` : undefined}
+                {...rowProps(selectedKey === `home:${row.id}` || selectedKey === `home:${row.profile.id}`)}
+                onPress={() => openHref(router, homeCollectionHref(row.id), rail && onDetailRoute, 'HomesCollectionList.home')}
+            />
+        );
+    });
 
     const groupRows = collection.groups.map((row) => (
         <Item

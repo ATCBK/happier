@@ -6,6 +6,7 @@ import type { ServerSelectionGroup } from '@/sync/domains/server/selection/serve
 import {
     buildHomeCollection,
     describeHomeRow,
+    describeHomeStatus,
     homeCollectionHref,
     resolveSelectedHomeCollectionKey,
 } from './homeCollectionModel';
@@ -47,6 +48,32 @@ describe('buildHomeCollection', () => {
         expect(collection.homes.find((row) => row.id === 'cloud')).toMatchObject({ statusKey: 'action_required', needsAttention: true });
         expect(collection.homes.find((row) => row.id === 'acme')).toMatchObject({ needsAttention: false });
         expect(collection.groups.map((group) => [group.id, group.count])).toEqual([['g1', 2]]);
+    });
+});
+
+describe('Home row status', () => {
+    const summary = (kind: string, statusKey: string) => ({ kind, statusKey, statusLabelKey: 'status.unknown', action: 'none' }) as never;
+    const homes = (kinds: Record<string, [string, string]>) => buildHomeCollection({
+        servers: Object.keys(kinds).map((id) => profile(id, { name: id })), groups: [], activeServerId: 'connected',
+        activeTargetKey: null, deviceDefaultServerId: null, authStatusByServerId: {},
+        homeConnectionSummaryByServerId: Object.fromEntries(Object.entries(kinds).map(([id, [kind, key]]) => [id, summary(kind, key)])),
+    }).homes;
+
+    it('says a Home that needs sign-in or cannot be reached in the status slot, and keeps a healthy Home quiet', () => {
+        const rows = homes({ connected: ['connected', 'connected'], signIn: ['sign_in', 'action_required'],
+            down: ['unavailable', 'error'], retry: ['reconnecting', 'connecting'], mystery: ['unknown', 'unknown'] });
+        const status = (id: string) => describeHomeStatus(rows.find((row) => row.id === id)!)?.status ?? null;
+        expect(status('connected')).toBeNull();
+        expect(status('signIn')).toBe('signIn');
+        expect(status('down')).toBe('failed');
+        expect(status('retry')).toBe('offline');
+        expect(status('mystery')).toBeNull();
+    });
+
+    it('does not repeat the status word on the context line', () => {
+        const [row] = homes({ signIn: ['sign_in', 'action_required'] });
+        expect(describeHomeStatus(row!)?.label).toBeTruthy();
+        expect(describeHomeRow(row!)).not.toContain(describeHomeStatus(row!)!.label);
     });
 });
 

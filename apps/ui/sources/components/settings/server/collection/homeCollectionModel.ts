@@ -14,6 +14,7 @@ import {
 import type { ServerSelectionGroup } from '@/sync/domains/server/selection/serverSelectionTypes';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { t } from '@/text';
+import type { CollectionRowStatus } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 
 export const HOMES_COLLECTION_ROOT = SETTINGS_ROUTES.servers;
 export const HOMES_ADD_ROUTE = `${HOMES_COLLECTION_ROOT}/add` as const;
@@ -47,7 +48,7 @@ export type HomeCollection = Readonly<{
     groups: readonly HomeCollectionGroupRow[];
 }>;
 
-/** A Home's metadata: its location or address, use here, and any trouble. */
+/** A Home's metadata: its location or address and use here. Its connection state is the status slot's. */
 export function describeHomeRow(row: HomeCollectionRow): string {
     const facts: string[] = [];
     // A generic human title must not erase the identifier that distinguishes
@@ -55,9 +56,23 @@ export function describeHomeRow(row: HomeCollectionRow): string {
     if (!resolveHomeDisplayName(row.profile)) facts.push(toServerUrlDisplay(row.serverUrl));
     if (isServerProfilePersonalHomeBootstrapCompleted(row.profile)) facts.push(t('homesJourneys.livesOnThisComputer'));
     if (row.current) facts.push(t('addFlows.homesInUse'));
-    if (row.needsAttention || row.summary.kind === 'reconnecting') facts.push(t(row.summary.statusLabelKey));
     if (facts.length === 0) facts.push(toServerUrlDisplay(row.serverUrl));
     return facts.join(' · ');
+}
+
+/**
+ * What the Home's status slot says, from the one connection summary: a Home that needs sign-in, cannot be
+ * reached or is reconnecting. A connected or not yet known Home is quiet.
+ */
+export function describeHomeStatus(row: HomeCollectionRow): Readonly<{ status: CollectionRowStatus; label: string }> | null {
+    const label = t(row.summary.statusLabelKey);
+    switch (row.summary.kind) {
+        case 'sign_in': return { status: 'signIn', label };
+        case 'unavailable': return { status: 'failed', label };
+        case 'reconnecting': return { status: 'offline', label };
+        case 'connected':
+        case 'unknown': return null;
+    }
 }
 
 /**
