@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat, utimes } from 'node:fs/promises';
 import fs, { existsSync, readFileSync, watch } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { createHash } from 'node:crypto';
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -1719,7 +1720,12 @@ test('fresh source restart converges when protocol source changes between server
   await writeFile(join(repoDir, 'packages/protocol/package.json'), JSON.stringify({
     name: '@happier-dev/protocol', type: 'module', exports: { '.': { 'happier-source': './src/shared.ts' } },
   }));
-  await writeFile(protocolPath, 'export const version = "server-capture";');
+  const sharedProtocolSource = 'export const version = "shared-capture";';
+  await writeFile(protocolPath, sharedProtocolSource);
+  await Promise.all(Array.from({ length: 700 }, (_, index) => writeFile(
+    join(dirname(protocolPath), `shared-${index}-${'x'.repeat(96)}.ts`),
+    `export const shared${index} = ${index};`,
+  )));
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
   await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   await installSourcePreparationInputs(repoDir, 'server');
@@ -1743,6 +1749,9 @@ test('fresh source restart converges when protocol source changes between server
   }));
   assert.equal(selected[0].sourceInputDigests['packages/protocol/src/shared.ts'],
     selected[1].sourceInputDigests['packages/protocol/src/shared.ts']);
+  assert.equal(selected[0].sourceInputDigests['packages/protocol/src/shared.ts'],
+    createHash('sha256').update(sharedProtocolSource).digest('hex'),
+    'both components consume the one shared Protocol capture taken before either build');
 });
 
 test('completed source runtime lookup keeps publication custody through adoption', async t => {

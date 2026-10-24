@@ -1,9 +1,9 @@
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 
-import { buildSourceRuntimeBundle, admitSourceRuntimeReload, readSourceRuntimeInputConflict } from '../../build/build_source_runtime.mjs';
+import { buildSourceRuntimeBundle, admitSourceRuntimeReload, captureSourceRuntimeSharedInputs } from '../../build/build_source_runtime.mjs';
 import { exportSourceWebUi } from '../../build/build_source_web_ui.mjs';
 import { parseArgs } from '../../utils/cli/args.mjs';
 import { resolveSourceQaUiMode } from '../shared/borrowed_expo.mjs';
@@ -41,19 +41,16 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
   const log = async message => { console.log(message); await appendFile(logPath, `${message}\n`); };
   try {
     await mkdir(logDir, { recursive: true });
-    await writeJsonAtomic(statusPath, { status: 'preparing', logPath });
+    // The live pending marker owns preparation, including a failed attempt
+    // waiting for an edit. This record carries logs and terminal outcomes.
+    await writeJsonAtomic(statusPath, { logPath });
     await log('[reload] preparing replacement while incumbent runtime remains loaded');
     if (placement?.target && !connection.startServer) {
       throw new Error('[reload] remote server placement cannot be activated with an external-server source start; incumbent retained');
     }
-    const remote = placement?.target || placement?.daemonTarget
-      ? await (await import('../../utils/dev_targets/supervisor.mjs')).prepareStackDevTargetSourceReload({
-          stackName, stackBaseDir, repoDir, placement, args, serverRequested: connection.startServer,
-          env: { ...env, HAPPIER_STACK_SERVER_COMPONENT: serverComponent,
-            HAPPIER_SERVER_URL: connection.startServer
-              ? (await resolveStackServerEndpoint({ env, stackName })).internalServerUrl : connection.internalServerUrl },
-          sourceStartRequestId: pending.requestId,
-          signal: pending.signal, onPhase: (target, phase) => pending.setPhase(phase, target) }) : null;
+    let remote = null;
+    let preparations = [];
+    let sharedSourceInputDir = null;
     try {
       if (serverComponent !== 'happier-server-light' && connection.startServer) {
         throw new Error('[reload] full-server smoke requires isolated managed infrastructure; incumbent retained');
@@ -63,27 +60,38 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
         ? applyServerHostDatabaseProviderEnv({ serverComponentName: serverComponent, env: serverEnv })
         : applyEffectiveDbProviderEnv({ serverComponentName: serverComponent, env: serverEnv });
       const components = {};
-      const prepareServer = () => buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending, component: 'server',
-        serverComponent, dbProvider, env: serverEnv, signal: pending.signal });
-      if (connection.startServer && !placement?.target) components.server = await prepareServer();
-      if (!placement?.daemonTarget && resolveStackDaemonStartRequested({ env, noDaemon: flags.has('--no-daemon') })) {
-        components.daemon = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending,
-          component: 'daemon', env, signal: pending.signal });
-      }
-      if (components.server && components.daemon) {
-        const initialConflict = await readSourceRuntimeInputConflict({ stackBaseDir, replacements: components });
-        if (initialConflict) {
-          await log(`[reload] protocol input changed between component captures; rebuilding earlier server candidate (${initialConflict.conflictingInput})`);
-          components.server = await prepareServer();
-          const remainingConflict = await readSourceRuntimeInputConflict({ stackBaseDir, replacements: components });
-          if (remainingConflict) {
-            throw Object.assign(
-              new Error(`[source-bundle] protocol input ${remainingConflict.conflictingInput} changed again while converging replacement components; existing Stack lifecycle must retry preparation`),
-              { code: 'source_runtime_reload_retry_required', ...remainingConflict },
-            );
-          }
+      const daemonRequested = !placement?.daemonTarget
+        && resolveStackDaemonStartRequested({ env, noDaemon: flags.has('--no-daemon') });
+      const remotePreparation = (async () => {
+        if (placement?.target || placement?.daemonTarget) {
+          remote = await (await import('../../utils/dev_targets/supervisor.mjs')).prepareStackDevTargetSourceReload({
+            stackName, stackBaseDir, repoDir, placement, args, serverRequested: connection.startServer,
+            env: { ...env, HAPPIER_STACK_SERVER_COMPONENT: serverComponent,
+              HAPPIER_SERVER_URL: connection.startServer
+                ? (await resolveStackServerEndpoint({ env, stackName })).internalServerUrl : connection.internalServerUrl },
+            sourceStartRequestId: pending.requestId,
+            signal: pending.signal, onPhase: (target, phase) => pending.setPhase(phase, target) });
         }
-      }
+        return remote;
+      })();
+      const sharedSourceInputs = (async () => {
+        if (!connection.startServer || placement?.target || !daemonRequested) return null;
+        sharedSourceInputDir = await mkdtemp(join(sourceRoot, 'shared-inputs-'));
+        return await captureSourceRuntimeSharedInputs({ repoDir,
+          outputDir: sharedSourceInputDir, signal: pending.signal });
+      })();
+      // Finite producers retain their own joint host/resource admission. The
+      // coordinator holds no capacity while the independent preparations run.
+      const serverPreparation = sharedSourceInputs.then(shared => connection.startServer && !placement?.target
+        ? buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending, component: 'server', serverComponent,
+          dbProvider, env: serverEnv, signal: pending.signal, sharedSourceInputs: shared }) : null);
+      const daemonPreparation = sharedSourceInputs.then(shared => daemonRequested
+        ? buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending, component: 'daemon',
+          env, signal: pending.signal, sharedSourceInputs: shared }) : null);
+      preparations = [serverPreparation, daemonPreparation, remotePreparation];
+      const [server, daemon] = await Promise.all(preparations);
+      if (server) components.server = server;
+      if (daemon) components.daemon = daemon;
       const ui = components.server && uiMode === 'export' ? await exportSourceWebUi({ repoDir, baseDir: sourceRoot,
         stackBaseDir, pending, env, signal: pending.signal }) : null;
       await log('[reload] build complete; checking replacement daemon loader, server health and UI boot');
@@ -102,7 +110,14 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
       await log('[reload] replacement smoke passed; incumbent may now be retired by the restart owner')
         .catch(error => console.error('[reload] log publication failed:', error));
       return { ui, remote: Boolean(remote), remoteDaemon: Boolean(placement?.daemonTarget) };
-    } finally { await remote?.close(); }
+    } catch (error) {
+      pending.abort(error);
+      throw error;
+    } finally {
+      await Promise.allSettled(preparations);
+      try { await remote?.close(); }
+      finally { if (sharedSourceInputDir) await rm(sharedSourceInputDir, { recursive: true, force: true }); }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await writeJsonAtomic(statusPath, { status: 'failed', message, logPath })
