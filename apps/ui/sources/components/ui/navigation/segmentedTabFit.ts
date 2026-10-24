@@ -28,6 +28,8 @@ export type SegmentedTabFitInput = Readonly<{
   gap: number;
   /** The More trigger's measured width. */
   more: number;
+  /** Explicit overflow keeps More present even when every pinned tab fits. */
+  reserveMore?: boolean;
 }>;
 
 function rowWidth(
@@ -48,18 +50,19 @@ export function resolveSegmentedTabFit(
   if (input.available === null || count === 0)
     return { icons: true, counts: true, visibleCount: count };
   const tolerance = 0.5;
+  const reserved = input.reserveMore ? input.gap + input.more : 0;
   if (
-    rowWidth(input.withIcons, count, input.gap) <=
+    rowWidth(input.withIcons, count, input.gap) + reserved <=
     input.available + tolerance
   )
     return { icons: true, counts: true, visibleCount: count };
   if (
-    rowWidth(input.labelsOnly, count, input.gap) <=
+    rowWidth(input.labelsOnly, count, input.gap) + reserved <=
     input.available + tolerance
   )
     return { icons: false, counts: true, visibleCount: count };
   const names = input.labelsWithoutCounts ?? input.labelsOnly;
-  if (rowWidth(names, count, input.gap) <= input.available + tolerance)
+  if (rowWidth(names, count, input.gap) + reserved <= input.available + tolerance)
     return { icons: false, counts: false, visibleCount: count };
   let visible = count - 1;
   while (

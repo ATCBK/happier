@@ -859,6 +859,91 @@ function layOut(screen: RenderedScreen, rowWidth: number) {
 }
 
 describe('SegmentedTabBar measured overflow', () => {
+    it('retains the resolved menu items when only the overflow configuration carrier is rebuilt', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const tabs = PAGE_TABS.slice(0, 2);
+        const items = [{ id: 'actions', label: 'Actions', count: 'Running 2 · Failed 1' }];
+        const orderedIds = ['overview', 'code', 'actions'];
+        const onSelectTab = vi.fn();
+        const scene = () => <SegmentedTabBar presentation="plain" tabs={tabs} activeTabId="actions" onSelectTab={onSelectTab}
+            overflow={{ label: 'More', items, orderedIds }} testIDPrefix="page" />;
+        const screen = await renderScreen(scene());
+        layOut(screen, 1200);
+        const baseline = screen.root.findByType(DropdownMenu).props.items;
+        await screen.update(scene());
+        expect(screen.root.findByType(DropdownMenu).props.items).toBe(baseline);
+    });
+
+    it('offers explicit overflow when pinned pages fit and keeps its selected count and disabled reason accessible', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const onSelectTab = vi.fn();
+        const customize = React.createElement(React.Fragment, null, 'Customize');
+        const screen = await renderScreen(
+            <SegmentedTabBar presentation="plain" tabs={PAGE_TABS.slice(0, 2)} activeTabId="actions" onSelectTab={onSelectTab}
+                overflow={{ label: 'More', footer: customize, items: [{ id: 'actions', label: 'Actions', count: 'Running 2 · Failed 1', disabled: true, unavailableReason: 'Permission required' }] }} testIDPrefix="page" />,
+        );
+        layOut(screen, 1200);
+        const more = requireTab(screen, 'page:more');
+        expect(more.props.accessibilityState).toMatchObject({ selected: true });
+        expect(more.props.accessibilityLabel).toBe('More, Actions Running 2 · Failed 1, Permission required');
+        const menu = screen.root.findByType(DropdownMenu);
+        expect(menu.props.footer).toBe(customize);
+        expect(menu.props.selectedId).toBe('actions');
+        expect(menu.props.items).toMatchObject([{ id: 'actions', title: 'Actions Running 2 · Failed 1', subtitle: 'Permission required', checked: true, disabled: true }]);
+        expect(onSelectTab).not.toHaveBeenCalled();
+    });
+
+    it('unites fit and explicit overflow once in catalog order while preserving descriptors and resize selection', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const onSelectTab = vi.fn();
+        const screen = await renderScreen(
+            <SegmentedTabBar presentation="plain" tabs={PAGE_TABS} activeTabId="actions" onSelectTab={onSelectTab}
+                overflow={{ label: 'More', items: [{ id: 'actions', label: 'Actions' }, PAGE_TABS[5]!, PAGE_TABS[0]!], orderedIds: ['actions', 'context', 'overview', 'code', 'changes', 'scripts', 'services'] }} testIDPrefix="page" />,
+        );
+        layOut(screen, 260);
+        const menu = () => screen.root.findByType(DropdownMenu);
+        const ids = () => menu().props.items.map((item: { id: string }) => item.id);
+        expect(ids()).toEqual(['actions', 'context', ...PAGE_TABS.slice(1, 5).filter(tab => screen.findHostByTestId(`page:${tab.id}`) === null).map(tab => tab.id)]);
+        expect(new Set(ids()).size).toBe(ids().length);
+        expect(menu().props.items.find((item: { id: string }) => item.id === 'actions')?.checked).toBe(true);
+        layOut(screen, 1200);
+        expect(ids()).toEqual(['actions']);
+        expect(requireTab(screen, 'page:more').props.accessibilityState.selected).toBe(true);
+        act(() => menu().props.onSelect('actions'));
+        expect(onSelectTab).toHaveBeenCalledTimes(1);
+        expect(onSelectTab).toHaveBeenCalledWith('actions');
+    });
+
+    it('keeps an explicit-only bar reachable and removes More for an empty catalog', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const onSelectTab = vi.fn();
+        const screen = await renderScreen(<SegmentedTabBar tabs={[]} activeTabId="actions" onSelectTab={onSelectTab}
+            overflow={{ label: 'More', items: [{ id: 'actions', label: 'Actions' }] }} testIDPrefix="page" />);
+        expect(requireTab(screen, 'page:more').props.accessibilityState.selected).toBe(true);
+        await screen.update(<SegmentedTabBar tabs={[]} activeTabId="actions" onSelectTab={onSelectTab}
+            overflow={{ label: 'More', items: [] }} testIDPrefix="page" />);
+        expect(screen.findHostByTestId('page:more')).toBeNull();
+    });
+
+    it('keeps keyboard roving on enabled visible tabs while explicit pages stay in the same accessible menu', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const onSelectTab = vi.fn();
+        const screen = await renderScreen(<SegmentedTabBar presentation="plain" tabs={PAGE_TABS.slice(0, 2)} activeTabId="actions" onSelectTab={onSelectTab}
+            overflow={{ label: 'More', items: [{ id: 'actions', label: 'Actions' }] }} testIDPrefix="page" />);
+        layOut(screen, 1200);
+        const overview = requireTab(screen, 'page:overview');
+        expect(overview.props.tabIndex).toBe(0);
+        act(() => overview.props.onKeyDown({ key: 'End', preventDefault: vi.fn() }));
+        expect(onSelectTab).toHaveBeenCalledTimes(1);
+        expect(onSelectTab).toHaveBeenCalledWith('code');
+        expect(requireTab(screen, 'page:more').props.accessibilityRole).toBe('button');
+        expect(screen.root.findByType(DropdownMenu).props.selectedId).toBe('actions');
+    });
+
     it('positions the selected hidden page at More in track coordinates across route and width changes', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');
         const onSelectTab = vi.fn();
@@ -954,6 +1039,16 @@ describe('SegmentedTabBar value choice that no longer fits', () => {
         { id: 'least', label: 'Least used' },
         { id: 'most', label: 'Most left' },
     ];
+
+    it('retains explicit choices and the chosen value in the field select', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const screen = await renderScreen(<SegmentedTabBar role="radiogroup" tabs={STRATEGIES.slice(0, 2)} activeTabId="most" onSelectTab={() => {}}
+            overflow={{ label: 'More', items: STRATEGIES.slice(2) }} testIDPrefix="strategy" />);
+        layOut(screen, 1200);
+        expect(requireTab(screen, 'strategy:select').props.accessibilityLabel).toBe('Most left');
+        expect(screen.root.findByType(DropdownMenu).props.items.map((item: { id: string }) => item.id)).toEqual(STRATEGIES.map(tab => tab.id));
+    });
 
     it('becomes one field select of every option, showing the chosen value, instead of hiding options behind More', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');

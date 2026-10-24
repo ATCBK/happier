@@ -8,6 +8,15 @@ const labelsOnly = [80, 54, 82, 60, 72, 68];
 const base = { withIcons, labelsOnly, gap: 2, more: 60 } as const;
 
 describe('resolveSegmentedTabFit', () => {
+  it('reserves More for explicit overflow before testing glyph, count and name fit', () => {
+    const explicit = { withIcons: [100, 100], labelsOnly: [80, 80], labelsWithoutCounts: [60, 60], gap: 2, more: 60, reserveMore: true };
+    expect(resolveSegmentedTabFit({ ...explicit, available: 264 })).toEqual({ icons: true, counts: true, visibleCount: 2 });
+    expect(resolveSegmentedTabFit({ ...explicit, available: 224 })).toEqual({ icons: false, counts: true, visibleCount: 2 });
+    expect(resolveSegmentedTabFit({ ...explicit, available: 184 })).toEqual({ icons: false, counts: false, visibleCount: 2 });
+    expect(resolveSegmentedTabFit({ ...explicit, available: 183 })).toEqual({ icons: false, counts: false, visibleCount: 1 });
+    expect(resolveSegmentedTabFit({ ...explicit, available: 40 })).toEqual({ icons: false, counts: false, visibleCount: 0 });
+  });
+
   it('keeps every tab with its glyph while the measured row holds them all', () => {
     expect(resolveSegmentedTabFit({ ...base, available: 600 })).toEqual({
       icons: true,
