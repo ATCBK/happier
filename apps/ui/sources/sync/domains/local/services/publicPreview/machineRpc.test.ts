@@ -52,6 +52,16 @@ describe('local service public-preview machine RPC client', () => {
         machineRpcWithServerScopeMock.mockReset();
     });
 
+    it.each(['throw', 'result'] as const)('keeps temporary routing loss distinct from an unsupported public preview (%s)', async carrier => {
+        const { fetchLocalServicePublicPreviewStatusViaMachineRpc } = await import('./machineRpc');
+        const input = { serverId: 'server_1', request: { machineId: 'machine_1', sessionId: 'session_1', previewId: 'preview_1' } };
+        if (carrier === 'throw') machineRpcWithServerScopeMock.mockRejectedValueOnce({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        else machineRpcWithServerScopeMock.mockResolvedValueOnce({ errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, error: 'Method not found' });
+        expect(await fetchLocalServicePublicPreviewStatusViaMachineRpc(input)).toEqual({ ok: false, reason: 'request_failed' });
+        machineRpcWithServerScopeMock.mockRejectedValueOnce({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+        expect(await fetchLocalServicePublicPreviewStatusViaMachineRpc(input)).toEqual({ ok: false, reason: 'unavailable' });
+    });
+
     it('fetches public preview status through daemon machine RPC', async () => {
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ protocolVersion: 1, snapshot });
         const { fetchLocalServicePublicPreviewStatusViaMachineRpc } = await import('./machineRpc');

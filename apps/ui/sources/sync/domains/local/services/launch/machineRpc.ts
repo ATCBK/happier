@@ -10,8 +10,6 @@ import {
 } from '@happier-dev/protocol/local/services/launcher/v1';
 import {
     isRpcMethodNotFoundResult,
-    RPC_ERROR_CODES,
-    RPC_ERROR_MESSAGES,
     RPC_METHODS,
 } from '@happier-dev/protocol/rpc';
 import {
@@ -40,17 +38,14 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isRpcUnavailableResult(value: unknown): boolean {
+function readRpcFailureReason(value: unknown): 'unavailable' | 'request_failed' | null {
     if (isRpcMethodNotFoundResult(value)) {
-        return true;
+        return 'unavailable';
     }
     if (!isRecord(value)) {
-        return false;
+        return null;
     }
-    if (value.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
-        return true;
-    }
-    return value.error === RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE;
+    return isRpcMethodNotAvailableError({ rpcErrorCode: value.errorCode }) ? 'request_failed' : null;
 }
 
 export async function fetchLocalServiceLauncherSnapshotViaMachineRpc(
@@ -77,16 +72,15 @@ export async function fetchLocalServiceLauncherSnapshotViaMachineRpc(
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
             payload,
         });
-        if (isRpcMethodNotFoundResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServiceLauncherSnapshotResponseV1Schema.safeParse(raw);
         if (!parsed.success || parsed.data.snapshot.machineId !== input.machineId) {
             return { ok: false, reason: 'invalid_response' };
         }
         return { ok: true, snapshot: parsed.data.snapshot };
-    } catch {
-        return { ok: false, reason: 'request_failed' };
+    } catch (error) {
+        return { ok: false, reason: isRpcMethodNotFoundError(error) ? 'unavailable' : 'request_failed' };
     }
 }
 
@@ -119,9 +113,8 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
             operationTimeoutMs: null,
             ...(input.signal ? { signal: input.signal } : {}),
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServiceLauncherStartResponseV1Schema.safeParse(raw);
         if (
             !parsed.success
@@ -132,9 +125,10 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
         }
         return { ok: true, response: parsed.data };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
+        if (isRpcMethodNotAvailableError(error)) return { ok: false, reason: 'request_failed' };
         // A lost acknowledgement cannot prove that native preparation/start did
         // not happen. Only the transport's positive nonacceptance permits failure.
         return { ok: false, reason: dispatched && readRpcRequestDisposition(error) !== 'notSent'
@@ -165,15 +159,14 @@ export async function openLocalServiceLauncherPreviewViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServiceLauncherOpenPreviewResponseV1Schema.safeParse(raw);
         return parsed.success
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };
@@ -199,15 +192,14 @@ export async function registerLocalServiceLauncherPreviewViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServiceLauncherRegisterPreviewResponseV1Schema.safeParse(raw);
         return parsed.success
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };
@@ -236,15 +228,14 @@ export async function clearLocalServiceLauncherHistoryViaMachineRpc(
             ...(input.accountId ? { accountId: input.accountId } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServiceLauncherHistoryClearResponseV1Schema.safeParse(raw);
         return parsed.success
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };

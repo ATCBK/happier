@@ -1,6 +1,6 @@
 import { negotiateMemorySearchV1, type MemorySearchCorpusV1, type MemorySearchMode, type MemorySearchResultV1, type MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemoryStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
-import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -88,8 +88,7 @@ export async function searchDaemonMemory(args: Readonly<{
             args.eligibleSessionIds,
         );
     } catch (error) {
-        const errorCode = readRpcErrorCode(error);
-        if (errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
+        if (isRpcMethodNotFoundError(error)) {
             return {
                 v: 1,
                 ok: false,

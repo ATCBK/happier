@@ -24,6 +24,9 @@ const homes = createHomeGovernanceHarness();
 const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
 installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
+// Assemble the invariant module graph outside per-test behavioral hooks; each
+// beforeEach still disposes and restores the canonical Sync bridge after reset.
+await loadSyncSingletonForTests();
 
 const transport = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>());
 // The real RPC codec and all selection logic run beneath this network transport boundary.
@@ -231,11 +234,10 @@ describe('useNewSessionCapabilities', () => {
         expect(result, JSON.stringify({ result, calls: transport.mock.calls })).toMatchObject({ ok: true, result: { ok: true, pendingApply: { mcp: true, skills: false }, mcp: { items: [] } } });
     });
 
-    it.each(['invalid_request', 'unreachable', 'missing_method'] as const)('projects %s from the genuine preview transport to the strict Action failure', async failure => {
+    it.each(['invalid_request', 'unreachable'] as const)('projects %s from the genuine preview transport to the strict Action failure', async failure => {
         transport.mockImplementation(async input => {
             if (!isPreviewRequest(input)) return previewResponse;
             if (failure === 'invalid_request') return { ok: false, errorCode: 'invalid_request', error: 'invalid input' };
-            if (failure === 'missing_method') throw createRpcCallError({ error: 'Method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
             throw Object.assign(new Error('offline'), { code: 'machine_offline' });
         });
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -243,6 +245,32 @@ describe('useNewSessionCapabilities', () => {
             machineId: 'machine-1', agentId: 'codex', directory: '/repo',
         }, { serverId, surface: 'ui', authority: 'present_user' });
         expect(result).toMatchObject({ ok: true, result: { ok: false, reason: failure === 'unreachable' ? 'machine_unreachable' : 'invalid_input' } });
+    });
+
+    it.each(['throw', 'result'] as const)('preserves missing-method truth and retry through the real preview Action (%s)', async carrier => {
+        const { useNewSessionCapabilities } = await import('./useNewSessionCapabilities');
+        const hook = await renderHook(() => {
+            const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+            return useNewSessionCapabilities({ machineId: 'machine-1', directory: '/repo', agentId: 'codex',
+                targetServerId: serverId, selection, setSelection });
+        });
+        const fail = (errorCode: string) => {
+            const error = { error: 'Preview method unavailable', errorCode };
+            transport.mockImplementation(async input => {
+                if (!isPreviewRequest(input)) return previewResponse;
+                if (carrier === 'throw') throw createRpcCallError(error);
+                return error;
+            });
+        };
+        fail('RPC_METHOD_NOT_AVAILABLE');
+        await act(async () => { hook.getCurrent().demandPreview(); await flushHookEffects(); });
+        expect(hook.getCurrent()).toMatchObject({ previewStatus: 'error', unsupported: false, error: 'RPC_METHOD_NOT_AVAILABLE' });
+        fail('RPC_METHOD_NOT_FOUND');
+        await act(async () => hook.getCurrent().refresh());
+        expect(hook.getCurrent()).toMatchObject({ previewStatus: 'error', unsupported: true });
+        transport.mockResolvedValue(previewResponse);
+        await act(async () => hook.getCurrent().refresh());
+        expect(hook.getCurrent()).toMatchObject({ previewStatus: 'ready', unsupported: false, error: null });
     });
 
     it('rejects a malformed RPC success discriminator rather than laundering it into an Action success', async () => {

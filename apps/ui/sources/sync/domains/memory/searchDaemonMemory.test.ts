@@ -220,7 +220,7 @@ describe('searchDaemonMemory', () => {
         reply.mockImplementation(async request => {
             // The real transport retries a missing method after refreshing its binding.
             if (request.method === RPC_METHODS.DAEMON_MEMORY_STATUS) throw Object.assign(new Error('No status method'), {
-                rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
             });
             return { v: 1, ok: true, hits: [transcriptHit] };
         });
@@ -289,9 +289,9 @@ describe('searchDaemonMemory', () => {
         });
     });
 
-    it('normalizes daemon memory search unavailability into a non-fatal result', async () => {
+    it('normalizes an affirmed missing daemon search method into a non-fatal result', async () => {
         reply.mockRejectedValue(Object.assign(new Error('RPC method not available'), {
-            rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         }));
 
         const { searchDaemonMemory } = await import('./searchDaemonMemory');
@@ -309,6 +309,38 @@ describe('searchDaemonMemory', () => {
             ok: false,
             errorCode: 'memory_index_missing',
         });
+    });
+
+    it('preserves temporary search routing failures for retry', async () => {
+        reply.mockRejectedValue(Object.assign(new Error('Discovery failed'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+        const { searchDaemonMemory } = await import('./searchDaemonMemory');
+        await expect(searchDaemonMemory(query)).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+    });
+
+    it('preserves a temporary document-support probe failure without downgrading the requested corpora', async () => {
+        reply.mockRejectedValue(Object.assign(new Error('Discovery failed'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+        const { searchDaemonMemory } = await import('./searchDaemonMemory');
+        await expect(searchDaemonMemory({ ...query, corpora: ['sessions', 'documents'] }))
+            .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        expect(network.requests.some(request => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(false);
+        reply.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
+            ? { ...status, documentSearchSupported: true }
+            : { v: 1, ok: true, hits: [documentHit], documents: { state: 'ready' } });
+        await expect(searchDaemonMemory({ ...query, corpora: ['sessions', 'documents'] }))
+            .resolves.toMatchObject({ ok: true, hits: [documentHit], documents: { state: 'ready' } });
+        expect(network.requests.find(request => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.payload)
+            .toMatchObject({ corpora: ['sessions', 'documents'] });
+    });
+
+    it.each(['read', 'write'] as const)('keeps memory settings %s retryable until the method is affirmed missing', async operation => {
+        const { fetchDaemonMemorySettings, writeDaemonMemorySettings } = await import('./fetchDaemonMemorySettings');
+        const { DEFAULT_MEMORY_SETTINGS } = await import('@happier-dev/protocol/memory/memorySettings');
+        const invoke = () => operation === 'read' ? fetchDaemonMemorySettings(query)
+            : writeDaemonMemorySettings({ ...query, settings: DEFAULT_MEMORY_SETTINGS });
+        reply.mockRejectedValue(Object.assign(new Error('Discovery failed'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+        await expect(invoke()).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        reply.mockRejectedValue(Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }));
+        await expect(invoke()).resolves.toEqual({ supported: false, settings: DEFAULT_MEMORY_SETTINGS });
     });
 
     it('preserves machine-target unavailability as a transport/reachability outcome', async () => {

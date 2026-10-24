@@ -8,7 +8,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { SpawnCapabilitiesPreviewOutputV1Schema, type SpawnCapabilitiesPreviewOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { isMachineRequestReachabilityFailure } from '@/sync/domains/machines/reachability/machineReachability';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@/sync/runtime/rpcErrors';
+import { isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 import { setSessionCapabilitySelectionItem } from './sessionCapabilitySelectionState';
 
 type Preview = Extract<SpawnCapabilitiesPreviewOutputV1, { ok: true }>;
@@ -78,11 +78,11 @@ export function useNewSessionCapabilities(draft: Readonly<{
             } else {
                 const message = !receipt.ok ? receipt.errorCode ?? receipt.error : parsed?.success && !parsed.data.ok ? parsed.data.reason : 'invalid_action_output';
                 setError(message); setPreviewStatus(message === 'machine_unreachable' || isMachineRequestReachabilityFailure({ code: message }) ? 'unreachable' : 'error');
-                setUnsupported(message === 'RPC_METHOD_NOT_AVAILABLE' || message === 'RPC_METHOD_NOT_FOUND' || message === 'unsupported');
+                setUnsupported(isRpcMethodNotFoundError({ rpcErrorCode: message }));
             }
         } catch (failure) {
             if (request !== requestRef.current) return;
-            setUnsupported(isRpcMethodNotAvailableError(failure) || isRpcMethodNotFoundError(failure));
+            setUnsupported(isRpcMethodNotFoundError(failure));
             setError(failure instanceof Error ? failure.message : String(failure));
             setPreviewStatus(isMachineRequestReachabilityFailure(failure) ? 'unreachable' : 'error');
         } finally {

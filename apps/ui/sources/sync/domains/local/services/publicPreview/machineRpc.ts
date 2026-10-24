@@ -10,8 +10,6 @@ import {
 } from '@happier-dev/protocol/local/services/public/v1';
 import {
     isRpcMethodNotFoundResult,
-    RPC_ERROR_CODES,
-    RPC_ERROR_MESSAGES,
     RPC_METHODS,
 } from '@happier-dev/protocol/rpc';
 import {
@@ -40,19 +38,18 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isRpcUnavailableResult(value: unknown): boolean {
+function readRpcFailureReason(value: unknown): 'unavailable' | 'request_failed' | null {
     if (isRpcMethodNotFoundResult(value)) {
-        return true;
+        return 'unavailable';
     }
     if (!isRecord(value)) {
-        return false;
+        return null;
     }
-    return value.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
-        || value.error === RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE;
+    return isRpcMethodNotAvailableError({ rpcErrorCode: value.errorCode }) ? 'request_failed' : null;
 }
 
 function failureFromError(error: unknown): LocalServicePublicPreviewStatusClientResult {
-    if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+    if (isRpcMethodNotFoundError(error)) {
         return { ok: false, reason: 'unavailable' };
     }
     return { ok: false, reason: 'request_failed' };
@@ -73,9 +70,8 @@ export async function fetchLocalServicePublicPreviewStatusViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServicePublicPreviewStatusResponseV1Schema.safeParse(raw);
         return parsed.success && isPublicPreviewSnapshotForRequest(parsed.data.snapshot, payload)
             ? { ok: true, snapshot: parsed.data.snapshot }
@@ -100,15 +96,14 @@ export async function createLocalServicePublicPreviewExposureViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServicePublicPreviewCreateResponseV1Schema.safeParse(raw);
         return parsed.success && isPublicPreviewCreateResponseForRequest(parsed.data, payload)
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };
@@ -130,15 +125,14 @@ export async function revokeLocalServicePublicPreviewExposureViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServicePublicPreviewRevokeResponseV1Schema.safeParse(raw);
         return parsed.success && isPublicPreviewRevokeResponseForRequest(parsed.data, payload)
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };
@@ -160,15 +154,14 @@ export async function copyLocalServicePublicPreviewUrlViaMachineRpc(
             payload,
             signal: input.signal,
         });
-        if (isRpcUnavailableResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
-        }
+        const failureReason = readRpcFailureReason(raw);
+        if (failureReason) return { ok: false, reason: failureReason };
         const parsed = DaemonLocalServicePublicPreviewCopyUrlResponseV1Schema.safeParse(raw);
         return parsed.success && isPublicPreviewCopyUrlResponseForRequest(parsed.data, payload)
             ? { ok: true, response: parsed.data }
             : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+        if (isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
         return { ok: false, reason: 'request_failed' };

@@ -97,6 +97,16 @@ describe('dispatchBrowserDaemonControlCommandViaMachineRpc', () => {
         expect(result).toEqual({ ok: false, reason: 'invalid_response' });
     });
 
+    it.each(['throw', 'result'] as const)('keeps temporary routing loss retryable for commands and discovery (%s)', async carrier => {
+        if (carrier === 'throw') machineRpcWithServerScopeMock.mockRejectedValue(new RpcError('Discovery failed', 'RPC_METHOD_NOT_AVAILABLE'));
+        else machineRpcWithServerScopeMock.mockResolvedValue({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+        const scope = { machineId: MACHINE_ID, serverId: SERVER_ID };
+        expect(await dispatchBrowserDaemonControlCommandViaMachineRpc({ ...scope, command: RELOAD_COMMAND }))
+            .toEqual({ ok: false, reason: 'request_failed' });
+        expect(await listBrowserDaemonViewsViaMachineRpc({ ...scope, browserSessionId: RELOAD_COMMAND.browserSessionId }))
+            .toEqual({ ok: false, reason: 'request_failed' });
+    });
+
     it('maps a transport throw to request_failed', async () => {
         machineRpcWithServerScopeMock.mockRejectedValue(new Error('socket down'));
 

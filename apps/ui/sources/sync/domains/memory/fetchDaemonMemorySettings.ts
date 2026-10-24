@@ -1,5 +1,5 @@
 import { DEFAULT_MEMORY_SETTINGS, MemorySettingsV1Schema, type MemorySettingsV1 } from '@happier-dev/protocol/memory/memorySettings';
-import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -44,7 +44,7 @@ export async function fetchDaemonMemorySettings(args: Readonly<{
             settings: MemorySettingsV1Schema.parse(raw),
         };
     } catch (error) {
-        if (readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
+        if (isRpcMethodNotFoundError(error)) {
             return {
                 supported: false,
                 settings: DEFAULT_MEMORY_SETTINGS,
@@ -82,7 +82,7 @@ export async function writeDaemonMemorySettings(args: Readonly<{
             settings: MemorySettingsV1Schema.parse(raw),
         };
     } catch (error) {
-        if (readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
+        if (isRpcMethodNotFoundError(error)) {
             return {
                 supported: false,
                 settings: DEFAULT_MEMORY_SETTINGS,
