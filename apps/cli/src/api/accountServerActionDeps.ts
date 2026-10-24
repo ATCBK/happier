@@ -7,7 +7,6 @@ import { createAccountServerWorkspaceWorkerPreferenceClient } from '@/api/worksp
 import { observeProjectServicePlacementActualV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readProjectAccountRowsObservation } from '@/workspaces/projectAccountRows';
-import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { createAccountServerMachineFinitePolicyClient } from '@/api/machine/accountServerMachineFinitePolicyClient';
@@ -17,7 +16,6 @@ import { ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1, AccountSessionsSignO
 import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { bindPublicProfileActionPorts } from '@happier-dev/protocol/actions/executor/publicProfileActions';
 import { buildPublicProfileSnapshot } from '@happier-dev/protocol/account/publicProfileSnapshot';
-import { readScmHostingRepository } from '@/scm/hostingProviders/readRepository';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { bindSessionAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions/sessionAccessActionFamily';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
@@ -70,7 +68,6 @@ import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/accoun
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { admitUsageCoachRemedies, applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
 import { buildUsageCoachRemedies } from '@happier-dev/protocol/usage/coach/buildUsageCoachRemedies';
-import { readCliUsageDetail } from '@/usage/readCliUsageDetail';
 import { loadMcpServerCatalogV1, type McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
@@ -625,6 +622,7 @@ export function createAccountServerActionDeps(input: Readonly<{
           quota = { status: code === 'unsupported' ? 'unsupported' : 'unknown',
             errorCode: typeof code === 'string' ? code : 'usage_quota_read_failed' };
         }
+        const { readCliUsageDetail } = await import('@/usage/readCliUsageDetail');
         if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
         const accounting = snapshots.filter((snapshot): snapshot is UsageAccountingSourceSnapshot => !('ok' in snapshot));
@@ -719,8 +717,12 @@ export function createAccountServerActionDeps(input: Readonly<{
             workspaceRefs: rows.workspaceRefs, relationships: rows.relationships,
             childMachineProjections: machines.flatMap(machine => machine.devcontainerChild
               ? [{ serverId: targetServerId, machineId: machine.id, projection: machine.devcontainerChild }] : []),
-            readChildMachines: machineIds => readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, credentials, signal,
-              purpose: 'admitted_mapping', machineIds }),
+            readChildMachines: async machineIds => {
+              const localProfileId = configuration.activeServerId;
+              const { readWorkspaceSyncChildMachineFacts } = await import('@/workspaces/sync/workspaceSyncTargetAuthority');
+              return await readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, localProfileId, credentials, signal,
+                purpose: 'admitted_mapping', machineIds });
+            },
             isCurrent: async () => await isCurrent() && await observation.isCurrent(),
             readSnapshot: snapshot => callExactMachineRpc({ credentials, serverUrl: serverHttpBaseUrl,
               machineId: snapshot.machineId, method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
@@ -1526,6 +1528,9 @@ export function createAccountServerActionDeps(input: Readonly<{
         throw Object.assign(new Error('credential_scope_retired'), { code: 'credential_scope_retired' });
       }
     },
-    getRepository: (selector, context) => readScmHostingRepository({ selector, signal: context.signal }),
+    getRepository: async (selector, context) => {
+      const { readScmHostingRepository } = await import('@/scm/hostingProviders/readRepository');
+      return await readScmHostingRepository({ selector, signal: context.signal });
+    },
   }) };
 }
