@@ -12,3 +12,4 @@ export * from './declarative/normalize.js';
 export * from './declarative/note.js';
 export * from './transcriptReference.js';
 export * from './forkVisualCopies.js';
+export * from './visualPolicy.js';

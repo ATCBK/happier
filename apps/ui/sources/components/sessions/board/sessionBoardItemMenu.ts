@@ -44,6 +44,8 @@ export type SessionBoardItemMenuInput = Readonly<{
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     /** The widget definition flows this card offers (About, Save as your widget, Post a snapshot). */
     definition?: Readonly<{ onAbout?: (() => void) | undefined; onAddTo?: (() => void) | undefined; onSaveAsYours?: (() => void) | undefined; onPostSnapshot?: (() => void) | undefined }>;
+    /** Opens the Network access flow of an HTML visual. Editors only; present only when the controller can save it. */
+    onEditNetwork?: (() => void) | undefined;
     visualCopy?: Readonly<{ onSaveArtifact?: (() => void) | undefined; onShare?: (() => void) | undefined }>;
     onMove?: ((direction: 'before' | 'after') => void) | undefined;
     canMoveBefore?: boolean | undefined;
@@ -170,6 +172,9 @@ export function buildSessionBoardItemActions(input: SessionBoardItemMenuInput): 
     }
     if (input.onEdit && isSessionBoardItemEditableInPlace(item)) {
         actions.push({ id: 'edit', title: t('common.edit'), icon: 'pencil', group: contentGroup, onPress: input.onEdit });
+    }
+    if (input.onEditNetwork) {
+        actions.push({ id: 'network', title: t('sessionBoard.item.actions.network'), icon: 'globe', group: contentGroup, onPress: input.onEditNetwork });
     }
     if (input.onRename) {
         // Pressing the title starts the same editor for a pointer. This entry is

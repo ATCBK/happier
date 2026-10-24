@@ -350,6 +350,30 @@ describe('useSessionBoardController', () => {
         await hook.unmount();
     });
 
+    it('changes an HTML visual\'s network through the item update with its stored capabilities kept', async () => {
+        const actions = recordingActions();
+        const hook = await mountController({
+            snapshot: readySnapshot({ layout: LAYOUT_TWO_VIEWS, items: [{ itemId: 'note-1', item: hostedHtml('Dashboard', '<main>Before</main>') }] }),
+            actions: actions.port,
+        });
+        expect(hook.getCurrent().supports('item.network')).toBe(true);
+        await hook.getCurrent().run({ kind: 'item.network', itemId: 'note-1',
+            network: { mode: 'origins', origins: ['https://api.example.com'] } });
+        const call = actions.calls[0];
+        if (call?.kind !== 'upsert') throw new Error('Expected one item update');
+        expect(call.input.expectedItemRevision).toBe('rev-note-1');
+        expect(call.input.item?.source).toMatchObject({ kind: 'hostedHtml',
+            requestedCapabilities: { hostMethods: ['notify'], networkOrigins: ['https://api.example.com'] } });
+
+        await hook.getCurrent().run({ kind: 'item.network', itemId: 'note-1', network: { mode: 'open', origins: [] } });
+        const open = actions.calls[1];
+        if (open?.kind !== 'upsert') throw new Error('Expected the second item update');
+        expect(open.input.item?.source).toMatchObject({ requestedCapabilities: { network: 'open', networkOrigins: [] } });
+
+        await hook.getCurrent().run({ kind: 'item.network', itemId: 'missing', network: { mode: 'none', origins: [] } });
+        expect(actions.calls).toHaveLength(2);
+    });
+
     it('keeps a mounted mutation pending until the shared approval settles', async () => {
         retirePresentationNotice();
         const actions = recordingActions({

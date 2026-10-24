@@ -65,6 +65,7 @@ import { useWidgetFrameSurfaceDefault } from '@/components/widgets/frame/useWidg
 import type { WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
 import { resolveWidgetFrameStyle } from '@/components/widgets/frame/widgetFrameStyle';
 import { SessionWidgetHost, type SessionWidgetDensity } from './SessionWidgetHost';
+import type { SessionVisualNetworkChoice } from './sessionBoardVisualNetwork';
 import { useSessionBoardArrivals } from './useSessionBoardArrivals';
 import { BoardWidgetAddPopover } from '@/components/widgets/add/BoardWidgetAddPopover';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
@@ -1157,6 +1158,12 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                         const result = await runAcknowledgedWidgetSetupCommand(() => controller.run({ kind: 'item.rename', itemId, title }), t('widgetAdd.saveFailed'));
                         if (!result.ok) throw new Error('widget_rename_refused');
                     } }
+                    : {})}
+                {...(mutationControls && controller.supports('item.network')
+                    ? { onSetNetwork: (network: SessionVisualNetworkChoice) => runAcknowledgedWidgetSetupCommand(
+                        () => controller.run({ kind: 'item.network', itemId, network }),
+                        t('sessionBoard.item.network.failed'),
+                    ) }
                     : {})}
                 {...(mutationControls && controller.supports('item.inputs')
                     ? { onSetInputs: (bindings: WidgetInputBindingsV1) => runAcknowledgedWidgetSetupCommand(

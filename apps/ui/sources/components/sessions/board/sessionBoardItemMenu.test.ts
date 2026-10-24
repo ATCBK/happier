@@ -29,6 +29,16 @@ describe('buildSessionBoardItemActions', () => {
         expect(actions.map(action => action.id)).toEqual(expect.arrayContaining(['pin-to-board', 'about', 'addTo', 'saveAsYours', 'shareVisual']));
     });
 
+    it('offers Network access only to an editor with a handler, in the content group', () => {
+        const onEditNetwork = vi.fn();
+        const withHandler = buildSessionBoardItemActions({ density: 'full', canEdit: true, item, onEditNetwork });
+        expect(withHandler.find(action => action.id === 'network')).toMatchObject({ group: { id: 'content' } });
+        withHandler.find(action => action.id === 'network')?.onPress();
+        expect(onEditNetwork).toHaveBeenCalledOnce();
+        expect(buildSessionBoardItemActions({ density: 'full', canEdit: true, item }).some(action => action.id === 'network')).toBe(false);
+        expect(buildSessionBoardItemActions({ density: 'full', canEdit: false, item, onEditNetwork }).some(action => action.id === 'network')).toBe(false);
+    });
+
     it('groups the complete item operation set by content, movement, geometry, and destruction', () => {
         const actions = buildSessionBoardItemActions({
             density: 'full',

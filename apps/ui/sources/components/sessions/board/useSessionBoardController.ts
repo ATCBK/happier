@@ -46,6 +46,7 @@ import {
 } from './sessionBoardMutationApproval';
 import { resolveSessionBoardFailurePresentation } from './sessionBoardFailurePresentation';
 import { readSessionBoardHostedHtmlItemText } from './hostedHtml/sessionBoardHostedHtmlItem';
+import { applySessionVisualNetworkChoice, type SessionVisualNetworkChoice } from './sessionBoardVisualNetwork';
 
 import type { SessionBoardBinding } from './observeSessionBoard';
 import {
@@ -109,6 +110,8 @@ export type SessionBoardCommand =
     | Readonly<{ kind: 'item.frameStyle'; itemId: string; frameStyle: SessionBoardItemFrameStyle | null }>
     /** Height is item content, not placement: it stays coherent across every view. */
     | Readonly<{ kind: 'item.height'; itemId: string; height: SessionSurfaceItemV1['height'] }>
+    /** An HTML visual's network access (none, exact sites, any site), through the item update and its approval. */
+    | Readonly<{ kind: 'item.network'; itemId: string; network: SessionVisualNetworkChoice }>
     | Readonly<{ kind: 'item.move'; itemId: string; direction: 'before' | 'after' }>
     | Readonly<{
         kind: 'item.moveAnchored';
@@ -724,6 +727,7 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
             case 'item.resize':
             case 'item.frameStyle':
             case 'item.height':
+            case 'item.network':
             case 'item.move':
             case 'item.moveAnchored':
             case 'item.moveToView':
@@ -1151,6 +1155,19 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                     item: next,
                 }));
                 return;
+            }
+
+            case 'item.network': {
+                const projected = live.itemsById.get(command.itemId);
+                if (!projected || projected.revision === null || projected.state.kind !== 'ready') return;
+                const next = applySessionVisualNetworkChoice(projected.state.item, command.network);
+                if (!next) return;
+                return await submit(command, (p) => p.upsertItem({
+                    sessionId: current.sessionId,
+                    itemId: command.itemId,
+                    expectedItemRevision: projected.revision as string,
+                    item: next,
+                }));
             }
 
             case 'item.rename':

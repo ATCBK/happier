@@ -123,12 +123,33 @@ export type SessionBoardTranslation = Readonly<{
             pinToBoard: string;
             /** Names the destination board view; never a code-joined "label: title". */
             moveToView: (params: Readonly<{ title: string }>) => string;
+            /** Opens the Network access flow for an HTML visual. */
+            network: string;
         }>;
         /**
          * What assistive technology hears after a completed move. Each locale
          * authors one whole sentence; the app never joins fragments with its own
          * punctuation, which reads as an unfinished phrase in every language.
          */
+        /** Network access for one HTML visual (the Session item menu's Network access… flow). */
+        network: Readonly<{
+            title: string;
+            hint: string;
+            /** The choice row's label: what the visual can contact. */
+            reach: string;
+            none: string;
+            sites: string;
+            open: string;
+            sitesLabel: string;
+            sitesPlaceholder: string;
+            sitesInvalid: (params: Readonly<{ sites: string }>) => string;
+            sitesNeeded: string;
+            noneConsequence: string;
+            sitesConsequence: string;
+            openConsequence: string;
+            shareOffNote: string;
+            failed: string;
+        }>;
         moved: Readonly<{
             before: (params: Readonly<{ title: string }>) => string;
             after: (params: Readonly<{ title: string }>) => string;
@@ -392,6 +413,24 @@ export const sessionBoardTranslationsEnglish = { en: {
                 unpin: 'Unpin from this view',
                 pinToBoard: 'Pin to Board',
                 moveToView: ({ title }) => `Move to ${title}`,
+                network: 'Network access…',
+            },
+            network: {
+                title: 'Network access',
+                hint: 'Which sites this visual can contact from the browser that shows it.',
+                reach: 'Can contact',
+                none: 'None',
+                sites: 'Specific sites',
+                open: 'Any site',
+                sitesLabel: 'Sites',
+                sitesPlaceholder: 'https://api.example.com',
+                sitesInvalid: ({ sites }) => `Not a site address: ${sites}. Use https://example.com.`,
+                sitesNeeded: 'Add at least one site.',
+                noneConsequence: 'It runs on its own and makes no outside requests.',
+                sitesConsequence: 'It can contact only the sites you list. Remote code and assets on them can change.',
+                openConsequence: 'It can contact any site, send its contents there and reveal the viewer’s IP address. Remote code can change.',
+                shareOffNote: 'A public link can still be shared with network access off.',
+                failed: 'Couldn’t change network access. Try again.',
             },
             moved: {
                 before: ({ title }) => `${title} moved earlier.`,

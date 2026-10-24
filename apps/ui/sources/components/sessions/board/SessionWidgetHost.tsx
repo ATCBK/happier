@@ -73,6 +73,8 @@ import {
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback, useSessionSurfaceEntityDrag, type SessionSurfaceEntityBinding } from './SessionSurfaceEntityDrag';
 import { buildSessionBoardItemActions, type SessionBoardItemMenuInput } from './sessionBoardItemMenu';
 import { SessionVisualCopyPanel } from './SessionVisualCopyPanel';
+import { SessionVisualNetworkPanel } from './SessionVisualNetworkPanel';
+import { readSessionVisualNetworkChoice, type SessionVisualNetworkChoice } from './sessionBoardVisualNetwork';
 import { WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
 
 /**
@@ -160,6 +162,8 @@ export type SessionWidgetHostProps = Readonly<{
     onSetInputs?: (bindings: WidgetInputBindingsV1) => Promise<WidgetSetupSubmitResult>;
     /** Edit content in place when the mounted Board controller publishes a real editor handler. */
     onEdit?: () => void;
+    /** An HTML visual's network access (none, exact sites, any site), through the Board's item update. Editors only. */
+    onSetNetwork?: (network: SessionVisualNetworkChoice) => Promise<WidgetSetupSubmitResult>;
     /** Persist one semantic Board width. Full density only. */
     onResize?: (width: SessionBoardItemWidth) => void;
     /** Persist one anchored move within the current Board view. */
@@ -444,6 +448,11 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         },
     }), []);
     const [copyFlow, setCopyFlow] = React.useState<'save' | 'share' | null>(null);
+    const [networkFlow, setNetworkFlow] = React.useState(false);
+    const closeNetworkFlow = React.useCallback(() => setNetworkFlow(false), []);
+    const onSetNetwork = props.onSetNetwork;
+    const editNetwork = React.useMemo(() => props.canEdit && onSetNetwork && readyItem && readSessionVisualNetworkChoice(readyItem) !== null
+        ? () => { card.reveal(); setNetworkFlow(true); } : undefined, [card, onSetNetwork, props.canEdit, readyItem]);
     const closeCopyFlow = React.useCallback(() => setCopyFlow(null), []);
     const copyAccount = boardSurface.scope && viewerScope?.serverId === boardSurface.scope.serverId ? viewerScope : null;
     const copyable = Boolean(readyItem && canPromoteSessionWidgetDefinitionSourceV1(readyItem.source) && copyAccount);
@@ -529,6 +538,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         onRename: renameEnabled ? beginRename : undefined,
         editInputs: inputs.editInputs,
         definition: { onAbout: definitionFlows.about, onAddTo: definitionFlows.addTo, onSaveAsYours: definitionFlows.saveAsYours, onPostSnapshot: definitionFlows.postSnapshot },
+        onEditNetwork: editNetwork,
         visualCopy: { onSaveArtifact: saveHtml, onShare: shareVisual },
         onMove: props.onMove,
         canMoveBefore: props.canMoveBefore,
@@ -557,6 +567,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         definitionFlows.postSnapshot,
         saveHtml,
         shareVisual,
+        editNetwork,
         props.canEdit,
         props.canMoveAfter,
         props.canMoveBefore,
@@ -903,6 +914,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             <SessionSurfaceEntityTargetFeedback drag={entityDrag} testID={testID} />
             {inputs.popover}
             {definitionFlows.panel}
+            {networkFlow && readyItem ? <WidgetFlowShell anchorRef={card.anchorRef}
+                title={t('sessionBoard.item.network.title')}
+                onRequestClose={closeNetworkFlow} testID={`${testID}.networkShell`}>
+                <SessionVisualNetworkPanel item={readyItem} testID={`${testID}.network`} onClose={closeNetworkFlow}
+                    onSave={(choice) => onSetNetwork?.(choice) ?? Promise.resolve({ ok: false, message: t('sessionBoard.item.network.failed') })} />
+            </WidgetFlowShell> : null}
             {copyFlow && readyItem && copyAccount ? <WidgetFlowShell anchorRef={card.anchorRef}
                 title={t('widgetDefinition.visualSaveTitle')}
                 onRequestClose={closeCopyFlow} testID={`${testID}.copyShell`}>
