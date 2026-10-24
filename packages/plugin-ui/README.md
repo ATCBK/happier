@@ -236,6 +236,25 @@ exact page colours (`HappierUiPalette`) and page chrome, and without them the
 colours resolve from the public theme snapshot. See the published guide
 "Settings and detail pages" (`apps/docs/content/docs/plugins/ui/configuration-pages.mdx`).
 
+### Project detail navigation (0.3 development source)
+
+Project `appPage` surfaces use the ordinary `defineUiSurface` context and public
+`Collection`/`DetailsPane`. The host docks published details in its existing
+Project column on desktop and pushes them on a phone. Keep selection, filters
+and Find in the controlled page model while its presentation changes.
+
+Place public `DetailsPaneOpenAsPageButton` in `DetailsPane.actions`. Its
+`onPress`, optional `disabled`, `testID` and `accessibilityLabel` bind the shared
+control; do not draw another expand button. Call the existing
+`host.replacePageLocation(fullPageSubPath, {backLocation: detailSubPath})` and use
+the returned `subPath`. Return uses `detailSubPath` with `backLocation` pointing
+to the list. These are plugin-local validated locations; the host retains Home,
+Project and checkout context. No additional DetailsPane expand prop, route
+prefix API or return-route store is needed.
+The [external author example](../plugin-sdk/examples/public-authoring) exercises
+this binding without a Run-on prerequisite. This source contract is Developer
+Preview; generated API and loaded-platform verification remain separate.
+
 ### Dialog and sheet headers
 
 `ModalHeader` is the title band Happier's own dialogs and sheets draw: an
@@ -446,6 +465,20 @@ derive host-only injection props from their public semantic inputs.
 In 0.3 development source, a `Select` with `presentation="menu"` or `"field"`
 and no options keeps its trigger disabled. Options can arrive or be withdrawn
 while mounted; the caller explains loading, unavailable or empty source data.
+
+## Hosted CI evidence (development source)
+
+`@happier-dev/plugin-ui/ansi` exposes the pure incremental `tokenizeAnsiText`
+parser and its token/state types without loading a native or web renderer.
+Hosted CI uses these tokens for safe text presentation; it does not render log
+HTML, execute OSC commands, or emulate a terminal. Renderer composition remains
+with the UI owner.
+
+Hosted log Find uses the public `matchFindText` and Find controller contracts
+from `/components`, with `useFindSurfaceRegistration` from `/hostApi`. Reuse the
+host's Find bar and registration rather than adding a log-specific matcher or
+query Action. Row content continues to use the public collection/work primitives;
+the Triage status adapter's intrinsic geometry must be preserved when migrating.
 
 ## Published package contents
 
