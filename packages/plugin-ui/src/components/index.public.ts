@@ -1580,3 +1580,14 @@ export {
 } from './CapabilityAddBody.js';
 /** The most blocking capability status that speaks at a placement; null when none does (healthy is quiet). */
 export { pickMostBlockingHappierCapabilityStatus as pickMostBlockingCapabilityStatus } from '../presentation/capabilities/capabilityStatus.js';
+export {
+  HAPPIER_COLLECTION_ROW_METRICS,
+  HappierCollectionRowContent,
+  resolveHappierCollectionRowHeight,
+  resolveHappierCollectionRowIdentityMetrics,
+  resolveHappierCollectionRowLineMetrics,
+  resolveHappierCollectionRowTitleMetrics,
+  type HappierCollectionRowContentProps,
+  type HappierCollectionRowDensity,
+  type HappierCollectionRowTextMetrics,
+} from '../presentation/collection/CollectionRowContent.js';

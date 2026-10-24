@@ -1368,3 +1368,14 @@ export {
   type HappierCapabilityAddLevel,
   type HappierCapabilityAddMode,
 } from './capabilities/CapabilityAddBody.js';
+export {
+  HAPPIER_COLLECTION_ROW_METRICS,
+  HappierCollectionRowContent,
+  resolveHappierCollectionRowHeight,
+  resolveHappierCollectionRowIdentityMetrics,
+  resolveHappierCollectionRowLineMetrics,
+  resolveHappierCollectionRowTitleMetrics,
+  type HappierCollectionRowContentProps,
+  type HappierCollectionRowDensity,
+  type HappierCollectionRowTextMetrics,
+} from './collection/CollectionRowContent.js';
