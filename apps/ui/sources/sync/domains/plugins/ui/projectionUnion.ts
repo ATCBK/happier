@@ -108,34 +108,6 @@ export function mergeInstalledPluginUiProjections(
     return deriveInstalledPluginUiProjection(installed, runtime, materializations, explicitOrigins, createDeclarationComparisons(), completeUiPluginIds);
 }
 
-/** A previous publication cannot stand in for this merge's source choice. */
-function withoutHostUiSourceSelection<T>(entry: T): T {
-    const record = asRecord(entry);
-    if (record?.hostUiSourceSelection === undefined
-        || (record.contributionKind !== 'surfacePlacement' && record.contributionKind !== 'settingsPage')) return entry;
-    const unselected = Object.assign({}, entry);
-    Reflect.deleteProperty(unselected, 'hostUiSourceSelection');
-    return Object.freeze(unselected);
-}
-
-function withoutProjectionHostUiSourceSelections(projection: PluginUiProjectionModel | null): PluginUiProjectionModel | null {
-    if (!projection) return projection;
-    const clear = <T>(entries: Readonly<Record<string, T>>): Readonly<Record<string, T>> => {
-        let changed: Record<string, T> | null = null;
-        for (const [id, entry] of Object.entries(entries)) {
-            const unselected = withoutHostUiSourceSelection(entry);
-            if (unselected === entry) continue;
-            changed ??= { ...entries };
-            changed[id] = unselected;
-        }
-        return changed ? Object.freeze(changed) : entries;
-    };
-    const surfacePlacementsById = clear(projection.surfacePlacementsById);
-    const settingsPagesById = clear(projection.settingsPagesById);
-    return surfacePlacementsById === projection.surfacePlacementsById && settingsPagesById === projection.settingsPagesById
-        ? projection : Object.freeze({ ...projection, surfacePlacementsById, settingsPagesById });
-}
-
 function deriveInstalledPluginUiProjection(
     installed: readonly PluginUiProjectionModel[],
     runtime: PluginUiProjectionModel | null,
@@ -144,7 +116,7 @@ function deriveInstalledPluginUiProjection(
     comparisons: DeclarationComparisons,
     completeUiPluginIds?: ReadonlySet<string>,
 ): PluginUiProjectionModel | null {
-    if (installed.length === 0) return withoutProjectionHostUiSourceSelections(runtime);
+    if (installed.length === 0) return runtime;
     // A renderer descriptor selects that renderer, not the plugin's entire
     // declaration census. Partial installation metadata retains known rows,
     // but cannot turn an unobserved UI declaration into a withdrawal.
@@ -162,9 +134,7 @@ function deriveInstalledPluginUiProjection(
         .filter(plugin => plugin.source.kind === 'bundled' && !plugin.occurrenceId).map(plugin => plugin.id)));
     const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false, hostDeclarations = false) => {
         const declared: Record<string, T> = Object.assign({}, ...installed.map(read));
-        if (hostDeclarations) for (const [key, entry] of Object.entries(declared)) declared[key] = withoutHostUiSourceSelection(entry);
-        for (const [key, runtimeEntry] of Object.entries(runtime ? read(runtime) : {})) {
-            const entry = hostDeclarations ? withoutHostUiSourceSelection(runtimeEntry) : runtimeEntry;
+        for (const [key, entry] of Object.entries(runtime ? read(runtime) : {})) {
             const declaration = asRecord(declared[key]);
             // Account Actions and their per-Action executable graphs share
             // Availability custody, independently of an optional Machine supplier.
@@ -173,17 +143,14 @@ function deriveInstalledPluginUiProjection(
             const pluginId = readString(asRecord(entry)?.pluginId);
             const selectedOrigin = pluginId ? explicitOrigins?.get(pluginId) : undefined;
             if (pluginId && hostBundledPluginIds.has(pluginId) && selectedOrigin && 'sourceRef' in selectedOrigin
+                && !(hostDeclarations && readPluginUiAccountExecutableOrigin(declaration))
                 && selectedOrigin.sourceRef.sourceCustody.kind === 'development'
                 && readPluginUiContributionSupplies(entry).some(supply => supply.phase === 'current' && supply.interactionEnabled
                     && supply.executionOrigin && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, selectedOrigin))) {
-                // Only the explicitly selected live source overrides host bytes.
-                // Other suppliers remain byte routes and cannot select the UI.
-                // Carry this already-decided choice to mounted requester
-                // readiness; raw Account Availability alone cannot select it.
-                const kind = asRecord(entry)?.contributionKind;
-                declared[key] = kind === 'surfacePlacement' || kind === 'settingsPage'
-                    ? Object.freeze(Object.assign({}, entry, { hostUiSourceSelection: 'explicitDevelopment' as const }))
-                    : entry;
+                // Development renderer bytes are selected independently from
+                // an existing Account destination's requester custody. Only
+                // Machine-owned/new destinations take the runtime declaration.
+                declared[key] = entry;
                 continue;
             }
             const executableOwner = asRecord(entry)?.generatedOwnerKind;
@@ -437,9 +404,7 @@ export function createInstalledPluginUiProjectionPublication() {
                 return snapshot;
             }
             if (installed.length === 0) {
-                // Strip only a prior merge's private source choice. Unmarked
-                // runtime rows and their authored payloads retain identity.
-                snapshot = withoutProjectionHostUiSourceSelections(runtime);
+                snapshot = runtime;
                 runtimeIndex = readPublishedProjectionPluginIndex(runtime);
                 installedIndexes = new Map();
                 comparisons = createDeclarationComparisons();
@@ -1034,7 +999,7 @@ function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: r
 function declarationContent(entry: unknown): unknown {
     const record = asRecord(entry);
     if (!record) return entry;
-    const { occurrenceId, executionOrigin, sourceCustody, immutableGenerationId, generation, hostUiSourceSelection,
+    const { occurrenceId, executionOrigin, sourceCustody, immutableGenerationId, generation,
         enabled, availability, available, runtimeMode, runtimeDiagnostics, diagnostics, ...content } = record;
     const renderer = asRecord(content.renderer);
     if (renderer?.kind !== 'declarative' || renderer.model === undefined) return content;

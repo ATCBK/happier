@@ -40,11 +40,6 @@ import {
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-/** Host-only result of declaration selection, never an execution grant or wire field. */
-type PluginUiHostDeclarationSourceSelection = Readonly<{
-    hostUiSourceSelection?: 'explicitDevelopment';
-}>;
-
 /** Observation time remains an Availability fact, not an input to UI declarations. */
 export function samePluginUiMaterializationFacts(left: PluginMachineMaterializationV1 | undefined, right: PluginMachineMaterializationV1 | undefined): boolean {
     if (left === right) return true;
@@ -188,7 +183,7 @@ export type PluginUiPageHeaderActionProjection = Readonly<{
     command: PluginUiResolvedSemanticCommandV1;
 }>;
 
-type PluginUiSurfacePlacementProjectionFields = UnknownRecord & PluginUiHostDeclarationSourceSelection & Readonly<{
+type PluginUiSurfacePlacementProjectionFields = UnknownRecord & Readonly<{
     id: string;
     pluginId: string;
     /** Exact process-local occurrence projected with this contribution row. */
@@ -279,7 +274,7 @@ export type PluginUiSettingsGroupProjection = UnknownRecord & Readonly<{
  * `settingsPage × app` binding, carried verbatim so both the Settings catalog
  * and generic route consume the same canonical destination identity.
  */
-export type PluginUiSettingsPageProjection = UnknownRecord & PluginUiHostDeclarationSourceSelection & Readonly<{
+export type PluginUiSettingsPageProjection = UnknownRecord & Readonly<{
     id: string;
     pluginId: string;
     contributionKind: 'settingsPage';
@@ -347,6 +342,15 @@ export type PluginUiActionProjection = UnknownRecord & PluginProjectedActionV2 &
 
 /** One daemon-admitted Resource declaration carried without reinterpretation. */
 export type PluginUiResourceProjection = UnknownRecord & PluginProjectedResourceV2;
+
+/** One exact lookup in the daemon-qualified Resource declaration record. */
+export function readPluginUiResourceProjection(
+    resourcesById: Readonly<Record<string, PluginUiResourceProjection>> | null | undefined,
+    identity: PluginContributionIdentityV1,
+): PluginUiResourceProjection | null {
+    const resource = resourcesById?.[buildQualifiedPluginContributionKey(identity)];
+    return resource?.pluginId === identity.pluginId && resource.id === identity.localId ? resource : null;
+}
 
 /**
  * One exact lookup over the daemon-admitted raw Action projection. Consumers

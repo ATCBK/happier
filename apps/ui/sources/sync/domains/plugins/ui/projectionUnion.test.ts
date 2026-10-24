@@ -297,11 +297,8 @@ it('uses a development override only for the explicitly selected source and othe
         .toEqual({ title: 'Edited page' });
     const automaticAgain = mergeInstalledPluginUiProjections(installed, current, undefined, new Map());
     expect(automaticAgain?.surfacePlacementsById[String(entry.id)]?.display).toEqual({ title: 'Bundled page' });
-    expect(automaticAgain?.surfacePlacementsById[String(entry.id)]?.hostUiSourceSelection).toBeUndefined();
     // A prior merge result is not a fresh explicit decision when reused as an
-    // upstream runtime projection, including the no-installed fast path.
-    expect(mergeInstalledPluginUiProjections([], explicitlySelected)?.surfacePlacementsById[String(entry.id)]?.hostUiSourceSelection)
-        .toBeUndefined();
+    // upstream runtime projection.
     expect(mergeInstalledPluginUiProjections(installed, explicitlySelected)?.surfacePlacementsById[String(entry.id)]?.display)
         .toEqual({ title: 'Bundled page' });
     const missingSource = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
