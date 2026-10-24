@@ -21,7 +21,7 @@ import {
 import {
   resolveAuthoritativePackagedRuntimeProjectRoot,
 } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
-import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import {
   findRepoRoot,
@@ -67,6 +67,9 @@ import {
   readRuntimePackageJson,
   resolvePackagedCliBundledWorkspacePackageRoot,
   resolvePhysicalBundledWorkspacePackageRoot,
+  resolvePluginAuthorSourceWorkspace,
+  resolvePluginAuthorWorkspaceUiBuilder,
+  resolvePluginUiBuildArguments,
   type RuntimePackageJson,
 } from './hostSdkResolution';
 
@@ -557,6 +560,8 @@ export function resolvePluginUiBuildBin(projectRoot: string): string | null {
   ) {
     return null;
   }
+  const sourceBuilder = resolvePluginAuthorWorkspaceUiBuilder(resolvedProjectRoot);
+  if (sourceBuilder) return sourceBuilder;
   const projectNodeModulesRoot = realpathSync(join(resolvedProjectRoot, 'node_modules'));
   const packageJsonPath = realpathSync(join(
     resolvedProjectRoot,
@@ -654,6 +659,7 @@ export type ManagedPluginPnpmRunResult =
 
 /** Source-workspace dependencies belong to the repository installer, not pnpm's author install. */
 function prepareSourceWorkspacePluginDependencies(projectRoot: string): boolean {
+  if (!resolvePluginAuthorSourceWorkspace(projectRoot)) return false;
   let packageJson: unknown;
   try {
     packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
@@ -663,22 +669,6 @@ function prepareSourceWorkspacePluginDependencies(projectRoot: string): boolean 
   }
   if (!isRecord(packageJson) || typeof packageJson.name !== 'string'
     || !packageJson.name.startsWith('@happier-dev/plugins-')) return false;
-  let repoRoot: string;
-  try {
-    repoRoot = findRepoRoot(projectRoot);
-  } catch {
-    return false;
-  }
-  const workspaceRoot = resolveWorkspaceSourceDir({ repoRoot, packageName: packageJson.name });
-  try {
-    const physicalProjectRoot = realpathSync(projectRoot);
-    if (!isCanonicalAbsolutePathInsideRoot(realpathSync(repoRoot), physicalProjectRoot)
-      || !canonicalAbsolutePathsEqual(physicalProjectRoot, realpathSync(workspaceRoot))) return false;
-  } catch (error) {
-    if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'ENOENT') return false;
-    throw error;
-  }
-
   // Check the declarations through ordinary package resolution. No host alias,
   // public-author override, install or shared-tree refresh is involved. Missing
   // required dependencies remain an explicit preparation failure.
@@ -1120,7 +1110,7 @@ export async function runPluginUiArtifactBuild(
       }
       result = await deps.spawn({
         command: runtimeCommand,
-        args: [uiBuildBin, '--project-root', projectRoot, ...(manifestPath ? ['--manifest-path', manifestPath] : [])],
+        args: resolvePluginUiBuildArguments({ projectRoot, builderPath: uiBuildBin, manifestPath }),
         cwd: projectRoot,
         env: deps.processEnv,
         ...(params.signal ? { signal: params.signal } : {}),

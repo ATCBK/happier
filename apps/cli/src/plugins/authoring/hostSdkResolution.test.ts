@@ -6,11 +6,15 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
+import { createJiti } from 'jiti';
+import { readWorkspacePackages, workspaceSourceCompilerPaths } from '@happier-dev/cli-common/sourceRuntimeEntries';
+import { resolveInternalWorkspacePackageNameClosure } from '@happier-dev/cli-common/workspaces';
 
 import {
   PLUGIN_SDK_PACKAGE_NAME,
   preparePluginSingleFileDevelopmentLoad,
   resolveHostPluginSdkPackageRoot,
+  resolvePluginAuthorWorkspaceAliases,
 } from './hostSdkResolution';
 
 async function writePackagedRuntimeFixture(params: Readonly<{
@@ -46,6 +50,38 @@ async function writePackagedRuntimeFixture(params: Readonly<{
 }
 
 describe('host plugin SDK resolution', () => {
+  it('preserves declared workspace targets with a compact source alias table', async () => {
+    const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+    const root = join(repoRoot, 'packages/plugins/channels');
+    const closure = new Set(resolveInternalWorkspacePackageNameClosure({
+      repoRoot, packageNames: ['@happier-dev/plugins-channels'],
+    }));
+    const packages = new Map([...await readWorkspacePackages(repoRoot)].filter(([name]) => closure.has(name)));
+    const paths = workspaceSourceCompilerPaths(packages);
+    const exact = Object.fromEntries(Object.entries(paths)
+      .sort(([left], [right]) => right.split('/').length - left.split('/').length)
+      .map(([specifier, targets]) => [specifier, targets[0]]));
+    Object.defineProperty(exact, Symbol.for('pathe:normalizedAlias'), { value: true, enumerable: true });
+    const aliases = await resolvePluginAuthorWorkspaceAliases(root);
+    const parent = join(repoRoot, 'packages/protocol/src/index.ts');
+    const loader = createJiti(parent, { alias: aliases, fsCache: false });
+    for (const [specifier, target] of Object.entries(exact)) {
+      expect(loader.resolve(specifier), specifier).toBe(await realpath(target));
+    }
+    // Report-only timings isolate repeated alias application from transforms.
+    for (const [mode, table] of [['exact-control', exact], ['owner', aliases]] as const) {
+      const resolver = createJiti(parent, { alias: table, fsCache: false });
+      const target = join(repoRoot, 'packages/protocol/src/profiles/profileRecordSchemaV1.ts');
+      const start = performance.now();
+      const cpuStart = process.cpuUsage();
+      for (let index = 0; index < 10_000; index += 1) {
+        expect(resolver.resolve('./profiles/profileRecordSchemaV1.js')).toBe(target);
+      }
+    }
+    // Each removed entry would otherwise be scanned on every module import.
+    expect(Object.keys(aliases).length).toBeLessThan(Object.keys(exact).length / 2);
+  }, 120_000);
+
   it.each(['hostSdkResolution.ts', 'typescriptConfigBoundary.ts'])(
     'keeps the TypeScript API unloaded when importing %s before authoring demand',
     async (moduleName) => {

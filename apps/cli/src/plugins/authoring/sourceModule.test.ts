@@ -1,14 +1,17 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { createJiti } from 'jiti';
+import { readWorkspacePackages, workspaceSourceCompilerPaths } from '@happier-dev/cli-common/sourceRuntimeEntries';
 import { defineComposerReference, definePlugin, type JsonValue } from '@happier-dev/plugin-sdk';
 import { defineAccountCollection } from '@happier-dev/plugin-sdk/collections';
 import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
 import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { serializeCanonicalPluginManifest } from '@/plugins/manifest/serialize';
 import { classifyPluginAuthorDaemonBuild } from './toolchain';
+import { resolvePluginAuthorWorkspaceAliases } from './hostSdkResolution';
 import { evaluatePluginDevelopmentCandidate, evaluatePluginAuthorStagingSource, evaluatePluginAuthorSource, projectEvaluatedPluginDevelopmentSource, projectPluginAuthorModule, resolvePluginAuthorStagingModule, resolvePluginAuthoringSource, resolvePluginAuthorSourceEntrypoint } from './sourceModule';
 
 function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
@@ -21,6 +24,115 @@ function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
 }
 
 describe('plugin author source module owner', () => {
+  it('keeps canonical workspace candidates on source exports across edits without loading stale dist', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'happier-devplug-source-workspace-'));
+    const root = join(repo, 'packages/plugins/devplug');
+    const dependency = join(repo, 'packages/devplug-protocol');
+    const unrelated = join(repo, 'packages/devplug-unrelated');
+    try {
+      await mkdir(join(root, 'src'), { recursive: true });
+      await mkdir(join(root, 'node_modules/@happier-dev'), { recursive: true });
+      await mkdir(join(dependency, 'src'), { recursive: true });
+      await mkdir(unrelated, { recursive: true });
+      await writeFile(join(repo, 'package.json'), '{"private":true}');
+      await writeFile(join(repo, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+      await writeFile(join(repo, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - packages/plugins/*\n');
+      await writeFile(join(root, 'package.json'), JSON.stringify({
+        name: '@happier-dev/plugins-devplug',
+        dependencies: { '@happier-dev/devplug-protocol': '0.0.0' },
+        devDependencies: { '@happier-dev/devplug-unrelated': '0.0.0' },
+      }));
+      await writeFile(join(unrelated, 'package.json'), JSON.stringify({
+        name: '@happier-dev/devplug-unrelated',
+        exports: { '.': { 'happier-source': './unused.ts' } },
+      }));
+      await writeFile(join(dependency, 'package.json'), JSON.stringify({
+        name: '@happier-dev/devplug-protocol', type: 'module',
+        exports: {
+          '.': { 'happier-source': './src/index.ts', default: './stale.cjs' },
+          ...Object.fromEntries(Array.from({ length: 64 }, (_, index) => [
+            `./schema-${index}`, { 'happier-source': './src/index.ts', default: './stale.cjs' },
+          ])),
+        },
+      }));
+      await writeFile(join(dependency, 'stale.cjs'), 'throw new Error("stale dist must not load");');
+      await symlink(dependency, join(root, 'node_modules/@happier-dev/devplug-protocol'), 'junction');
+      const entrySource = [
+        "import { marker } from '@happier-dev/devplug-protocol';",
+        'export const actionContracts = { marker, revision: REVISION };',
+        'export const manifest = { schemaVersion: 2, id: "example.devplug", version: "0.1.0", displayName: "Devplug",',
+        'engines: { happier: ">=0.0.0" }, runtime: { apiVersion: 1 }, hostAccess: { required: [], optional: [] }, contributes: {} };',
+        'export function activate() {}',
+      ].join('\n');
+      await writeFile(join(dependency, 'src/index.ts'), 'export const marker: string = "source";');
+      const aliases = await resolvePluginAuthorWorkspaceAliases(root);
+      expect(aliases).not.toHaveProperty('@happier-dev/devplug-unrelated');
+      expect(aliases['@happier-dev/devplug-protocol/schema-63']).toBe(join(dependency, 'src/index.ts'));
+      let aliasTargetReads = 0;
+      // Observe the real compiler boundary: recursively constructing a loader
+      // must not re-normalize a terminal source-export table quadratically.
+      const observedAliases = new Proxy(aliases, {
+        get(target, key, receiver) {
+          if (typeof key === 'string') aliasTargetReads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      createJiti(import.meta.url, { alias: observedAliases, fsCache: false });
+      expect(aliasTargetReads).toBe(0);
+      for (const revision of [1, 2]) {
+        await writeFile(join(root, 'src/index.ts'), entrySource.replace('REVISION', String(revision)));
+        const candidate = await evaluatePluginDevelopmentCandidate({
+          locator: root,
+          sourceAuthority: { kind: 'development', registeredRootId: 'workspace', canonicalRoot: root, observedRevision: revision },
+        });
+        expect(candidate.evaluated.actionContracts).toEqual({ marker: 'source', revision });
+      }
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['channels', 'channel-email'])('evaluates the current %s workspace with its source SDK and protocol', async (name) => {
+    const root = fileURLToPath(new URL(`../../../../../packages/plugins/${name}/`, import.meta.url));
+    const aliasStart = performance.now();
+    const aliases = await resolvePluginAuthorWorkspaceAliases(root);
+    if (name === 'channels') {
+      const paths = workspaceSourceCompilerPaths(await readWorkspacePackages(fileURLToPath(new URL('../../../../../', import.meta.url))));
+      const fullAliases = Object.fromEntries(Object.entries(paths).map(([specifier, targets]) => [specifier, targets[0]]));
+      for (const [mode, table] of [['full-unnormalized', fullAliases], ['runtime-closure-normalized', aliases]] as const) {
+        const constructions = [];
+        for (let index = 0; index < 3; index += 1) {
+          const start = performance.now();
+          const cpuStart = process.cpuUsage();
+          createJiti(import.meta.url, { alias: table, fsCache: false });
+          constructions.push({ elapsedMs: performance.now() - start, cpu: process.cpuUsage(cpuStart) });
+        }
+      }
+    }
+    for (const observedRevision of [1, 2]) {
+      const start = performance.now();
+      const cpuStart = process.cpuUsage();
+      let lastTick = start;
+      let maxLagMs = 0;
+      const heartbeat = setInterval(() => {
+        const now = performance.now();
+        maxLagMs = Math.max(maxLagMs, now - lastTick);
+        lastTick = now;
+      }, 10);
+      try {
+        const candidate = await evaluatePluginDevelopmentCandidate({
+          locator: root,
+          sourceAuthority: { kind: 'development', registeredRootId: 'devplug', canonicalRoot: root, observedRevision },
+        });
+        expect(candidate.evaluated.manifest.id).toBe(name === 'channels' ? 'happier.channels' : 'happier.channel.email');
+        expect(typeof candidate.graph.module.activate).toBe('function');
+      } finally {
+        maxLagMs = Math.max(maxLagMs, performance.now() - lastTick);
+        clearInterval(heartbeat);
+      }
+    }
+  }, 120_000);
+
   it('admits the external Composer author manifest to the public daemon build path', async () => {
     const fixtureRoot = fileURLToPath(new URL('../../../../../packages/tests/fixtures/plugin-platform/composer-external-dogfood/', import.meta.url));
     const evaluated = await evaluatePluginAuthorSource({ locator: fixtureRoot });
@@ -119,6 +231,45 @@ describe('plugin author source module owner', () => {
         entryPath,
       });
       expect(second.graph).not.toHaveProperty('immutableGenerationId');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([['ts', 'js'], ['ts', 'mjs'], ['js', 'mjs'], ['mjs', 'js']] as const)('refreshes a mutable .%s entry re-exporting a .%s child with top-level await', async (entryExtension, extension) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-plugin-author-transitive-'));
+    const entryPath = join(root, `index.${entryExtension}`);
+    const childPath = join(root, `definition.${extension}`);
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module', main: `./index.${entryExtension}` }));
+    await writeFile(entryPath, `await Promise.resolve();\nexport { manifest, activate } from './definition.${extension}';\n`);
+    const writeChild = async (title: string) => {
+      await writeFile(childPath, [
+        'await Promise.resolve();',
+        'export const manifest = {',
+        "  schemaVersion: 2, id: 'example.transitive', version: '0.1.0',",
+        `  displayName: '${title}',`,
+        "  engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },",
+        '  hostAccess: { required: [], optional: [] }, contributes: {},',
+        '};',
+        'export function activate() {}',
+      ].join('\n'));
+    };
+    const candidate = (observedRevision: number) => evaluatePluginDevelopmentCandidate({
+      locator: root,
+      sourceAuthority: { kind: 'development', registeredRootId: root, canonicalRoot: root, observedRevision },
+    });
+    try {
+      await writeChild('Before edit');
+      const first = await candidate(1);
+      await writeChild('After edit');
+      const second = await candidate(2);
+      await writeChild('Edited again');
+      const third = await candidate(3);
+      expect(first.evaluated.manifest.displayName).toBe('Before edit');
+      expect(second.evaluated.manifest.displayName).toBe('After edit');
+      expect(third.evaluated.manifest.displayName).toBe('Edited again');
+      expect(second.graph.rootPath).toBe(await realpath(root));
+      expect(second.graph.entryPath).toBe(await realpath(entryPath));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

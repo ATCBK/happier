@@ -1,9 +1,11 @@
-import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { builtinModules, createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type ts from 'typescript';
+import { workspaceSourceCompilerPaths } from '@happier-dev/cli-common/sourceRuntimeEntries';
 
 import {
   resolveAuthoritativePackagedRuntimeProjectRoot,
@@ -11,9 +13,11 @@ import {
 } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 import {
   findRepoRoot,
+  resolveInternalWorkspacePackageNameClosure,
   resolveWorkspaceBundlesFromPackageJson,
+  resolveWorkspaceSourceDir,
 } from '@happier-dev/cli-common/workspaces';
-import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
 import { resolveSameInstallNodeModulesRoot } from './packageInstallationRoot';
 
@@ -23,9 +27,134 @@ import { resolveSameInstallNodeModulesRoot } from './packageInstallationRoot';
  * physically bundle the SDK) and projects exact public specifier aliases for
  * the narrow dependency-free single-file development loader. Package-root
  * development shares the bundled-package resolver for prepublication
- * dependency preparation, but never consumes the single-file aliases.
+ * dependency preparation. Canonical first-party workspace roots additionally
+ * consume the source runtime's export aliases; external roots keep package resolution.
  */
 export const PLUGIN_SDK_PACKAGE_NAME = '@happier-dev/plugin-sdk';
+
+/** Source dependency/tool resolution is available only at the package's canonical workspace root. */
+export function resolvePluginAuthorSourceWorkspace(projectRoot: string): string | null {
+  try {
+    const physicalRoot = realpathSync(projectRoot);
+    const packageJson = readPackageJsonRecord(join(physicalRoot, 'package.json'), 'The plugin workspace');
+    if (typeof packageJson.name !== 'string' || !packageJson.name.startsWith('@happier-dev/plugins-')) return null;
+    const repoRoot = realpathSync(findRepoRoot(physicalRoot));
+    const workspaceRoot = realpathSync(resolveWorkspaceSourceDir({ repoRoot, packageName: packageJson.name }));
+    return isCanonicalAbsolutePathInsideRoot(repoRoot, physicalRoot)
+      && canonicalAbsolutePathsEqual(physicalRoot, workspaceRoot) ? repoRoot : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Feed the source host's existing export projection to the single module evaluator. */
+export async function resolvePluginAuthorWorkspaceAliases(
+  projectRoot: string,
+  aliases: Readonly<Record<string, string>> = {},
+): Promise<Readonly<Record<string, string>>> {
+  const repoRoot = resolvePluginAuthorSourceWorkspace(projectRoot);
+  if (!repoRoot) return aliases;
+  // Candidates execute the runtime dependency closure, not repository tooling
+  // or unrelated plugins. Keep public subpaths for lazy runtime imports, but
+  // never project every workspace export into each candidate.
+  const packageName = readPackageJsonRecord(join(projectRoot, 'package.json'), 'The plugin workspace').name;
+  if (typeof packageName !== 'string') throw new Error('The plugin workspace must declare its package name');
+  const closure = resolveInternalWorkspacePackageNameClosure({ repoRoot, packageNames: [packageName] });
+  const packages = new Map(closure.map(name => {
+    const root = resolveWorkspaceSourceDir({ repoRoot, packageName: name });
+    return [name, { root, manifest: readPackageJsonRecord(join(root, 'package.json'), 'The runtime workspace') }] as const;
+  }));
+  const paths = workspaceSourceCompilerPaths(packages);
+  const exact: Record<string, string> = { ...aliases };
+  const prefixes: Record<string, string> = {};
+  for (const [name, { root }] of packages) {
+    const sourceRoot = join(root, 'src');
+    for (const [specifier, targets] of Object.entries(paths)) {
+      if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
+      const target = targets[0];
+      const suffix = specifier.slice(name.length + 1);
+      const stem = join(sourceRoot, suffix);
+      const directTargets = ['.ts', '.mts', '.mjs'].map(extension => stem + extension);
+      const indexTarget = join(stem, 'index.ts');
+      // Retain explicit file targets when extensionless resolution could pick
+      // a sibling file; in particular foo.ts must not shadow foo/index.ts.
+      const shadowed = (existsSync(stem) && statSync(stem).isFile()) || [...directTargets, stem + '.js', stem + '.cjs', stem + '.cts',
+        stem + '.tsx', stem + '.jsx', stem + '.json', stem + '.node']
+        .some(candidate => candidate !== target && existsSync(candidate));
+      if (suffix && !specifier.includes('*') && !shadowed
+        && (directTargets.includes(target) || target === indexTarget)) {
+        prefixes[`${name}/`] = sourceRoot;
+      } else {
+        exact[specifier] = target;
+      }
+    }
+  }
+  // Pathe also matches children of an exact alias. Keep their declarations
+  // ahead of irregular parent exports such as hooks -> catalog.ts.
+  const parents = Object.keys(exact).filter(specifier => specifier.split('/').length > 2);
+  for (const [specifier, targets] of Object.entries(paths)) {
+    if (parents.some(parent => specifier.startsWith(`${parent}/`))) exact[specifier] = targets[0];
+  }
+  const resolvedAliases = { ...exact, ...prefixes };
+  if (!Object.values(resolvedAliases).every(target => isAbsolute(target))) {
+    throw new Error('Source workspace aliases must resolve to absolute terminal paths');
+  }
+  const normalized = Object.fromEntries(Object.entries(resolvedAliases).sort(
+    ([left], [right]) => right.split('/').length - left.split('/').length,
+  ));
+  // Pinned Jiti uses Pathe's shared marker to skip quadratic normalization in
+  // every child loader. Absolute targets have no alias chains to rewrite.
+  // Enumerable symbol metadata survives the evaluator's existing map copies.
+  Object.defineProperty(normalized, Symbol.for('pathe:normalizedAlias'), { value: true, enumerable: true });
+  return Object.freeze(normalized);
+}
+
+export function resolvePluginAuthorWorkspaceUiBuilder(projectRoot: string): string | null {
+  const repoRoot = resolvePluginAuthorSourceWorkspace(projectRoot);
+  if (!repoRoot) return null;
+  const sdkRoot = realpathSync(resolveWorkspaceSourceDir({ repoRoot, packageName: PLUGIN_SDK_PACKAGE_NAME }));
+  if (!isCanonicalAbsolutePathInsideRoot(repoRoot, sdkRoot)
+    || readPackageJsonRecord(join(sdkRoot, 'package.json'), 'The source Plugin SDK').name !== PLUGIN_SDK_PACKAGE_NAME) {
+    throw new Error('Resolved source Plugin SDK must belong to its canonical workspace');
+  }
+  const builderPath = realpathSync(join(sdkRoot, 'src/ui/build/bin.ts'));
+  if (!isCanonicalAbsolutePathInsideRoot(sdkRoot, builderPath) || !statSync(builderPath).isFile()) {
+    throw new Error('Resolved Plugin UI source builder must be a contained regular file');
+  }
+  return builderPath;
+}
+
+/** The managed child uses the same source export authority as the source host. */
+export function resolvePluginUiBuildArguments(params: Readonly<{
+  projectRoot: string;
+  builderPath: string;
+  manifestPath?: string | null;
+}>): readonly string[] {
+  const repoRoot = resolvePluginAuthorSourceWorkspace(params.projectRoot);
+  if (!repoRoot) return [
+    params.builderPath, '--project-root', params.projectRoot,
+    ...(params.manifestPath ? ['--manifest-path', params.manifestPath] : []),
+  ];
+  const sourceRuntimeRoot = resolveWorkspaceSourceDir({ repoRoot, packageName: '@happier-dev/cli-common' });
+  const compilerUrl = pathToFileURL(join(dirname(params.builderPath), 'buildUniversalUiArtifacts.ts')).href;
+  const resolverUrl = pathToFileURL(join(sourceRuntimeRoot, 'sourceRuntimeEntries.mjs')).href;
+  return [
+    '--conditions=happier-source',
+    '--import', pathToFileURL(join(sourceRuntimeRoot, 'registerSourceRuntime.mjs')).href,
+    '--input-type=module', '--eval', [
+      `import { buildUniversalPluginUiArtifacts } from ${JSON.stringify(compilerUrl)};`,
+      `import { packageNameOfSpecifier, readWorkspacePackages, resolveWorkspaceSource, SOURCE_CONDITION } from ${JSON.stringify(resolverUrl)};`,
+      `const packages = await readWorkspacePackages(${JSON.stringify(repoRoot)});`,
+      'await buildUniversalPluginUiArtifacts(process.argv[1], process.argv[2], {',
+      '  exportConditions: [SOURCE_CONDITION],',
+      '  resolveSourceImport: specifier => packages.has(packageNameOfSpecifier(specifier))',
+      '    ? resolveWorkspaceSource(packages, specifier) : undefined,',
+      '});',
+    ].join('\n'),
+    params.projectRoot,
+    ...(params.manifestPath ? [params.manifestPath] : []),
+  ];
+}
 
 export type RuntimePackageJson = Readonly<{
   name?: unknown;

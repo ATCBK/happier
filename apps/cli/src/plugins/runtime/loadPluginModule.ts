@@ -68,10 +68,12 @@ async function importMutablePluginAuthorSourceModule(
     entryPath: string,
 ): Promise<PluginModuleNamespace> {
     const extension = extname(entryPath).toLowerCase();
-    // Jiti's async .js/.mjs path can delegate to Node's immutable native ESM
-    // cache. These bytes are author-owned and mutable, so keep JavaScript in
-    // Jiti's transform/cache path where the candidate-scope eviction applies.
-    if (extension === '.js' || extension === '.mjs') {
+    const forceTranspile = 'forceTranspile' in loader.options
+        && loader.options.forceTranspile === true;
+    // Patched development candidates keep recursive ESM imports in Jiti and
+    // preserve top-level await. Keep the existing synchronous JavaScript path
+    // for other loads and until the pinned patch is installed.
+    if ((extension === '.js' || extension === '.mjs') && !forceTranspile) {
         return loader(entryPath) as PluginModuleNamespace;
     }
     return await loader.import(entryPath) as PluginModuleNamespace;
@@ -105,7 +107,9 @@ export async function loadPluginAuthorSourceModule(
         );
     }
     const loader = createJiti(import.meta.url, {
-        fsCache: false,
+        // Jiti validates transforms against current source bytes. This cache
+        // saves compilation without changing module identity or eviction.
+        fsCache: true,
         moduleCache: true,
         interopDefault: false,
         ...(options.aliases && Object.keys(options.aliases).length > 0
@@ -202,7 +206,7 @@ function resolveTypeScriptGenerationLoaderState(
     if (current) return current;
     const created = Object.freeze({
         loader: createJiti(import.meta.url, {
-            fsCache: false,
+            fsCache: true,
             moduleCache: true,
             interopDefault: false,
         }),
@@ -218,7 +222,7 @@ export function createPluginTypeScriptGenerationScope(options: Readonly<{
     const generationScope = Object.freeze({});
     typescriptGenerationLoaderStates.set(generationScope, Object.freeze({
         loader: createJiti(import.meta.url, {
-            fsCache: false,
+            fsCache: true,
             moduleCache: true,
             interopDefault: false,
             ...(options.aliases && Object.keys(options.aliases).length > 0
@@ -244,6 +248,11 @@ export async function createPluginTypeScriptCandidateScope(options: Readonly<{
         ...(options.aliases ? { aliases: options.aliases } : {}),
     });
     const state = resolveTypeScriptGenerationLoaderState(candidateScope);
+    // Only the pinned Jiti patch declares this default-off instance option.
+    // Unpatched installs retain their current evaluation behavior.
+    if ('forceTranspile' in state.loader.options) {
+        state.loader.options.forceTranspile = true;
+    }
     for (const cachedPath of Object.keys(state.loader.cache)) {
         const absoluteCachedPath = resolve(cachedPath);
         if (
