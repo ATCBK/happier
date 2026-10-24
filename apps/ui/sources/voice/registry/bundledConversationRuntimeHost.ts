@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
 import { randomUUID } from '@/platform/randomUUID';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import type {
   BundledAdmittedCanonicalTranscriptPersistenceEvent,
   BundledDirectMediaBindingOwnership,
@@ -378,22 +378,7 @@ function readCandidateAgentSessionBasis(sessionAddress: SessionAddress): Candida
     });
   }
   const metadata = metadataRead.metadata;
-  const target = metadata.backendTarget;
-  const targetRecord = target !== null
-    && typeof target === 'object'
-    && !Array.isArray(target)
-      ? target as Readonly<Record<string, unknown>>
-      : null;
-  const backendId = targetRecord?.kind === 'backend'
-    && typeof targetRecord.backendId === 'string'
-      ? targetRecord.backendId
-      : target === undefined
-        ? (
-            typeof metadata.agentType === 'string'
-              ? metadata.agentType
-              : resolveAgentIdFromSessionMetadata(metadata)
-          )
-        : null;
+  const backendId = resolveSessionActionDefaultBackend({ session })?.defaultAgentId;
   if (!backendId) {
     return Object.freeze({ candidate: false as const, code: 'feature_unavailable' as const });
   }

@@ -76,6 +76,25 @@ describe('Agent-realtime voice RPCs keep the server they were bound to', () => {
       method: 'session.agentRealtime.inspect', serverUrl: homeA.serverUrl, token: homeA.token })]);
   });
 
+  it('does not inspect a configured ACP Session as its stale bundled flavor', async () => {
+    const session = agentSessionOn(homeA.id);
+    storage.setState({ sessions: { [SESSION_ID]: createSessionFixture({ ...session,
+      metadata: { ...session.metadata!, acpConfiguredBackendV1: {
+        v: 1, backendId: 'qa-c-exact-args', title: 'QA configured ACP', updatedAt: 1,
+      } },
+    }) } });
+    const lease = createBundledConversationRuntimeHostLease();
+    try {
+      await expect(lease.host.resolveAgentRealtimeVoiceConversationBinding!({
+        provider: PROVIDER, agent: AGENT, controlSessionId: SESSION_ID,
+        requestedTargetSessionAddress: { serverId: homeA.id, sessionId: SESSION_ID }, settings: {},
+      })).rejects.toMatchObject({ code: 'feature_unavailable' });
+      expect(network.requests).toEqual([]);
+    } finally {
+      lease.revoke();
+    }
+  });
+
   it('retires an unanswered inspection when its runtime is revoked', async () => {
     installSessionOn(homeA.id);
     network.setRpcResponder(async () => await new Promise(() => {}));
