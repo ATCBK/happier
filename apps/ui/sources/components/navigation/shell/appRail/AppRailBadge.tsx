@@ -10,7 +10,7 @@ import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionT
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
-import { APP_RAIL_BADGE } from './appRailMetrics';
+import { APP_RAIL_BADGE, APP_RAIL_BADGE_OVERLAP_PX } from './appRailMetrics';
 
 /**
  * `attention`: something needs the person's action (the attention amber). `accent`: news worth a look
@@ -22,6 +22,20 @@ export type AppRailBadgeSignal =
     | Readonly<{ kind: 'count'; value: number; tone: AppRailBadgeTone }>
     /** Attention (or news) without a number. */
     | Readonly<{ kind: 'dot'; tone: AppRailBadgeTone }>;
+
+/** A folded rail keeps the strongest signal, never a sum of unrelated domain counts. */
+export function resolveStrongestAppRailBadge(signals: readonly (AppRailBadgeSignal | null)[]): AppRailBadgeSignal | null {
+    for (const tone of ['attention', 'accent', 'neutral'] as const) {
+        const candidates = signals.filter((signal): signal is AppRailBadgeSignal => signal?.tone === tone
+            && (signal.kind === 'dot' || signal.value > 0));
+        if (candidates.length === 0) continue;
+        const counts = candidates.filter((signal): signal is Extract<AppRailBadgeSignal, { kind: 'count' }> => signal.kind === 'count');
+        return counts.length > 0 ? counts.reduce((strongest, signal) => signal.value > strongest.value ? signal : strongest) : candidates[0]!;
+    }
+    return null;
+}
+
+export type RailBadgeSignalRenderer = (signal: AppRailBadgeSignal | null) => React.ReactNode;
 
 /** The one tone mapping for rail badges: amber only for what needs action. */
 export function resolveAppRailBadgeTone(
@@ -54,17 +68,27 @@ export function resolveAppRailBadgeTone(
  * type, a tone from `resolveAppRailBadgeTone`, and a ring in the rail's colour that separates it from
  * the glyph. Rendered inside a rail slot; it takes no pointer events.
  */
-export const AppRailBadge = React.memo(function AppRailBadge(props: Readonly<{ signal: AppRailBadgeSignal; testID?: string }>) {
+export const AppRailBadge = React.memo(function AppRailBadge(props: Readonly<{
+    signal: AppRailBadgeSignal;
+    /**
+     * A chrome glyph outside the rail (Activity in the title strip): the badge anchors to that glyph's own
+     * box instead of a rail slot, at the same overlap, so the two read as one family.
+     */
+    glyphSizePx?: number;
+    testID?: string;
+}>) {
     const styles = stylesheet;
     const appear = useBadgeAppear();
     const tone = props.signal.tone === 'attention'
         ? styles.attention
         : props.signal.tone === 'accent' ? styles.accent : styles.neutral;
+    const anchor = props.glyphSizePx === undefined ? styles.anchor
+        : [styles.anchor, { left: props.glyphSizePx - APP_RAIL_BADGE_OVERLAP_PX, top: -APP_RAIL_BADGE_OVERLAP_PX }];
     if (props.signal.kind === 'dot') {
-        return <Animated.View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.dot, tone, appear]} />;
+        return <Animated.View pointerEvents="none" testID={props.testID} style={[anchor, styles.dot, tone, appear]} />;
     }
     return (
-        <Animated.View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.count, tone, appear]}>
+        <Animated.View pointerEvents="none" testID={props.testID} style={[anchor, styles.count, tone, appear]}>
             <Text style={styles.countText} numberOfLines={1}>
                 {formatBadgeCount(props.signal.value)}
             </Text>

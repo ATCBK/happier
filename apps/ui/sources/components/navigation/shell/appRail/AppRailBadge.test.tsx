@@ -11,6 +11,14 @@ function flatten(style: unknown): Record<string, unknown> {
 }
 
 describe('AppRailBadge', () => {
+    it('folds semantic priority before numeric magnitude and never adds unrelated domains', async () => {
+        const { resolveStrongestAppRailBadge } = await import('./AppRailBadge');
+        expect(resolveStrongestAppRailBadge([{ kind: 'count', tone: 'neutral', value: 99 },
+            { kind: 'dot', tone: 'attention' }])).toEqual({ kind: 'dot', tone: 'attention' });
+        expect(resolveStrongestAppRailBadge([{ kind: 'count', tone: 'neutral', value: 3 },
+            { kind: 'count', tone: 'neutral', value: 8 }])).toEqual({ kind: 'count', tone: 'neutral', value: 8 });
+        expect(resolveStrongestAppRailBadge([null, { kind: 'count', tone: 'attention', value: 0 }])).toBeNull();
+    });
     it('anchors every badge at the glyph box corner, a count and a dot each at one size', async () => {
         const { AppRailBadge } = await import('./AppRailBadge');
         const { APP_RAIL_BADGE } = await import('./appRailMetrics');

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
 import type { ScmStatus } from '@/sync/domains/state/storageTypes';
+import type { AppRailBadgeSignal } from '@/components/navigation/shell/appRail/AppRailBadge';
 
 installNavigationCommonModuleMocks();
 const { GitActionRailBadge } = await import('./GitActionRailBadge');
@@ -22,6 +23,12 @@ describe('Git action rail badge', () => {
         expect(screen.getTextContent()).toContain('−8');
         await screen.update(<GitActionRailBadge scmStatus={status} mode="off" testID="git-badge" />);
         expect(screen.findAllHostsByTestId('git-badge')).toHaveLength(0);
+        let signal: AppRailBadgeSignal | null = null;
+        const renderSignal = (value: AppRailBadgeSignal | null) => { signal = value; return null; };
+        await screen.update(<GitActionRailBadge scmStatus={status} mode="diffLines" renderSignal={renderSignal} />);
+        expect(signal).toEqual({ kind: 'count', tone: 'neutral', value: 3 });
+        await screen.update(<GitActionRailBadge scmStatus={status} mode="off" renderSignal={renderSignal} />);
+        expect(signal).toBeNull();
     });
     it('uses file count for incomplete status and hides a clean tree', async () => {
         const screen = await renderScreen(<GitActionRailBadge scmStatus={{ ...status, isComplete: false }} mode="diffLines" testID="git-badge" />);
