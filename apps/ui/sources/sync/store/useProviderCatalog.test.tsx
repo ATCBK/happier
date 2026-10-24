@@ -13,10 +13,50 @@ const account = createProviderSettingsAccountHarness();
 const { useProviderCatalog } = await import('./useProviderCatalog');
 const { useProviderSettings } = await import('@/providers/hooks/useProviderSettings');
 const { refreshProviderCatalog } = await import('@/sync/engine/settings/providerCatalogEngine');
+const { beginProviderCatalogLoad, getProviderCatalogSnapshot } = await import('./settings/providerCatalogSnapshot');
 
 afterEach(async () => { standardCleanup(); await account.reset(); });
 
 describe('Provider catalog observation', () => {
+    it('parks hidden catalog demand and renders, then rejoins the current canonical snapshot on reopen', async () => {
+        const scope = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
+        let reads = 0;
+        account.home.answer(scope.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { select: () => {
+            reads += 1;
+            return { body: { status: 'present', revision: 1,
+                content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+        } });
+        let enabled = true;
+        let requested = scope;
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useProviderCatalog(requested, { enabled });
+        });
+        await vi.waitFor(() => expect(hook.getCurrent()?.status).toBe('ready'));
+        enabled = false;
+        await hook.rerender();
+        const held = hook.getCurrent();
+        renders = 0;
+        await act(async () => { beginProviderCatalogLoad(scope); });
+        expect(getProviderCatalogSnapshot(scope)?.stale).toBe(true);
+        expect(hook.getCurrent()).toBe(held);
+        expect(renders).toBe(0);
+        expect(reads).toBe(1);
+        // Parking must not retain the previous Account's data under a new scope.
+        requested = { ...scope, accountId: 'replacement-account' };
+        await hook.rerender();
+        expect(hook.getCurrent()).toBeNull();
+        expect(reads).toBe(1);
+        requested = scope;
+        enabled = true;
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false }));
+        expect(renders).toBeGreaterThan(0);
+        expect(reads).toBe(2);
+        await hook.unmount();
+    });
+
     it('settles real catalog listeners without restarting demand on equivalent scopes or refresh publications', async () => {
         const scope = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
         let reads = 0;
