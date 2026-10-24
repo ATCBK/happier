@@ -4,6 +4,7 @@ import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invoc
 import type { HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { SERVER_HTTP_KEEP_ALIVE_TIMEOUT_MS_V1 } from '@happier-dev/protocol/server/http/connectionLifetimeV1';
 import { SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { log, logger } from "@/utils/logging/log";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -294,6 +295,7 @@ export async function startApi(params: Readonly<{
     const app = fastify({
         loggerInstance: logger,
         bodyLimit: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1,
+        keepAliveTimeout: SERVER_HTTP_KEEP_ALIVE_TIMEOUT_MS_V1,
         forceCloseConnections: 'idle',
         ...(typeof trustProxy !== "undefined" ? { trustProxy } : null),
     });

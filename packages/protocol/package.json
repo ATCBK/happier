@@ -6944,6 +6944,11 @@
       "types": "./dist/server/http/requestBodyBoundsV1.d.ts",
       "default": "./dist/server/http/requestBodyBoundsV1.js"
     },
+    "./server/http/connectionLifetimeV1": {
+      "happier-source": "./src/server/http/connectionLifetimeV1.ts",
+      "types": "./dist/server/http/connectionLifetimeV1.d.ts",
+      "default": "./dist/server/http/connectionLifetimeV1.js"
+    },
     "./automations/automationTriggerDefinitionStoredContent": {
       "happier-source": "./src/automations/automationTriggerDefinitionStoredContent.ts",
       "types": "./dist/automations/automationTriggerDefinitionStoredContent.d.ts",
