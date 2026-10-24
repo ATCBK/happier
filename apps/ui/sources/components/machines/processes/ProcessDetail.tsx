@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { HappierSeries } from '@happier-dev/plugin-ui/presentation';
 import type {
@@ -88,8 +89,10 @@ export const ProcessDetail = React.memo(function ProcessDetail(
   const { row } = props;
   const [wide, setWide] = React.useState(false);
   const onLayout = React.useCallback(
-    (event: LayoutChangeEvent) =>
-      setWide(event.nativeEvent.layout.width >= TWO_COLUMN_MIN_WIDTH_PX),
+    (event: LayoutChangeEvent) => {
+      const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+      if (width !== null) setWide(width >= TWO_COLUMN_MIN_WIDTH_PX);
+    },
     [],
   );
   const name = describeProcessTitle(row);

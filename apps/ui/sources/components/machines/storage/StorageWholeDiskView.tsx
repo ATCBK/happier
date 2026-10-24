@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   Collection,
@@ -962,7 +963,10 @@ function DiskChart(
     <View
       testID={`machine-storage-disk-${props.shape}`}
       style={styles.chart}
-      onLayout={(event) => setWidth(Math.round(event.nativeEvent.layout.width))}
+      onLayout={(event) => {
+        const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+        if (visibleWidth !== null) setWidth(Math.round(visibleWidth));
+      }}
     >
       {chartWidth > 0 ? (
         props.shape === 'map' ? (

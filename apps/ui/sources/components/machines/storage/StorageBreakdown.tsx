@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -78,7 +79,10 @@ export const StorageBreakdown = React.memo(function StorageBreakdown(props: Read
             <ItemGroup
                 title={t('machineStorage.breakdown.title', { amount: formatMachineBytes(total, 'storage') })}
                 titleAccessory={<BreakdownAccessory compact={props.compact} />}>
-                <View onLayout={event => setWidth(Math.round(event.nativeEvent.layout.width))}>
+                <View onLayout={event => {
+                    const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+                    if (visibleWidth !== null) setWidth(Math.round(visibleWidth));
+                }}>
                     {withRing ? (
                         <View style={styles.joined}>
                             <StorageRing summary={props.summary} />

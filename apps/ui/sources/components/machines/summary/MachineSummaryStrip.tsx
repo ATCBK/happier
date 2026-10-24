@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 
@@ -82,7 +83,9 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
     const instruments = React.useMemo(() => (summary ? buildMachineSummaryInstruments(summary) : null), [summary]);
     const [underWidth, setUnderWidth] = React.useState<number | null>(null);
     const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-        const width = Math.round(event.nativeEvent.layout.width);
+        const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+        if (visibleWidth === null) return;
+        const width = Math.round(visibleWidth);
         setUnderWidth(current => (current === width ? current : width));
     }, []);
     if (props.metrics.length === 0) return null;

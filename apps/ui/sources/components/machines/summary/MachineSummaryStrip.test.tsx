@@ -74,9 +74,14 @@ describe('MachineSummaryStrip', () => {
         const named = () => screen.findAll(node => node.type === Tooltip).length;
         // Before the first measurement every chosen metric shows (nothing is dropped on a guess).
         expect(named()).toBe(MACHINE_SUMMARY_METRICS.length);
+        measure(0);
+        expect(named()).toBe(MACHINE_SUMMARY_METRICS.length);
         measure(250);
         expect(named()).toBeLessThan(MACHINE_SUMMARY_METRICS.length);
         expect(named()).toBeGreaterThanOrEqual(1);
+        const retainedMetrics = named();
+        measure(0);
+        expect(named()).toBe(retainedMetrics);
         measure(40);
         expect(named()).toBe(1);
         measure(520);

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -63,8 +64,8 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
   const onLayout = React.useCallback(
     (event: LayoutChangeEvent) => {
       // A retained, hidden panel measures zero; keep its chart until a real resize.
-      const measuredWidth = event.nativeEvent.layout.width;
-      if (measuredWidth > 0) setWidth(measuredWidth);
+      const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+      if (visibleWidth !== null) setWidth(visibleWidth);
     },
     [],
   );

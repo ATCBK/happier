@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet } from 'react-native-unistyles';
 import { HAPPIER_DATA_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
@@ -28,9 +29,8 @@ export const VitalsSheet = React.memo(function VitalsSheet(
   const phone = useDeviceType() === 'phone';
   const [narrow, setNarrow] = React.useState(false);
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-    const width = event.nativeEvent.layout.width;
-    // Hidden retained panels report zero, not a change to the wide composition.
-    if (width > 0) setNarrow(width < TWO_COLUMN_MIN_WIDTH_PX);
+    const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+    if (width !== null) setNarrow(width < TWO_COLUMN_MIN_WIDTH_PX);
   }, []);
   const columns = phone || narrow ? 1 : (props.columns ?? 2);
   const stacked = columns === 1;
