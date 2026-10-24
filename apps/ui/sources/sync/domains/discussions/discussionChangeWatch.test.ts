@@ -24,6 +24,7 @@ describe('mounted Discussion AccountChange watch', () => {
             changes: [{ cursor: 2, kind: 'discussion', entityId: 'discussion-a', changedAt: 2 }],
         });
         expect(onInvalidated).toHaveBeenCalledOnce();
+        expect(onInvalidated).toHaveBeenLastCalledWith(['discussion-a'], new Map([['discussion-a', 2]]));
         watch.dispose();
     });
 

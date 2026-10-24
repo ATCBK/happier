@@ -9,7 +9,7 @@ export type MountedDiscussionChangeWatch = Readonly<{
 type ActiveWatch = Readonly<{
     scope: ServerAccountScope;
     address: Readonly<{ serverId: string }>;
-    onInvalidated(discussionIds: readonly string[]): void;
+    onInvalidated(discussionIds: readonly string[], revisions: ReadonlyMap<string, number>): void;
     includeDocSourceChanges?: () => boolean;
 }>;
 
@@ -23,7 +23,7 @@ const activeWatches = new Set<ActiveWatch>();
 export function watchMountedDiscussions(input: Readonly<{
     scope: ServerAccountScope;
     address: Readonly<{ serverId: string }>;
-    onInvalidated(discussionIds: readonly string[]): void;
+    onInvalidated(discussionIds: readonly string[], revisions: ReadonlyMap<string, number>): void;
     includeDocSourceChanges?: () => boolean;
 }>): MountedDiscussionChangeWatch {
     const watch: ActiveWatch = Object.freeze({
@@ -53,7 +53,11 @@ export function publishMountedDiscussionChanges(input: Readonly<{
     changes: readonly ApiChangeEntry[];
 }>): void {
     if (activeWatches.size === 0) return;
-    const discussionIds = [...new Set(input.changes.filter(change => change.kind === 'discussion').map(change => change.entityId))];
+    const revisions = new Map<string, number>();
+    for (const change of input.changes) {
+        if (change.kind === 'discussion') revisions.set(change.entityId, Math.max(revisions.get(change.entityId) ?? 0, change.cursor));
+    }
+    const discussionIds = [...revisions.keys()];
     const discussionChanged = discussionIds.length > 0;
     const docChanged = input.changes.some(change => change.kind === 'artifact');
     if (!discussionChanged && !docChanged) return;
@@ -67,7 +71,7 @@ export function publishMountedDiscussionChanges(input: Readonly<{
         }
         if (!discussionChanged && !(docChanged && watch.includeDocSourceChanges?.())) continue;
         try {
-            watch.onInvalidated(discussionIds);
+            watch.onInvalidated(discussionIds, revisions);
         } catch {
             // A presentation refresh cannot suppress sibling observers or the
             // AccountChange owner's own canonical materialization/checkpoint.
