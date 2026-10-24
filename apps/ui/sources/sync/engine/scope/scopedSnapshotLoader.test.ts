@@ -45,6 +45,33 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 describe('createScopedSnapshotLoader', () => {
+    it('cancels a demanded read only when its final observer leaves', async () => {
+        const target = { key: 'read-lifetime', serverId: 'read-home' };
+        let signal: AbortSignal | undefined;
+        let finish!: () => void;
+        const held = new Promise<void>(resolve => { finish = resolve; });
+        const loader = createScopedSnapshotLoader({
+            load: async (_target, context) => {
+                const candidate = 'signal' in context ? context.signal : undefined;
+                signal = candidate instanceof AbortSignal ? candidate : undefined;
+                await held;
+            },
+            shouldLoadOnObserve: () => true,
+            invalidateServer: () => {},
+            invalidateTarget: () => {},
+        });
+        const first = loader.observe(target);
+        const second = loader.observe(target);
+        try {
+            await Promise.resolve();
+            expect(signal).toBeInstanceOf(AbortSignal);
+            first();
+            expect(signal?.aborted).toBe(false);
+            second();
+            expect(signal?.aborted).toBe(true);
+        } finally { first(); second(); finish(); await loader.refresh(target); loader.resetForTests(); }
+    });
+
     it('does not turn completed maintenance into new Account-currentness demand on a settled page', async () => {
         type Identity = Pick<ReturnType<typeof AccountEncryptionCurrentnessResponseSchema.parse>, 'version' | 'mode' | 'contentKeyFingerprint'>;
         const target = { key: 'catalog:settled-maintenance', serverId: 'settled-home' };

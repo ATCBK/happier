@@ -1,6 +1,4 @@
 import {
-    TeamGroupV1Schema,
-    TeamGroupsPageV1Schema,
     TeamsPageV1Schema,
     TeamSummaryV1Schema,
     teamDirectoryQueryKeyV1,
@@ -11,15 +9,12 @@ import {
     type TeamsListInputV1,
     type TeamCredentialResourceCatalogEntryV1,
 } from '@happier-dev/protocol/teams';
-import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
-import {
-    requestHomeDomain,
-} from '@/sync/api/home/homeServerActionTransport';
-import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
+import { runTeamAction, type HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
+import { getTeamGroup, listTeamGroups } from '@/sync/ops/teams/teamGroupOperations';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
     serverAccountScopeKeySuffix,
@@ -146,16 +141,15 @@ const loader = createScopedSnapshotLoader<TeamsDirectoryTarget>({
         beginTeamsDirectoryLoad(scope, queryKey);
         // A refresh always re-reads the first page: a cursor names a position in
         // a sequence that may have moved, and replaying it would duplicate rows.
-        const request = bindHomeDomainActionHttpRequestV1('teams.list', { ...input, cursor: null });
-        const result = await requestHomeDomain({
+        const result = await runTeamAction({
             scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamsPageV1Schema,
+            actionId: 'teams.list',
+            input: { ...input, cursor: null },
+            parse: value => TeamsPageV1Schema.parse(value),
+            signal: loadContext.signal,
         });
-        if (result.ok) {
+        if (loadContext.signal.aborted) return;
+        if (result.kind === 'succeeded') {
             applyTeamsDirectoryPage({
                 scope,
                 queryKey,
@@ -202,16 +196,15 @@ function teamTargetFor(scope: ServerAccountScope, address: TeamAddress): TeamTar
 const teamLoader = createScopedSnapshotLoader<TeamTarget>({
     load: async ({ scope, address }, loadContext) => {
         beginTeamLoad(scope, address);
-        const request = bindHomeDomainActionHttpRequestV1('teams.get', { v: 1, teamId: address.teamId });
-        const result = await requestHomeDomain({
+        const result = await runTeamAction({
             scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamSummaryV1Schema,
+            actionId: 'teams.get',
+            input: { v: 1, teamId: address.teamId },
+            parse: value => TeamSummaryV1Schema.parse(value),
+            signal: loadContext.signal,
         });
-        if (result.ok) {
+        if (loadContext.signal.aborted) return;
+        if (result.kind === 'succeeded') {
             applyTeamProjection({
                 scope,
                 address,
@@ -295,39 +288,29 @@ export async function loadMoreTeamsDirectory(
 
     paginating.add(target.key);
     try {
-        const request = bindHomeDomainActionHttpRequestV1('teams.list', { ...input, cursor });
-        const result = await requestHomeDomain({
-            scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamsPageV1Schema,
-        });
-        // A refresh may have replaced the whole sequence while this page was in
-        // flight — a wake re-reads page one, and it can land first. The cursor
-        // *is* the position in a sequence, so a directory that no longer sits at
-        // the position this page continues has moved on, and appending it would
-        // duplicate rows the refresh already published and hand the reader a
-        // cursor into a sequence that no longer exists. Dropping the answer is
-        // correct and loses nothing: the fresh page carries its own cursor.
-        if ((getTeamsDirectorySnapshot(scope, target.queryKey)?.nextCursor ?? null) !== cursor) return;
+        await loader.readContinuation(target, async signal => {
+            const result = await runTeamAction({ scope, actionId: 'teams.list', input: { ...input, cursor },
+                parse: value => TeamsPageV1Schema.parse(value), signal });
+            if (signal.aborted) return;
+            // A refresh may have replaced this sequence, even when its cursor repeats.
+            if ((getTeamsDirectorySnapshot(scope, target.queryKey)?.nextCursor ?? null) !== cursor) return;
 
-        if (result.ok) {
-            applyTeamsDirectoryPage({
+            if (result.kind === 'succeeded') {
+                applyTeamsDirectoryPage({
+                    scope,
+                    queryKey: target.queryKey,
+                    items: result.value.items,
+                    nextCursor: result.value.nextCursor,
+                    observedAt: Date.now(),
+                    append: true,
+                });
+                return;
+            }
+            applyTeamsDirectoryFailure({
                 scope,
                 queryKey: target.queryKey,
-                items: result.value.items,
-                nextCursor: result.value.nextCursor,
-                observedAt: Date.now(),
-                append: true,
+                error: toSnapshotError(result.failure),
             });
-            return;
-        }
-        applyTeamsDirectoryFailure({
-            scope,
-            queryKey: target.queryKey,
-            error: toSnapshotError(result.failure),
         });
     } finally {
         paginating.delete(target.key);
@@ -360,8 +343,8 @@ const membersLoader = createScopedSnapshotLoader<TeamMembersTarget>({
         beginTeamMembersLoad(scope, address, queryKey);
         const begun = getTeamMembersSnapshot(scope, address, queryKey);
         const outcome = await loadTeamPageRange({ loadedRowCount,
-            loadPage: cursor => listTeamMembers({ scope, address, filter, ...(query ? { query } : {}), cursor }),
-            isCancelled: () => getTeamMembersSnapshot(scope, address, queryKey) !== begun,
+            loadPage: cursor => listTeamMembers({ scope, address, filter, ...(query ? { query } : {}), cursor, signal: context.signal }),
+            isCancelled: () => context.signal.aborted || getTeamMembersSnapshot(scope, address, queryKey) !== begun,
         });
         // Sign-out and the last observer retire this sequence while its request
         // may still be pending. Its old answer cannot recreate those private rows.
@@ -405,13 +388,15 @@ export async function loadMoreTeamMembers(scope: ServerAccountScope, address: Te
     const cursor = snapshot.nextCursor;
     beginTeamMembersLoad(scope, address, target.queryKey, true);
     const pending = getTeamMembersSnapshot(scope, address, target.queryKey);
-    const outcome = await listTeamMembers({ scope, address, filter, query: target.query, cursor });
-    // A refresh or wake replaces this snapshot even when its cursor repeats.
-    // That older continuation can no longer append to the deciding sequence.
-    if (getTeamMembersSnapshot(scope, address, target.queryKey) !== pending) return;
-    if (outcome.kind === 'succeeded') {
-        applyTeamMembersPage({ scope, address, queryKey: target.queryKey, ...outcome.value, append: true, current: pending?.stale === false });
-    } else applyTeamMembersFailure({ scope, address, queryKey: target.queryKey, error: outcome.failure });
+    await membersLoader.readContinuation(target, async signal => {
+        const outcome = await listTeamMembers({ scope, address, filter, query: target.query, cursor, signal });
+        // A refresh or wake replaces this snapshot even when its cursor repeats.
+        // That older continuation can no longer append to the deciding sequence.
+        if (signal.aborted || getTeamMembersSnapshot(scope, address, target.queryKey) !== pending) return;
+        if (outcome.kind === 'succeeded') {
+            applyTeamMembersPage({ scope, address, queryKey: target.queryKey, ...outcome.value, append: true, current: pending?.stale === false });
+        } else applyTeamMembersFailure({ scope, address, queryKey: target.queryKey, error: outcome.failure });
+    });
 }
 
 /** Shared Group labels retain their scoped snapshot beyond their visible list. */
@@ -445,23 +430,8 @@ const groupsLoader = createScopedSnapshotLoader<TeamGroupsTarget>({
         beginTeamGroupsLoad(scope, address, queryKey);
         const result = await loadTeamPageRange({
             loadedRowCount,
-            loadPage: async (cursor) => {
-                const request = bindHomeDomainActionHttpRequestV1('teams.groups.list', {
-                    v: 1,
-                    teamId: address.teamId,
-                    archived,
-                    ...(cursor === null ? {} : { cursor }),
-                });
-                const page = await requestHomeDomain({
-                    scope,
-                    method: request.method,
-                    path: request.path,
-                    effect: 'read',
-                    input: request.body,
-                    schema: TeamGroupsPageV1Schema,
-                });
-                return page.ok ? { kind: 'succeeded', value: page.value } : { kind: 'failed', failure: page.failure };
-            },
+            loadPage: cursor => listTeamGroups({ scope, address, archived, cursor, signal: loadContext.signal }),
+            isCancelled: () => loadContext.signal.aborted,
         });
         if (result === null) return;
         if (result.kind === 'succeeded') {
@@ -518,20 +488,9 @@ function groupTargetFor(
 const groupLoader = createScopedSnapshotLoader<TeamGroupTarget>({
     load: async ({ scope, address, groupId }, loadContext) => {
         beginTeamGroupLoad(scope, address, groupId);
-        const request = bindHomeDomainActionHttpRequestV1('teams.groups.get', {
-            v: 1,
-            teamId: address.teamId,
-            groupId,
-        });
-        const result = await requestHomeDomain({
-            scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamGroupV1Schema,
-        });
-        if (result.ok) {
+        const result = await getTeamGroup({ scope, address, groupId, signal: loadContext.signal });
+        if (loadContext.signal.aborted) return;
+        if (result.kind === 'succeeded') {
             applyTeamGroupProjection({
                 scope,
                 address,
@@ -595,19 +554,15 @@ function credentialResourcesTargetFor(
 /**
  * One Team's shared credential resources.
  *
- * Unlike the directory and Group reads beside it, this one goes through the
- * Team Action front door rather than the raw Home transport: the resource
- * intents are declared Actions, and a read that bypassed the front door would
- * escape the per-surface enablement and provenance every other resource intent
- * is subject to. The freshness lifecycle is still the shared one, so the
- * projection cannot develop a second refresh policy.
+ * Like the directory and Group reads, acquisition uses the Team Action front
+ * door so per-Action settings apply. The shared loader owns demand and freshness.
  */
 const credentialResourcesLoader = createScopedSnapshotLoader<TeamCredentialResourcesTarget>({
     load: async ({ scope, address, search, filter, queryKey }, loadContext) => {
         beginTeamCredentialResourcesLoad(scope, address, queryKey);
         let outcome: Awaited<ReturnType<typeof listTeamCredentialResources>>;
         try {
-            outcome = await listTeamCredentialResources({ scope, address, search, filter });
+            outcome = await listTeamCredentialResources({ scope, address, search, filter, signal: loadContext.signal });
         } catch {
             // Ask-first reads settle through the Action owner. A thrown fault
             // is not a Home answer and must not revive an abandoned observer.
@@ -686,8 +641,9 @@ const credentialResourceLoader = createScopedSnapshotLoader<TeamCredentialResour
         beginTeamCredentialResourceLoad(scope, address, resourceId);
         let outcome: Awaited<ReturnType<typeof getTeamCredentialResource>>;
         try {
-            outcome = await getTeamCredentialResource({ scope, resourceId });
+            outcome = await getTeamCredentialResource({ scope, resourceId, signal: loadContext.signal });
         } catch {
+            if (!loadContext.isCurrent()) return;
             applyTeamCredentialResourceFailure({
                 scope,
                 address,
@@ -764,7 +720,9 @@ function credentialResourceCatalogTargetFor(
 
 const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentialResourceCatalogTarget>({
     loadGroupKey: ({ scope, application }) => JSON.stringify([serverAccountScopeKeySuffix(scope), application ?? null]),
-    loadMany: async group => {
+    loadMany: async (loads, signal) => {
+        const group = loads.filter(load => !load.context.signal.aborted);
+        if (group.length === 0) return;
         for (const load of group) {
             const { scope, address, application } = load.target;
             beginTeamCredentialResourceCatalogLoad(scope, address, application);
@@ -779,6 +737,7 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
             do {
                 if (!group.some(load => load.context.isCurrent())) return;
                 const outcome = await discoverEntitledTeamCredentialResources({ scope, teamIds,
+                    signal,
                     shouldContinue: () => group.some(load => load.context.isCurrent()),
                     ...(application ? { application } : {}), ...(cursor ? { cursor } : {}) });
                 if (outcome.kind === 'failed') {
@@ -906,28 +865,31 @@ export async function loadMoreTeamCredentialResources(
 
     paginating.add(target.key);
     try {
-        const outcome = await listTeamCredentialResources({ scope, address, cursor, search, filter });
-        if ((getTeamCredentialResourcesSnapshot(scope, address, target.queryKey)?.nextCursor ?? null) !== cursor) return;
-        if (outcome.kind === 'succeeded') {
-            const current = getTeamCredentialResourcesSnapshot(scope, address, target.queryKey);
-            applyTeamCredentialResourcesPage({
+        await credentialResourcesLoader.readContinuation(target, async signal => {
+            const outcome = await listTeamCredentialResources({ scope, address, cursor, search, filter, signal });
+            if (signal.aborted) return;
+            if ((getTeamCredentialResourcesSnapshot(scope, address, target.queryKey)?.nextCursor ?? null) !== cursor) return;
+            if (outcome.kind === 'succeeded') {
+                const current = getTeamCredentialResourcesSnapshot(scope, address, target.queryKey);
+                applyTeamCredentialResourcesPage({
+                    scope,
+                    address,
+                    queryKey: target.queryKey,
+                    resources: outcome.value.resources,
+                    nextCursor: outcome.value.nextCursor,
+                    viewer: outcome.value.viewer,
+                    observedAt: Date.now(),
+                    append: true,
+                    current: current?.stale === false,
+                });
+                return;
+            }
+            applyTeamCredentialResourcesFailure({
                 scope,
                 address,
                 queryKey: target.queryKey,
-                resources: outcome.value.resources,
-                nextCursor: outcome.value.nextCursor,
-                viewer: outcome.value.viewer,
-                observedAt: Date.now(),
-                append: true,
-                current: current?.stale === false,
+                error: toSnapshotError(outcome.failure),
             });
-            return;
-        }
-        applyTeamCredentialResourcesFailure({
-            scope,
-            address,
-            queryKey: target.queryKey,
-            error: toSnapshotError(outcome.failure),
         });
     } finally {
         paginating.delete(target.key);
@@ -994,39 +956,29 @@ export async function loadMoreTeamGroups(
 
     paginating.add(target.key);
     try {
-        const request = bindHomeDomainActionHttpRequestV1('teams.groups.list', {
-            v: 1,
-            teamId: address.teamId,
-            archived,
-            cursor,
-        });
-        const result = await requestHomeDomain({
-            scope,
-            method: request.method,
-            path: request.path,
-            effect: 'read',
-            input: request.body,
-            schema: TeamGroupsPageV1Schema,
-        });
-        if ((getTeamGroupsSnapshot(scope, address, target.queryKey)?.nextCursor ?? null) !== cursor) return;
+        await groupsLoader.readContinuation(target, async signal => {
+            const result = await listTeamGroups({ scope, address, archived, cursor, signal });
+            if (signal.aborted) return;
+            if ((getTeamGroupsSnapshot(scope, address, target.queryKey)?.nextCursor ?? null) !== cursor) return;
 
-        if (result.ok) {
-            applyTeamGroupsPage({
+            if (result.kind === 'succeeded') {
+                applyTeamGroupsPage({
+                    scope,
+                    address,
+                    queryKey: target.queryKey,
+                    items: result.value.items,
+                    nextCursor: result.value.nextCursor,
+                    observedAt: Date.now(),
+                    append: true,
+                });
+                return;
+            }
+            applyTeamGroupsFailure({
                 scope,
                 address,
                 queryKey: target.queryKey,
-                items: result.value.items,
-                nextCursor: result.value.nextCursor,
-                observedAt: Date.now(),
-                append: true,
+                error: toSnapshotError(result.failure),
             });
-            return;
-        }
-        applyTeamGroupsFailure({
-            scope,
-            address,
-            queryKey: target.queryKey,
-            error: toSnapshotError(result.failure),
         });
     } finally {
         paginating.delete(target.key);

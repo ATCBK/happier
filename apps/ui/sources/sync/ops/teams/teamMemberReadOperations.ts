@@ -14,9 +14,11 @@ export async function listTeamMembers(params: Readonly<{
     query?: string;
     cursor?: string | null;
     limit?: number;
+    signal?: AbortSignal;
 }>): Promise<TeamMemberOutcome<TeamMembersPageV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
+        signal: params.signal,
         actionId: 'teams.members.list',
         input: {
             v: 1,

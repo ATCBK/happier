@@ -65,10 +65,12 @@ export async function listTeamInvitations(params: Readonly<{
      * asking for fifty of them would be paid-for and discarded.
      */
     limit?: number;
+    signal?: AbortSignal;
 }>): Promise<TeamInvitationOutcome<TeamInvitationsPageV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
         actionId: 'teams.invitations.list',
+        signal: params.signal,
         input: {
             v: 1,
             teamId: params.address.teamId,

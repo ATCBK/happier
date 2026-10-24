@@ -1,78 +1,40 @@
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-    NO_TEAM_CAPABILITIES_V1,
     teamDirectoryQueryKeyV1,
     type TeamSummaryV1,
     type TeamsListInputV1,
 } from '@happier-dev/protocol/teams';
 
-const runtimeFetchMock = vi.hoisted(() => vi.fn());
-const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
+import { standardCleanup, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal: importOriginal as <T = typeof import('@/auth/storage/tokenStorage')>() => Promise<T>,
-        tokenStorage: { getCredentialsForServerUrl: getCredentialsForServerUrlMock },
-    });
-});
-
-import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import {
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+// Only the Team HTTP response varies by case; Action/account/settings admission stays real.
+const runtimeFetchMock = vi.fn<(request: { url: string; init: RequestInit | undefined }) => Promise<Response>>();
+const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const {
     getTeamSnapshot,
     getTeamsDirectorySnapshot,
     resetTeamsSnapshotsForTests,
-} from '@/sync/store/teams/teamsSnapshots';
-import { createTeamAddress } from '@/sync/domains/teams/teamAddress';
+} = await import('@/sync/store/teams/teamsSnapshots');
+const { createTeamAddress } = await import('@/sync/domains/teams/teamAddress');
 
-import {
+const {
     loadMoreTeamsDirectory,
     observeTeam,
     observeTeamsDirectory,
     resetTeamsDirectoryEngineForTests,
-} from './teamsDirectoryEngine';
+} = await import('./teamsDirectoryEngine');
 
 const listInput: TeamsListInputV1 = { v: 1, scope: 'member', archived: 'active' };
 const queryKey = teamDirectoryQueryKeyV1(listInput);
 
-function tokenForSub(sub: string): string {
-    const payload = globalThis.btoa(JSON.stringify({ sub }))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    return `e30.${payload}.signature`;
-}
-
 function team(id: string, name = `Team ${id}`): TeamSummaryV1 {
-    return {
-        id,
-        name,
-        description: null,
-        logo: null,
-        archivedAt: null,
-        recovery: null,
-        policy: {
-            v: 1,
-            sessionCreationPolicy: 'team_default',
-            externalSharingPolicy: 'team_admins_only',
-            defaultSessionHistoryAccess: 'from_membership',
-            admissionMode: 'invite_only',
-            authenticationPolicy: null,
-        },
-        viewerRole: 'member',
-        capabilities: NO_TEAM_CAPABILITIES_V1,
-        admission: {
-            historyChoice: { admin: 'choice', member: 'choice', guest: 'hidden' },
-        },
-        counts: null,
-    };
+    return teamSummaryFixture({ id, name, viewerRole: 'member' });
 }
 
 function page(items: TeamSummaryV1[], nextCursor: string | null): Response {
@@ -84,21 +46,29 @@ function requestedBodies(): TeamsListInputV1[] {
 }
 
 async function addHome(name: string, serverUrl: string): Promise<string> {
-    return (await upsertServerProfile({ serverUrl, name })).id;
+    const serverId = await home.addHome({ serverUrl, name, accountId: 'account', teamsEnabled: true });
+    for (const path of ['/v1/teams/list', '/v1/teams/get']) home.answer(serverId, path, {
+        select: async (_input, request) => {
+            const response = await runtimeFetchMock(request);
+            return { status: response.status, body: await response.json() };
+        },
+    });
+    return serverId;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+    await home.reset();
     runtimeFetchMock.mockReset();
-    getCredentialsForServerUrlMock.mockReset();
-    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    standardCleanup();
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
     vi.clearAllMocks();
+    await home.reset();
 });
 
 describe('teamsDirectoryEngine', () => {
@@ -110,7 +80,7 @@ describe('teamsDirectoryEngine', () => {
         const address = createTeamAddress(homeA, 't1')!;
 
         const release = observeTeam(scope, address);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamSnapshot(scope, address)?.status).toBe('ready');
         });
 
@@ -128,12 +98,12 @@ describe('teamsDirectoryEngine', () => {
         const address = createTeamAddress(homeA, 't1')!;
 
         const release = observeTeam(scope, address);
-        await vi.waitFor(() => expect(getTeamSnapshot(scope, address)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamSnapshot(scope, address)?.status).toBe('ready'));
 
         runtimeFetchMock.mockRejectedValue(new Error('network down'));
         publishHomeAccountChange(homeA);
 
-        await vi.waitFor(() => expect(getTeamSnapshot(scope, address)?.status).toBe('error'));
+        await waitForHomeGovernance(() => expect(getTeamSnapshot(scope, address)?.status).toBe('error'));
         expect(getTeamSnapshot(scope, address)).toMatchObject({
             stale: true,
             data: { id: 't1' },
@@ -149,7 +119,7 @@ describe('teamsDirectoryEngine', () => {
         const scope = createServerAccountScope(homeA, 'account')!;
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('ready');
         });
 
@@ -168,7 +138,7 @@ describe('teamsDirectoryEngine', () => {
         const scope = createServerAccountScope(homeA, 'account')!;
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.nextCursor).toBe('cursor-1');
         });
 
@@ -188,7 +158,7 @@ describe('teamsDirectoryEngine', () => {
         const scope = createServerAccountScope(homeA, 'account')!;
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('ready');
         });
         const callsBefore = runtimeFetchMock.mock.calls.length;
@@ -220,12 +190,12 @@ describe('teamsDirectoryEngine', () => {
         });
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => expect(releaseFirstResponse).not.toBeNull());
+        await waitForHomeGovernance(() => expect(releaseFirstResponse).not.toBeNull());
 
         publishHomeAccountChange(homeA);
         releaseFirstResponse!();
 
-        await vi.waitFor(() => expect(releaseTrailingResponse).not.toBeNull());
+        await waitForHomeGovernance(() => expect(releaseTrailingResponse).not.toBeNull());
         expect(getTeamsDirectorySnapshot(scope, queryKey)).toMatchObject({
             stale: true,
             data: [{ name: 'Before rename' }],
@@ -233,7 +203,7 @@ describe('teamsDirectoryEngine', () => {
 
         releaseTrailingResponse!();
 
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.data?.[0]?.name).toBe('After rename');
         });
         expect(getTeamsDirectorySnapshot(scope, queryKey)?.stale).toBe(false);
@@ -247,7 +217,7 @@ describe('teamsDirectoryEngine', () => {
         const scope = createServerAccountScope(home, 'account')!;
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('ready'));
         const reads = runtimeFetchMock.mock.calls.length;
 
         publishHomeAccountChange(home, ['session-1', 'self']);
@@ -255,7 +225,7 @@ describe('teamsDirectoryEngine', () => {
         expect(runtimeFetchMock.mock.calls.length).toBe(reads);
 
         publishHomeAccountChange(home, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]);
-        await vi.waitFor(() => expect(runtimeFetchMock.mock.calls.length).toBe(reads + 1));
+        await waitForHomeGovernance(() => expect(runtimeFetchMock.mock.calls.length).toBe(reads + 1));
         release();
     });
 
@@ -269,14 +239,14 @@ describe('teamsDirectoryEngine', () => {
 
         const releaseA = observeTeamsDirectory(scopeA, listInput);
         const releaseB = observeTeamsDirectory(scopeB, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.status).toBe('ready');
             expect(getTeamsDirectorySnapshot(scopeB, queryKey)?.status).toBe('ready');
         });
         const snapshotB = getTeamsDirectorySnapshot(scopeB, queryKey);
 
         publishHomeAccountChange(homeA);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.stale).toBe(false);
         });
 
@@ -299,7 +269,7 @@ describe('teamsDirectoryEngine', () => {
         ));
         const releaseA = observeTeamsDirectory(scopeA, listInput);
         const releaseB = observeTeamsDirectory(scopeB, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.status).toBe('ready');
             expect(getTeamsDirectorySnapshot(scopeB, queryKey)?.status).toBe('ready');
         });
@@ -327,7 +297,7 @@ describe('teamsDirectoryEngine', () => {
             );
         });
         const releaseAgain = observeTeamsDirectory(scopeA, listInput);
-        await vi.waitFor(() => expect(releaseRemountResponse).not.toBeNull());
+        await waitForHomeGovernance(() => expect(releaseRemountResponse).not.toBeNull());
         expect(getTeamsDirectorySnapshot(scopeA, queryKey)).toMatchObject({
             stale: true,
             data: [{ name: 'Before rename' }],
@@ -335,7 +305,7 @@ describe('teamsDirectoryEngine', () => {
         expect(getTeamsDirectorySnapshot(scopeB, queryKey)).toBe(untouchedB);
 
         releaseRemountResponse!();
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.data?.[0]?.name).toBe('After rename');
             expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.stale).toBe(false);
         });
@@ -352,7 +322,7 @@ describe('teamsDirectoryEngine', () => {
         const scope = createServerAccountScope(homeA, 'account')!;
 
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('ready');
         });
 
@@ -361,7 +331,7 @@ describe('teamsDirectoryEngine', () => {
         });
         publishHomeAccountChange(homeA);
 
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.status).toBe('error');
         });
         const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
@@ -379,7 +349,7 @@ describe('teamsDirectoryEngine', () => {
         // Page one of the original sequence.
         runtimeFetchMock.mockImplementationOnce(async () => page([team('t1'), team('t2')], 'cursor-1'));
         const release = observeTeamsDirectory(scope, listInput);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.nextCursor).toBe('cursor-1');
         });
 
@@ -393,12 +363,13 @@ describe('teamsDirectoryEngine', () => {
             return page([team('t2'), team('t3')], 'cursor-2');
         });
         const continuation = loadMoreTeamsDirectory(scope, listInput);
+        await waitForHomeGovernance(() => expect(runtimeFetchMock.mock.calls.length).toBe(2));
 
         // A wake refresh re-reads page one of a sequence that has moved, and
         // resolves first.
         runtimeFetchMock.mockImplementationOnce(async () => page([team('t9'), team('t1')], 'cursor-1b'));
         publishHomeAccountChange(homeA);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamsDirectorySnapshot(scope, queryKey)?.nextCursor).toBe('cursor-1b');
         });
 

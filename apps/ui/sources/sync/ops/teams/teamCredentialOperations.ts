@@ -193,6 +193,7 @@ export function discoverEntitledTeamCredentialResources(params: Readonly<{
     application?: ProviderBrokerApplicationBindingV1;
     cursor?: string;
     shouldContinue: () => boolean;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceDiscoveryPageV1>> {
     return runTeamAction({
         scope: params.scope,
@@ -201,6 +202,7 @@ export function discoverEntitledTeamCredentialResources(params: Readonly<{
             ...(params.cursor ? { cursor: params.cursor } : {}) },
         parse: value => TeamCredentialResourceDiscoveryPageV1Schema.parse(value),
         executorOptions: { homeDomainReadCurrentness: params.shouldContinue },
+        signal: params.signal,
     });
 }
 
@@ -209,10 +211,12 @@ export async function listTeamCredentialActivity(params: Readonly<{
     resourceId: string;
     cursor?: string | null;
     limit?: number;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceActivityPageV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.activity.list',
+        signal: params.signal,
         input: {
             resourceId: params.resourceId,
             ...(params.cursor ? { cursor: params.cursor } : {}),
@@ -284,10 +288,12 @@ export function getTeamCredentialPreparation(params: Readonly<{
     scope: ServerAccountScope;
     teamId: string;
     resourceId: string;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialPreparationOutputV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.preparation.get',
+        signal: params.signal,
         input: { teamId: params.teamId, resourceId: params.resourceId },
         parse: (value) => TeamCredentialPreparationOutputV1Schema.parse(value),
     });
@@ -492,10 +498,12 @@ export async function deleteTeamCredentialResource(params: Readonly<{
 export function listTeamCredentialUsageLimits(params: Readonly<{
     scope: ServerAccountScope;
     resourceId: string;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialUsageLimitListOutputV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.limits.list',
+        signal: params.signal,
         input: { resourceId: params.resourceId },
         parse: (value) => TeamCredentialUsageLimitListOutputV1Schema.parse(value),
     });
@@ -556,10 +564,12 @@ export async function deleteTeamCredentialUsageLimit(params: Readonly<{
 export function queryTeamCredentialUsage(params: Readonly<{
     scope: ServerAccountScope;
     input: TeamCredentialUsageQueryInputV1;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialUsageQueryResultV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.usage.query',
+        signal: params.signal,
         input: params.input,
         parse: (value) => TeamCredentialUsageQueryResultV1Schema.parse(value),
     });
@@ -568,10 +578,12 @@ export function queryTeamCredentialUsage(params: Readonly<{
 export function listTeamCredentialExternalApiKeys(params: Readonly<{
     scope: ServerAccountScope;
     resourceId: string;
+    signal?: AbortSignal;
 }>): Promise<TeamCredentialOutcome<TeamCredentialExternalApiKeyListOutputV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.externalKeys.list',
+        signal: params.signal,
         input: { resourceId: params.resourceId },
         parse: (value) => TeamCredentialExternalApiKeyListOutputV1Schema.parse(value),
     });

@@ -33,10 +33,14 @@ export type ScopedSnapshotLoader<TTarget extends ScopedLoadTarget> = Readonly<{
     refresh: (target: TTarget) => Promise<void>;
     /** Invalidates now and awaits the newest load, including a required trailing reload. */
     invalidate: (target: TTarget) => Promise<void>;
+    /** A cursor read shares its observed sequence's cancellation lifetime. */
+    readContinuation: (target: TTarget, read: (signal: AbortSignal) => Promise<void>) => Promise<void>;
     resetForTests: () => void;
 }>; 
 
 export type ScopedSnapshotLoadContext = Readonly<{
+    /** Canceled when demand leaves or this sequence is replaced. Finite reads own their call lifetime. */
+    signal: AbortSignal;
     /**
      * Whether this request can publish authority-bearing data as current.
      * A wake or observer gap that happened after the request began makes
@@ -73,7 +77,7 @@ type ScopedSnapshotReader<TTarget> = Readonly<{
 }> | Readonly<{
     load?: never;
     /** Reads the synchronously demanded set before any asynchronous admission. */
-    loadMany: (loads: readonly ScopedSnapshotLoad<TTarget>[]) => Promise<void>;
+    loadMany: (loads: readonly ScopedSnapshotLoad<TTarget>[], signal: AbortSignal) => Promise<void>;
     /** Exact independent read boundary, e.g. captured Account and application. */
     loadGroupKey: (target: TTarget) => string;
 }>;
@@ -103,6 +107,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
 }>): ScopedSnapshotLoader<TTarget> {
     const observed = new Map<string, { target: TTarget; count: number }>();
     const inFlight = new Map<string, Promise<void>>();
+    const lifetimes = new Map<string, AbortController>();
     const maintenance = new Map<string, { result: ScopedSnapshotLoadMaintenance; reloadAfterMaintenance: boolean }>();
     /**
      * A target read without observers, or returning after its observers left, cannot remain trusted as current:
@@ -135,20 +140,41 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         const loadMany = params.loadMany;
         const key = params.loadGroupKey(target);
         return new Promise<void>((resolve, reject) => {
+            // One target may leave while siblings still need the shared Action.
+            // Release its own slot without canceling their result recipient.
+            const finish = () => { context.signal.removeEventListener('abort', finish); resolve(); };
+            const fail = (error: unknown) => { context.signal.removeEventListener('abort', finish); reject(error); };
+            if (context.signal.aborted) { finish(); return; }
+            context.signal.addEventListener('abort', finish, { once: true });
             const pending = pendingLoads.get(key);
             if (pending) {
-                pending.push({ target, context, resolve, reject });
+                pending.push({ target, context, resolve: finish, reject: fail });
                 return;
             }
-            const loads = [{ target, context, resolve, reject }];
+            const loads = [{ target, context, resolve: finish, reject: fail }];
             pendingLoads.set(key, loads);
             // Observation, refresh and a wake supply their ready targets in one
             // turn. Collect them here, before settings/approval can split ticks.
             queueMicrotask(() => {
                 pendingLoads.delete(key);
-                void loadMany(loads).then(() => {
+                // A set remains useful while any member of it still has demand.
+                const lifetime = new AbortController();
+                let remaining = 0;
+                const withdraw = () => {
+                    remaining -= 1;
+                    if (remaining === 0) lifetime.abort();
+                };
+                for (const load of loads) {
+                    if (load.context.signal.aborted) continue;
+                    remaining += 1;
+                    load.context.signal.addEventListener('abort', withdraw, { once: true });
+                }
+                if (remaining === 0) lifetime.abort();
+                void loadMany(loads, lifetime.signal).then(() => {
                     for (const load of loads) load.resolve();
-                }, error => { for (const load of loads) load.reject(error); });
+                }, error => { for (const load of loads) load.reject(error); }).finally(() => {
+                    for (const load of loads) load.context.signal.removeEventListener('abort', withdraw);
+                });
             });
         });
     }
@@ -161,10 +187,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
             try {
                 while (true) {
                     let failure: unknown = null;
+                    // A deciding first-page read replaces its old cursor sequence.
+                    lifetimes.get(target.key)?.abort();
+                    const lifetime = new AbortController();
+                    lifetimes.set(target.key, lifetime);
                     try {
                         // Enter the load through a microtask so `inFlight` is registered before a
                         // domain reader can either resolve or throw synchronously.
-                        const isCurrent = () => !reloadAfterInFlight.has(target.key)
+                        const isCurrent = () => !lifetime.signal.aborted && !reloadAfterInFlight.has(target.key)
                             && revalidateOnNextObserve.get(target.key) !== 'observer-gap';
                         // Only cleanup that preceded this read can suppress it. After
                         // publication the live map may contain this read's own cleanup.
@@ -183,6 +213,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                             return true;
                         };
                         const result = await Promise.resolve().then(async () => await readTarget(observed.get(target.key)?.target ?? target, {
+                            signal: lifetime.signal,
                             isCurrent,
                             async readWithMaintenance({ read, publish, getPublication }) {
                                 let finishRead!: () => void;
@@ -237,7 +268,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                             });
                         }
                     } catch (error) {
-                        failure = error;
+                        if (!lifetime.signal.aborted) failure = error;
                     }
                     if (!reloadAfterInFlight.delete(target.key)) {
                         if (failure !== null) throw failure;
@@ -254,6 +285,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                 // read or start a new read; it cannot join a request that already chose to exit.
                 if (inFlight.get(target.key) === pending) {
                     inFlight.delete(target.key);
+                    if (!observed.has(target.key)) lifetimes.delete(target.key);
                     // A finite borrower can refresh without any wake subscription. Its answer
                     // stays valid for that invocation, but a later first observer must revalidate.
                     if (!observed.has(target.key) && !revalidateOnNextObserve.has(target.key)) {
@@ -389,6 +421,8 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                     // No background read is useful without a consumer. The
                     // next first observer now owns the revalidation instead.
                     reloadAfterInFlight.delete(target.key);
+                    lifetimes.get(target.key)?.abort();
+                    lifetimes.delete(target.key);
                 }
                 releaseLifecycleSubscriptionsIfIdle();
             };
@@ -399,7 +433,22 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         async invalidate(target) {
             await invalidate(target);
         },
+        async readContinuation(target, read) {
+            const lifetime = lifetimes.get(target.key) ?? new AbortController();
+            lifetimes.set(target.key, lifetime);
+            try {
+                await read(lifetime.signal);
+            } catch (error) {
+                if (!lifetime.signal.aborted) throw error;
+            } finally {
+                if (!observed.has(target.key) && !inFlight.has(target.key) && lifetimes.get(target.key) === lifetime) {
+                    lifetimes.delete(target.key);
+                }
+            }
+        },
         resetForTests() {
+            for (const lifetime of lifetimes.values()) lifetime.abort();
+            lifetimes.clear();
             observed.clear();
             inFlight.clear();
             maintenance.clear();

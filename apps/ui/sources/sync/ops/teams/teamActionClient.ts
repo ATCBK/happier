@@ -163,6 +163,8 @@ export async function runTeamAction<TValue>(params: Readonly<{
     // with the incumbent approval owner rather than throwing away its result as
     // a deferred mutation. The snapshot loader still owns demand currentness.
     const read = getActionSpec(params.actionId).sideEffectClass === 'read';
+    // Observations and point surfaces supply their demand signal. A finite
+    // caller without an observer instead retains its read until the decision.
     const signal = params.signal ?? (read ? new AbortController().signal : undefined);
     const executorOptions = read && signal ? {
         ...params.executorOptions,

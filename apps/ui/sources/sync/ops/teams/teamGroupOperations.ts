@@ -48,10 +48,12 @@ export async function listTeamGroups(params: Readonly<{
     address: TeamAddress;
     archived: 'active' | 'archived';
     cursor?: string | null;
+    signal?: AbortSignal;
 }>): Promise<TeamGroupOutcome<TeamGroupsPageV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
         actionId: 'teams.groups.list',
+        signal: params.signal,
         input: {
             v: 1,
             teamId: params.address.teamId,
@@ -67,10 +69,12 @@ export async function getTeamGroup(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
     groupId: string;
+    signal?: AbortSignal;
 }>): Promise<TeamGroupOutcome<TeamGroupV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
         actionId: 'teams.groups.get',
+        signal: params.signal,
         input: { v: 1, teamId: params.address.teamId, groupId: params.groupId },
         parse: (value) => TeamGroupV1Schema.parse(value),
     });
@@ -201,10 +205,12 @@ export async function listTeamGroupMembers(params: Readonly<{
     address: TeamAddress;
     groupId: string;
     cursor?: string | null;
+    signal?: AbortSignal;
 }>): Promise<TeamGroupOutcome<TeamGroupMembersPageV1>> {
     const outcome = await runTeamAction({
         scope: params.scope,
         actionId: 'teams.groups.members.list',
+        signal: params.signal,
         input: {
             v: 1,
             teamId: params.address.teamId,
