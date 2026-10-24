@@ -41,10 +41,17 @@ export function selectScmDiffSummaryDiscussionSavedResult(state: ScmDiffSummaryS
     target: Readonly<{ resultId: string; expectedRevision: number; stopIds?: readonly string[] }> | null): ScmDiffSummaryResult | null {
     const stopId = target?.stopIds?.[0];
     if (!target || !stopId) return null;
+    const saved = selectScmDiffSummaryDiscussionResult(state, target);
+    return saved?.output.success && saved.output.outputs?.walkthrough?.value?.stops.some((stop) => stop.id === stopId) ? saved : null;
+}
+
+/** The loaded saved revision a walkthrough question addresses, with or without a stop. */
+export function selectScmDiffSummaryDiscussionResult(state: ScmDiffSummaryState,
+    target: Readonly<{ resultId: string; expectedRevision: number }> | null): ScmDiffSummaryResult | null {
+    if (!target) return null;
     for (const entry of Object.values(state.entriesByKey)) {
         const saved = entry.savedResult;
-        if (saved?.resultId !== target.resultId || saved.revision !== target.expectedRevision || !saved.output.success) continue;
-        return saved.output.outputs?.walkthrough?.value?.stops.some((stop) => stop.id === stopId) ? saved : null;
+        if (saved?.resultId === target.resultId && saved.revision === target.expectedRevision && saved.output.success) return saved;
     }
     return null;
 }

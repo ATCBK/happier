@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, ExecutionRunGetResponseSchema, type ActionExecutorDeps, type ExecutionRunPublicState, type ScmComparison, type ScmDiffSummaryGenerateInput, type ScmDiffSummaryGenerateOutput, type ScmDiffSummaryGenerateSuccess, type TurnChangeSet } from '@happier-dev/protocol';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends';
-import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getScmDiffSummaryOperationState, type ScmDiffSummaryGenerateRpc } from './generate';
 import { createScmDiffSummaryOperationsWithTransport as createScmDiffSummaryOperations } from '@/dev/testkit/harness/scmActionTransport';
 import { getPreferredLanguage } from '@/text';
@@ -72,15 +72,20 @@ describe('SCM diff summary operations', () => {
         expect(git).toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
         expect(git).not.toHaveProperty('ok');
     });
-    it('preserves a named-Turn capture transport refusal instead of reporting invalid Action output', async () => {
-        machineRpc.mockRejectedValueOnce(new Error('Machine connection closed'));
+    it.each([
+        { error: new Error('Machine connection closed'), errorCode: 'REPOSITORY_REFRESH_FAILED' },
+        { error: Object.assign(new Error(RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE), {
+            rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+        }), errorCode: 'BACKEND_UNAVAILABLE' },
+    ])('preserves a named-Turn capture transport refusal as $errorCode instead of invalid Action output', async ({ error, errorCode }) => {
+        machineRpc.mockRejectedValueOnce(error);
         const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({
             scmActionExecute: createUiScmAction(),
         }));
         const ops = createScmDiffSummaryOperations({ actionExecutor });
         expect(await ops.captureComparison({ machineId: 'machine', input: { cwd: '/repo',
             source: { kind: 'turnCheckpoint', sessionId: 'session', turnId: 'turn-2', evidenceMode: 'reconciled' },
-        } })).toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+        } })).toMatchObject({ success: false, errorCode });
     });
     it.each([
         ['invalid_parameters', 'invalidRequest', 'walkthrough.generationFailure.invalidRequest', 'reviewRequest'],
@@ -275,6 +280,84 @@ describe('SCM diff summary operations', () => {
             ops.applySavedResult(key, { ...result, revision: 4, output: { ...result.output, revision: 4 } });
             expect(notifications).toHaveBeenCalledTimes(2);
             expect(getScmDiffSummaryOperationState(ops.getState(), key).revision).toBe(4);
+        } finally {
+            unsubscribe();
+        }
+    });
+    it('publishes only changed Run facts and retains unchanged captured evidence and output identities', async () => {
+        let clock = 100;
+        const output = { ...complete, requestedOutputs: ['summary', 'walkthrough'], outputs: { ...complete.outputs, walkthrough: { state: 'complete', value: {
+            title: 'Unchanged walkthrough', intro: '', stops: [], otherChangeRefs: [],
+        } } } } satisfies ScmDiffSummaryGenerateSuccess;
+        const regenerating = { ...output, revision: 3, outputs: {
+            summary: { state: 'pending' }, walkthrough: { state: 'pending' },
+        } } satisfies ScmDiffSummaryGenerateSuccess;
+        let snapshot = ExecutionRunGetResponseSchema.parse({ run, structuredMeta: { kind: 'scm_diff_summary.v1', payload: output } });
+        const get = vi.fn(async () => structuredClone(snapshot));
+        const ops = createScmDiffSummaryOperations({ generateSummary: async () => regenerating, getExecutionRun: get, nowMs: () => ++clock });
+        const key = ops.loadSavedResult({ sessionId: 'session_1', scope: { serverId: 'home', accountId: 'account' },
+            result: { resultId: output.resultId, revision: output.revision, canUndo: false, output } })!;
+        const refresh = () => ops.refreshRun({ key, sessionId: 'session_1', runId: run.runId });
+        await refresh();
+        const original = ops.getState();
+        const entry = original.entriesByKey[key]!;
+        const originalOutputs = getScmDiffSummaryOperationState(original, key).outputs;
+        const notifications = vi.fn();
+        const unsubscribe = ops.subscribe(notifications);
+        try {
+            for (let index = 0; index < 10; index += 1) await refresh();
+            expect(notifications).toHaveBeenCalledTimes(0);
+            expect(ops.getState()).toBe(original);
+
+            snapshot = ExecutionRunGetResponseSchema.parse({ ...snapshot, run: { ...run, status: 'succeeded', finishedAtMs: 200 } });
+            await refresh();
+            expect(notifications).toHaveBeenCalledTimes(1);
+            const settled = ops.getState().entriesByKey[key]!;
+            expect(settled.latestRun?.status).toBe('succeeded');
+            expect(settled.latestOutput).toBe(entry.latestOutput);
+            expect(settled.finalSummary).toBe(entry.finalSummary);
+            expect(getScmDiffSummaryOperationState(ops.getState(), key).outputs).toBe(originalOutputs);
+
+            snapshot = ExecutionRunGetResponseSchema.parse({ ...snapshot, structuredMeta: { kind: 'scm_diff_summary.v1', payload: {
+                ...output, revision: 1, outputs: { ...output.outputs, summary: { state: 'complete', value: { summaryMarkdown: 'Changed summary' } } },
+            } } });
+            await refresh();
+            expect(notifications).toHaveBeenCalledTimes(2);
+            const changed = ops.getState().entriesByKey[key]!;
+            expect(changed.latestOutput?.comparison).toBe(entry.latestOutput?.comparison);
+            expect(changed.latestOutput?.analysis).toBe(entry.latestOutput?.analysis);
+            expect(changed.latestOutput?.outputs?.walkthrough).toBe(entry.latestOutput?.outputs?.walkthrough);
+            expect(getScmDiffSummaryOperationState(ops.getState(), key).summaryMarkdown).toBe('Changed summary');
+
+            // The binding reads the saved owner before its Run. That ingress must
+            // preserve the same unchanged facts when only the summary was edited.
+            ops.applySavedResult(key, structuredClone({ resultId: output.resultId, revision: 2, canUndo: true,
+                output: { ...output, revision: 2, outputs: { ...output.outputs,
+                    summary: { state: 'complete', value: { summaryMarkdown: 'Saved edit' } } } } }));
+            expect(notifications).toHaveBeenCalledTimes(3);
+            const saved = ops.getState().entriesByKey[key]!;
+            expect(saved.latestOutput?.comparison).toBe(entry.latestOutput?.comparison);
+            expect(saved.latestOutput?.outputs?.walkthrough).toBe(entry.latestOutput?.outputs?.walkthrough);
+            expect(getScmDiffSummaryOperationState(ops.getState(), key).summaryMarkdown).toBe('Saved edit');
+
+            // A same-comparison regeneration displays old values without putting
+            // them into the latest wire output. That projection is also stable.
+            expect(await ops.generateFromUserAction({ ...params, key, intent: 'regenerate',
+                input: { ...input, outputs: ['summary', 'walkthrough'] } })).toMatchObject({ ok: true });
+            snapshot = ExecutionRunGetResponseSchema.parse({ run, structuredMeta: { kind: 'scm_diff_summary.v1', payload: regenerating } });
+            await refresh();
+            const retained = getScmDiffSummaryOperationState(ops.getState(), key).outputs;
+            expect(retained?.summary?.value?.summaryMarkdown).toBe('Saved edit');
+            expect(retained?.walkthrough?.value).toBe(saved.latestOutput?.outputs?.walkthrough?.value);
+            expect(ops.getState().entriesByKey[key]?.latestOutput?.outputs?.summary).not.toHaveProperty('value');
+            expect(getScmDiffSummaryOperationState(ops.getState(), key).outputs).toBe(retained);
+            notifications.mockClear();
+            for (let index = 0; index < 10; index += 1) await refresh();
+            expect(notifications).toHaveBeenCalledTimes(0);
+            snapshot = ExecutionRunGetResponseSchema.parse({ ...snapshot, run: { ...run, status: 'succeeded', finishedAtMs: 300 } });
+            await refresh();
+            expect(notifications).toHaveBeenCalledTimes(1);
+            expect(getScmDiffSummaryOperationState(ops.getState(), key).outputs).toBe(retained);
         } finally {
             unsubscribe();
         }

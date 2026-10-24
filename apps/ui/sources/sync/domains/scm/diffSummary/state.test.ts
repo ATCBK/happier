@@ -105,7 +105,7 @@ describe('SCM diff summary state', () => {
         expect(selectScmDiffSummaryViewModel(failedRefresh, 'progressive')?.savedResult).toEqual(result);
         const recovered = applyScmDiffSummaryEvent(failedRefresh, { type: 'saved_result', key: 'progressive', result, observedAtMs: 146 });
         expect(recovered).not.toBe(failedRefresh);
-        expect(selectScmDiffSummaryViewModel(recovered, 'progressive')).toMatchObject({ error: null, savedResult: result });
+        expect(selectScmDiffSummaryViewModel(recovered, 'progressive')).toMatchObject({ error: null, savedResult: result, isShowingLastKnownSummary: false });
         for (const structuredOutput of [
             { ...pending, resultId: 'foreign', revision: 4 },
             { ...pending, success: false as const, error: 'An old failure', errorCode: 'SUMMARY_FAILED' as const, revision: 2 },
@@ -187,6 +187,9 @@ describe('SCM diff summary state', () => {
         expect(selectScmDiffSummaryViewModel(state, 'k').error).toMatchObject({ reason: 'modelUnavailable', nextAction: 'chooseModel' });
         state = applyScmDiffSummaryEvent(state, { type: 'request_failed', key: 'k', sessionId: 's', actionId: 'scm.diffSummary.generate', input,
             error: 'RPC method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE', failedAtMs: 2, intent: 'generate' });
+        expect(selectScmDiffSummaryViewModel(state, 'k').error).toMatchObject({ reason: 'generationFailed', nextAction: 'retry' });
+        state = applyScmDiffSummaryEvent(state, { type: 'request_failed', key: 'k', sessionId: 's', actionId: 'scm.diffSummary.generate', input,
+            error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND', failedAtMs: 3, intent: 'generate' });
         expect(selectScmDiffSummaryViewModel(state, 'k').error).toMatchObject({ reason: 'invalidRequest', nextAction: 'reviewRequest' });
     });
 

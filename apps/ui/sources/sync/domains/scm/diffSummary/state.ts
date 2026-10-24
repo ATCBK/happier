@@ -13,7 +13,7 @@ import type {
     ScmDiffSummaryResult,
 } from '@happier-dev/protocol';
 import { buildScmComparisonSourceKey } from '@happier-dev/protocol/scm';
-import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 
 export const SCM_DIFF_SUMMARY_GENERATE_ACTION_ID = 'scm.diffSummary.generate' as const;
 
@@ -60,6 +60,8 @@ export type ScmDiffSummaryEntry = Readonly<{
     finalSummary: ScmDiffSummaryPayload | null;
     lastKnownSummary: ScmDiffSummaryPayload | null;
     latestOutput: ScmDiffSummaryGenerateOutput | null;
+    /** Display-only retained values; latestOutput remains the producer's wire facts. */
+    displayOutputs: ScmDiffSummaryOutputs | null;
     error: Readonly<{ message: string; code?: string }> | null;
     retryAttempt: number;
 }>;
@@ -199,6 +201,10 @@ export const SCM_DIFF_SUMMARY_DISABLED_FAILURE = {
 } as const satisfies ScmDiffSummaryFailurePresentation;
 
 function presentScmDiffSummaryFailure(error: NonNullable<ScmDiffSummaryEntry['error']>): ScmDiffSummaryFailurePresentation {
+    if (isRpcMethodNotFoundError({ rpcErrorCode: error.code })) {
+        return { reason: 'invalidRequest', messageKey: 'walkthrough.generationFailure.invalidRequest',
+            nextAction: 'reviewRequest', nextActionKey: 'walkthrough.generationFailure.reviewRequest' };
+    }
     switch (error.code) {
         case 'generation_cancelled':
             return { reason: 'cancelled', messageKey: 'walkthrough.notice.cancelled',
@@ -206,7 +212,6 @@ function presentScmDiffSummaryFailure(error: NonNullable<ScmDiffSummaryEntry['er
         case 'invalid_parameters':
         case 'invalid_action_transport_input':
         case 'INVALID_REQUEST':
-        case 'RPC_METHOD_NOT_AVAILABLE':
             return { reason: 'invalidRequest', messageKey: 'walkthrough.generationFailure.invalidRequest',
                 nextAction: 'reviewRequest', nextActionKey: 'walkthrough.generationFailure.reviewRequest' };
         case 'MODEL_UNAVAILABLE':
@@ -296,19 +301,48 @@ function errorFromOutput(output: ScmDiffSummaryGenerateOutput | null | undefined
     return null;
 }
 
-function writeEntry(state: ScmDiffSummaryState, entry: ScmDiffSummaryEntry): ScmDiffSummaryState {
+function writeEntry(state: ScmDiffSummaryState, entry: Omit<ScmDiffSummaryEntry, 'displayOutputs'>): ScmDiffSummaryState {
+    const output = entry.latestOutput;
+    const summary = entry.finalSummary ?? entry.lastKnownSummary;
+    const previousOutputs = output?.comparison?.id && summary && output.comparison.id === summary.output.comparison?.id
+        ? summary.output.outputs : undefined;
+    const outputs = output?.outputs && previousOutputs ? retainOutputValues(output.outputs, previousOutputs)
+        : output?.outputs ?? summary?.output.outputs ?? null;
+    const displayOutputs = reconcileSnapshotFacts(state.entriesByKey[entry.key]?.displayOutputs, outputs);
     return {
         entriesByKey: {
             ...state.entriesByKey,
-            [entry.key]: entry,
+            [entry.key]: { ...entry, displayOutputs },
         },
     };
+}
+
+/** Snapshot ingress has already admitted these data objects. Reuse unchanged facts
+ * here so observation carriers never replace captured evidence or published prose. */
+function reconcileSnapshotFacts<T>(previous: T | null | undefined, incoming: T): T {
+    if (Object.is(previous, incoming)) return incoming;
+    if (!previous || !incoming || typeof previous !== 'object' || typeof incoming !== 'object') return incoming;
+    if (Array.isArray(previous) !== Array.isArray(incoming)) return incoming;
+    const previousRecord = previous as Readonly<Record<string, unknown>>;
+    const incomingRecord = incoming as Readonly<Record<string, unknown>>;
+    const keys = Object.keys(incoming);
+    const shapeChanged = keys.length !== Object.keys(previous).length
+        || (Array.isArray(incoming) && incoming.length !== (previous as readonly unknown[]).length);
+    let entries: Array<readonly [string, unknown]> | null = shapeChanged ? [] : null;
+    for (const [index, key] of keys.entries()) {
+        const value = reconcileSnapshotFacts(previousRecord[key], incomingRecord[key]);
+        if (!entries && (!Object.hasOwn(previous, key) || !Object.is(value, previousRecord[key]))) {
+            entries = keys.slice(0, index).map(previousKey => [previousKey, previousRecord[previousKey]] as const);
+        }
+        entries?.push([key, value]);
+    }
+    return entries ? (Array.isArray(incoming) ? entries.map(([, value]) => value) : Object.fromEntries(entries)) as T : previous;
 }
 
 function makeStartedEntry(
     event: Extract<ScmDiffSummaryEvent, { type: 'request_started' }>,
     previous: ScmDiffSummaryEntry | null,
-): ScmDiffSummaryEntry {
+): Omit<ScmDiffSummaryEntry, 'displayOutputs'> {
     return {
         key: event.key,
         sessionId: event.sessionId,
@@ -341,7 +375,7 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
     }
 
     if (event.type === 'request_failed') {
-        const entry: ScmDiffSummaryEntry = {
+        const entry: Omit<ScmDiffSummaryEntry, 'displayOutputs'> = {
             key: event.key,
             sessionId: event.sessionId,
             ...(event.machineId ? { machineId: event.machineId } : previous?.machineId ? { machineId: previous.machineId } : {}),
@@ -373,7 +407,7 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
     if (event.type === 'cache_hit') {
         const payload = readPayload(event.output);
         if (!payload) return state;
-        const entry: ScmDiffSummaryEntry = {
+        const entry: Omit<ScmDiffSummaryEntry, 'displayOutputs'> = {
             key: event.key,
             sessionId: event.sessionId,
             machineId: event.machineId,
@@ -413,19 +447,22 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
         if (current?.resultId !== event.result.resultId
             || (current.revision ?? -1) > event.result.revision
             || current.comparison?.id !== event.result.output.comparison?.id) return state;
-        const output = { ...event.result.output, resultId: event.result.resultId, revision: event.result.revision };
+        const savedResult = reconcileSnapshotFacts(previous.savedResult, event.result);
+        const output = reconcileSnapshotFacts(previous.latestOutput, {
+            ...savedResult.output, resultId: savedResult.resultId, revision: savedResult.revision,
+        });
         // Machine reads can echo unchanged results while commit progress is polled.
         // Equal revisions alone are insufficient: apply progress and Undo availability
         // can change independently, and a successful reread must clear a read error.
         if (output.success && previous.error === null
             && previous.status === statusFromOutput(output, previous.input)
-            && pluginJsonValuesEqual(previous.savedResult, event.result)
-            && pluginJsonValuesEqual(previous.latestOutput, output)) return state;
-        const payload = readPayload(output);
+            && savedResult === previous.savedResult
+            && output === previous.latestOutput) return state;
+        const payload = output === previous.latestOutput && previous.finalSummary ? previous.finalSummary : readPayload(output);
         const nextRunId = output.runId ?? previous.executionRunId;
         return writeEntry(state, {
             ...previous,
-            savedResult: event.result,
+            savedResult,
             latestOutput: output,
             status: statusFromOutput(output, previous.input),
             finalSummary: payload,
@@ -443,8 +480,8 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
     const foreignResult = incoming?.resultId && previous.latestOutput?.resultId && incoming.resultId !== previous.latestOutput.resultId;
     const olderRevision = incoming?.resultId === previous.latestOutput?.resultId && (incoming?.revision ?? -1) < currentRevision;
     const accepted = foreignResult || olderRevision ? null : incoming;
-    const output = accepted ?? previous.latestOutput;
-    const structuredPayload = readPayload(accepted);
+    const output = accepted ? reconcileSnapshotFacts(previous.latestOutput, accepted) : previous.latestOutput;
+    const structuredPayload = accepted && output !== previous.latestOutput ? readPayload(output) : null;
     const outputStatus = statusFromOutput(output, previous.input);
     const runFailure = errorFromOutput(output, previous.input)
         ?? (outputStatus !== 'succeeded' && (event.run.status === 'failed' || event.run.status === 'cancelled')
@@ -456,21 +493,22 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
     const nextStatus = runFailure ? 'failed' : outputStatus;
     const nextSummary = structuredPayload ?? previous.finalSummary;
 
-    return writeEntry(state, {
+    const next = reconcileSnapshotFacts(previous, {
         ...previous,
         status: nextStatus,
         executionRunId: event.run.runId,
         callId: event.run.callId,
         sidechainId: event.run.sidechainId,
         pendingIntent: nextStatus === 'running' ? previous.pendingIntent : null,
-        observedAtMs: event.observedAtMs,
+        observedAtMs: previous.observedAtMs,
         streamingMarkdown: typeof event.progressMarkdown === 'string' ? event.progressMarkdown : previous.streamingMarkdown,
-        latestRun: event.run,
+        latestRun: reconcileSnapshotFacts(previous.latestRun, event.run),
         latestOutput: output,
         finalSummary: nextSummary,
         lastKnownSummary: nextSummary ?? previous.finalSummary ?? previous.lastKnownSummary,
         error: runFailure,
     });
+    return next === previous ? state : writeEntry(state, { ...next, observedAtMs: event.observedAtMs });
 }
 
 export function selectScmDiffSummaryEntry(state: ScmDiffSummaryState, key: string): ScmDiffSummaryEntry | null {
@@ -483,18 +521,18 @@ function retainOutputValue<T extends Readonly<{ value?: unknown }>>(current: T |
         : current;
 }
 
+function retainOutputValues(current: ScmDiffSummaryOutputs, previous: ScmDiffSummaryOutputs): ScmDiffSummaryOutputs {
+    const summary = retainOutputValue(current.summary, previous.summary);
+    const walkthrough = retainOutputValue(current.walkthrough, previous.walkthrough);
+    const commitPlan = retainOutputValue(current.commitPlan, previous.commitPlan);
+    return summary === current.summary && walkthrough === current.walkthrough && commitPlan === current.commitPlan
+        ? current : { ...current, summary, walkthrough, commitPlan };
+}
+
 export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: string, requestedOutput?: ScmDiffSummaryOutputKind): ScmDiffSummaryViewModel {
     const entry = selectScmDiffSummaryEntry(state, key);
     const summary = entry?.finalSummary ?? entry?.lastKnownSummary ?? null;
     const output = entry?.latestOutput ?? null;
-    const previousOutputs = output?.comparison?.id && summary && output.comparison.id === summary.output.comparison?.id
-        ? summary.output.outputs : undefined;
-    const outputs = output?.outputs && previousOutputs ? {
-        ...output.outputs,
-        summary: retainOutputValue(output.outputs.summary, previousOutputs.summary),
-        walkthrough: retainOutputValue(output.outputs.walkthrough, previousOutputs.walkthrough),
-        commitPlan: retainOutputValue(output.outputs.commitPlan, previousOutputs.commitPlan),
-    } : output?.outputs ?? summary?.output.outputs ?? null;
     const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = requestedOutput ? [requestedOutput] : entry?.input.outputs ?? output?.requestedOutputs ?? ['summary'];
     // A reader asks for one output. A failed sibling must not relabel its completed proposal/reading.
     // Admission failures still belong to the request and remain visible over a retained previous value.
@@ -533,7 +571,7 @@ export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: s
         latestRun: entry?.latestRun ?? null,
         comparison: output?.comparison ?? summary?.output.comparison ?? null,
         requestedOutputs,
-        outputs,
+        outputs: entry?.displayOutputs ?? null,
         analysis: output?.analysis ?? summary?.output.analysis ?? null,
         resultId: output?.resultId ?? summary?.output.resultId ?? null,
         revision: output?.revision ?? summary?.output.revision ?? null,
