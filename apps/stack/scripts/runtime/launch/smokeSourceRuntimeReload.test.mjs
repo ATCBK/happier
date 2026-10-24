@@ -149,3 +149,24 @@ test('source reload recognizes the real emitted PostgreSQL graph and skips only 
   assert.equal(observation.masterSecret, '');
   assert.ok(observation.dataDir.includes('hstack-reload-smoke-'));
 });
+
+test('source reload isolates its health smoke on loopback despite inherited server exposure', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-smoke-listen-host-' });
+  const witness = fixture.path('listen-host');
+  const server = await createServerFixture(fixture.root, 'sqlite', witness);
+  await writeFile(server.entrypoint, `
+    import {createServer} from 'node:http';
+    import {writeFileSync} from 'node:fs';
+    const http = createServer((_request,response)=>{
+      response.setHeader('content-type','application/json');
+      response.end(JSON.stringify({status:'ok',service:'happier-server'}));
+    });
+    http.listen(Number(process.env.PORT), process.env.HAPPIER_SERVER_HOST ?? '0.0.0.0', () => {
+      writeFileSync(${JSON.stringify(witness)}, http.address().address);
+    });
+  `);
+  await smokeSourceRuntimeReload({ components: { server },
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_SERVER_HOST: '0.0.0.0',
+      HAPPY_SERVER_HOST: '0.0.0.0' } });
+  assert.equal(await readFile(witness, 'utf8'), '127.0.0.1');
+});

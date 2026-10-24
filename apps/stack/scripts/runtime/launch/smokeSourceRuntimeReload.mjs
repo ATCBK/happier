@@ -46,7 +46,7 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
     // Reuse port allocation/availability policy; never stop an occupant.
     const port = await pickNextFreeTcpPort(40_000);
     const url = `http://127.0.0.1:${port}`;
-    const isolated = { ...env, ...server.env, HOST: '127.0.0.1',
+    const isolated = { ...env, ...server.env, HAPPIER_SERVER_HOST: '127.0.0.1',
       HAPPIER_HOME_DIR: scratch, HAPPIER_STACK_CLI_HOME_DIR: join(scratch, 'cli'),
       HAPPIER_SERVER_LIGHT_DATA_DIR: join(scratch, 'server-light'),
       HAPPIER_SERVER_LIGHT_FILES_DIR: join(scratch, 'files'),
