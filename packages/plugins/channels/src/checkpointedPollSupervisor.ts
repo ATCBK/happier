@@ -23,6 +23,7 @@ import {
 } from './ingress.js';
 import type { ConversationPairingManager } from './management.js';
 import { createSupervisorWake } from './supervisorWake.js';
+import { createChannelsCollectionAccess } from './collectionUpdateRequired.js';
 
 const RECOVERY_INTERVAL_MS = 1_000;
 
@@ -174,10 +175,12 @@ export function createIngressSupervisor(
   let controller: AbortController | null = null;
   let running: Promise<void> | null = null;
   let disposed = false;
+  let updateRequired = false;
 
   const run = async (context: BackgroundServiceContext): Promise<void> => {
     if (disposed) throw new Error('Checkpointed poll supervisor is disposed.');
     if (running !== null) throw new Error('Checkpointed poll supervisor is already running.');
+    if (updateRequired) return;
     const supervisorController = new AbortController();
     controller = supervisorController;
     const abortFromContext = (): void => supervisorController.abort(context.signal.reason);
@@ -207,6 +210,14 @@ export function createIngressSupervisor(
     let retentionPass: Promise<void> | null = null;
     running = (async () => {
       try {
+        const access = createChannelsCollectionAccess(requireChannelsAccountStorage(context), (status, error) => {
+          updateRequired = true;
+          context.services.logger.warn('[Channels] Account Collection requires an update', status);
+          supervisorController.abort(error);
+        });
+        context = { ...context, services: { ...context.services, storage: {
+          ...context.services.storage, account: access.storage,
+        } } };
         const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
         observations.push(collection.watch({ kind: 'collection' }, () => {
           // A checkpoint/census repair can unblock a failed poll without

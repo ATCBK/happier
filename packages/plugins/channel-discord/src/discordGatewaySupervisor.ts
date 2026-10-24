@@ -10,7 +10,7 @@ import {
   type ConversationTransportFactReportInputV1,
 } from '@happier-dev/channels-protocol/v1';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
-import type { Disposable, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError, type Disposable, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { projectPluginEventSourceConnectionStatusV1, type PluginEventSourceConnectionStatusV1 } from '@happier-dev/plugin-sdk/events';
 
 import {
@@ -367,6 +367,20 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   let disposed = false;
   let invalidateSupervisor = (): void => {};
   let recoveryAt: number | undefined;
+  let updateRequired = false;
+
+  const stopOnCollectionUpdateRequired = (error: unknown, context: PluginInvocationContext): boolean => {
+    if (!isPluginError(error) || error.code !== 'collection_update_required') return false;
+    if (!updateRequired) {
+      updateRequired = true;
+      supervisorAbort?.abort(error);
+      stopAllWorkers('generationRetired');
+      context.services.logger.warn('[Channels] Account Collection requires an update', {
+        code: 'collection_update_required', retryable: false, recovery: 'updateHappierOnThisMachine',
+      });
+    }
+    return true;
+  };
 
   const retryReconciliation = (): void => {
     recoveryAt = clock.now() + reconciliationIntervalMs;
@@ -526,14 +540,17 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
         api,
         webSockets: context.services.http,
         admitObservation: async (admission, admissionOptions) => {
-          await context.services.actions.execute(
+          try { await context.services.actions.execute(
             {
               pluginId: CHANNELS_CORE_PLUGIN_ID,
               localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest,
             },
             admission,
             admissionOptions,
-          );
+          ); } catch (error) {
+            stopOnCollectionUpdateRequired(error, context);
+            throw error;
+          }
         },
         reportConnectionStatus: async (status) => {
           // The worker never writes status. It can only queue a fact through
@@ -556,7 +573,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
       entry.worker = worker;
       result = await worker.result;
     } catch (error) {
-      if (!isAbort(error, context.signal) && !entry.controller.signal.aborted) {
+      if (!stopOnCollectionUpdateRequired(error, context) && !isAbort(error, context.signal) && !entry.controller.signal.aborted) {
         result = {
           kind: 'notReady',
           failure: { kind: 'notReady', reason: 'network', diagnostic: 'Discord Gateway worker could not be initialized.' },
@@ -624,11 +641,13 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   };
 
   const reportPendingFacts = async (snapshot: ConversationProviderConnectionReconciliationSnapshotV1, context: BackgroundServiceContext): Promise<boolean> => {
+    if (updateRequired || context.signal.aborted) return false;
     const key = connectionFactKey(snapshot);
     const facts = pendingFacts.get(key);
     if (!facts || facts.length === 0) return true;
     let blocksAdmission = false;
     for (const fact of facts) {
+      if (updateRequired || context.signal.aborted) return false;
       let result: unknown;
       try {
         result = await context.services.actions.execute(
@@ -639,8 +658,8 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
           { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, fact },
           { signal: context.signal },
         );
-      } catch {
-        retryReconciliation();
+      } catch (error) {
+        if (!stopOnCollectionUpdateRequired(error, context)) retryReconciliation();
         return false;
       }
       const parsed = ConversationTransportFactReportResultV1Schema.safeParse(result);
@@ -694,7 +713,8 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
         { connectionId: listed.connectionId },
         { signal: context.signal },
       );
-    } catch {
+    } catch (error) {
+      stopOnCollectionUpdateRequired(error, context);
       return { kind: 'readFailed' };
     }
     const parsed = ConversationProviderConnectionReadResultV1Schema.safeParse(result);
@@ -718,6 +738,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   };
 
   const reconcile = async (context: BackgroundServiceContext): Promise<void> => {
+    if (updateRequired) return;
     recoveryAt = undefined;
     let source: unknown;
     try {
@@ -729,7 +750,8 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
         {},
         { signal: context.signal },
       );
-    } catch {
+    } catch (error) {
+      if (stopOnCollectionUpdateRequired(error, context)) return;
       await stopWorkersForAuthorityLoss([...workers.values()]);
       retryReconciliation();
       return;
@@ -745,6 +767,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     const authorityLossFactKeys = new Set<string>();
     for (const listed of Object.values(parsed.data)) {
       const read = await readCurrentConnection(listed, context);
+      if (updateRequired || context.signal.aborted) return;
       if (read.kind === 'readFailed') {
         retryReconciliation();
         // The list proves the connection exists; only its authoritative read
@@ -829,6 +852,7 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
   const run = async (context: BackgroundServiceContext): Promise<void> => {
     if (disposed) throw new Error('Discord Gateway supervisor is disposed.');
     if (runPromise) throw new Error('Discord Gateway supervisor is already running.');
+    if (updateRequired) return;
     const controller = new AbortController();
     supervisorAbort = controller;
     const abortFromContext = (): void => controller.abort(context.signal.reason);

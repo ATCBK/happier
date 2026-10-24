@@ -8,6 +8,7 @@ import {
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -268,6 +269,35 @@ function gatewaySocketUntilStopped(
 }
 
 describe('Discord Gateway supervisor', () => {
+  it.each([CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList, CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead])(
+    'settles a Collection update refusal from %s for this generation', async refusedAction => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const supervisor = createDiscordGatewaySupervisor();
+      const execute = vi.fn(async (action: Readonly<{ localId: string }>) => {
+        if (action.localId === refusedAction) throw new PluginError({ code: 'collection_update_required', retryable: false });
+        return { 'connection-1': snapshot() };
+      });
+      const context = backgroundContext({ actions: { execute }, connectedAccounts: {
+        watch: () => ({ dispose() {} }),
+      }, http: {} }, controller.signal);
+      const running = supervisor.run(context);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        const initialReads = execute.mock.calls.length;
+        for (let pass = 0; pass < 100; pass += 1) {
+          supervisor.invalidateConnections();
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
+        expect(execute).toHaveBeenCalledTimes(initialReads);
+        expect(context.services.logger.warn).toHaveBeenCalledExactlyOnceWith(
+          '[Channels] Account Collection requires an update',
+          { code: 'collection_update_required', retryable: false, recovery: 'updateHappierOnThisMachine' },
+        );
+      } finally { controller.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+    },
+  );
+
   it.each([
     ['missing caller', undefined],
     ['different plugin', {

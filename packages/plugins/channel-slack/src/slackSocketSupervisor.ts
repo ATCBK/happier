@@ -1,5 +1,5 @@
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   assertConversationChannelsCoreCallerV1,
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
@@ -57,6 +57,21 @@ export function createSlackSocketSupervisor() {
   let abortRun: AbortController | null = null;
   let disposed = false;
   let recoveryAt: number | undefined;
+  let updateRequired = false;
+
+  const stopOnCollectionUpdateRequired = (error: unknown, context: PluginInvocationContext): boolean => {
+    if (!isPluginError(error) || error.code !== 'collection_update_required') return false;
+    if (!updateRequired) {
+      updateRequired = true;
+      abortRun?.abort(error);
+      for (const entry of workers.values()) stopEntry(entry, 'generationRetired');
+      wake();
+      context.services.logger.warn('[Channels] Account Collection requires an update', {
+        code: 'collection_update_required', retryable: false, recovery: 'updateHappierOnThisMachine',
+      });
+    }
+    return true;
+  };
 
   const retryReconciliation = (): void => {
     recoveryAt = Date.now() + RECOVERY_INTERVAL_MS;
@@ -129,7 +144,9 @@ export function createSlackSocketSupervisor() {
         connection: { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, identity }, api,
         webSockets: context.services.http, signal: context.signal,
         async admitObservation(value, options) {
-          await context.services.actions.execute({ pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest }, value, options);
+          try {
+            await context.services.actions.execute({ pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest }, value, options);
+          } catch (error) { stopOnCollectionUpdateRequired(error, context); throw error; }
         },
         reportConnectionStatus() {
           if (workers.get(snapshot.connectionId) === entry && !context.signal.aborted && !entry.controller.signal.aborted) {
@@ -139,25 +156,27 @@ export function createSlackSocketSupervisor() {
         },
       });
       result = await entry.worker.result;
-    } catch {
-      if (!context.signal.aborted && !entry.controller.signal.aborted) result = { kind: 'notReady', failure: {
+    } catch (error) {
+      if (!stopOnCollectionUpdateRequired(error, context) && !context.signal.aborted && !entry.controller.signal.aborted) result = { kind: 'notReady', failure: {
         kind: 'notReady', reason: 'network', diagnostic: 'Slack Socket Mode could not be initialized.' } };
     } finally { recordResult(entry, result); }
   };
 
   const publishFacts = async (snapshot: Snapshot, context: BackgroundServiceContext): Promise<boolean> => {
+    if (updateRequired || context.signal.aborted) return false;
     const key = factKey(snapshot);
     const facts = pendingFacts.get(key);
     if (!facts?.length) return true;
     let historyGap = false;
     for (const fact of facts) {
+      if (updateRequired || context.signal.aborted) return false;
       try {
         const result = ConversationTransportFactReportResultV1Schema.parse(await context.services.actions.execute({
           pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport,
         }, { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, fact }, { signal: context.signal }));
         if (result.kind === 'staleAuthority') { pendingFacts.delete(key); return false; }
         if (fact.kind === 'historyGap') historyGap = true;
-      } catch { retryReconciliation(); return false; }
+      } catch (error) { if (!stopOnCollectionUpdateRequired(error, context)) retryReconciliation(); return false; }
     }
     // Preserve any newer fact queued while publication was in flight.
     const remaining = (pendingFacts.get(key) ?? []).filter(fact => !facts.includes(fact));
@@ -166,13 +185,17 @@ export function createSlackSocketSupervisor() {
   };
 
   const reconcile = async (context: BackgroundServiceContext): Promise<void> => {
+    if (updateRequired) return;
     recoveryAt = undefined;
     let listed: ReturnType<typeof ConversationProviderConnectionsSnapshotV1Schema.parse>;
     try {
       listed = ConversationProviderConnectionsSnapshotV1Schema.parse(await context.services.actions.execute({
         pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList,
       }, {}, { signal: context.signal }));
-    } catch { await stopAll('authorityUnavailable'); retryReconciliation(); return; }
+    } catch (error) {
+      if (stopOnCollectionUpdateRequired(error, context)) return;
+      await stopAll('authorityUnavailable'); retryReconciliation(); return;
+    }
     const current = new Set<string>();
     const retainedFactKeys = new Set<string>();
     for (const discovery of Object.values(listed)) {
@@ -185,7 +208,8 @@ export function createSlackSocketSupervisor() {
         const values = Object.values(read);
         if (values.length !== 1 || values[0]?.connectionId !== discovery.connectionId) throw new Error('Slack connection authority is unavailable.');
         snapshot = values[0];
-      } catch {
+      } catch (error) {
+        if (stopOnCollectionUpdateRequired(error, context)) return;
         retryReconciliation();
         const entry = workers.get(discovery.connectionId);
         if (entry) { retainedFactKeys.add(factKey(entry.snapshot)); stopEntry(entry, 'authorityUnavailable'); }
@@ -237,6 +261,7 @@ export function createSlackSocketSupervisor() {
 
   const run = async (context: BackgroundServiceContext): Promise<void> => {
     if (disposed || running) throw new Error('Slack socket supervisor is unavailable.');
+    if (updateRequired) return;
     const controller = new AbortController();
     abortRun = controller;
     let invalidated = true;

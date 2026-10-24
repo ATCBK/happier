@@ -1,4 +1,5 @@
 import type { PluginAccountStorageScope } from '@happier-dev/plugin-sdk/storage';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -129,6 +130,36 @@ function createWatchableCollection() {
 }
 
 describe('Channels connections Resource invalidation', () => {
+  it.each(['channel-state', 'channel-deliveries'] as const)(
+    'projects the typed %s update requirement instead of an empty connections list', async collectionId => {
+      const state = new MemoryAccountCollection();
+      const deliveries = new MemoryAccountCollection();
+      await state.put(createCurrentConversationConnectionFixture({ connectionId: 'connection-1', authority: {
+        providerPluginId: 'example.channel.provider', providerContributionSelection: { contributionId: 'test-provider' },
+        providerSetupInput: {}, credentialRef: null,
+        transportOrigin: { serverIdentityId: 'srv_test', machineId: 'machine-1' },
+        providerConnectionKey: 'provider-connection-1', providerConfig: {}, routingIdentityKey: 'a'.repeat(43),
+        integrationPrincipal: { id: 'principal-1' }, authorityEpoch: 1,
+      } }), { expectedRevision: 'absent' });
+      const refused = collectionId === 'channel-state' ? state : deliveries;
+      vi.spyOn(refused, 'query').mockRejectedValue(new PluginError({
+        code: 'collection_update_required', retryable: false, message: 'private transport detail',
+      }));
+      const unavailableHost = () => { throw new Error('This Resource reads Account storage only.'); };
+      const snapshot = JSON.parse(resourceText(await CONNECTIONS_RESOURCE_RUNTIME.read({
+        context: { kind: 'global' }, signal: new AbortController().signal,
+        resources: { describe: unavailableHost, read: unavailableHost, watch: unavailableHost },
+        readAction: unavailableHost, observeAction: unavailableHost,
+        // The in-memory Collection is the persistent-storage boundary.
+        accountStorage: { collection: (definition: { id: string }) => definition.id === 'channel-state' ? state : deliveries } as unknown as PluginAccountStorageScope,
+      })));
+      expect(snapshot).toEqual({ status: {
+        kind: 'updateRequired', code: 'collection_update_required', collectionId,
+        retryable: false, recovery: 'updateHappierOnThisMachine',
+      } });
+    },
+  );
+
   it('uses the shared Resource storage guard with the connections error identity', async () => {
     await expect(CONNECTIONS_RESOURCE_RUNTIME.read({
       accountStorage: undefined,

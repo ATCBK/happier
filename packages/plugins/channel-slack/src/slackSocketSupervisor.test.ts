@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
 import { CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1, ConversationProviderConnectionReconciliationSnapshotV1Schema,
@@ -110,6 +111,33 @@ function harness(input: Readonly<{ empty?: boolean; unreadable?: boolean; discon
 }
 
 describe('Slack socket supervisor through real target worker Action', () => {
+  it.each([CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList, CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead])(
+    'settles a Collection update refusal from %s for this generation', async refusedAction => {
+      vi.useFakeTimers();
+      const h = harness();
+      const execute = vi.fn(async (action: Readonly<{ localId: string }>) => {
+        if (action.localId === refusedAction) throw new PluginError({ code: 'collection_update_required', retryable: false });
+        return { 'connection-1': snapshot };
+      });
+      const warn = vi.fn();
+      const context = { ...h.background, services: { ...h.background.services,
+        actions: { ...h.background.services.actions, execute }, logger: { ...h.background.services.logger, warn },
+      } } as BackgroundServiceContext;
+      const running = h.supervisor.run(context);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        const initialReads = execute.mock.calls.length;
+        for (let pass = 0; pass < 100; pass += 1) {
+          h.supervisor.invalidateConnections(); h.resyncCredentials();
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
+        expect(execute).toHaveBeenCalledTimes(initialReads);
+        expect(warn).toHaveBeenCalledExactlyOnceWith('[Channels] Account Collection requires an update',
+          { code: 'collection_update_required', retryable: false, recovery: 'updateHappierOnThisMachine' });
+      } finally { h.controller.abort(); await running; await h.supervisor.dispose(); vi.useRealTimers(); }
+    },
+  );
+
   it.each([true, false])('does no reconciliation reads or timer work in a settled minute (empty: %s)', async empty => {
     vi.useFakeTimers();
     const h = harness({ empty });

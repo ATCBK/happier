@@ -71,6 +71,64 @@ function backgroundContext(
 }
 
 describe('Checkpointed poll supervisor', () => {
+  it.each(['retention', 'due-work', 'connection-discovery', 'poll'] as const)(
+    'settles collection_update_required from %s without reads or writes on later wakes', async boundary => {
+      vi.useFakeTimers();
+      const generation = new AbortController();
+      const listeners: Array<() => void> = [];
+      const logger = { warn: vi.fn() };
+      let outdated = true;
+      const refusal = new PluginError({ code: 'collection_update_required', retryable: false,
+        message: 'private transport detail must not be exposed' });
+      const get = vi.fn(async () => { if (outdated && boundary === 'poll') throw refusal; return null; });
+      const query = vi.fn(async (request: Readonly<{ prefix?: readonly unknown[] }>) => {
+        const kind = request.prefix?.[0];
+        if (outdated && ((boundary === 'retention' && kind === 'ingress-census')
+          || (boundary === 'due-work' && kind === 'ingress-obligation')
+          || (boundary === 'connection-discovery' && kind === 'connection'))) throw refusal;
+        return { rows: kind === 'connection' ? connectionRows(1) : [], changeCursor: 1 };
+      });
+      const write = vi.fn();
+      const context = backgroundContext(generation.signal, undefined, logger);
+      const services = { ...context.services, storage: { account: { collection: () => ({
+        get, query, put: write, delete: write, batch: write, forget: write,
+        watch: (_request: unknown, notify: () => void) => { listeners.push(notify); return { dispose() {} }; },
+      }) } }, events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } } } as unknown as PluginServices;
+      const supervisor = createIngressSupervisor();
+      const running = supervisor.run({ ...context, services });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        const reads = get.mock.calls.length + query.mock.calls.length;
+        // Neither ordinary row hints nor elapsed retry deadlines make this
+        // generation's compiled Collection contract current.
+        outdated = false;
+        for (let pass = 0; pass < 100; pass += 1) {
+          for (const notify of listeners) notify();
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(get.mock.calls.length + query.mock.calls.length).toBe(reads);
+        expect(write).not.toHaveBeenCalled();
+        expect(logger.warn.mock.calls).toEqual([['[Channels] Account Collection requires an update', {
+          kind: 'updateRequired', code: 'collection_update_required', collectionId: 'channel-state',
+          retryable: false, recovery: 'updateHappierOnThisMachine',
+        }]]);
+        await running;
+        await supervisor.run({ ...context, services });
+        expect(get.mock.calls.length + query.mock.calls.length).toBe(reads);
+        // An updated activation owns fresh Collection admission.
+        const replacement = createIngressSupervisor();
+        const replacementRun = replacement.run({ ...context, services });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(get.mock.calls.length + query.mock.calls.length).toBeGreaterThan(reads);
+        generation.abort();
+        await replacementRun;
+        await replacement.dispose();
+      } finally {
+        generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers();
+      }
+    },
+  );
+
   it('parks a permanent poll failure for a settled minute and recovers on a Collection change with attributable logs', async () => {
     vi.useFakeTimers();
     const generation = new AbortController();

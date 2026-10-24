@@ -16,19 +16,28 @@ import {
 } from './outwardDelivery.js';
 import { requireChannelsResourceAccountStorage } from './requiredAccountStorage.js';
 import { recommendConversationConnectionRecovery } from './recoveryRecommendation.js';
+import { createChannelsCollectionAccess } from './collectionUpdateRequired.js';
 
 async function readConnectionsResource(
   options: PluginDynamicResourceInvocationOptionsV1,
 ): Promise<string> {
-  const accountStorage = requireChannelsResourceAccountStorage(options, 'connections');
-  const connectionRows = await readConversationConnectionManagementRows({
-    collection: accountStorage.collection(CHANNEL_STATE_COLLECTION),
-    signal: options.signal,
-  });
-  return JSON.stringify({ connections: await projectConversationConnectionDeliveryAttention({
-    connections: connectionRows.connections,
-    deliveriesCollection: accountStorage.collection(CHANNEL_DELIVERIES_COLLECTION), signal: options.signal,
-  }) });
+  const access = createChannelsCollectionAccess(requireChannelsResourceAccountStorage(options, 'connections'));
+  try {
+    const connectionRows = await readConversationConnectionManagementRows({
+      collection: access.storage.collection(CHANNEL_STATE_COLLECTION),
+      signal: options.signal,
+    });
+    return JSON.stringify({ connections: await projectConversationConnectionDeliveryAttention({
+      connections: connectionRows.connections,
+      deliveriesCollection: access.storage.collection(CHANNEL_DELIVERIES_COLLECTION), signal: options.signal,
+    }) });
+  } catch (error) {
+    if (options.signal.aborted || access.updateRequired === undefined) throw error;
+    // No rows are claimed when this reader's compiled contract is behind.
+    // The existing management Resource carries the update remedy, including
+    // when a custody adapter reduced the refusal to generic unavailability.
+    return JSON.stringify({ status: access.updateRequired });
+  }
 }
 
 /** Resource snapshots and management pages share the same custody-status projection. */
