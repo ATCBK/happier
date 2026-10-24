@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 import type { LocalServicePreviewResourceV1, LocalServicePreviewSnapshotRowV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import type { BrowserLocalServicePreviewTargetV1 } from '@happier-dev/protocol';
@@ -88,6 +90,10 @@ export function listLocalServicePreviewResources(
     return Array.from(registry.previewsById.values(), (preview) => preview.resource);
 }
 
+export function previewIdForInventoryEntry(accountId: string, machineId: string, sessionId: string | undefined, entryId: string): string {
+    return `preview-${createHash('sha256').update(JSON.stringify([accountId, machineId, sessionId ?? null, entryId])).digest('hex')}`;
+}
+
 /** Inventory Open and launcher projection must select the same existing listener registration.
  * An explicit Session remains a separate scope; a Machine view may use a Session-owned preview
  * without transferring its ownership or creating another registration for the same listener.
@@ -95,8 +101,10 @@ export function listLocalServicePreviewResources(
 export function selectLocalServicePreviewForInventoryEntry(
     resources: readonly LocalServicePreviewResourceV1[],
     entry: NormalizedLocalServiceInventoryEntry,
+    accountId: string | undefined,
     sessionId?: string,
 ): LocalServicePreviewResourceV1 | undefined {
+    if (!accountId) return undefined;
     const entryHost = normalizeHostnameForLoopbackCheck(entry.endpoint?.host ?? entry.address.host);
     return resources.filter((resource) => {
         // A managed registration belongs to one native occurrence, never to an
@@ -105,6 +113,10 @@ export function selectLocalServicePreviewForInventoryEntry(
         if (resource.machineId !== entry.machineId || resource.target.port !== entry.port) return false;
         if (sessionId !== undefined && resource.sessionId !== sessionId) return false;
         if (entry.endpoint && entry.endpoint.scheme !== 'unknown' && resource.target.scheme !== entry.endpoint.scheme) return false;
+        // Endpoint equality alone cannot distinguish a replacement process. Use the
+        // registration owner's occurrence identity, including the resource's Session
+        // so a Machine view can still reuse a Session-owned preview of this listener.
+        if (resource.previewId !== previewIdForInventoryEntry(accountId, entry.machineId, resource.sessionId, entry.id)) return false;
         const host = normalizeHostnameForLoopbackCheck(resource.target.host);
         return host === entryHost
             || (entry.address.kind === 'wildcard' && isLiteralLoopbackHostname(host))

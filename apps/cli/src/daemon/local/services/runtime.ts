@@ -625,6 +625,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     const launcherHistory = createLocalServiceLauncherHistoryStore();
     const scannedLauncherFeed = createLocalServiceLauncherFeed({
         machineId: params.machineId,
+        accountId: params.accountId,
         inventoryRegistry,
         previewRegistry,
         projectManagedServices: params.projectManagedServices,

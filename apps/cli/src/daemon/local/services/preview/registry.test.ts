@@ -20,15 +20,19 @@ describe("daemon local service preview registry", () => {
             declaration: { workspaceRefId: 'workspace_123', selection: { kind: 'manifest', name: 'web' } },
         } }).ok).toBe(true);
         const entry = { machineId: 'machine_123', port: 5173, address: { kind: 'loopback', host: '127.0.0.1' } };
-        // Only the address fields are needed by this registry selection boundary.
         const scanned = { ...entry, address: { ...entry.address, kind: 'loopback' as const, family: 'ipv4' as const },
             id: 'listener', protocol: 'tcp' as const, detectedAt: 1, lastSeenAt: 1, state: 'listening' as const,
             source: 'detected' as const, labels: [], confidence: 'high' as const,
             processOwnershipConfidence: 'high' as const, workspaceAssociationConfidence: 'high' as const, diagnostics: [] };
-        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned)).toBeUndefined();
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned, 'account_123')).toBeUndefined();
         expect(mod.registerLocalServicePreview(registry, { ...input, previewId: 'scanned-preview' }).ok).toBe(true);
-        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned)?.previewId)
-            .toBe('scanned-preview');
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned, 'account_123')).toBeUndefined();
+        const previewId = mod.previewIdForInventoryEntry('account_123', scanned.machineId, undefined, scanned.id);
+        expect(mod.registerLocalServicePreview(registry, { ...input, previewId }).ok).toBe(true);
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned, 'account_123')?.previewId)
+            .toBe(previewId);
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned, 'other-account')).toBeUndefined();
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned, undefined)).toBeUndefined();
     });
     it("keeps the managed service binding on the browser target it publishes", async () => {
         const mod = await import("./registry");

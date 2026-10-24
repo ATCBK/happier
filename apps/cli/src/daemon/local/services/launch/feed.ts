@@ -42,6 +42,7 @@ export type LocalServiceSessionWorkspacePathsResolver =
 
 export type CreateLocalServiceLauncherFeedInput = Readonly<{
     machineId: string;
+    accountId?: string;
     sessionId?: string;
     inventoryRegistry: LocalServiceInventoryRegistry;
     previewRegistry: LocalServicePreviewRegistry;
@@ -196,6 +197,7 @@ export function createLocalServiceLauncherFeed(
                 ? [[resource.serviceTarget.managedServiceId, resource] as const] : []));
             const snapshot = buildLocalServiceLauncherSnapshot({
                 machineId: input.machineId,
+                accountId: input.accountId,
                 sessionId,
                 ...(workspaceScopePaths ? { workspaceScopePaths } : {}),
                 updatedAt: now(),

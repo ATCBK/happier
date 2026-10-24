@@ -3,7 +3,7 @@ import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/loca
 
 import { createLocalServiceInventoryRegistry } from '../inventory/registry';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
-import { createLocalServicePreviewRegistry, registerLocalServicePreview } from '../preview/registry';
+import { createLocalServicePreviewRegistry, previewIdForInventoryEntry, registerLocalServicePreview } from '../preview/registry';
 import { createLocalServiceLauncherFeed } from './feed';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
@@ -390,7 +390,7 @@ describe('createLocalServiceLauncherFeed', () => {
             diagnostics: [],
         });
         registerLocalServicePreview(previewRegistry, {
-            previewId: 'preview-a',
+            previewId: previewIdForInventoryEntry('account-a', 'machine-a', 'session-a', 'inventory-a'),
             sessionId: 'session-a',
             machineId: 'machine-a',
             owner: { kind: 'session', id: 'session-a' },
@@ -407,6 +407,7 @@ describe('createLocalServiceLauncherFeed', () => {
         const feed = createLocalServiceLauncherFeed({
             machineId: 'machine-a',
             sessionId: 'session-a',
+            accountId: 'account-a',
             inventoryRegistry,
             previewRegistry,
             now: () => 3_000,

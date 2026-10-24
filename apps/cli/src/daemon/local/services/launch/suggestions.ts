@@ -26,6 +26,7 @@ function clipLauncherText(value: string, maxLength: number): string {
 
 export type BuildLocalServiceLauncherSnapshotInput = Readonly<{
     machineId: string;
+    accountId?: string;
     sessionId?: string;
     /**
      * Workspace-PATH scope (D1). When present, inventory entries and run-targets are
@@ -315,7 +316,7 @@ export function buildLocalServiceLauncherSnapshot(
     const availableInventoryEntries = inventoryEntries.filter((entry) => entry.state === 'listening');
     const unavailableInventoryEntries = inventoryEntries.filter((entry) => entry.state !== 'listening');
     const previewByEntry = new Map(inventoryEntries.map(entry => [entry.id,
-        selectLocalServicePreviewForInventoryEntry(previews, entry)]));
+        selectLocalServicePreviewForInventoryEntry(previews, entry, input.accountId)]));
     // Registration grants access; it is not evidence of a running Service. Only
     // inventory and the managed supervisor produce Services, and carry their preview.
 

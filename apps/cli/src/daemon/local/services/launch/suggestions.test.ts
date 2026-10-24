@@ -3,6 +3,7 @@ import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol';
 import { LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { buildLocalServiceLauncherSnapshot } from './suggestions';
+import { previewIdForInventoryEntry } from '../preview/registry';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 
 function inventoryEntry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): NormalizedLocalServiceInventoryEntry {
@@ -120,18 +121,19 @@ describe('buildLocalServiceLauncherSnapshot', () => {
         expect(parsed.targets[0]?.sourceClass).toEqual({ kind: 'inventory_entry', inventoryEntryId: 'inventory-a' });
     });
     it('projects preview access only through a currently listening Service', () => {
+        const previewId = previewIdForInventoryEntry('account-a', 'machine-a', 'session-a', 'inventory-a');
         const preview = {
-            previewId: 'preview-a', sessionId: 'session-a', machineId: 'machine-a',
+            previewId, sessionId: 'session-a', machineId: 'machine-a',
             owner: { kind: 'session' as const, id: 'session-a' },
             target: { scheme: 'http' as const, host: '127.0.0.1', port: 5173 },
             initialPath: { pathname: '/', search: '' }, display: { title: 'App', addressLabel: 'localhost:5173' }, originMode: 'host' as const,
         };
-        const input = { machineId: 'machine-a', updatedAt: 3_000, runTargets: [],
+        const input = { machineId: 'machine-a', accountId: 'account-a', updatedAt: 3_000, runTargets: [],
             // Retained registrations never multiply the Services rows published per scan.
             previewResources: [preview, ...Array.from({ length: 128 }, (_, index) => ({ ...preview, previewId: `preview-z-${index}` }))] };
         const withListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry()] });
         expect(withListener.targets).toHaveLength(1);
-        expect(withListener.targets.find((target) => target.source === 'inventory_entry')).toMatchObject({ source: 'inventory_entry', actions: ['open_preview', 'register_preview'], browserTarget: { kind: 'localServicePreview', targetId: 'preview-a' } });
+        expect(withListener.targets.find((target) => target.source === 'inventory_entry')).toMatchObject({ source: 'inventory_entry', actions: ['open_preview', 'register_preview'], browserTarget: { kind: 'localServicePreview', targetId: previewId } });
         const withoutListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [] });
         expect(withoutListener.targets).toHaveLength(0);
         const foreign = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry({ machineId: 'other' })] });
@@ -142,8 +144,10 @@ describe('buildLocalServiceLauncherSnapshot', () => {
         expect(stale.targets[0]?.browserTarget).toBeUndefined();
     });
     it('projects scripts, inventory entries, and registered previews into stable launcher targets', () => {
+        const previewId = previewIdForInventoryEntry('account-a', 'machine-a', 'session-a', 'inventory-a');
         const snapshot = buildLocalServiceLauncherSnapshot({
             machineId: 'machine-a',
+            accountId: 'account-a',
             sessionId: 'session-a',
             updatedAt: 3_000,
             runTargets: [{
@@ -170,7 +174,7 @@ describe('buildLocalServiceLauncherSnapshot', () => {
                 }),
             ],
             previewResources: [{
-                previewId: 'preview-a',
+                previewId,
                 sessionId: 'session-a',
                 machineId: 'machine-a',
                 owner: { kind: 'session', id: 'session-a' },
@@ -185,7 +189,7 @@ describe('buildLocalServiceLauncherSnapshot', () => {
                 originMode: 'host',
                 browserTarget: {
                     kind: 'localServicePreview',
-                    targetId: 'preview-a',
+                    targetId: previewId,
                     sessionId: 'session-a',
                     machineId: 'machine-a',
                     display: {
