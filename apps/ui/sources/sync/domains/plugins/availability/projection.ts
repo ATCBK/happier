@@ -138,10 +138,12 @@ export function retirePluginAccountAvailabilityProjection(pluginIds: readonly st
  * returned reader is bound to the active Account realm, so a consumer cannot
  * accidentally pass a local server id or machine choice into currentness.
  */
-export function useActivePluginAccountAvailabilityReader(pluginId?: string): PluginAccountAvailabilityReader | null {
+export function useActivePluginAccountAvailabilityReader(pluginId?: string,
+    options?: Readonly<{ enabled?: boolean }>): PluginAccountAvailabilityReader | null {
     const scope = useActiveServerAccountScope();
     const readSnapshot = React.useCallback(() => readerStore.getObservationSnapshot(pluginId), [pluginId]);
-    const snapshot = React.useSyncExternalStore(subscribeToReactProjection, readSnapshot, readSnapshot);
+    const subscribe = options?.enabled === false ? noAvailabilitySubscription : subscribeToReactProjection;
+    const snapshot = React.useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
     const serverId = scope?.serverId ?? null;
     const accountId = scope?.accountId ?? null;
 
@@ -154,6 +156,8 @@ export function useActivePluginAccountAvailabilityReader(pluginId?: string): Plu
         return Object.freeze({ ...readPluginAccountAvailability(scope) });
     }, [accountId, snapshot, scope, serverId]);
 }
+
+function noAvailabilitySubscription(): () => void { return () => {}; }
 
 function useAvailabilityScopeRetirement(accountId: string | null, serverId: string | null): void {
     React.useEffect(() => {
