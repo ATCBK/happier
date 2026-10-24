@@ -8,7 +8,7 @@ import { showDocumentShareSheet } from '@/components/sharing/documents/showDocum
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Modal } from '@/modal';
-import { readProjectWidgetAreaContextV1 } from '@/sync/domains/widgets/projectWidgetAreaContext';
+import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -71,7 +71,7 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
 ) {
   const serverId = props.workspaceRef.serverId;
   const projectKey = React.useMemo(
-    () => readProjectWidgetAreaContextV1({ serverId, projectRef: props.workspaceRef }).projectIdentity?.projectKey ?? null,
+    () => projectWorkspaceRefV1(props.workspaceRef).projectKey,
     [props.workspaceRef, serverId],
   );
   // The mounted area owns selection; this bar sends its canonical Action only.
