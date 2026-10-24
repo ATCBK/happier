@@ -116,6 +116,8 @@ export const CORE_CAPSULE_HOST: HappierCapsuleHost = {
             loading={props.loading}
             leading={props.leading}
             onPress={props.onPress}
+            disabled={props.disabled}
+            accessibilityHint={props.accessibilityHint}
             testID={props.testID}
         />
     ),
