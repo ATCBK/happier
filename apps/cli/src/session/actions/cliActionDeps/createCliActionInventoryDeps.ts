@@ -49,11 +49,7 @@ import {
   type SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 
-import {
-  normalizeLimit,
-  readSessionModelsState,
-  readSessionModesState,
-} from './sessionStateReaders';
+import { normalizeLimit } from './sessionStateReaders';
 
 type ModelInventoryItem = Readonly<{
   id: string;
@@ -700,7 +696,8 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const usesConfiguredCompatBackend = backendTarget?.sourceKind === 'configured' || Boolean(backendTarget?.configuredBackendId);
       const usesMachineProbe = Boolean(args.machineId);
       const captured = usesConfiguredCompatBackend && !usesMachineProbe ? await readAcpInventorySnapshot(args.signal) : null;
-      const modelState = usesMachineProbe ? null : readSessionModelsState(await readSessionMetadataForId(params.sessionId));
+      const modelState = usesMachineProbe ? null : (await import('./sessionControlStateReaders'))
+        .readSessionModelsState(await readSessionMetadataForId(params.sessionId));
       const provider = typeof modelState?.provider === 'string' ? modelState.provider.trim() : '';
       const availableModels = Array.isArray(modelState?.availableModels) ? modelState.availableModels : [];
       const shouldUseSessionMetadataModels = Boolean(
@@ -1020,6 +1017,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         context, effectActionId: 'sessions.spawn.mcp_servers.preview', timeoutMs: null, signal: context?.signal }), args.limit);
     },
     sessionModesList: async ({ sessionId }) => {
+      const { readSessionModesState } = await import('./sessionControlStateReaders');
       const sessionModes = readSessionModesState(await readSessionMetadataForId(sessionId));
       const items = Array.isArray(sessionModes?.availableModes)
         ? sessionModes.availableModes
