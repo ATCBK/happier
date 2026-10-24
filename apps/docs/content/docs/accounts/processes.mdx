@@ -75,7 +75,11 @@ processes.
 Use **Stop session** or **Stop service** when you want the existing lifecycle
 control to stop that work. Stopping a session also ends its proven remaining
 processes after its runner exits; possible survivors can enter the Left behind
-flow. A stopped session wakes on your next message. **Start again** can restart
+flow. A session stopped from Processes can wake on your next message under your
+automatic-resume setting. Resource Stops from widgets, Guard, Storage holder
+cleanup and the machine's Runs section use the same behavior. **Stop session**
+from session Info and CLI Stop instead keep the session held until you explicitly
+resume it; a resource Stop does not clear an existing hold. **Start again** can restart
 supported service or browser work; it is not a way to relaunch every arbitrary
 process.
 

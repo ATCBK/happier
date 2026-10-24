@@ -51,14 +51,17 @@ In the app:
 The page lists each service with the agents that use it, and each account with how much of each limit
 is left and when it resets. From there you can:
 
-- connect a service or add another account: the sign-in opens in place on the page, on the machine you
-  pick, and the account then works on every machine
+- connect a service or add another account using the sign-in flow on the machine you pick
 - sign an account in again from its row when the provider signed it out
 - give accounts custom labels
 - choose, per agent, which account (or pool, or the agent's own login) it signs in with under
   **How accounts are used**
 - inspect an account's usage, the agents and pools that use it, and how it signed in
 - remove individual accounts (an account a pool uses is removed from the pool first)
+
+In 0.3 development, service cards still expand sign-in in place. **Add account**
+opens the same flow in the account detail, retaining its machine choice and
+recovery steps rather than starting a different authentication flow.
 
 In the CLI:
 
@@ -100,6 +103,12 @@ chosen gateway assigns that vendor slot, and disabling it clears the slot only
 if it still belongs to that pool. Multiple gateways require an explicit choice.
 These operations use the existing approval policy and revision-checked
 connection update, rather than a separate pool-routing setting.
+
+The current 0.3 development add flow opens an unsaved gateway draft in Connected
+services, including when opened from a pool. Opening or discarding the draft
+does not create a connection. **Create** saves the selected contribution, vendor
+slots and placement through the existing Provider connection operation and its
+approval policy. Saved gateway details use the same body and controls as Providers.
 
 In development builds, choosing or clearing this pool slot does not require a
 selected or online machine. It saves Account configuration, not a gateway start
