@@ -3524,7 +3524,6 @@ type BindingCreateAutomationExecution = Readonly<{
   enabled: boolean;
 }>;
 type BindingCreateStage = 'closed' | 'endpoint' | 'principal' | 'target' | 'policies' | 'review';
-type BindingCreateActiveStage = Exclude<BindingCreateStage, 'closed'>;
 type BindingCreateTarget =
   | Readonly<{ kind: 'session'; sessionId: string; label: string }>
   | Readonly<{ kind: 'threadRouter'; label: string }>
@@ -4885,31 +4884,21 @@ function parseBindingCreateAutomationPage(value: unknown): BindingCreateAutomati
   };
 }
 
-function bindingCreateStageTitle(stage: BindingCreateActiveStage, t: Translate): string {
-  switch (stage) {
-    case 'endpoint':
-      return t('plugins.channels.surface.bindingCreateEndpoint', 'Choose a conversation');
-    case 'principal':
-      return t('plugins.channels.surface.bindingCreatePrincipal', 'Choose an allowed sender');
-    case 'target':
-      return t('plugins.channels.surface.bindingCreateTarget', 'Choose a target');
-    case 'policies':
-      return t('plugins.channels.surface.bindingCreatePolicies', 'Policies');
-    case 'review':
-      return t('plugins.channels.surface.bindingCreateReview', 'Review binding');
-  }
-}
-
+/**
+ * A step's one action row: Back leads, Cancel and the step's primary close it. A step whose
+ * choice advances it (picking a conversation) has no primary.
+ */
 function BindingCreateStepActions(props: Readonly<{
   onBack?: () => void;
   onCancel: () => void;
   disabled: boolean;
   backDisabled?: boolean;
+  primary?: React.ReactNode;
   t: Translate;
 }>): React.ReactElement {
   return (
-    <Stack gap="small" testID="channels-binding-create-step-actions">
-      {props.onBack === undefined ? null : (
+    <Row gap="small" align="center" justify="space-between" wrap testID="channels-binding-create-step-actions">
+      {props.onBack === undefined ? <Stack /> : (
         <Button
           title={props.t('plugins.channels.surface.bindingCreateBack', 'Back')}
           variant="plain"
@@ -4917,13 +4906,16 @@ function BindingCreateStepActions(props: Readonly<{
           onPress={props.onBack}
         />
       )}
-      <Button
-        title={props.t('plugins.channels.surface.bindingCreateCancel', 'Cancel')}
-        variant="secondary"
-        disabled={props.disabled}
-        onPress={props.onCancel}
-      />
-    </Stack>
+      <Row gap="small" align="center">
+        <Button
+          title={props.t('plugins.channels.surface.bindingCreateCancel', 'Cancel')}
+          variant={props.primary === undefined ? 'secondary' : 'plain'}
+          disabled={props.disabled}
+          onPress={props.onCancel}
+        />
+        {props.primary}
+      </Row>
+    </Row>
   );
 }
 
@@ -6501,11 +6493,7 @@ function BindingCreateJourney(props: Readonly<{
       ) : null}
       {stage === 'closed' ? feedbackContent : (
         <Stack gap="medium" testID="channels-binding-create-flow">
-          <Status
-            testID="channels-binding-create-stage"
-            tone="secondary"
-            label={`${props.t('plugins.channels.surface.bindingCreateCurrentStep', 'Current step')}: ${bindingCreateStageTitle(stage, props.t)}`}
-          />
+          {/* Each step's heading takes focus when the step opens, which names the step once. */}
           {availableConnections.length > 1 ? (
             <Form.Select
               testID="channels-binding-create-connection"
@@ -6525,19 +6513,24 @@ function BindingCreateJourney(props: Readonly<{
                 value={props.t('plugins.channels.surface.bindingCreateEndpoint', 'Choose a conversation')}
                 focusTarget={stageFocusTarget}
               />
-              <Form.TextField
-                testID="channels-binding-create-endpoint-query"
-                label={props.t('plugins.channels.surface.bindingCreateEndpointQuery', 'Conversation search')}
-                value={endpointQuery}
-                onChange={setEndpointQuery}
-                disabled={actionLocked}
-              />
-              <Button
-                title={props.t('plugins.channels.surface.bindingCreateEndpointSearch', 'Search endpoints')}
-                busy={resolveAction.execution.status === 'pending'}
-                disabled={actionLocked || endpointQuery.trim() === ''}
-                onPress={searchEndpoints}
-              />
+              <Row gap="small" align="flex-end">
+                <Stack grow>
+                  <Form.TextField
+                    testID="channels-binding-create-endpoint-query"
+                    label={props.t('plugins.channels.surface.bindingCreateEndpointQuery', 'Conversation search')}
+                    value={endpointQuery}
+                    onChange={setEndpointQuery}
+                    disabled={actionLocked}
+                  />
+                </Stack>
+                <Button
+                  title={props.t('plugins.channels.surface.bindingCreateEndpointSearch', 'Search endpoints')}
+                  variant="secondary"
+                  busy={resolveAction.execution.status === 'pending'}
+                  disabled={actionLocked || endpointQuery.trim() === ''}
+                  onPress={searchEndpoints}
+                />
+              </Row>
               {endpointCandidates.length > 0 ? (
                 <List accessibilityLabel={props.t('plugins.channels.surface.bindingCreateEndpointCandidates', 'Endpoint candidates')}>
                   {endpointCandidates.map((candidate) => (
@@ -6584,19 +6577,24 @@ function BindingCreateJourney(props: Readonly<{
                 value={props.t('plugins.channels.surface.bindingCreatePrincipal', 'Choose an allowed sender')}
                 focusTarget={stageFocusTarget}
               />
-              <Form.TextField
-                testID="channels-binding-create-principal-query"
-                label={props.t('plugins.channels.surface.bindingCreatePrincipalQuery', 'People search')}
-                value={principalQuery}
-                onChange={setPrincipalQuery}
-                disabled={actionLocked}
-              />
-              <Button
-                title={props.t('plugins.channels.surface.bindingCreatePrincipalSearch', 'Search people')}
-                busy={resolveAction.execution.status === 'pending'}
-                disabled={actionLocked || principalQuery.trim() === ''}
-                onPress={searchPrincipals}
-              />
+              <Row gap="small" align="flex-end">
+                <Stack grow>
+                  <Form.TextField
+                    testID="channels-binding-create-principal-query"
+                    label={props.t('plugins.channels.surface.bindingCreatePrincipalQuery', 'People search')}
+                    value={principalQuery}
+                    onChange={setPrincipalQuery}
+                    disabled={actionLocked}
+                  />
+                </Stack>
+                <Button
+                  title={props.t('plugins.channels.surface.bindingCreatePrincipalSearch', 'Search people')}
+                  variant="secondary"
+                  busy={resolveAction.execution.status === 'pending'}
+                  disabled={actionLocked || principalQuery.trim() === ''}
+                  onPress={searchPrincipals}
+                />
+              </Row>
               <BindingPrincipalChoices
                 testID="channels-binding-create-principal-candidates"
                 label={props.t('plugins.channels.surface.bindingCreatePrincipalCandidates', 'Allowed sender candidates')}
@@ -6618,15 +6616,17 @@ function BindingCreateJourney(props: Readonly<{
                   setFeedback(undefined);
                 }}
               />
-              <Button
-                title={props.t('plugins.channels.surface.bindingCreateContinue', 'Continue')}
-                disabled={actionLocked || principalSelection === undefined}
-                onPress={continueFromPrincipal}
-              />
               <BindingCreateStepActions
                 disabled={actionLocked}
                 onBack={backToEndpoint}
                 onCancel={cancelJourney}
+                primary={(
+                  <Button
+                    title={props.t('plugins.channels.surface.bindingCreateContinue', 'Continue')}
+                    disabled={actionLocked || principalSelection === undefined}
+                    onPress={continueFromPrincipal}
+                  />
+                )}
                 t={props.t}
               />
             </Stack>
@@ -6716,7 +6716,7 @@ function BindingCreateJourney(props: Readonly<{
                 }}
                 t={props.t}
               />
-              <Stack gap="small">
+              <Row gap="small" align="center" wrap>
                 <Button
                   title={props.t('plugins.channels.surface.bindingCreateSessionReload', 'Reload Sessions')}
                   variant="plain"
@@ -6751,7 +6751,7 @@ function BindingCreateJourney(props: Readonly<{
                     onPress={() => { void loadAutomationTargets(automationNextCursor); }}
                   />
                 )}
-              </Stack>
+              </Row>
               <BindingCreateStepActions
                 disabled={actionLocked}
                 onBack={backToPrincipal}
@@ -6856,15 +6856,17 @@ function BindingCreateJourney(props: Readonly<{
                 disabled={actionLocked}
                 onChange={(next) => { if (typeof next === 'string') setSenderFeedback(next); }}
               />
-              <Button
-                title={props.t('plugins.channels.surface.bindingCreateReview', 'Review binding')}
-                disabled={actionLocked || !createApprovalAudienceValid}
-                onPress={() => setStage('review')}
-              />
               <BindingCreateStepActions
                 disabled={actionLocked}
                 onBack={backToTarget}
                 onCancel={cancelJourney}
+                primary={(
+                  <Button
+                    title={props.t('plugins.channels.surface.bindingCreateReview', 'Review binding')}
+                    disabled={actionLocked || !createApprovalAudienceValid}
+                    onPress={() => setStage('review')}
+                  />
+                )}
                 t={props.t}
               />
             </Stack>
@@ -7198,20 +7200,22 @@ function BindingCreateJourney(props: Readonly<{
                   ]}
                 />
               </Stack>
-              <Button
-                testID="channels-binding-create-submit"
-                title={pairingRequired
-                  ? props.t('plugins.channels.surface.bindingCreatePairingConfirm', 'Create pairing challenge')
-                  : props.t('plugins.channels.surface.bindingCreateConfirm', 'Link conversation')}
-                busy={createAction.execution.status === 'pending' || pairingAction.execution.status === 'pending'}
-                disabled={actionLocked || feedback === 'created' || (pairingRequired && proofLocationIncomplete)}
-                onPress={pairingRequired ? createPairing : createBinding}
-              />
               <BindingCreateStepActions
                 disabled={actionLocked}
                 backDisabled={feedback === 'created'}
                 onBack={backToPolicies}
                 onCancel={cancelJourney}
+                primary={(
+                  <Button
+                    testID="channels-binding-create-submit"
+                    title={pairingRequired
+                      ? props.t('plugins.channels.surface.bindingCreatePairingConfirm', 'Create pairing challenge')
+                      : props.t('plugins.channels.surface.bindingCreateConfirm', 'Link conversation')}
+                    busy={createAction.execution.status === 'pending' || pairingAction.execution.status === 'pending'}
+                    disabled={actionLocked || feedback === 'created' || (pairingRequired && proofLocationIncomplete)}
+                    onPress={pairingRequired ? createPairing : createBinding}
+                  />
+                )}
                 t={props.t}
               />
             </Stack>
@@ -8178,18 +8182,8 @@ function BindingEditJourney(props: Readonly<{
         {...(headerActions === undefined ? {} : { actions: headerActions })}
         t={props.t}
       />
-      {/* The policies stage announces itself through the focused page title; the
-          sub-steps it opens announce which step the reader is on. */}
-      {stage === 'policies' ? null : <Status
-        tone="secondary"
-        label={`${props.t('plugins.channels.surface.bindingEditCurrentStep', 'Current step')}: ${stage === 'endpoint'
-            ? props.t('plugins.channels.surface.bindingCreateEndpoint', 'Choose a conversation')
-            : stage === 'principal'
-              ? props.t('plugins.channels.surface.bindingCreatePrincipal', 'Choose allowed senders')
-              : stage === 'target'
-                ? props.t('plugins.channels.surface.bindingCreateTarget', 'Choose a target')
-                : props.t('plugins.channels.surface.bindingEditReview', 'Review changes')}`}
-      />}
+      {/* The policies stage announces itself through the focused page title, and each
+          sub-step through its focused heading. */}
       {finalizingDelete ? (
         <Banner
           tone="warning"

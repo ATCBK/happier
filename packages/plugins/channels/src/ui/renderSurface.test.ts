@@ -879,11 +879,11 @@ async function expectBindingCreateStage(
     hasBack: boolean;
   }>,
 ): Promise<void> {
-  const announcement = document.querySelector<HTMLElement>('[data-testid="channels-binding-create-stage"]');
-  expect(announcement, 'Expected the current binding-create step to be announced.').not.toBeNull();
-  expect(announcement?.getAttribute('role')).toBe('status');
-  expect(announcement?.getAttribute('aria-live')).toBe('polite');
-  expect(announcement?.textContent).toContain(`Current step: ${input.title}`);
+  // The step is named once, by its heading; no second "Current step" line repeats it.
+  await expect(fixture.getByRole('heading', { name: input.title })).resolves.toBeDefined();
+  expect(document.body.textContent).not.toContain('Current step');
+  const actions = document.querySelector<HTMLElement>('[data-testid="channels-binding-create-step-actions"]');
+  expect(actions, 'Expected one action row for the step.').not.toBeNull();
 
   await expect(fixture.getByRole('button', { name: 'Cancel' })).resolves.toBeDefined();
   if (input.hasBack) {
@@ -7079,7 +7079,8 @@ describe('Channels connection policy editing across a source change', () => {
       authorPlugin: { id: 'happier.channels', version: '0.0.0' },
       surface: renderSurface,
       surfaceContext: createChannelsSurfaceContext(),
-      adapter: createChannelsSemanticAdapter(),
+      // The observation-age field opens its choices through the host popover, which the testkit draws only with overlays.
+      adapter: createChannelsSemanticAdapter(emptyDataClient, undefined, { overlays: true }),
       handlers: {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
@@ -7156,7 +7157,8 @@ describe('Channels connection policy editing across a source change', () => {
       authorPlugin: { id: 'happier.channels', version: '0.0.0' },
       surface: renderSurface,
       surfaceContext: createChannelsSurfaceContext(),
-      adapter: createChannelsSemanticAdapter(),
+      // The observation-age field opens its choices through the host popover, which the testkit draws only with overlays.
+      adapter: createChannelsSemanticAdapter(emptyDataClient, undefined, { overlays: true }),
       handlers: {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
@@ -7202,7 +7204,8 @@ describe('Channels connection policy editing across a source change', () => {
       authorPlugin: { id: 'happier.channels', version: '0.0.0' },
       surface: renderSurface,
       surfaceContext: createChannelsSurfaceContext(),
-      adapter: createChannelsSemanticAdapter(),
+      // The observation-age field opens its choices through the host popover, which the testkit draws only with overlays.
+      adapter: createChannelsSemanticAdapter(emptyDataClient, undefined, { overlays: true }),
       handlers: {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction: async () => {
