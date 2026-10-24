@@ -26,8 +26,62 @@ import {
   registerDaemonPluginChangeRoutes,
 } from './controlRoutes';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
+import { createDaemonPluginChangeService } from './changeService';
 
 describe('registerDaemonPluginChangeRoutes', () => {
+  it('forwards reversible handoff and final shutdown refusals from the real change owner', async () => {
+    const app = fastify();
+    const service = createDaemonPluginChangeService({
+      prepare: async () => ({
+        pluginId: 'acme.example',
+        requiresReview: false,
+        apply: async () => ({
+          kind: 'committed',
+          pluginId: 'acme.example',
+          desiredGeneration: 'generation-1',
+          appliedGeneration: 'generation-1',
+          pendingSurfaces: [],
+        }),
+        cleanup: async () => undefined,
+      }),
+    });
+    registerDaemonPluginChangeRoutes(app, {
+      service,
+      requireAuth: async (request, reply) => {
+        if (request.headers.authorization !== 'Bearer test-token') await reply.code(401).send();
+      },
+    });
+    const request = () => app.inject({
+      method: 'POST',
+      url: '/plugins/change/request',
+      headers: { authorization: 'Bearer test-token' },
+      payload: { kind: 'installPath', locator: '/tmp/example', development: false },
+    });
+    const lease = await service.quiesceForHandoff();
+    try {
+      const draining = await request();
+      expect(draining.statusCode).toBe(200);
+      expect(draining.json()).toEqual({ kind: 'unavailable', code: 'daemon_draining' });
+
+      lease.resume();
+      const resumed = await request();
+      expect(resumed.statusCode).toBe(200);
+      expect(resumed.json()).toMatchObject({ kind: 'committed', pluginId: 'acme.example' });
+
+      const finalLease = await service.quiesceForHandoff();
+      await service.shutdown();
+      const stopped = await request();
+      expect(stopped.statusCode).toBe(200);
+      expect(stopped.json()).toEqual({ kind: 'unavailable', code: 'daemon_shutting_down' });
+      finalLease.resume();
+      expect((await request()).json()).toEqual({ kind: 'unavailable', code: 'daemon_shutting_down' });
+    } finally {
+      lease.resume();
+      await service.shutdown();
+      await app.close();
+    }
+  });
+
   it('exposes one authenticated daemon development register/unregister/reload/status contract', async () => {
     const app = fastify();
     const controlPluginDevelopment = vi.fn(async () => ({

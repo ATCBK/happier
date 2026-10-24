@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -84,6 +85,104 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
+  it.each(['initial authority', 'post-wake authority', 'post-dispatch authority', 'post-record authority'] as const)(
+    'retires a disconnected first-turn request during %s lookup', async (phase) => {
+    const sessionId = 'session-disconnected-first-turn';
+    const retainedAgent = createRetainedAgent();
+    const runner = { pid: 2242, processStartTimeMs: 1_717_171_717_700,
+      processCommandHash: 'b'.repeat(64), snapshotIdentity: 'snapshot:disconnected-first-turn' };
+    const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing });
+    const authority = await publishAgentRuntimeDaemonServiceAuthority({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      path: authorityPath, sessionId, runner, retainedAgent, httpPort: 46_008,
+      capability: capabilityA, readPluginHardRevocationRevision: async () => 0 });
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: runner.pid, sessionRunnerPid: runner.pid,
+      happySessionId: sessionId, processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash,
+      agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, agentRuntimeDaemonServiceCapabilityHash: authority.capabilityDigest,
+      runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
+      runnerAgentInvocationContext: { cwd: '/workspace', environment: {}, providerBindingActive: false } };
+    await writeSessionMarker({ pid: runner.pid, happySessionId: sessionId, startedBy: 'daemon', cwd: '/workspace' });
+    const admissionDrain = createDaemonAdmissionDrain();
+    const beforeDispatch = phase === 'initial authority' || phase === 'post-wake authority';
+    if (beforeDispatch) admissionDrain.beginTemporaryDrain();
+    const authorityEntered = createDeferred<void>();
+    const authorityReply = createDeferred<number>();
+    const responseClosed = createDeferred<void>();
+    const handlerSettled = createDeferred<void>();
+    let settled = false;
+    let holdAuthorityRead = phase === 'initial authority';
+    let activeWaiters = 0;
+    const subscribe = admissionDrain.subscribe;
+    const subscription = vi.spyOn(admissionDrain, 'subscribe').mockImplementation(listener => {
+      activeWaiters++;
+      const release = subscribe(listener);
+      return () => { activeWaiters--; release(); };
+    });
+    // Hard-revocation storage is the asynchronous boundary. Authority parsing,
+    // drain, HTTP cancellation, turn decision and durable marker remain real.
+    const dispatches: string[] = [];
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'guest', admissionDrain,
+      stopSession: async () => ({ status: 'not_found' as const }), spawnSession: async () => ({ type: 'success' as const, sessionId }),
+      requestShutdown() {}, onHappySessionWebhook() {}, controlToken: 'control-token',
+      readPluginHardRevocationRevision: async () => {
+        if (holdAuthorityRead) { authorityEntered.resolve(); return await authorityReply.promise; }
+        return 0;
+      },
+      agentRuntimeDaemonServices: { dispatch: async (request, subject) => {
+        dispatches.push(request.operation.kind);
+        if (request.operation.kind !== 'turn.admission.authorize') throw new Error('Unexpected operation');
+        if (phase === 'post-dispatch authority') holdAuthorityRead = true;
+        return await authorizeRunnerAgentTurnAdmission({ retainedAgent: subject.retainedAgent, witness: request.operation.witness });
+      } }, recordAgentRuntimeDaemonServiceAdmission: async (session, admission) => {
+        const recorded = await updateSessionMarkerActiveTurn({
+          pid: session.sessionRunnerPid ?? session.pid, sessionId, activeTurnId: admission.turnId,
+          agentRuntimeDaemonServiceActiveAdmission: admission });
+        if (phase === 'post-record authority') holdAuthorityRead = true;
+        return recorded;
+      }, clearAgentRuntimeDaemonServiceAdmission: (session, admission) => updateSessionMarkerActiveTurn({
+        pid: session.sessionRunnerPid ?? session.pid, sessionId, activeTurnId: session.activeTurnId ?? null,
+        expectedAgentRuntimeDaemonServiceActiveAdmission: admission }) });
+    app.addHook('onRequest', async (_request, reply) => {
+      reply.raw.once('close', () => responseClosed.resolve());
+    });
+    app.addHook('onError', async () => { settled = true; handlerSettled.resolve(); });
+    app.addHook('onSend', async () => { settled = true; handlerSettled.resolve(); });
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const client = httpRequest(new URL(AGENT_RUNTIME_DAEMON_SERVICES_PATH, address), {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-daemon-token': capabilityA },
+    });
+    client.on('error', () => {}); // Expected native socket retirement after destroy.
+    try {
+      client.end(JSON.stringify({ v: 1, context: { token: capabilityA, sessionId },
+        operation: { kind: 'turn.admission.authorize', requestId: 'disconnected-first-turn',
+          witness: { turnId: 'turn-disconnected', inputId: 'input-disconnected', userMessageSeq: 1, userMessageSeqs: [1] } } }));
+      if (phase === 'post-wake authority') {
+        await vi.waitFor(() => expect(activeWaiters).toBe(1));
+        holdAuthorityRead = true;
+        admissionDrain.resume();
+      }
+      await authorityEntered.promise;
+      client.destroy();
+      await responseClosed.promise;
+      authorityReply.resolve(0);
+      // Distinguish a retired handler from an abandoned waiter or stale effect.
+      await vi.waitFor(() => expect(settled || activeWaiters > 0 || (beforeDispatch && dispatches.length > 0)).toBe(true));
+      expect(activeWaiters).toBe(0);
+      expect(dispatches).toEqual(beforeDispatch ? [] : ['turn.admission.authorize']);
+      admissionDrain.resume();
+      await handlerSettled.promise;
+      expect(dispatches).toEqual(beforeDispatch ? [] : ['turn.admission.authorize']);
+      expect((await readSessionMarkerForPid(runner.pid))?.agentRuntimeDaemonServiceActiveAdmission).toBeUndefined();
+      expect(tracked.activeTurnId).toBeUndefined();
+    } finally {
+      authorityReply.resolve(0); client.destroy(); admissionDrain.beginShutdown();
+      await app.close(); subscription.mockRestore();
+      await removeSessionMarker(runner.pid);
+      await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
+        publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, capabilityDigest: authority.capabilityDigest });
+    }
+  });
   it.each(['busy', 'unknown', 'temporary', 'handoff', 'shutdown', 'retired'] as const)(
     'retains an opened Session first turn across a managed activity probe: %s', async (outcome) => {
     const sessionId = 'session-managed-probe-first-turn';

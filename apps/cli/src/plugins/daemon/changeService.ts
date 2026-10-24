@@ -127,6 +127,10 @@ export function createDaemonPluginChangeService(params: Readonly<{
   let handoffQuiescenceDrain: Promise<void> | null = null;
 
   const acceptsChanges = (): boolean => !stopped && handoffQuiescenceHolders === 0;
+  const admissionRefusal = (): Extract<PluginChangeRequestResult, { kind: 'unavailable' }> => ({
+    kind: 'unavailable',
+    code: stopped ? 'daemon_shutting_down' : 'daemon_draining',
+  });
 
   function beginActiveRequest(): () => void {
     let resolveDrain!: () => void;
@@ -323,7 +327,7 @@ export function createDaemonPluginChangeService(params: Readonly<{
     },
     async requestPluginChange(request, options) {
       if (options?.signal?.aborted) return { kind: 'cancelled' };
-      if (!acceptsChanges()) return { kind: 'unavailable', code: 'daemon_shutting_down' };
+      if (!acceptsChanges()) return admissionRefusal();
       const finishActiveRequest = beginActiveRequest();
       try {
         // An author/Action rejoins the observer's exact retained candidate.
@@ -360,7 +364,7 @@ export function createDaemonPluginChangeService(params: Readonly<{
         }
         if (!acceptsChanges()) {
           await cleanupPrepared(prepared);
-          return { kind: 'unavailable', code: 'daemon_shutting_down' };
+          return admissionRefusal();
         }
         const key = preparedChangeKey(prepared);
         if (

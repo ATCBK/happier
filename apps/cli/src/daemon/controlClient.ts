@@ -114,7 +114,7 @@ import type {
   TakeoverAdmissionMode,
 } from './spawn/persistedTakeoverAdmission';
 import { daemonPost, type DaemonControlRequestOptions } from './controlHttp';
-import { EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema } from './lifecycle/admissionDrain';
+import { DaemonAdmissionRefusalCodeSchema, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema } from './lifecycle/admissionDrain';
 import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 export type { DaemonControlRequestOptions } from './controlHttp';
 import { inspectDaemonPublicationPresence, type DaemonPublicationPresenceInspection } from './controlLiveness';
@@ -793,6 +793,7 @@ export async function requestDaemonSessionConnectedServiceAuthSwitch(
     timeoutMs: resolveDaemonSessionConnectedServiceAuthSwitchTimeoutMs(),
     ...options,
   });
+  throwIfDaemonAdmissionRefused(result);
   if (result?.error) {
     throw new Error(String(result.error));
   }
@@ -831,6 +832,7 @@ function normalizeDaemonRuntimeAuthRefreshResponse(
   value: unknown,
   refreshAttemptId: string,
 ): ConnectedServiceDaemonAuthBridgeRefreshResult {
+  throwIfDaemonAdmissionRefused(value);
   const result = value && typeof value === 'object' ? value as Record<string, unknown> : null;
   if (result?.error || result?.errorCode) {
     if (result.errorCode === 'timeout' || (!result.errorCode && typeof result.error === 'string' && /abort|timed?\s*out|timeout/iu.test(result.error))) {
@@ -1051,6 +1053,7 @@ async function requestDaemonSessionRunnerRestartOperation(
       : RestartSessionRunnerRequestV1Schema.parse(request);
   // The canonical retirement and respawn lifecycle owns completion; caller cancellation remains live.
   const result = await daemonPost(path, body, { timeoutMs: null, ...options });
+  throwIfDaemonAdmissionRefused(result);
   if (result?.error) throw new Error(String(result.error));
   const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
   if (!parsed.success) throw new Error('Invalid daemon session runner restart response');
@@ -1087,6 +1090,7 @@ export async function restartAllDaemonSessionRunners(
     timeoutMs: null,
     ...options,
   });
+  throwIfDaemonAdmissionRefused(result);
   if (result?.error) {
     throw new Error(String(result.error));
   }
@@ -1095,6 +1099,15 @@ export async function restartAllDaemonSessionRunners(
     throw new Error('Invalid daemon session runner restart-all response');
   }
   return parsed.data;
+}
+
+/** Preserve daemon lifecycle refusals before parsing operation-specific responses. */
+function throwIfDaemonAdmissionRefused(result: unknown): void {
+  if (!result || typeof result !== 'object' || !('errorCode' in result)) return;
+  const code = DaemonAdmissionRefusalCodeSchema.safeParse(result.errorCode);
+  if (!code.success) return;
+  const message = 'error' in result && typeof result.error === 'string' ? result.error : code.data;
+  throw Object.assign(new Error(message), { code: code.data });
 }
 
 export async function admitDaemonForegroundAgentRuntime(
@@ -1107,6 +1120,7 @@ export async function admitDaemonForegroundAgentRuntime(
     body,
     options,
   );
+  throwIfDaemonAdmissionRefused(result);
   const parsed =
     ForegroundAgentRuntimeAdmissionResponseV1Schema.safeParse(result);
   if (parsed.success) return parsed.data;
@@ -1137,6 +1151,7 @@ export async function claimDaemonForegroundAgentRuntime(
         options.timeoutMs === undefined ? 300_000 : options.timeoutMs,
     },
   );
+  throwIfDaemonAdmissionRefused(result);
   return ForegroundAgentRuntimeClaimResponseV1Schema.parse(result);
 }
 
@@ -1150,6 +1165,7 @@ export async function resolveDaemonForegroundAgentRuntimeSessionOptions(
     body,
     options,
   );
+  throwIfDaemonAdmissionRefused(result);
   return ForegroundAgentRuntimeSessionOptionsResponseV1Schema.parse(result);
 }
 
@@ -1163,6 +1179,7 @@ export async function releaseDaemonForegroundAgentRuntime(
     body,
     options,
   );
+  throwIfDaemonAdmissionRefused(result);
   ForegroundAgentRuntimeReleaseResponseV1Schema.parse(result);
 }
 

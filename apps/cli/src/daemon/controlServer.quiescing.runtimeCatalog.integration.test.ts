@@ -4,6 +4,17 @@ import { createDaemonControlApp } from './controlServer';
 import { createDaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { applyTrackedSessionTurnLifecycle } from './sessions/applyTrackedSessionTurnLifecycle';
 import type { TrackedSession } from './types';
+import { admitDaemonForegroundAgentRuntime, releaseDaemonForegroundAgentRuntime } from './controlClient';
+import { FOREGROUND_AGENT_RUNTIME_ADMISSION_PATH, FOREGROUND_AGENT_RUNTIME_RELEASE_PATH } from './agentRuntime/foregroundAdmissionContract';
+import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
+
+const foregroundRequest = {
+  v: 1 as const, attemptId: 'attempt-1', sessionId: 'session-1', foregroundPid: process.pid,
+  directory: '/workspace', agentId: 'codex',
+  backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const },
+};
 
 describe('daemon control server quiescing producer routes', () => {
   it('reopens the same control ingress after a temporary drain without final teardown', async () => {
@@ -25,7 +36,10 @@ describe('daemon control server quiescing producer routes', () => {
           updateSessionMarkerActiveTurn: async () => true }) }),
     });
     try {
-      await app.ready();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP control listener');
+      const clientOptions = { target: { pid: process.pid, httpPort: address.port, controlToken: 'test-token' } };
       const spawn = () => app.inject({ method: 'POST', url: '/spawn-session',
         headers: { 'x-happier-daemon-token': 'test-token' }, payload: { directory: '/repo' } });
       const runAdmission = () => app.inject({ method: 'POST', url: '/execution-run/admission',
@@ -44,7 +58,18 @@ describe('daemon control server quiescing producer routes', () => {
         payload: { sessionId: 'happy-test-123', turnId: 'turn-next', event: 'task_started' } })).json())
         .toMatchObject({ ok: true, result: { status: 'continue', turnCustody: { status: 'recorded', activeTurnId: 'turn-next' } } });
       expect(tracked.activeTurnId).toBe('turn-next');
-      expect((await spawn()).statusCode).toBe(503);
+      const refused = await spawn();
+      expect(refused.statusCode).toBe(503);
+      expect(refused.json()).toMatchObject({ errorCode: 'daemon_draining' });
+      const failure = normalizeSpawnSessionNonceResolution({ ...refused.json(), status: 'error', errorMessage: refused.json().error });
+      expect(failure).toMatchObject({ status: 'error', errorCode: 'daemon_draining' });
+      if (failure.status !== 'error') throw new Error('Expected typed spawn refusal');
+      expect(SessionSpawnNewResultV1Schema.parse(projectSessionSpawnFailure(failure)))
+        .toMatchObject({ code: 'spawn_failed', launchError: { code: 'daemon_draining' } });
+      await expect(admitDaemonForegroundAgentRuntime(foregroundRequest, clientOptions))
+        .rejects.toMatchObject({ code: 'daemon_draining' });
+      await expect(releaseDaemonForegroundAgentRuntime({ v: 1, attemptId: 'attempt-1', sessionId: 'session-1' }, clientOptions))
+        .rejects.toMatchObject({ code: 'daemon_draining' });
       expect(admissionDrain.isPublicationQuiescing()).toBe(false);
       admissionDrain.resume();
       expect((await runAdmission()).json()).toEqual({ admitted: true });
@@ -52,10 +77,16 @@ describe('daemon control server quiescing producer routes', () => {
       admissionDrain.beginShutdown();
       admissionDrain.resume();
       expect((await runAdmission()).json()).toEqual({ admitted: false, reason: 'daemon_shutting_down' });
-      expect((await spawn()).statusCode).toBe(503);
+      expect((await spawn()).json()).toMatchObject({ errorCode: 'daemon_shutting_down' });
+      await expect(admitDaemonForegroundAgentRuntime(foregroundRequest, clientOptions))
+        .rejects.toMatchObject({ code: 'daemon_shutting_down' });
     } finally { await app.close(); }
   });
-  it('rejects runtime producer routes while shutdown is quiescing new work', async () => {
+  it.each(['temporary', 'unused-stop overlap', 'plugin handoff', 'final', 'legacy final'] as const)('rejects runtime producer routes with their %s drain cause', async (cause) => {
+    const admissionDrain = createDaemonAdmissionDrain({ isPluginHandoffQuiescing: () => cause === 'plugin handoff' });
+    if (cause === 'temporary' || cause === 'unused-stop overlap') admissionDrain.beginTemporaryDrain();
+    if (cause === 'unused-stop overlap') { admissionDrain.beginUnusedStopDrain(); admissionDrain.resume(); }
+    if (cause === 'final') admissionDrain.beginShutdown();
     const handleSessionConnectedServiceAuthSwitch = vi.fn(async () => ({ status: 'switched' }));
     const handleSessionRunnerRestart = vi.fn(async () => ({
       ok: true as const,
@@ -143,7 +174,8 @@ describe('daemon control server quiescing producer routes', () => {
       stopSession: async () => ({ status: 'not_found' as const }),
       spawnSession,
       requestShutdown: () => {},
-      isShuttingDown: () => true,
+      admissionDrain: cause === 'legacy final' ? undefined : admissionDrain,
+      isShuttingDown: () => cause === 'legacy final',
       onHappySessionWebhook: () => {},
       controlToken: 'test-token',
       handleSessionConnectedServiceAuthSwitch,
@@ -164,6 +196,9 @@ describe('daemon control server quiescing producer routes', () => {
           url: '/spawn-session',
           payload: {},
         },
+        { url: '/continue-with-replay', payload: {} },
+        { url: FOREGROUND_AGENT_RUNTIME_ADMISSION_PATH, payload: foregroundRequest },
+        { url: FOREGROUND_AGENT_RUNTIME_RELEASE_PATH, payload: { v: 1, attemptId: 'attempt-1', sessionId: 'session-1' } },
         {
           url: '/connected-service-auth/session/switch',
           payload: {
@@ -259,7 +294,7 @@ describe('daemon control server quiescing producer routes', () => {
         });
 
         expect(response.statusCode, `${request.url}: ${response.body}`).toBe(503);
-        expect(response.json()).toMatchObject({ errorCode: 'daemon_shutting_down' });
+        expect(response.json()).toMatchObject({ errorCode: cause === 'final' || cause === 'legacy final' ? 'daemon_shutting_down' : 'daemon_draining' });
       }
     } finally {
       await app.close();

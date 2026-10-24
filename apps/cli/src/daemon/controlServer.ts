@@ -12,7 +12,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import { configuration } from '@/configuration';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
-import { createDaemonAdmissionDrain, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, waitForDaemonAdmission, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
+import { createDaemonAdmissionDrain, DaemonAdmissionRefusalCodeSchema, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, waitForDaemonAdmission, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { AUTHORITY_CEILING_HEADER_V1, resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { waitForTerminalPresentUserPolicyRefresh, type TerminalPresentUserPolicyScope } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { logger } from '@/ui/logger';
@@ -969,22 +969,24 @@ export function createDaemonControlApp({
   let restartState: 'idle' | 'restarting' = 'idle';
   const admissionDrain = suppliedAdmissionDrain ?? createDaemonAdmissionDrain({ isShutdownRequested: isShuttingDown });
   const isDaemonQuiescing = admissionDrain.isQuiescing;
-  const daemonShuttingDownResponse = () => ({
+  const daemonAdmissionRefusal = () => admissionDrain.isFinalShutdown()
+    ? { errorCode: 'daemon_shutting_down' as const, error: 'Daemon is shutting down' }
+    : { errorCode: 'daemon_draining' as const, error: 'Daemon is draining' };
+  const daemonAdmissionRefusedResponse = () => ({
     ok: false as const,
-    errorCode: 'daemon_shutting_down' as const,
+    errorCode: daemonAdmissionRefusal().errorCode,
   });
-  const daemonShuttingDownRouteResponseSchema = z.object({
+  const daemonAdmissionRefusedRouteResponseSchema = z.strictObject({
     ok: z.literal(false),
-    errorCode: z.literal('daemon_shutting_down'),
+    errorCode: DaemonAdmissionRefusalCodeSchema,
   });
-  const daemonShuttingDownErrorResponse = () => ({
-    ...daemonShuttingDownResponse(),
-    error: 'Daemon is shutting down',
+  const daemonAdmissionRefusedErrorResponse = () => ({
+    ok: false as const,
+    ...daemonAdmissionRefusal(),
   });
-  const spawnDaemonShuttingDownResponse = () => ({
+  const spawnDaemonAdmissionRefusedResponse = () => ({
     success: false as const,
-    error: 'Daemon is shutting down',
-    errorCode: 'daemon_shutting_down' as const,
+    ...daemonAdmissionRefusal(),
   });
 
   const pruneSpawnNonceCorrelation = (nowMs: number = Date.now()): void => {
@@ -1344,7 +1346,7 @@ export function createDaemonControlApp({
     schema: { body: BrowserRuntimeActionControlRequestSchema },
     preHandler: requireAuth,
   }, async (request, reply) => {
-    if (isDaemonQuiescing()) return reply.code(503).send(daemonShuttingDownResponse());
+    if (isDaemonQuiescing()) return reply.code(503).send(daemonAdmissionRefusedResponse());
     const lifetime = createDaemonControlRequestLifetime(request, reply);
     try {
       const result = await (runtimeActionExecute ?? createUnavailableRuntimeActionExecutor())({
@@ -1382,7 +1384,7 @@ export function createDaemonControlApp({
     schema: { body: z.strictObject({}), response: { 200: ExecutionRunDaemonAdmissionResponseSchema, 401: authSchema401 } },
     preHandler: requireRunMaterializeAuth,
   }, async () => admissionDrain.isQuiescing()
-    ? { admitted: false as const, reason: admissionDrain.isFinalShutdown() ? 'daemon_shutting_down' as const : 'daemon_draining' as const }
+    ? { admitted: false as const, reason: daemonAdmissionRefusal().errorCode }
     : { admitted: true as const });
 
   typed.post(CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH, {
@@ -1577,7 +1579,7 @@ export function createDaemonControlApp({
           result: z.unknown(),
         }),
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({
           ok: z.literal(false),
           errorCode: z.literal('connected_service_auth_switch_handler_unavailable'),
@@ -1588,7 +1590,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleSessionConnectedServiceAuthSwitch) {
       reply.code(501);
@@ -1650,7 +1652,7 @@ export function createDaemonControlApp({
           ok: z.literal(false),
           errorCode: z.literal('connected_service_daemon_auth_bridge_unavailable'),
         }),
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
       },
     },
     preHandler: requireAuth,
@@ -1664,7 +1666,7 @@ export function createDaemonControlApp({
     }
     if (admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleSessionConnectedServiceRuntimeAuthRefresh) {
       reply.code(501);
@@ -1701,7 +1703,7 @@ export function createDaemonControlApp({
         response: {
           200: RestartSessionRunnerResultV1Schema,
           401: authSchema401,
-          503: daemonShuttingDownRouteResponseSchema,
+          503: daemonAdmissionRefusedRouteResponseSchema,
           501: z.object({
             ok: z.literal(false),
             status: z.literal('unsupported_daemon'),
@@ -1714,7 +1716,7 @@ export function createDaemonControlApp({
     }, async (request, reply) => {
       if (isDaemonQuiescing()) {
         reply.code(503);
-        return daemonShuttingDownResponse();
+        return daemonAdmissionRefusedResponse();
       }
       if (!handleSessionRunnerRestart) {
         reply.code(501);
@@ -1745,7 +1747,7 @@ export function createDaemonControlApp({
       response: {
         200: RestartSessionRunnerResultV1Schema,
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({
           ok: z.literal(false),
           status: z.literal('unsupported_daemon'),
@@ -1758,7 +1760,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleSessionRunnerRestart) {
       reply.code(501);
@@ -1778,7 +1780,7 @@ export function createDaemonControlApp({
       response: {
         200: RestartAllSessionRunnersResultV1Schema,
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: RestartAllSessionRunnersResultV1Schema,
       },
     },
@@ -1786,7 +1788,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleSessionRunnerRestartAll) {
       reply.code(501);
@@ -1881,13 +1883,13 @@ export function createDaemonControlApp({
     schema: {
       body: z.strictObject({ sessionId: z.nullable(z.string().check(z.minLength(1))), followOccurrence: z.optional(SessionFollowOccurrenceNotificationSchema) }),
       response: { 200: SessionActivityChangedResponseSchema, 401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema },
+        503: daemonAdmissionRefusedRouteResponseSchema },
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
     if (admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     const occurrence = request.body.followOccurrence;
     const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
@@ -2348,7 +2350,7 @@ export function createDaemonControlApp({
           result: ConnectedServiceTurnLifecycleResultSchema,
         }),
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({
           ok: z.literal(false),
           errorCode: z.literal('connected_service_turn_lifecycle_handler_unavailable'),
@@ -2360,7 +2362,7 @@ export function createDaemonControlApp({
     const releasesInput = request.body.event === 'prompt_or_steer';
     if (releasesInput ? isDaemonQuiescing() : admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleConnectedServiceTurnLifecycle) {
       reply.code(501);
@@ -2428,7 +2430,7 @@ export function createDaemonControlApp({
         401: authSchema401,
         503: z.object({
           ok: z.literal(false),
-          errorCode: z.literal('daemon_shutting_down'),
+          errorCode: DaemonAdmissionRefusalCodeSchema,
         }),
         501: z.object({
           ok: z.literal(false),
@@ -2440,7 +2442,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleConnectedServiceQuotaRecoveryCreditConsume) {
       reply.code(501);
@@ -2476,7 +2478,7 @@ export function createDaemonControlApp({
         }),
         401: authSchema401,
         503: z.union([
-          daemonShuttingDownRouteResponseSchema,
+          daemonAdmissionRefusedRouteResponseSchema,
           z.object({
             ok: z.literal(false),
             errorCode: z.literal('provider_account_usage_snapshot_intake_failed'),
@@ -2492,7 +2494,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!handleProviderAccountUsageSnapshot) {
       reply.code(501);
@@ -2553,7 +2555,7 @@ export function createDaemonControlApp({
         503: z.object({
           ok: z.literal(false),
           errorCode: z.union([
-            z.literal('daemon_shutting_down'),
+            DaemonAdmissionRefusalCodeSchema,
             z.literal('provider_account_usage_adoption_intake_failed'),
           ]),
         }),
@@ -2567,7 +2569,7 @@ export function createDaemonControlApp({
 	  }, async (request, reply) => {
         if (admissionDrain.isPublicationQuiescing()) {
           reply.code(503);
-          return daemonShuttingDownResponse();
+          return daemonAdmissionRefusedResponse();
         }
 	    if (!handleProviderAccountUsageAdoption) {
 	      reply.code(501);
@@ -2680,7 +2682,7 @@ export function createDaemonControlApp({
     preHandler: requireRunMaterializeAuth,
   }, async (request) => {
     const result = admissionDrain.isPublicationQuiescing()
-      ? { status: 'unavailable' as const, reason: 'daemon_shutting_down' }
+      ? { status: 'unavailable' as const, reason: daemonAdmissionRefusal().errorCode }
       : refreshConnectedServiceRuntimeAuthForExecutionRun
         ? await refreshConnectedServiceRuntimeAuthForExecutionRun(request.body)
         : { status: 'unavailable' as const, reason: 'connected_service_daemon_auth_bridge_unavailable' };
@@ -2809,7 +2811,7 @@ export function createDaemonControlApp({
       response: {
         200: z.object({ ok: z.literal(true), snapshot: z.unknown() }),
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({ ok: z.literal(false), errorCode: z.literal('local_services_inventory_unavailable') }),
       },
     },
@@ -2817,7 +2819,7 @@ export function createDaemonControlApp({
   }, async (_request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!localServicesInventory) {
       reply.code(501);
@@ -2837,7 +2839,7 @@ export function createDaemonControlApp({
         200: z.object({ ok: z.literal(true) }),
         401: authSchema401,
         404: z.object({ ok: z.literal(false), reason: z.literal('unknown_inventory_entry') }),
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({ ok: z.literal(false), errorCode: z.literal('local_services_inventory_unavailable') }),
       },
     },
@@ -2845,7 +2847,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!localServicesInventory) {
       reply.code(501);
@@ -2938,7 +2940,7 @@ export function createDaemonControlApp({
       response: {
         200: z.object({ ok: z.literal(true), result: SimulatorPreviewActionResultV1Schema }),
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({ ok: z.literal(false), errorCode: z.literal('simulator_preview_unavailable') }),
       },
     },
@@ -2946,7 +2948,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!simulatorPreview) {
       reply.code(501);
@@ -2961,7 +2963,7 @@ export function createDaemonControlApp({
       response: {
         200: z.object({ ok: z.literal(true), result: LocalServiceActionResultV1Schema }),
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
         501: z.object({ ok: z.literal(false), errorCode: z.literal('local_services_actions_unavailable') }),
       },
     },
@@ -2969,7 +2971,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!localServicesActions) {
       reply.code(501);
@@ -2987,7 +2989,7 @@ export function createDaemonControlApp({
         403: AgentRuntimeDaemonServiceResponseV1Schema,
         501: AgentRuntimeDaemonServiceResponseV1Schema,
         503: z.union([
-          daemonShuttingDownRouteResponseSchema,
+          daemonAdmissionRefusedRouteResponseSchema,
           AgentRuntimeDaemonServiceResponseV1Schema,
         ]),
       },
@@ -3005,6 +3007,8 @@ export function createDaemonControlApp({
       reply.code(401);
       return { success: false as const, error: 'Unauthorized' };
     }
+    const requestLifetime = createDaemonControlRequestLifetime(request, reply);
+    try {
     const serviceSessions = getChildren();
     const authorizedTracked = constantTimeEqualUtf8(
       providedCapability,
@@ -3017,12 +3021,13 @@ export function createDaemonControlApp({
       )
       : null;
     const trackedAuthority = authorizedTracked
-      ? await resolveTrackedAgentRuntimeDaemonServiceAuthority(
+      ? await requestLifetime.run(() => resolveTrackedAgentRuntimeDaemonServiceAuthority(
         authorizedTracked,
         request.body.context.sessionId,
         readPluginHardRevocationRevision,
-      )
+      ))
       : null;
+    requestLifetime.signal.throwIfAborted();
     const tracked = trackedAuthority?.tracked ?? null;
     const canonicalTrackedSubjectExists =
       serviceSessions.some((candidate) =>
@@ -3074,9 +3079,10 @@ export function createDaemonControlApp({
       || request.body.operation.kind === 'managed_server.supervision.authorize';
     if (releasesNewWork ? admissionDrain.isFinalShutdown() : admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return admissionDrain.isFinalShutdown() ? daemonShuttingDownResponse() : {
+      const refusal = daemonAdmissionRefusal();
+      return admissionDrain.isFinalShutdown() ? daemonAdmissionRefusedResponse() : {
         ok: false as const,
-        error: { code: 'daemon_draining', message: 'Daemon is draining' },
+        error: { code: refusal.errorCode, message: refusal.error },
       };
     }
     if (!agentRuntimeDaemonServices) {
@@ -3101,13 +3107,12 @@ export function createDaemonControlApp({
     let childActionAuthorized = false;
     const authorizeChild = agentRuntimeDaemonServices.authorizeExecutionRunAction;
     if (childAction && trackedAuthority && authorizeChild) {
-      const lifetime = createDaemonControlRequestLifetime(request, reply);
       try {
-        childActionAuthorized = await lifetime.run(() => authorizeChild(childAction, {
-          sessionId: request.body.context.sessionId, trackedSession: trackedAuthority.tracked, signal: lifetime.signal,
+        childActionAuthorized = await requestLifetime.run(() => authorizeChild(childAction, {
+          sessionId: request.body.context.sessionId, trackedSession: trackedAuthority.tracked, signal: requestLifetime.signal,
         }));
       } catch { childActionAuthorized = false; }
-      finally { lifetime.dispose(); }
+      requestLifetime.signal.throwIfAborted();
     }
     const turnWitnessIsCurrent = (
       subject: ForegroundDaemonServiceSubject | null = foregroundSubject,
@@ -3165,6 +3170,7 @@ export function createDaemonControlApp({
     }
     const trackedAuthorityAtDispatch = trackedAuthority;
     const trackedAuthorityRemainsCurrent = async (): Promise<boolean> => {
+      requestLifetime.signal.throwIfAborted();
       if (!trackedAuthorityAtDispatch) return true;
       const current = trackedAuthorityAtDispatch.tracked;
       if (
@@ -3176,16 +3182,16 @@ export function createDaemonControlApp({
       ) {
         return false;
       }
-      return trackedAgentRuntimeDaemonServiceAuthorityMatches(
-        trackedAuthorityAtDispatch,
-        await resolveTrackedAgentRuntimeDaemonServiceAuthority(
+      const currentAuthority = await requestLifetime.run(() => resolveTrackedAgentRuntimeDaemonServiceAuthority(
           current,
           request.body.context.sessionId,
           readPluginHardRevocationRevision,
-        ),
-      );
+        ));
+      requestLifetime.signal.throwIfAborted();
+      return trackedAgentRuntimeDaemonServiceAuthorityMatches(trackedAuthorityAtDispatch, currentAuthority);
     };
     const isCurrent = async (): Promise<boolean> => {
+      requestLifetime.signal.throwIfAborted();
       // The exact turn witness admitted this Action above. Native completion
       // may precede a slow MCP result; it does not revoke an accepted effect.
       // Runner replacement, source retirement and request cancellation still
@@ -3223,9 +3229,6 @@ export function createDaemonControlApp({
         },
       };
     };
-    const requestLifetime = new AbortController();
-    const onClientClose = () => requestLifetime.abort();
-    reply.raw.once('close', onClientClose);
     let result: AgentRuntimeDaemonServiceResponseV1;
     try {
       // A managed activity probe can overlap an already opening/open Session.
@@ -3237,8 +3240,9 @@ export function createDaemonControlApp({
         } catch (error) {
           if (!admissionDrain.isFinalShutdown()) throw error;
           reply.code(503);
-          return daemonShuttingDownResponse();
+          return daemonAdmissionRefusedResponse();
         }
+        requestLifetime.signal.throwIfAborted();
         if (!await isCurrent()) {
           reply.code(403);
           return { ok: false as const, error: {
@@ -3247,6 +3251,7 @@ export function createDaemonControlApp({
           } };
         }
       }
+      requestLifetime.signal.throwIfAborted();
       result = await agentRuntimeDaemonServices.dispatch(
         request.body,
         trackedAuthority
@@ -3293,9 +3298,8 @@ export function createDaemonControlApp({
         },
       );
       throw error;
-    } finally {
-      reply.raw.removeListener('close', onClientClose);
     }
+    requestLifetime.signal.throwIfAborted();
     if (request.body.operation.kind === 'action.execute'
       ? !await isCurrent()
       : tracked && !await trackedAuthorityRemainsCurrent()) {
@@ -3331,6 +3335,7 @@ export function createDaemonControlApp({
         userMessageSeqs:
           result.result.witness.userMessageSeqs,
       } satisfies AgentRuntimeDaemonServiceAdmission;
+      requestLifetime.signal.throwIfAborted();
       const admissionRecorded = await (
         tracked
           ? recordAgentRuntimeDaemonServiceAdmission?.(
@@ -3349,7 +3354,15 @@ export function createDaemonControlApp({
       if (!admissionRecorded) {
         return admissionCustodyUnavailable();
       }
-      if (tracked && !await trackedAuthorityRemainsCurrent()) {
+      // A marker write may finish after the caller has gone. Retire that exact
+      // admission through the existing stale-custody cleanup before returning.
+      const recordedAuthorityIsCurrent = tracked
+        ? await trackedAuthorityRemainsCurrent().catch((error: unknown) => {
+          if (requestLifetime.signal.aborted) return false;
+          throw error;
+        })
+        : !requestLifetime.signal.aborted;
+      if (tracked && !recordedAuthorityIsCurrent) {
         try {
           await clearAgentRuntimeDaemonServiceAdmission?.(
             tracked,
@@ -3363,6 +3376,7 @@ export function createDaemonControlApp({
         }
         return admissionCustodyUnavailable();
       }
+      requestLifetime.signal.throwIfAborted();
       if (tracked) {
         tracked.activeTurnId =
           result.result.witness.turnId;
@@ -3378,6 +3392,9 @@ export function createDaemonControlApp({
       }
     }
     return result;
+    } finally {
+      requestLifetime.dispose();
+    }
   });
 
   typed.post(FOREGROUND_AGENT_RUNTIME_ADMISSION_PATH, {
@@ -3386,14 +3403,14 @@ export function createDaemonControlApp({
       response: {
         200: ForegroundAgentRuntimeAdmissionResponseV1Schema,
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
       },
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!foregroundAgentRuntimeAdmission) {
       return {
@@ -3417,7 +3434,7 @@ export function createDaemonControlApp({
         200: ForegroundAgentRuntimeClaimResponseV1Schema,
         401: authSchema401,
         403: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -3444,7 +3461,7 @@ export function createDaemonControlApp({
     }
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!foregroundAgentRuntimeAdmission) {
       reply.code(403);
@@ -3461,14 +3478,14 @@ export function createDaemonControlApp({
       response: {
         200: ForegroundAgentRuntimeSessionOptionsResponseV1Schema,
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
       },
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     if (!foregroundAgentRuntimeAdmission) {
       return {
@@ -3490,14 +3507,14 @@ export function createDaemonControlApp({
       response: {
         200: ForegroundAgentRuntimeReleaseResponseV1Schema,
         401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
+        503: daemonAdmissionRefusedRouteResponseSchema,
       },
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return daemonAdmissionRefusedResponse();
     }
     await foregroundAgentRuntimeAdmission?.release(
       request.body.attemptId,
@@ -3520,7 +3537,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownErrorResponse();
+      return daemonAdmissionRefusedErrorResponse();
     }
     if (!sshTunnels) {
       reply.code(503);
@@ -3607,7 +3624,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownErrorResponse();
+      return daemonAdmissionRefusedErrorResponse();
     }
     if (!sshTunnels) {
       reply.code(503);
@@ -3645,7 +3662,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownErrorResponse();
+      return daemonAdmissionRefusedErrorResponse();
     }
     if (!sshTunnels) {
       reply.code(503);
@@ -3718,7 +3735,7 @@ export function createDaemonControlApp({
         503: z.object({
           success: z.literal(false),
           error: z.string(),
-          errorCode: z.literal('daemon_shutting_down'),
+          errorCode: DaemonAdmissionRefusalCodeSchema,
         }),
         500: SpawnSessionControlErrorResponseSchema,
       }
@@ -3727,7 +3744,7 @@ export function createDaemonControlApp({
       }, async (request, reply) => {
         if (isDaemonQuiescing()) {
           reply.code(503);
-          return spawnDaemonShuttingDownResponse();
+          return spawnDaemonAdmissionRefusedResponse();
         }
         const parsedRequest = SpawnDaemonSessionRequestSchema.safeParse(request.body);
         if (!parsedRequest.success) {
@@ -3969,7 +3986,7 @@ export function createDaemonControlApp({
         503: z.object({
           success: z.literal(false),
           error: z.string(),
-          errorCode: z.literal('daemon_shutting_down'),
+          errorCode: DaemonAdmissionRefusalCodeSchema,
         }),
         500: z.object({
           success: z.boolean(),
@@ -3982,7 +3999,7 @@ export function createDaemonControlApp({
   }, async (request, reply) => {
     if (isDaemonQuiescing()) {
       reply.code(503);
-      return spawnDaemonShuttingDownResponse();
+      return spawnDaemonAdmissionRefusedResponse();
     }
     const parsedRequest = parseSessionContinueWithReplayRpcParamsCompatIngress(request.body);
     if (!parsedRequest.success) {

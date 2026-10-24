@@ -419,6 +419,9 @@ describe('createDaemonPluginChangeService', () => {
     await service.shutdown();
     await expect(service.statusPluginChange({ pendingChangeId: begun.pendingChangeId }))
       .resolves.toEqual({ kind: 'daemonUnavailable' });
+    await expect(service.requestPluginChange({
+      kind: 'installPath', locator: '/tmp/example', development: false,
+    })).resolves.toEqual({ kind: 'unavailable', code: 'daemon_shutting_down' });
 
     const restarted = createDaemonPluginChangeService({
       prepare: async () => {
@@ -738,7 +741,7 @@ describe('createDaemonPluginChangeService', () => {
       sourceRootPath: '/tmp/second',
     })).resolves.toEqual({
       kind: 'unavailable',
-      code: 'daemon_shutting_down',
+      code: 'daemon_draining',
     });
     expect(prepare).toHaveBeenCalledTimes(1);
     await Promise.resolve();
@@ -760,7 +763,7 @@ describe('createDaemonPluginChangeService', () => {
     await service.shutdown();
   });
 
-  it('waits for in-flight candidate preparation and cleanup before completing handoff', async () => {
+  it.each(['handoff', 'shutdown'] as const)('waits for in-flight candidate preparation and cleanup before completing %s', async (closure) => {
     let markPreparationStarted!: () => void;
     const preparationStarted = new Promise<void>((resolve) => {
       markPreparationStarted = resolve;
@@ -797,7 +800,7 @@ describe('createDaemonPluginChangeService', () => {
     await preparationStarted;
 
     let quiesced = false;
-    const quiescing = service.quiesceForHandoff().then((lease) => {
+    const quiescing = (closure === 'handoff' ? service.quiesceForHandoff() : service.shutdown()).then((lease) => {
       quiesced = true;
       return lease;
     });
@@ -812,10 +815,10 @@ describe('createDaemonPluginChangeService', () => {
     const lease = await quiescing;
     await expect(request).resolves.toEqual({
       kind: 'unavailable',
-      code: 'daemon_shutting_down',
+      code: closure === 'handoff' ? 'daemon_draining' : 'daemon_shutting_down',
     });
     expect(cleanup).toHaveBeenCalledOnce();
-    lease.resume();
+    lease?.resume();
     await service.shutdown();
   });
 
@@ -917,7 +920,7 @@ describe('createDaemonPluginChangeService', () => {
       sourceRootPath: '/tmp/example',
     })).resolves.toEqual({
       kind: 'unavailable',
-      code: 'daemon_shutting_down',
+      code: 'daemon_draining',
     });
     expect(prepare).not.toHaveBeenCalled();
 
