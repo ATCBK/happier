@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import * as React from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { normalizeServerUrl, setActiveServerAndSwitch, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { getActiveServerUrl, listServerProfiles } from '@/sync/domains/server/serverProfiles';
@@ -10,12 +10,15 @@ import { clearPendingNotificationNav, getPendingNotificationNav, setPendingNotif
 import {
     clearPendingNotificationAction,
     getPendingNotificationAction,
-    setPendingNotificationAction,
 } from '@/sync/domains/pending/pendingNotificationAction';
-import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { withTimeout } from '@/utils/timing/time';
 import { navigateToSessionRoute } from '@/hooks/session/navigateToSessionRoute';
+import { executeNotificationPermissionAction } from './notificationPermissionActions';
+import { markNotificationResponseHandled, wasNotificationResponseHandled } from './notificationResponseConsumption';
+import { consumeNotificationPermissionRecoveryNeeded, markNotificationPermissionRecoveryNeeded } from './notificationPermissionRecovery';
 
-import { isUnsafeNotificationServerUrl, parseNotificationTap } from '../notificationRouting';
+import { isNotificationPermissionAction, isUnsafeNotificationServerUrl, parseNotificationTap } from '../notificationRouting';
 
 type ExpoNotificationsWithClear = ExpoNotificationsModule & Readonly<{
     clearLastNotificationResponseAsync?: () => Promise<void>;
@@ -36,8 +39,8 @@ export function useNotificationResponseRouting(params: Readonly<{
     enabled: boolean;
     refreshAuth: () => Promise<void>;
 }>): void {
-    const handledNotificationResponseKeysRef = React.useRef<Set<string>>(new Set());
     const refreshAuthRef = React.useRef(params.refreshAuth);
+    const handledNavigationResponsesRef = React.useRef(new Set<string>());
 
     React.useEffect(() => {
         refreshAuthRef.current = params.refreshAuth;
@@ -45,48 +48,48 @@ export function useNotificationResponseRouting(params: Readonly<{
 
     React.useEffect(() => {
         if (!params.enabled) {
-            handledNotificationResponseKeysRef.current.clear();
             return;
         }
 
         if (Platform.OS === 'web') return;
 
-        const performPermissionAction = async (actionParams: {
-            sessionId: string;
-            requestId: string;
-            action: 'allow' | 'deny';
-        }): Promise<void> => {
-            const { sessionAllow, sessionDeny } = await import('@/sync/ops');
-            if (actionParams.action === 'allow') {
-                await sessionAllow(actionParams.sessionId, actionParams.requestId, undefined, undefined, 'approved');
-            } else {
-                await sessionDeny(
-                    actionParams.sessionId,
-                    actionParams.requestId,
-                    undefined,
-                    undefined,
-                    'denied',
-                    'Denied from notification',
+        let disposed = false;
+        const showRecoveryIfActive = async () => {
+            if (disposed || Platform.OS !== 'android' || AppState.currentState !== 'active') return;
+            try {
+                const [{ Modal }, { t }] = await withTimeout(
+                    () => Promise.all([import('@/modal'), import('@/text')]),
+                    EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS,
+                    'notification recovery UI module load',
                 );
+                if (!disposed && AppState.currentState === 'active' && consumeNotificationPermissionRecoveryNeeded()) {
+                    Modal.alert(t('common.error'), t('notifications.permissionActionNeedsReview'));
+                }
+            } catch {
+                console.warn('[notifications] Permission action recovery unavailable');
             }
         };
 
         const pendingAction = getPendingNotificationAction();
-        if (pendingAction) {
+        if (pendingAction && Platform.OS === 'android') {
+            // Old versions queued actions across server switches. Do not replay an
+            // old decision when adopting background actions: require in-app review.
+            clearPendingNotificationAction();
+            try {
+                markNotificationPermissionRecoveryNeeded();
+            } catch {
+                console.warn('[notifications] Permission action recovery storage unavailable');
+            }
+            console.warn('[notifications] Saved permission action requires in-app review');
+        }
+        if (pendingAction && Platform.OS !== 'android') {
             const active = normalizeServerUrl(getActiveServerUrl());
             if (normalizeServerUrl(pendingAction.serverUrl) === active) {
                 clearPendingNotificationAction();
+                // Legacy pending records have no occurrence identity and are review-only.
+                const saved = findSavedServerProfileForUrl(pendingAction.serverUrl);
                 fireAndForget((async () => {
-                    try {
-                        await performPermissionAction({
-                            sessionId: pendingAction.sessionId,
-                            requestId: pendingAction.requestId,
-                            action: pendingAction.action,
-                        });
-                    } catch {
-                        // best-effort; navigation still proceeds
-                    }
-                    navigateToSessionRoute({ router, sessionId: pendingAction.sessionId, refreshAuth: refreshAuthRef.current });
+                    navigateToSessionRoute({ router, sessionId: pendingAction.sessionId, serverId: saved?.id, refreshAuth: refreshAuthRef.current });
                 })(), { tag: 'RootLayout.pendingNotificationAction' });
                 return;
             }
@@ -102,36 +105,73 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
         }
 
-        const maybeRedirectFromResponse = (response: unknown, defaultActionIdentifier: string) => {
-            const parsed = parseNotificationTap({
+        const maybeRedirectFromResponse = (response: unknown, defaultActionIdentifier: string, allowExecution = true) => {
+            let parsed = parseNotificationTap({
                 response,
                 defaultActionIdentifier,
             });
             if (!parsed) return;
 
-            if (parsed.dedupeKey) {
-                const handled = handledNotificationResponseKeysRef.current;
-                if (handled.size > 512) {
-                    handled.clear();
+            // Registration controls native foregrounding, not callback ownership.
+            // The task does not receive every foreground press. Both paths must
+            // invoke the same guarded executor before navigation/server switching.
+            if (Platform.OS === 'android' && isNotificationPermissionAction(parsed)) {
+                if (allowExecution) {
+                    fireAndForget(executeNotificationPermissionAction(parsed).then(showRecoveryIfActive), { tag: 'notificationPermissionAction' });
+                    return;
                 }
-                if (handled.has(parsed.dedupeKey)) return;
-                handled.add(parsed.dedupeKey);
+                // Expo also caches actions handled without opening an Activity.
+                // Only an unhandled saved launch needs foreground review.
+                if (wasNotificationResponseHandled(parsed)) return;
+                parsed = { ...parsed, permissionAction: null, isOpenAction: true };
+            }
+
+            if (isNotificationPermissionAction(parsed)) {
+                if (wasNotificationResponseHandled(parsed)) return;
+                markNotificationResponseHandled(parsed);
+            } else if (parsed.dedupeKey) {
+                if (handledNavigationResponsesRef.current.has(parsed.dedupeKey)) return;
+                handledNavigationResponsesRef.current.add(parsed.dedupeKey);
             }
 
             if (!parsed.route) return;
 
             const route = parsed.route;
+            const routeSessionId = parsed.routeSessionId;
             const serverUrl = parsed.serverUrl;
+            const savedTarget = serverUrl ? findSavedServerProfileForUrl(serverUrl) : null;
+            const navigateToRoute = (serverId?: string) => {
+                if (routeSessionId) {
+                    navigateToSessionRoute({ router, sessionId: routeSessionId, serverId, refreshAuth: refreshAuthRef.current });
+                } else {
+                    router.push(route);
+                }
+            };
             const routeToServerSettingsForUrl = (url: string) => {
                 router.push(`/settings/server?url=${encodeURIComponent(url)}&source=notification`);
             };
+
+            if (routeSessionId && (!serverUrl || savedTarget)) {
+                if (parsed.permissionAction && serverUrl) {
+                    fireAndForget((async () => {
+                        try {
+                            await executeNotificationPermissionAction(parsed);
+                        } catch {
+                            // Navigation still opens the request for in-app review.
+                        }
+                        navigateToRoute(savedTarget?.id);
+                    })(), { tag: 'RootLayout.notificationAction.session' });
+                } else {
+                    navigateToRoute(savedTarget?.id);
+                }
+                return;
+            }
 
             // Permission action buttons are security-sensitive. Only perform allow/deny when:
             // - the server is already active, OR
             // - the server is already saved (we can switch safely), OR
             // - (otherwise) navigate only and let the user handle it in-app.
             if (parsed.permissionAction) {
-                const { action, sessionId: actionSessionId, requestId: actionRequestId } = parsed.permissionAction;
                 if (!serverUrl) {
                     router.push(route);
                     return;
@@ -158,7 +198,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                         refreshAuth: refreshAuthRef.current,
                                     });
                                     clearPendingNotificationNav();
-                                    router.push(route);
+                                    navigateToRoute(findSavedServerProfileForUrl(serverUrl)?.id);
                                 } catch {
                                     // keep pending notification nav as fallback
                                 }
@@ -171,12 +211,9 @@ export function useNotificationResponseRouting(params: Readonly<{
                         return;
                     }
 
-                    setPendingNotificationAction({
-                        serverUrl: saved.serverUrl,
-                        sessionId: actionSessionId,
-                        requestId: actionRequestId,
-                        action,
-                    });
+                    // Persist navigation recovery, never an approval to replay
+                    // after a later authentication or server-switch lifecycle.
+                    setPendingNotificationNav({ serverUrl: saved.serverUrl, route });
                     fireAndForget((async () => {
                         try {
                             await setActiveServerAndSwitch({
@@ -184,15 +221,15 @@ export function useNotificationResponseRouting(params: Readonly<{
                                 scope: 'device',
                                 refreshAuth: refreshAuthRef.current,
                             });
-                            clearPendingNotificationAction();
+                            clearPendingNotificationNav();
                             try {
-                                await performPermissionAction({ sessionId: actionSessionId, requestId: actionRequestId, action });
+                                await executeNotificationPermissionAction(parsed);
                             } catch {
                                 // best-effort
                             }
-                            navigateToSessionRoute({ router, sessionId: actionSessionId, refreshAuth: refreshAuthRef.current });
+                            navigateToRoute(saved.id);
                         } catch {
-                            // keep pending notification action as fallback
+                            // Keep navigation for in-app review after recovery.
                         }
                     })(), { tag: 'RootLayout.notificationAction.savedServer' });
                     return;
@@ -213,7 +250,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                     refreshAuth: refreshAuthRef.current,
                                 });
                                 clearPendingNotificationNav();
-                                router.push(route);
+                                navigateToRoute(saved.id);
                             } catch {
                                 // keep pending notification nav as fallback
                             }
@@ -238,7 +275,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                     refreshAuth: refreshAuthRef.current,
                                 });
                                 clearPendingNotificationNav();
-                                router.push(route);
+                                navigateToRoute(findSavedServerProfileForUrl(serverUrl)?.id);
                             } catch {
                                 // keep pending notification nav as fallback
                             }
@@ -253,14 +290,13 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
 
             if (parsed.permissionAction) {
-                const { action, sessionId: actionSessionId, requestId: actionRequestId } = parsed.permissionAction;
                 fireAndForget((async () => {
                     try {
-                        await performPermissionAction({ sessionId: actionSessionId, requestId: actionRequestId, action });
+                        await executeNotificationPermissionAction(parsed);
                     } catch {
                         // best-effort
                     }
-                    navigateToSessionRoute({ router, sessionId: actionSessionId, refreshAuth: refreshAuthRef.current });
+                    navigateToRoute(savedTarget?.id);
                 })(), { tag: 'RootLayout.notificationAction.activeServer' });
                 return;
             }
@@ -270,7 +306,10 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
         };
 
-        let disposed = false;
+        const recoverySubscription = Platform.OS === 'android'
+            ? AppState.addEventListener('change', (state) => { if (state === 'active') void showRecoveryIfActive(); })
+            : null;
+        void showRecoveryIfActive();
         let subscription: { remove: () => void } | null = null;
         void loadExpoNotifications()
             .then((Notifications) => {
@@ -278,8 +317,8 @@ export function useNotificationResponseRouting(params: Readonly<{
                 const defaultActionIdentifier = Notifications.DEFAULT_ACTION_IDENTIFIER;
                 void Notifications.getLastNotificationResponseAsync()
                     .then(async (response) => {
-                        if (!response) return;
-                        maybeRedirectFromResponse(response, defaultActionIdentifier);
+                        if (disposed || !response) return;
+                        maybeRedirectFromResponse(response, defaultActionIdentifier, false);
                         const clearLastNotificationResponseAsync = (Notifications as ExpoNotificationsWithClear).clearLastNotificationResponseAsync;
                         if (typeof clearLastNotificationResponseAsync === 'function') {
                             await clearLastNotificationResponseAsync();
@@ -296,6 +335,7 @@ export function useNotificationResponseRouting(params: Readonly<{
         return () => {
             disposed = true;
             subscription?.remove();
+            recoverySubscription?.remove();
         };
     }, [params.enabled]);
 }

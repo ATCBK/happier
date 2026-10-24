@@ -77,6 +77,7 @@ import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAre
 import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 import { installWebFontFaces } from '@/platform/installWebFontFaces';
 import { ActionOperationRuntime } from '@/sync/domains/actionOperations/actionOperationRuntime';
+import { notificationPermissionActionsOpenApp } from '@/activity/notifications/runtime/notificationBackgroundTaskState';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
@@ -363,8 +364,9 @@ function configureAndroidNotificationChannels(Notifications: ExpoNotificationsMo
     }).catch(() => {});
 }
 
-function configureNotificationCategories(Notifications: ExpoNotificationsModule): void {
+async function configureNotificationCategories(Notifications: ExpoNotificationsModule): Promise<void> {
     if (Platform.OS === 'web') return;
+    const opensAppToForeground = await notificationPermissionActionsOpenApp(Platform.OS);
 
     // Expo docs recommend avoiding ':' and '-' in category identifiers.
     // Our category ids live in `@happier-dev/protocol` so the CLI push payload and app registration stay in sync.
@@ -372,12 +374,12 @@ function configureNotificationCategories(Notifications: ExpoNotificationsModule)
         {
             identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
             buttonTitle: t('notifications.actions.allow'),
-            options: { opensAppToForeground: true },
+            options: { opensAppToForeground },
         },
         {
             identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
             buttonTitle: t('notifications.actions.deny'),
-            options: { opensAppToForeground: true, isDestructive: true },
+            options: { opensAppToForeground, isDestructive: true },
         },
     ]).catch(() => {});
 
@@ -395,7 +397,7 @@ void (async () => {
         const Notifications = await loadExpoNotifications();
         configureForegroundNotificationHandler(Notifications);
         configureAndroidNotificationChannels(Notifications);
-        configureNotificationCategories(Notifications);
+        await configureNotificationCategories(Notifications);
     } catch {
         // Native notification modules are optional in local dev clients; startup must still render.
     }

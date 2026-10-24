@@ -12,6 +12,7 @@ import {
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 
 import type { ScopedSocketClient, ScopedSocketConnectParams } from './serverScopedRpcTypes';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
 type SocketLike = Readonly<{
     connected: boolean;
@@ -112,7 +113,8 @@ function readScopedRpcSocketIdleDisconnectMsFromEnv(): number {
     return parsed;
 }
 
-async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number): Promise<void> {
+async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new Error('Scoped RPC socket connection aborted');
     if (socket.connected) return;
     await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -127,6 +129,7 @@ async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number): 
             clearTimeout(timeoutId);
             socket.off('connect', onConnect);
             socket.off('connect_error', onConnectError);
+            signal?.removeEventListener('abort', onAbort);
         };
 
         const onConnect = () => {
@@ -144,8 +147,16 @@ async function connectSocketWithTimeout(socket: SocketLike, timeoutMs: number): 
             reject(error instanceof Error ? error : new Error('Scoped RPC socket connection failed'));
         };
 
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error('Scoped RPC socket connection aborted'));
+        };
+
         socket.on('connect', onConnect);
         socket.on('connect_error', onConnectError);
+        signal?.addEventListener('abort', onAbort, { once: true });
         try {
             socket.connect();
         } catch (error) {
@@ -296,12 +307,43 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
     const acquire = async (params: ScopedSocketConnectParams): Promise<ScopedSocketClient> => {
         const serverUrl = normalizeServerUrl(params.serverUrl);
         const token = String(params.token ?? '');
-        const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 30_000;
+        const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
         if (!serverUrl) {
             throw new Error('Missing server URL');
         }
         if (!token) {
             throw new Error('Missing token');
+        }
+
+        if (params.networkMode === 'background-task') {
+            // OS-dispatched work owns this socket until the caller's finally block.
+            // Reuse authentication/connection setup, but not foreground supervision
+            // or pooled idle retention. Never toggle the app-wide network gate.
+            if (params.signal?.aborted) throw new Error('Scoped RPC socket connection aborted');
+            const socket = deps.createSocket({ serverUrl, token });
+            let disconnected = false;
+            const disconnect = () => {
+                if (disconnected) return;
+                disconnected = true;
+                params.signal?.removeEventListener('abort', disconnect);
+                socket.disconnect();
+            };
+            // Attach for the whole caller-owned lifetime, not just connection.
+            // A stalled encryption await must not keep this socket alive.
+            params.signal?.addEventListener('abort', disconnect, { once: true });
+            try {
+                await connectSocketWithTimeout(socket, timeoutMs, params.signal);
+                if (params.signal?.aborted) throw new Error('Scoped RPC socket connection aborted');
+            } catch (error) {
+                disconnect();
+                throw error;
+            }
+            return {
+                timeout: (ms: number) => socket.timeout(ms),
+                emitWithAck: (event: string, payload: any) => socket.emitWithAck(event, payload),
+                emit: (event: string, payload: any) => socket.emit(event, payload),
+                disconnect,
+            };
         }
 
         const entry = getOrCreateEntry(serverUrl, token);

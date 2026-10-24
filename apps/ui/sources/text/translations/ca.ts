@@ -3679,6 +3679,7 @@ export const ca: TranslationStructure = {
     },
 
     notifications: {
+        permissionActionNeedsReview: "No s’ha pogut confirmar la resposta de permís de la notificació. Obre la sessió i comprova la sol·licitud actual abans de tornar a respondre.",
         actions: {
             allow: 'Permetre',
             deny: 'Denegar',

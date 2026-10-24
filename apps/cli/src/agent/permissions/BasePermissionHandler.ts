@@ -60,25 +60,7 @@ let permissionRpcConsumerSequence = 0;
 /**
  * Permission response from the mobile app.
  */
-export interface PermissionResponse {
-    id: string;
-    approved: boolean;
-    decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
-    // When the user chooses "don't ask again (session)", the UI may send a tool allowlist.
-    allowedTools?: string[];
-    allowTools?: string[]; // legacy alias
-    // Claude Agent SDK / Claude Code hook responses may attach provider-specific permission updates.
-    updatedPermissions?: unknown;
-    /**
-     * Structured user answers (AskUserQuestion user action).
-     *
-     * When present, the agent can complete the request without requiring an additional free-form user message.
-     */
-    answers?: Record<string, string>;
-    execPolicyAmendment?: {
-        command: string[];
-    };
-}
+export type PermissionResponse = SessionPermissionRpcPayload;
 
 /**
  * Local routing and policy metadata; the coordinator owns request waiters.
@@ -175,6 +157,8 @@ export abstract class BasePermissionHandler {
      * This is critical for avoiding stale session references after onSessionSwap.
      */
     updateSession(newSession: ApiSessionClient): void {
+        const pendingContexts = [...this.pendingRequests.keys()]
+            .map((id) => this.requestCoordinator.getResponseContext(id));
         logger.debug(`${this.getLogPrefix()} Session reference updated`);
         this.session = newSession;
         // Re-setup RPC handler with new session
@@ -188,9 +172,9 @@ export abstract class BasePermissionHandler {
 
         // If we were mid-permission when the session reference swapped (offline reconnect),
         // republish still-pending items into the new agentState and re-attempt push notifications.
-        for (const id of this.pendingRequests.keys()) {
-            const context = this.requestCoordinator.getResponseContext(id);
+        for (const context of pendingContexts) {
             if (!context) continue;
+            const id = context.requestId;
             if (!this.requestStore.hasOutstandingRequest(id)) {
                 this.requestStore.publishRequest(context);
             } else {
@@ -365,7 +349,7 @@ export abstract class BasePermissionHandler {
         const hasStructuredAnswers = response.answers !== undefined || response.structuredAnswersV1 !== undefined;
         const candidateContext = hasStructuredAnswers
             ? null
-            : this.requestCoordinator.getResponseContext(response.id);
+            : this.requestCoordinator.getResponseContext(response.id, response.occurrenceId);
         const requiresLocalQuestionOwner = hasStructuredAnswers
             || (candidateContext !== null && this.isStructuredQuestionContext(candidateContext));
         const context = requiresLocalQuestionOwner
@@ -468,6 +452,7 @@ export abstract class BasePermissionHandler {
         };
         const completed = await this.requestCoordinator.completeRpcResponse({
             context, completion: { result, completedRequest }, onAdmitted,
+            expectedOccurrenceId: response.occurrenceId,
         });
         if (!completed && (structuredAnswers || context.status === 'live')) return false;
         if (completed) this.pendingRequests.delete(response.id);

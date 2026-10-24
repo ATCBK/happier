@@ -4170,6 +4170,7 @@ localTailscale: {
   },
 
   notifications: {
+      permissionActionNeedsReview: "通知からの権限リクエストへの応答を確認できませんでした。再度応答する前にセッションを開き、現在のリクエストを確認してください。",
     actions: {
       allow: "許可",
       deny: "拒否",

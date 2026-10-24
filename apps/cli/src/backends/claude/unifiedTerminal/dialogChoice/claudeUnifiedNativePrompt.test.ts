@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PUBLIC_RPC_HANDLER_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol';
 import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { FakePermissionClient } from '../../utils/permissionHandler.testkit';
@@ -17,6 +18,8 @@ import { createFakeControlPort } from '../tuiControls/fakeControlPort';
 import { ClaudeLocalPermissionBridge } from '../../localPermissions/localPermissionBridge';
 import { routeClaudePermissionHook } from '../../localPermissions/routeClaudePermissionHook';
 import { createClaudeSessionTranscriptProjector } from '../../localControl/createClaudeSessionTranscriptProjector';
+import { createClaudeUnifiedHookLifecycleBridge } from '../createClaudeUnifiedHookLifecycleBridge';
+import { createClaudeUnifiedInputArbiter } from '../createClaudeUnifiedInputArbiter';
 
 const QUESTIONS = [{ question: 'Which probe color?', header: 'Header Color', multiSelect: false,
   options: [{ label: 'Amber', description: 'Warm amber probe color.' }, { label: 'Blue', description: 'Cool blue probe color.' }],
@@ -57,6 +60,58 @@ function createHarness() {
 }
 
 describe('native prompts through the existing terminal dialog owner', () => {
+  it('releases native input after repeated ingress observes one tool prompt resolved in the terminal', async () => {
+    const { session, broker, client } = createHarness();
+    const injected: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter({
+      quietPeriodMs: 0,
+      injectPrompt: async (batch) => {
+        injected.push(batch.message);
+        return { status: 'injected', at: Date.now(), bytesWritten: batch.message.length };
+      },
+    });
+    const lifecycle = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        session.addClaudeSessionHookCallback(callback);
+        return () => session.removeClaudeSessionHookCallback(callback);
+      },
+      arbiter, completionQuiescenceMs: 0,
+    });
+    lifecycle.start({ abortSignal: new AbortController().signal });
+    arbiter.observeLifecycle({ type: 'output' });
+    const ingress = () => routeClaudePermissionHook({
+      data: { hook_event_name: 'PreToolUse', session_id: 'claude-native-session',
+        tool_use_id: 'native-repeat', tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS } },
+      session, bridge: null, settings: {}, unifiedTerminalActive: true,
+    });
+    try {
+      await ingress();
+      const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(SCREEN));
+      if (!dialog) throw new Error('expected native question');
+      const pending = broker.requestDialogChoice({ dialog });
+      void pending.catch(() => {});
+      await vi.waitFor(() => expect(client.agentState.requests['native-repeat']).toBeDefined());
+      await ingress();
+      await arbiter.enqueueUiMessage({ message: 'continue after native answer', origin: { kind: 'ui_immediate' } });
+      await arbiter.drainWhenSafe();
+      expect(injected).toEqual([]);
+
+      await broker.observeTranscript({ sessionId: 'claude-native-session', type: 'user',
+        toolUseResult: { answers: { 'Which probe color?': 'Blue' } },
+        message: { content: [{ type: 'tool_result', tool_use_id: 'native-repeat' }] },
+      });
+      await arbiter.drainWhenSafe();
+      expect(injected).toEqual(['continue after native answer']);
+      expect(client.agentState.requests['native-repeat']).toBeUndefined();
+      expect(client.agentState.completedRequests['native-repeat']).toMatchObject({ status: 'approved' });
+      await expect(pending).rejects.toThrow();
+    } finally {
+      await broker.dispose();
+      lifecycle.dispose();
+      await arbiter.dispose();
+    }
+  });
+
   it.each(['current primary', 'headless sidechain', 'legacy no live hook', 'legacy sidechain history'] as const)('correlates repeated provider requests without claiming a historical or another agent identity (%s)', async (source) => {
     const dir = await mkdtemp(join(tmpdir(), 'claude-live-permission-id-'));
     const { session, broker, client } = createHarness();
@@ -369,8 +424,17 @@ describe('native prompts through the existing terminal dialog owner', () => {
     });
     await expect(probe.probe()).resolves.toMatchObject({ kind: 'request_published', dialogId: 'ask_user_question' });
     await vi.waitFor(() => expect(client.agentState.requests['toolu-native-1']).toBeDefined());
-    await expect(client.rpcHandlerManager.getHandler('permission')!({
-      id: 'toolu-native-1', approved: true, structuredAnswersV1: { 'Which probe color?': ['Blue'] },
+    const request = client.agentState.requests['toolu-native-1'];
+    const occurrenceId = request && typeof request === 'object' && 'occurrenceId' in request ? request.occurrenceId : null;
+    if (typeof occurrenceId !== 'string') throw new Error('expected published occurrence identity');
+    expect(occurrenceId).not.toBe('toolu-native-1');
+    const respond = client.rpcHandlerManager.getHandler(SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_TO_OCCURRENCE_V1)!;
+    await expect(respond({ id: 'toolu-native-1', occurrenceId: 'toolu-native-1', approved: true,
+      structuredAnswersV1: { 'Which probe color?': ['Blue'] },
+    })).rejects.toMatchObject({ publicErrorCode: PUBLIC_RPC_HANDLER_ERROR_CODES.STRUCTURED_QUESTION_RECEIVER_NOT_OWNER });
+    expect(port.sentKeys).toEqual([]);
+    await expect(respond({
+      id: 'toolu-native-1', occurrenceId, approved: true, structuredAnswersV1: { 'Which probe color?': ['Blue'] },
     })).resolves.toEqual({ ok: true });
     expect(port.sentKeys).toEqual(['ArrowDown', 'Enter']);
     expect(client.agentState.requests['toolu-native-1']).toBeUndefined();

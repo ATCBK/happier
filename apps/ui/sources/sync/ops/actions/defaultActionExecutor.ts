@@ -23,6 +23,7 @@ import {
     forkSession as forkSessionOp,
     rollbackSessionConversation as rollbackSessionConversationOp,
     sessionStopWithServerScope,
+    sessionRespondToPermission,
 } from '@/sync/ops/sessions';
 import { delegateSessionHandoffToSourceDaemon } from '@/sync/ops/delegatedSessionHandoff';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
@@ -333,12 +334,7 @@ export function createDefaultActionExecutor(opts?: Readonly<{
       const request = decision === 'allow'
         ? { id: reqId, approved: true }
         : { id: reqId, approved: false };
-      return await sessionRpcWithServerScope({
-        sessionId,
-        serverId,
-        method: 'permission',
-        payload: request,
-      });
+      return await sessionRespondToPermission({ sessionId, request, serverId });
     },
     sessionUserActionAnswer: async ({ sessionId, requestId, answers, decision, reason, updatedPermissions, serverId }) => {
       const reqId = String(requestId ?? '').trim();
@@ -365,21 +361,24 @@ export function createDefaultActionExecutor(opts?: Readonly<{
       if (answerPayload?.kind === 'requires_cli_update') {
         return { ok: false, errorCode: 'cli_update_required', errorMessage: 'cli_update_required', sessionId };
       }
-      return await sessionRpcWithServerScope({
+      if (answerPayload?.send.protocol === 'structured-question-v1') {
+        return await sessionRpcWithServerScope({
+          sessionId,
+          serverId,
+          method: SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1,
+          payload: { id: reqId, structuredAnswersV1: answerPayload.send.structuredAnswersV1 },
+        });
+      }
+      return await sessionRespondToPermission({
         sessionId,
         serverId,
-        method: answerPayload?.send.protocol === 'structured-question-v1'
-          ? SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1
-          : SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_LEGACY,
-        payload: answerPayload?.send.protocol === 'structured-question-v1'
-          ? { id: reqId, structuredAnswersV1: answerPayload.send.structuredAnswersV1 }
-          : {
-              id: reqId,
-              approved,
-              ...(answerPayload?.send.protocol === 'legacy-permission' ? { answers: answerPayload.send.answers } : {}),
-              ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
-              ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
-            },
+        request: {
+          id: reqId,
+          approved,
+          ...(answerPayload?.send.protocol === 'legacy-permission' ? { answers: answerPayload.send.answers } : {}),
+          ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
+          ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
+        },
       });
     },
     sessionTerminalComposerClear: async ({ sessionId, expectedStateAtMs, serverId }) =>

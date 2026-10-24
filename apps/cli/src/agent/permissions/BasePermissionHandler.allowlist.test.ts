@@ -226,14 +226,34 @@ describe('BasePermissionHandler allowlist', () => {
     expect(handler.isAllowed('bash', input)).toBe(false);
   });
 
-  it('answers a retained live request after its persisted pending projection is lost', async () => {
+  it.each(['immediate', 'queued'] as const)('answers a retained live request after its %s persisted pending projection is lost', async (publicationMode) => {
     const session = new FakeSession();
+    let publication = Promise.resolve();
+    if (publicationMode === 'queued') {
+      const updateAgentState = session.updateAgentState.bind(session);
+      // Model the real client's serialized asynchronous state-write boundary.
+      session.updateAgentState = (updater) => {
+        publication = publication.then(() => { updateAgentState(updater); });
+        return publication;
+      };
+    }
     const input = { command: ['bash', '-lc', 'echo hello'] };
-    const handler = new TestPermissionHandler(session as any);
+    const router = new SessionPermissionRpcRouter(session.rpcHandlerManager);
+    Object.assign(session, { getOrCreatePermissionRpcRouter: () => router });
+    const handler = new TestPermissionHandler(session as unknown as ApiSessionClient);
     const pending = handler.request('missing-state', 'bash', input);
+    await publication;
+    expect(session.agentState.requests['missing-state']).toMatchObject({ occurrenceId: expect.any(String) });
     const originalRequest = { ...session.agentState.requests['missing-state'] };
     // The network/session snapshot can lose the pending projection while the coordinator still owns its waiter.
     session.agentState.requests = {};
+
+    const occurrenceRpc = session.rpcHandlerManager.handlers.get(SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_TO_OCCURRENCE_V1)!;
+    await expect(occurrenceRpc({
+      id: 'missing-state', occurrenceId: originalRequest.occurrenceId, approved: true,
+    })).resolves.toMatchObject({ ok: false, errorCode: 'permission_request_not_found' });
+    expect(handler.isAllowed('bash', input)).toBe(false);
+    expect(session.agentState.completedRequests['missing-state']).toBeUndefined();
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
     expect(rpc).toBeDefined();

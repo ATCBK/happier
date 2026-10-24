@@ -35,4 +35,21 @@ if (typeof window !== 'undefined') {
 }
 
 require('./sources/unistyles');
+// Keep this optional-native boundary structural. A typeof import of either
+// implementation pulls Expo/React Native ambient globals into the entry point
+// ahead of Node's test declarations, changing the app-wide timer overloads.
+type NotificationBackgroundTaskModule = { registerNotificationBackgroundTask(): Promise<boolean> };
+type NotificationBackgroundTaskBootstrap = {
+    initializeNotificationBackgroundTask(platform: string, load: () => NotificationBackgroundTaskModule): Promise<boolean>;
+};
+try {
+    const platform = require('react-native') as { Platform?: { OS?: string } };
+    if (platform.Platform?.OS === 'android') {
+        const { initializeNotificationBackgroundTask } = require('./sources/activity/notifications/runtime/notificationBackgroundTaskState') as NotificationBackgroundTaskBootstrap;
+        void initializeNotificationBackgroundTask('android', () =>
+            require('./sources/activity/notifications/runtime/notificationBackgroundTask') as NotificationBackgroundTaskModule);
+    }
+} catch {
+    console.warn('[notifications] Background action bootstrap unavailable; using foreground actions');
+}
 require('expo-router/entry');

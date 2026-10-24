@@ -3907,6 +3907,7 @@ export const pl: TranslationStructure = {
   },
 
     notifications: {
+        permissionActionNeedsReview: "Nie udało się potwierdzić odpowiedzi na prośbę o uprawnienie z powiadomienia. Otwórz sesję i sprawdź bieżącą prośbę, zanim odpowiesz ponownie.",
       actions: {
         allow: 'Zezwól',
         deny: 'Odmów',

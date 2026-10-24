@@ -3566,6 +3566,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     notifications: {
+        permissionActionNeedsReview: "無法確認通知中的權限請求回覆。再次回覆前，請開啟工作階段並檢查目前的請求。",
         actions: {
             allow: '允許',
             deny: '拒絕',

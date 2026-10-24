@@ -24,14 +24,13 @@ This avoids landing on the wrong server or silently approving a request on an un
 
 If the notification contains a session route, Happier opens that session.
 
-If the notification belongs to a different saved server than the one currently active:
-
-- Happier switches to that saved server first
-- then it opens the session
+If the notification belongs to a different saved server than the one currently active, Happier opens the session on that saved server. The destination keeps the notification's server even if you change servers while an action is running.
 
 This is the default behavior for normal notification taps and for the `Answer` action used by action-request notifications.
 
 ## What happens when you press a notification action
+
+The Android background-action behavior below is an unreleased development candidate, not a verified stable-release capability.
 
 On the mobile app, current interactive notification actions are:
 
@@ -40,8 +39,12 @@ On the mobile app, current interactive notification actions are:
 
 Their behavior is intentionally different:
 
-- `Allow` and `Deny` open the app, send the permission response when it is safe to do so, and then open the session
+- On Android builds with background notification actions available, `Allow` and `Deny` send the permission response without opening Happier or switching the selected server. A successful response does not navigate away from your current screen.
+- If Android background registration is unavailable, fails, or times out, the buttons retain foreground behavior. Happier handles live responses in the app without navigating; a terminated-state press that arrives only as a saved launch response is not executed and instead navigates to the session for review.
+- On iOS, `Allow` and `Deny` retain their foreground behavior: open the app, send the permission response when safe, and open the session.
 - `Answer` opens the app directly on the session so you can answer in context
+
+Automatic permission responses require an updated CLI and a notification identifying the exact request you saw. On Android, a live or background response to an older notification sends no decision and leaves a review notice for when Happier is active, without opening the session. An unhandled saved Android launch response opens the session for review. On iOS, older notifications also open for review without sending a decision.
 
 User-action requests include cases such as:
 
@@ -51,6 +54,8 @@ User-action requests include cases such as:
 Happier does **not** currently try to send freeform or multiple-choice answers directly from the notification itself. The action button is a fast path back into the correct session.
 
 ## Server-aware safety rules
+
+The navigation rules below apply to ordinary taps, `Answer`, and iOS permission actions. Android `Allow` / `Deny` use the separate rules in the next section.
 
 ### 1) Server is already active
 
@@ -63,9 +68,10 @@ If the notification targets the server that is already active:
 
 If the notification targets a saved server profile that is not currently active:
 
-- Happier switches to that saved server
-- performs the action if applicable
-- opens the session
+- Happier sends the response to that saved server when applicable
+- opens the session with that server selected
+
+Generated session destinations use the notification's saved server. Explicit links to other app routes retain their existing routing behavior.
 
 ### 3) Server is not saved, and the device has no saved servers yet
 
@@ -94,12 +100,30 @@ After you choose **Add & Use**, Happier continues to the original session automa
 
 Notification actions are convenient, but permission responses are security-sensitive.
 
-That is why Happier only auto-sends a permission response when it can prove that the targeted server is:
+For the foreground navigation flow above, Happier only auto-sends a permission response when the targeted server is:
 
 - already active, or
 - already saved locally and can be switched to explicitly
 
 If the server is unknown, Happier falls back to navigation and review instead of silently performing the approval.
+
+## Android permission action safety and recovery
+
+Android permission actions require a saved server and saved sign-in details for an account that can access the session. They can respond on an inactive saved server without changing the selected server. They never add an unknown server or queue an approval for later sign-in. If the notification names an account, it must match the saved sign-in.
+
+The CLI checks that the request is still the one shown in the notification. An old notification cannot answer a replacement request. Only an accepted response is confirmed; a rejection, timeout, or missing result is not reported as approval success.
+
+Decisions are never automatically retried after a failed or uncertain response. Open the relevant server and session to check the current request before responding again.
+
+If Android opens Happier from a terminated state but only exposes an unhandled saved response, the saved response does not send the approval. Instead, Happier navigates to the relevant session — using the same server-safety rules as an ordinary notification tap — so you can review and answer the current request in the app. This also applies to the foreground fallback when background registration is unavailable. A cached response already handled in the running app does not reopen the session or change the selected server on a later routing mount.
+
+If an action cannot be confirmed, a generic recovery notice is saved for when Happier is active. The notice does not open the app from the background and does not reveal session content.
+
+### Native build and lifecycle limits
+
+Background actions require a new Android app build. An over-the-air update alone cannot add this support to an older installed app.
+
+Android delivery still depends on battery restrictions and whether the app has been force-stopped. Physical-device validation is not yet complete. Normal notification taps, `Answer`, web startup, and iOS foreground behavior are unchanged.
 
 ## Prerequisites
 

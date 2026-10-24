@@ -96,7 +96,7 @@ describe('serverScopedRpcSocketPool', () => {
         pool.resetForTests();
     });
 
-    it('uses the canonical Socket.IO updates path', async () => {
+    it.each([undefined, 'background-task'] as const)('uses the canonical authenticated Socket.IO updates path in %s mode', async (networkMode) => {
         vi.resetModules();
         const { socket } = createFakeSocket();
         const ioSpy = vi.fn(() => socket);
@@ -119,6 +119,7 @@ describe('serverScopedRpcSocketPool', () => {
             serverUrl: 'https://server.example.test',
             token: 'token-a',
             timeoutMs: 1000,
+            networkMode,
         });
         client.disconnect();
 
@@ -126,11 +127,63 @@ describe('serverScopedRpcSocketPool', () => {
             'https://server.example.test',
             expect.objectContaining({
                 path: '/v1/updates/',
-                auth: expect.objectContaining({ connectedServiceIds: ConnectedServiceIdSchema.options }),
+                auth: expect.objectContaining({ token: 'token-a', connectedServiceIds: ConnectedServiceIdSchema.options }),
                 withCredentials: false,
             }),
         );
 
+        await pool.stopAll();
+        pool.resetForTests();
+    });
+
+    it('disconnects a background connection that times out without starting foreground reachability', async () => {
+        vi.useFakeTimers();
+        const { socket, connectSpy, disconnectSpy } = createFakeSocket();
+        connectSpy.mockImplementation(() => {});
+        const waitForReachable = vi.fn(async () => {});
+        const startReachability = vi.fn(async () => {});
+        const pool = createServerScopedRpcSocketPool({
+            createSocket: () => socket,
+            reachability: {
+                waitForReachable,
+                startReachability,
+                reportUnreachable: () => {},
+                subscribeNetworkAllowed: () => () => {},
+            },
+            readIdleDisconnectMs: () => 5000,
+        });
+        const connection = pool.acquire({
+            serverUrl: 'https://server.example.test', token: 'token-a', timeoutMs: 1000,
+            networkMode: 'background-task',
+        });
+        const assertion = expect(connection).rejects.toThrow('Scoped RPC socket connection timeout');
+        await vi.advanceTimersByTimeAsync(1000);
+        await assertion;
+        expect(disconnectSpy).toHaveBeenCalledTimes(1);
+        expect(waitForReachable).not.toHaveBeenCalled();
+        expect(startReachability).not.toHaveBeenCalled();
+        await pool.stopAll();
+        pool.resetForTests();
+    });
+
+    it('immediately disposes a socket created while its background lifetime is being aborted', async () => {
+        const controller = new AbortController();
+        const { socket, connectSpy, disconnectSpy } = createFakeSocket();
+        const pool = createServerScopedRpcSocketPool({
+            createSocket: () => { controller.abort(); return socket; },
+            reachability: {
+                waitForReachable: async () => {},
+                startReachability: async () => {},
+                reportUnreachable: () => {},
+                subscribeNetworkAllowed: () => () => {},
+            },
+        });
+        await expect(pool.acquire({
+            serverUrl: 'https://server.example.test', token: 'token-a', timeoutMs: 1000,
+            networkMode: 'background-task', signal: controller.signal,
+        })).rejects.toThrow('Scoped RPC socket connection aborted');
+        expect(connectSpy).not.toHaveBeenCalled();
+        expect(disconnectSpy).toHaveBeenCalledTimes(1);
         await pool.stopAll();
         pool.resetForTests();
     });

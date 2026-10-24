@@ -1,6 +1,8 @@
 import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/agents';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 
 import type { SDKAssistantMessage } from '../sdk';
 import { Query } from '../sdk/query';
@@ -29,6 +31,45 @@ function bashToolUseMessage(): SDKAssistantMessage {
 const defaultMode = { permissionMode: 'default' } as EnhancedMode;
 
 describe('permission RPC routing', () => {
+  it('answers only the occurrence carried by a notification while legacy approvals remain supported', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('notification-occurrence');
+    const requests = new AgentStateRequestStore({ session: session.client, logPrefix: 'permission-rpc-test' });
+    const { PermissionHandler } = await import('./permissionHandler');
+    const handler = new PermissionHandler(session);
+    const controller = new AbortController();
+    try {
+      const first = handler.handleToolCall('Bash', { command: 'echo first' }, defaultMode, {
+        signal: controller.signal, toolUseId: 'reused',
+      });
+      void first.catch(() => undefined);
+      const firstOccurrence = requests.readOutstandingRequest('reused')?.occurrenceId;
+      const respond = client.rpcHandlerManager.getHandler(SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_TO_OCCURRENCE_V1);
+      expect(respond).toBeDefined();
+      expect(firstOccurrence).toEqual(expect.any(String));
+      await expect(respond?.({ id: 'reused', occurrenceId: firstOccurrence, approved: true }))
+        .resolves.toEqual({ ok: true });
+      await expect(first).resolves.toMatchObject({ behavior: 'allow' });
+
+      const replacement = handler.handleToolCall('Bash', { command: 'echo replacement' }, defaultMode, {
+        signal: controller.signal, toolUseId: 'reused',
+      });
+      void replacement.catch(() => undefined);
+      const replacementOccurrence = requests.readOutstandingRequest('reused')?.occurrenceId;
+      expect(replacementOccurrence).not.toBe(firstOccurrence);
+      await expect(respond?.({ id: 'reused', occurrenceId: firstOccurrence, approved: true }))
+        .resolves.toMatchObject({ ok: false });
+      expect(requests.readOutstandingRequest('reused')?.occurrenceId).toBe(replacementOccurrence);
+      await expect(respond?.({ id: 'reused', approved: true })).resolves.toMatchObject({ ok: false });
+      // Existing clients can still use the unchanged legacy method for the current request.
+      await expect(client.rpcHandlerManager.getHandler('permission')?.({ id: 'reused', approved: true }))
+        .resolves.toEqual({ ok: true });
+      await expect(replacement).resolves.toMatchObject({ behavior: 'allow' });
+    } finally {
+      controller.abort();
+      handler.dispose();
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.HAPPIER_STACK_TOOL_TRACE;

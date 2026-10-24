@@ -3768,6 +3768,7 @@ export const zhHans: TranslationStructure = {
   },
 
   notifications: {
+      permissionActionNeedsReview: "无法确认通知中的权限请求回复。再次回复前，请打开会话并检查当前请求。",
     actions: {
       allow: '允许',
       deny: '拒绝',

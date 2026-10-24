@@ -3592,6 +3592,7 @@ export const fr: TranslationStructure = {
     },
 
     notifications: {
+        permissionActionNeedsReview: "La réponse envoyée depuis la notification n’a pas pu être confirmée. Ouvrez la session et vérifiez la demande d’autorisation en cours avant de répondre à nouveau.",
         actions: {
             allow: 'Autoriser',
             deny: 'Refuser',

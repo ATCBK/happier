@@ -3592,6 +3592,7 @@ export const de: TranslationStructure = {
     },
 
     notifications: {
+        permissionActionNeedsReview: "Die Berechtigungsantwort aus der Benachrichtigung konnte nicht bestätigt werden. Öffne die Sitzung und prüfe die aktuelle Anfrage, bevor du erneut antwortest.",
         actions: {
             allow: 'Erlauben',
             deny: 'Ablehnen',

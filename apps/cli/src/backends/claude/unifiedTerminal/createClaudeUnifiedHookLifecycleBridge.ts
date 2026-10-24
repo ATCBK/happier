@@ -198,7 +198,7 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   let terminalSideEffects: Promise<void> = Promise.resolve();
   let anonymousPermissionBlockCount = 0;
   let nativeResumeContinuationPending = false;
-  const pendingPermissionRequestIds = new Set<string>();
+  const permissionBlockCountByRequestId = new Map<string, number>();
 
   const clearQuietDrainTimer = (): void => {
     if (!quietDrainTimer) return;
@@ -436,13 +436,13 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   };
 
   const hasPendingPermissionBlock = (): boolean => (
-    anonymousPermissionBlockCount > 0 || pendingPermissionRequestIds.size > 0
+    anonymousPermissionBlockCount > 0 || permissionBlockCountByRequestId.size > 0
   );
 
   const observePermissionBlocked = (data: SessionHookData): void => {
     const requestId = readHookRequestId(data);
     if (requestId) {
-      pendingPermissionRequestIds.add(requestId);
+      permissionBlockCountByRequestId.set(requestId, (permissionBlockCountByRequestId.get(requestId) ?? 0) + 1);
     } else {
       anonymousPermissionBlockCount += 1;
     }
@@ -455,11 +455,17 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   ): void => {
     if (optsOverride?.releaseAll === true) {
       anonymousPermissionBlockCount = 0;
-      pendingPermissionRequestIds.clear();
+      permissionBlockCountByRequestId.clear();
     } else {
       const requestId = readHookRequestId(data);
       if (requestId) {
-        pendingPermissionRequestIds.delete(requestId);
+        const count = permissionBlockCountByRequestId.get(requestId) ?? 0;
+        // Each hook transport completes independently; PostToolUse proves the shared provider request ended.
+        if (readHookEventName(data) === 'PermissionRequestCompleted' && count > 1) {
+          permissionBlockCountByRequestId.set(requestId, count - 1);
+        } else {
+          permissionBlockCountByRequestId.delete(requestId);
+        }
       } else if (anonymousPermissionBlockCount > 0) {
         anonymousPermissionBlockCount -= 1;
       }

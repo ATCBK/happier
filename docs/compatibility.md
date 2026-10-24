@@ -567,6 +567,86 @@ opt-out restores previews; users can disable them again from an updated client. 
 the flag and retain their existing reduced hints. There is no new server operation,
 migration, duplicate settings owner, or client-update requirement.
 
+### Notification permission occurrences (development)
+
+Updated CLI permission publication adds an opaque `occurrenceId` to the existing
+agent-state request and notification payload. It remains stable when the same
+occurrence is republished, including session-reference replacement; a replacement
+occurrence receives a new identifier. It contains no tool arguments or their hash.
+
+The additive `session.permission.respondToOccurrence.v1` method requires that
+identifier and delegates to the existing permission admission/settlement owner.
+The actual agent-state update rechecks it, so a delayed response cannot settle a
+new occurrence sharing the local request ID. Existing `permission` callers retain
+their released method and payload; no second permission executor is introduced.
+
+Updated notification handlers do not fall back to the legacy method. An Android
+live or headless response without occurrence identity records a generic review
+notice without navigating. An unhandled cached Android launch response and an
+iOS response without occurrence identity navigate for review without sending a
+decision. An unsupported receiver or relay produces operation-scoped recovery.
+Other app operations and in-app
+permission controls remain available. An older UI can continue using its legacy
+permission operation against an updated CLI. No phone-side permission journal,
+parallel state writer or migration is needed.
+
+The account-scoped Session RPC resolves authenticated access and the existing
+plain, data-key, or legacy credential-key encryption mode without mounted UI.
+An optional Account hint must match saved credentials. Background actions use a
+caller-owned one-shot socket while foreground networking is paused, retaining
+the same authenticated-origin checks. Completion or cancellation disconnects
+that socket even when native encryption is pending; a late connection cannot
+send an expired action. The action reuses the scoped RPC timeout budget across
+preparation and dispatch. That budget is not an Android execution guarantee and
+does not resume background sync or change the active server.
+
+iOS permission callbacks use that same URL-bound executor while retaining their
+foreground and cold-start eligibility. Generated Session destinations use the
+canonical Session navigator with the captured saved server profile, rather than
+inferring the server from a session cache after an asynchronous response. Explicit
+notification URLs retain their existing routing. Legacy pending decisions remain
+review-only and do not gain execution authority from navigation.
+
+The foreground listener and native task share one coordinator. Identical active
+decisions share work; conflicting active decisions cannot overwrite it. Only
+explicit application success confirms the response. Within the same JS runtime,
+an identical Account, occurrence, and action reuses that confirmed acknowledgement
+so a second native delivery cannot produce a false recovery notice. Other outcomes
+release their work slot and require fresh intent to retry; no confirmation memory
+survives JS runtime recreation. Runtime response-consumption notes prevent a
+handled cached response from navigating again after remount. Only a generic
+presentation-recovery flag is persisted, without permission decisions, tokens,
+tool arguments, or a lifetime request quota.
+
+Android task registration is attempted once per runtime using the existing
+notification native-call budget; late completion still delivers through the
+same coordinator. This source adds `expo-task-manager` and bumps the native
+runtime, so it requires a new Android build rather than an OTA-only update to
+an older binary. Expo SDK 54 action-task delivery does not replace the
+foreground listener. Force-stop, battery restrictions, and native background or
+terminated-state delivery remain subject to physical-device validation.
+
+The SDK 54 dependency patch backports [Expo's Android task-lifetime fix](https://github.com/expo/expo/pull/43821)
+to `expo-task-manager` 14.0.9. Expo's existing event lifecycle keeps React Native
+timers active until the last task event finishes; the app does not add a second
+background service or task lifecycle. The UI package's Android autolinking
+`buildFromSource` declaration includes `expo-task-manager` and its existing
+`unimodules-app-loader` Gradle dependency, so native builds compile the patched
+source instead of its bundled Maven publication. The existing
+postinstall compilation verifier checks that declaration. This patch can be
+removed when the installed SDK includes the upstream fix, as SDK 55 in the 0.3
+line already does. It shares this PR's new native-runtime requirement and cannot
+be delivered to an older binary by OTA alone.
+
+The SDK 54 `expo-notifications` 0.32.16 patch also backports the dispatch change
+from [Expo's notification-startup fix](https://github.com/expo/expo/pull/43245).
+An ordinary notification tap uses foreground startup without starting a second
+headless instance. Foreground-opening custom actions open the app before their
+existing task dispatch; background Allow and Deny delivery is retained. That
+module is also selected for Android source compilation and checked by the same
+postinstall verifier. SDK 55 already includes this correction, so the 0.3 line
+needs neither predecessor patch nor its source-build overrides.
+
 ## Migration history
 
 Migration source has a stricter authoring boundary than ordinary internal code:
