@@ -61,17 +61,17 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
 
     const save = React.useCallback(async () => {
         if (saving) return false;
-        // The editor may still hold a debounced keystroke: save what is on screen.
-        await editorRef.current?.flushPendingChange();
-        const body = editorRef.current?.getValue() ?? bodyRef.current;
-        if (!draftChanged(title, body)) return false;
-        if (!title.trim() && !body.trim()) {
-            await Modal.alert(t('common.error'), t('artifacts.emptyFieldsError'));
-            return false;
-        }
         setSaving(true);
         setQuota(null);
         try {
+            // The editor may still hold a debounced keystroke: save only a confirmed value.
+            await editorRef.current?.flushPendingChange();
+            const body = editorRef.current?.getValue() ?? bodyRef.current;
+            if (!draftChanged(title, body)) return false;
+            if (!title.trim() && !body.trim()) {
+                await Modal.alert(t('common.error'), t('artifacts.emptyFieldsError'));
+                return false;
+            }
             if (!client || (mode === 'edit' && (!opening?.isDecrypted || !opening.rawHeader || opening.bodyVersion === undefined))) {
                 throw new Error('artifact_content_unavailable');
             }

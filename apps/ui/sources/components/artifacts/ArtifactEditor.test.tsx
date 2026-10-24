@@ -43,7 +43,7 @@ vi.mock('@react-navigation/native', async () => {
 });
 // The platform editor surface (Monaco on web, a CodeMirror WebView on native) is the boundary: a host node
 // with the same value/onChange contract, so the editor's own draft, save and refusal logic stays real.
-const editorBoundary = vi.hoisted(() => ({ pendingValue: null as string | null }));
+const editorBoundary = vi.hoisted(() => ({ pendingValue: null as string | null, rejectFlush: false }));
 vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
     const React = await import('react');
     return {
@@ -60,6 +60,7 @@ vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
             React.useImperativeHandle(ref, () => ({
                 getValue: () => editorBoundary.pendingValue ?? value.current,
                 flushPendingChange: async () => {
+                    if (editorBoundary.rejectFlush) throw new Error('snapshot_unconfirmed');
                     if (editorBoundary.pendingValue === null) return;
                     value.current = editorBoundary.pendingValue;
                     editorBoundary.pendingValue = null;
@@ -112,6 +113,7 @@ describe('ArtifactEditor', () => {
         navigation.push.mockClear();
         vi.mocked(Modal.alert).mockClear();
         editorBoundary.pendingValue = null;
+        editorBoundary.rejectFlush = false;
     });
 
     it('publishes a settled unavailable Session title through real route hydration and workspace wiring', async () => {
@@ -384,6 +386,26 @@ describe('ArtifactEditor', () => {
             expect(navigation.back).toHaveBeenCalledOnce();
         });
         await editor.unmount();
+    });
+
+    it('refuses an unconfirmed editor flush without writing or navigating and lets the retained draft retry', async () => {
+        const serverId = await restoreEditorHome('https://artifact-editor-unconfirmed.test');
+        const persisted = homes.artifacts(serverId);
+        const ArtifactEditor = await loadArtifactEditor();
+        const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'Draft'); });
+        editorBoundary.pendingValue = 'Draft with final native keystroke';
+        editorBoundary.rejectFlush = true;
+        await expect(screen.pressByTestIdAsync('artifact-editor:save')).resolves.toBeUndefined();
+        expect(persisted.list()).toHaveLength(0);
+        expect(navigation.replace).not.toHaveBeenCalled();
+        expect(navigation.back).not.toHaveBeenCalled();
+        expect(Modal.alert).toHaveBeenCalledWith('common.error', 'artifacts.createError');
+        expect(editorBoundary.pendingValue).toBe('Draft with final native keystroke');
+        editorBoundary.rejectFlush = false;
+        await screen.pressByTestIdAsync('artifact-editor:save');
+        expect(persisted.readPlainBody(persisted.list()[0]!.id)).toBe('Draft with final native keystroke');
+        await screen.unmount();
     });
 
     it('keeps the draft and reports the named budget when the create Action refuses quota', async () => {
