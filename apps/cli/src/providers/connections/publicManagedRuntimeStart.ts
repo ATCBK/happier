@@ -55,7 +55,10 @@ export type ManagedProviderExplicitStartCustody = Readonly<{
     externalApiKeyId: string;
     operationId: string;
   }>): Promise<boolean>;
-  revalidateRetainedClaims(signal?: AbortSignal): Promise<number>;
+  revalidateRetainedClaims(
+    signal?: AbortSignal,
+    selector?: Parameters<ManagedProviderExplicitStartCustody['retire']>[0],
+  ): Promise<number>;
   retireAll(): Promise<number>;
 }>;
 
@@ -410,9 +413,12 @@ export function createManagedProviderExplicitStartCustody(input: Readonly<{
         false,
       );
     },
-    async revalidateRetainedClaims(signal) {
+    async revalidateRetainedClaims(signal, selector) {
       return await withRegistryRequired(
-        async (registry) => await registry.revalidateManagedProviderExplicitStarts?.(signal) ?? 0,
+        async (registry) => await registry.revalidateManagedProviderExplicitStarts?.(
+          signal,
+          selector ? { ...selector, machineId: input.machineId } : undefined,
+        ) ?? 0,
       );
     },
     async retireAll() {

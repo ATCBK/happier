@@ -52,6 +52,8 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as privacyKit from 'privacy-kit';
 import { openAccountConnectionProviderBroker, admitAccountConnectionProviderBroker } from '@/app/providers/providerBrokerAdmission';
+import { admitProviderBrokerConsumerInTx } from '@/app/providers/brokerConsumerAdmission';
+import { transitionSessionArchiveStateInTx } from '@/app/session/archive/transitionSessionArchiveStateInTx';
 import { verifyProviderBrokerRouteGrantSignatureV1, verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
@@ -386,6 +388,24 @@ describe('Team credential Provider broker admission', () => {
         });
     }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(['Team', 'personal'] as const)('retires %s broker authority when the canonical archive owner archives an active Session', async source => {
+        const fixture = await createBrokerFixture(`archive-consumer-${source}`);
+        const resource = await fixture.createResource(`archive-connection-${source}`);
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const opened = await fixture.open({ resource, sessionId: session.id, authentication: TEST_AUTHENTICATION });
+        if (!opened.ok) throw new Error(`broker open failed: ${opened.reasonCode}`);
+        const current = () => source === 'Team'
+            ? fixture.catalog({ authority: opened.authority, resource })
+            : inTx(tx => admitProviderBrokerConsumerInTx(tx, { accountId: fixture.requester.id,
+                initiatorMachineId: fixture.worker.id, consumer: { kind: 'session', sessionId: session.id }, executionRun: null }));
+        expect(await current()).toMatchObject({ ok: true });
+        await inTx(tx => transitionSessionArchiveStateInTx({ tx, sessionId: session.id,
+            wasArchived: false, archivedAt: new Date() }));
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { active: true } })).toEqual({ active: true });
+        expect(await current()).toEqual({ ok: false, reasonCode: 'session_not_active' });
+    });
 
     it.each(['connected_account', 'connected_pool'] as const)(
         'admits brokered OAuth %s without granting direct export and rejects withdrawn membership',
@@ -1595,7 +1615,7 @@ describe('Team credential Provider broker admission', () => {
                 runtimeState: 'active_turn',
                 teamCredentialProviderModel: { resourceId: resource.id, deliveryMode: 'brokered' as const },
             }),
-        })).resolves.toEqual({ ok: false, reasonCode: 'operation_not_current' });
+        })).resolves.toEqual({ ok: false, reasonCode: 'session_not_active' });
         // Only the earlier admitted token-count request is accounted; the refused
         // admission above adds nothing.
         expect(await db.usageEvent.count({ where: { teamCredentialResourceId: resource.id } })).toBe(1);

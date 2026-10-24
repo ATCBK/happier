@@ -13,11 +13,15 @@ import {
 import {
   createProviderBrokerRouteGrantSigningInputV1,
   encodeProviderBrokerAuthorityV1,
+  type ProviderBrokerApplicationBindingV1,
   type SignedProviderBrokerRouteGrantV1,
 } from '@happier-dev/protocol';
 import { createPeerMediationLoopbackApp } from '@/daemon/peer/mediation/loopback/server';
 import { createProviderBrokerRouteGrantSigningInputV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
-import { AccountSettingsSchema, ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderConnectionIdSchema,
+  ProviderContributionV1Schema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
+import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
   PROVIDER_BROKER_MODEL_ID_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import { createBrokerProviderRegistry } from './providerBroker.testkit';
@@ -31,7 +35,11 @@ import type { ManagedProviderEndpointHttpAccess } from '@/plugins/runtime/invoca
 import { logger } from '@/ui/logger';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
-import { createAccountConnectionBrokerSourceOpen } from './accountConnectionSource';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { createAccountConnectionBrokerSourceOpen, retireAccountConnectionBrokerSource } from './accountConnectionSource';
+import { resolveProviderConnectionForMachine } from '@/providers/registry';
+import { projectProviderBrokerApplication } from './applicationProjection';
 import {
   createConnectedServicesBrokerSourceMemberSelect,
   createConnectedServicesBrokerSourceOpen,
@@ -39,6 +47,7 @@ import {
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import {
   createTeamCredentialBrokerSourceOwner,
+  type TeamCredentialBrokerOperation,
   type TeamCredentialBrokerSourceOwner,
 } from './teamCredentialBrokerSourceOwner';
 import {
@@ -346,14 +355,14 @@ async function requestThroughExternalApplicationTarget(input: Readonly<{
 describe('revalidateExternalProviderBrokerAuthorization', () => {
   it('keeps transient Home refusals distinct from operation authority loss', () => {
     expect(revalidateExternalProviderBrokerAuthorization({ ok: true })).toBe(true);
-    expect(revalidateExternalProviderBrokerAuthorization({
-      ok: false,
-      reasonCode: 'resource_forbidden',
-    })).toBe(false);
-    expect(() => revalidateExternalProviderBrokerAuthorization({
-      ok: false,
-      reasonCode: 'resource_unavailable',
-    })).toThrow('external broker authority unavailable');
+    for (const reasonCode of ['resource_forbidden', 'session_not_active', 'operation_not_current',
+      'execution_run_not_found', 'execution_run_terminal'] as const) {
+      expect(revalidateExternalProviderBrokerAuthorization({ ok: false, reasonCode })).toBe(false);
+    }
+    for (const reasonCode of ['resource_unavailable', 'resource_changed', 'grant_expired'] as const) {
+      expect(() => revalidateExternalProviderBrokerAuthorization({ ok: false, reasonCode }))
+        .toThrow('external broker authority unavailable');
+    }
   });
 });
 
@@ -1558,6 +1567,468 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
     },
     createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
   };
+
+  async function startRetainedTarget(personal = false) {
+    type Consumer = SignedProviderBrokerRouteGrantV1['payload']['consumer'];
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile');
+    closeTasks.push(async () => { diagnostics.mockRestore(); });
+    const unused = (): never => { throw new Error('Unexpected effect boundary'); };
+    const managed = createManagedServicesOwner({
+      processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+      dependencies: unused,
+      resolveScope: scope => scope,
+    });
+    const operationKey = (operation: TeamCredentialBrokerOperation) => JSON.stringify({ kind: 'providerBroker', operation });
+    const claim = (operation: TeamCredentialBrokerOperation) => ({
+      operationId: operationKey(operation),
+      pluginId: authority.payload.application.implementationIdentity.pluginId,
+      contributionQualifiedId: `${authority.payload.application.implementationIdentity.pluginId}/providers/${authority.payload.application.implementationIdentity.localId}`,
+    });
+    const consumers = new Map<string, boolean>();
+    const homeReads: string[] = [];
+    const streamChecks: string[] = [];
+    const children = new Map<string, { current: boolean; starts: number; cleanupAttempts: number; cleanupFailures: number }>();
+    let endConsumerOnRequest = false;
+    let failCleanupOnRequest = false;
+    let homeUnavailable = false;
+    let onChildRetired = () => {};
+    // The source custody port uses the real managed semantic/join owner. The
+    // already-authorized child process and Home HTTP are the effect boundaries.
+    const custody: ManagedProviderExplicitStartCustody = {
+      async acquire(input) {
+        const operation = input.operationClaim.operation;
+        const key = operationKey(operation);
+        const joined = await managed.runManagedProviderExplicitStart({
+          ...claim(operation), occurrenceId: 'provider-occurrence', purposeBindingsEqualityKey: 'exact-connected-account',
+          lifecycleKind: 'providerBroker', signal: input.signal, isCurrent: input.isAuthorizationCurrent,
+          ...(input.revalidateRetainedCurrentness ? { revalidateRetainedCurrentness: input.revalidateRetainedCurrentness } : {}),
+          establish: async () => {
+            const child = { current: true, starts: (children.get(key)?.starts ?? 0) + 1, cleanupAttempts: 0, cleanupFailures: 0 };
+            children.set(key, child);
+            return { status: 'running', projection: {
+              access: { endpointUrl: () => 'http://127.0.0.1:43120/v1', request: async () => {
+                if (!child.current) throw new Error('Retired child reached');
+                if (endConsumerOnRequest) consumers.set(key, false);
+                if (failCleanupOnRequest) child.cleanupFailures = 1;
+                return { ok: true, status: 200, statusText: 'OK', headers: {}, body: null };
+              } },
+              isCurrent: () => child.current,
+              cleanup: async () => {
+                child.cleanupAttempts++;
+                if (child.cleanupFailures > 0) { child.cleanupFailures--; throw new Error('Child cleanup unavailable'); }
+                child.current = false;
+                onChildRetired();
+              },
+            } };
+          },
+        });
+        return joined.status === 'established' ? joined.value.projection : null;
+      },
+      retire: async input => await managed.retireManagedProviderExplicitStart(claim(input.operationClaim.operation)),
+      retireExternalApiKey: unused,
+      revalidateRetainedClaims: async (signal, selector) => await managed.revalidateManagedProviderExplicitStarts(
+        signal, selector ? claim(selector.operationClaim.operation) : undefined,
+      ),
+      retireAll: async () => await managed.retireManagedProviderExplicitStarts('providerBroker'),
+    };
+    closeTasks.push(async () => { await custody.retireAll(); });
+    const bindings = createConnectedAccountPurposeBindingOwner({
+      store: { read: async () => ({ v: 1, bindings: [] }), update: unused, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unused, resolveTarget: async () => ({ displayName: 'Account', account: source.target.account }),
+      materializeAccount: unused, projectTargetAccounts: unused, assertTargetAccountMaterializable: unused,
+    });
+    const sourceOwner = createTeamCredentialBrokerSourceOwner({
+      machineId: 'broker-machine', custody,
+      selectConnectedServicesSourceMember: createConnectedServicesBrokerSourceMemberSelect({
+        withRegistry: async read => await read(createBrokerProviderRegistry()), resolveBindingIntentSelection: bindings.resolveBindingIntentSelection,
+      }),
+      openConnectedServicesSource: createConnectedServicesBrokerSourceOpen({
+        withRegistry: async read => await read(createBrokerProviderRegistry()), readResource: async () => brokerResource,
+        resolveBindingIntentSelection: bindings.resolveBindingIntentSelection, custody,
+      }),
+      openProviderConnectionSource: unused,
+    });
+    let personalAuthority: SignedProviderBrokerRouteGrantV2 | null = null;
+    let personalOpenFailure: unknown;
+    const personalConnection = personal ? (() => {
+      const base = createBrokerProviderRegistry();
+      const registry = { providersByContributionKey: new Map([...base.providersByContributionKey].map(([key, contribution]) => [key, {
+        ...contribution, definition: ProviderContributionV1Schema.parse({ ...contribution.definition,
+          managedRuntime: { ...contribution.definition.managedRuntime, sharing: 'connectionMachine', connectedAccounts: [] } }),
+      }])) };
+      const connectionId = ProviderConnectionIdSchema.parse('personal-retained-source');
+      const initial = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1, connections: [{
+        v: 1, id: connectionId, source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+        deployment: { kind: 'managedLocal' }, role: 'default', displayName: 'Gateway', displayNameMode: 'automatic',
+        revision: 1, createdAt: 1, updatedAt: 1, gatewayPlacement: { kind: 'machine', machineId: 'broker-machine' },
+      }] });
+      const resolve = (settings: typeof initial) => resolveProviderConnectionForMachine({ connectionId,
+        machineId: 'broker-machine', providerSettings: settings, registry, dnsEvidenceByEndpointUrl: new Map() });
+      const resolved = resolve(initial);
+      if (resolved.status !== 'resolved') throw new Error('Personal source unresolved');
+      const settings = ProviderSettingsV1Schema.parse({ ...initial, machineGrants: [{ v: 1, connectionId,
+        machineId: 'broker-machine', connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint,
+        endpointSetFingerprint: resolved.record.endpointSetFingerprint, confirmedAt: 1 }] });
+      const admitted = resolve(settings);
+      if (admitted.status !== 'resolved' || admitted.record.deployment.kind !== 'managedLocal') throw new Error('Personal source unavailable');
+      const application = projectProviderBrokerApplication({ connection: admitted.record,
+        agentTargetKey: 'agent:happier.agent.codex/codex', protocol: authority.payload.application.protocol });
+      if (!application) throw new Error('Personal application unavailable');
+      const { catalog, defaults } = splitProviderSettingsV1(settings);
+      const payload: SignedProviderBrokerRouteGrantV2['payload'] = { v: 2, grantId: 'personal-retained-grant',
+        aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 200, homeId: 'home-1', accountId: 'custodian-account',
+        initiatorTokenEpoch: 0, initiator: { ...authority.payload.initiator, accountId: 'custodian-account' },
+        target: authority.payload.target, consumer: authority.payload.consumer, application,
+        source: { kind: 'account_connection', connectionId,
+          expectedConnectionSecurityFingerprint: admitted.record.connectionSecurityFingerprint,
+          expectedManagedRuntimeBindingFingerprint: createProviderManagedRuntimeBindingFingerprintV1({
+            implementationIdentity: admitted.record.deployment.implementationIdentity,
+            managedRuntime: admitted.record.deployment.managedRuntime, purposeBindings: { v: 1, bindings: [] },
+          }) },
+      };
+      personalAuthority = { payload, signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: Buffer.from(tweetnacl.sign.detached(
+        Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), homeKey.secretKey,
+      )).toString('base64url') } };
+      const open = createAccountConnectionBrokerSourceOpen({ homeId: 'home-1', accountId: 'custodian-account',
+        machineId: 'broker-machine', expectedAccountSettingsScopeKey: 'retained-personal-scope', custody,
+        withRegistry: async read => await read(registry),
+        getAccountSettingsSnapshot: () => ({ source: 'cache', scopeKey: 'retained-personal-scope', settingsVersion: 1,
+          loadedAtMs: 1, settingsSecretsReadKeys: [], savedSecretResources: [], savedSecretCatalogState: 'ready',
+          settings: AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: defaults }),
+          providerConnectionsCatalog: { status: 'ready', revision: 1, catalog } }),
+        resolveBindingIntent: unused,
+        admitConsumer: async signed => {
+          const key = operationKey(signed.payload.consumer);
+          homeReads.push(key);
+          return consumers.get(key) === true;
+        },
+        projectModels: async () => DaemonProviderModelProjectionResponseV1Schema.parse({ status: 'success', agentTargetKey: application.agentTargetKey,
+          groups: [{ connectionId, providerName: 'Gateway', connectionName: 'Gateway', connectionRole: 'default',
+            connectionDisplayNameMode: 'automatic', connectionRevision: 1,
+            sourceAuthority: { provider: { identity: application.implementationIdentity, definitionRevision: 1 },
+              connectionSecurityFingerprint: admitted.record.connectionSecurityFingerprint }, authorization: { authorized: true },
+            modelLoadAction: 'descriptor_absent', manualModelPolicy: 'allowed', supportsFreeformModelIds: false,
+            suppressedConnectedServiceIds: [], rows: [{ ref: { agentTargetKey: application.agentTargetKey, providerConnectionId: connectionId, modelId: 'gpt-5' },
+              descriptor: { id: 'gpt-5', name: 'GPT' }, application, sources: { manual: false, static: false, probe: true }, confidence: 'probe',
+              compatibility: { result: { status: 'verified', selectedProtocol: application.protocol,
+                evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-09' } },
+                compatibilityFingerprint: 'compatibility:v1:retained', confirmed: false },
+              endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }] }],
+        }),
+      });
+      return { homeId: 'home-1', accountId: 'custodian-account',
+        open: async (request: Parameters<typeof open>[0]) => {
+          try { return await open(request); } catch (error) { personalOpenFailure = error; throw error; }
+        },
+        retire: async ({ authority: signed }: { authority: SignedProviderBrokerRouteGrantV2 }) => await retireAccountConnectionBrokerSource({
+          homeId: 'home-1', accountId: 'custodian-account', machineId: 'broker-machine', custody, authority: signed,
+        }),
+        revalidateCurrentness: async ({ authority: signed }: { authority: SignedProviderBrokerRouteGrantV2 }) => {
+          await custody.revalidateRetainedClaims(undefined, { identity: signed.payload.application.implementationIdentity,
+            operationClaim: { kind: 'providerBroker', operation: signed.payload.consumer },
+            sharedGateway: { homeId: 'home-1', accountId: 'custodian-account', machineId: 'broker-machine',
+              connectionId: signed.payload.source.connectionId, consumerId: JSON.stringify(signed.payload.consumer) } });
+          streamChecks.push(operationKey(signed.payload.consumer));
+        } };
+    })() : null;
+    const runtimeInput = {
+      machineId: 'broker-machine', resolveTrustRoots: () => homeTrustRoots, nowMs: () => 150,
+      createRequestId: () => 'retained-request',
+      ...(personalConnection ? { accountConnection: personalConnection } : {}),
+      resolveRequestPolicy: async () => ({ resourceRevision: 7, sourceRevision: authority.payload.sourceRevision,
+        application: authority.payload.application, source, policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: (id: string) => id } }),
+      admitRequest: async (request: Parameters<Parameters<typeof startDaemonProviderBrokerRuntime>[0]['admitRequest']>[0]) => ({
+        ok: true as const, resourceId: 'resource-1', brokerMachineId: 'broker-machine', source,
+        operation: request.authority.payload.consumer, usageEventId: 'usage-1',
+      }),
+      authorizeModelCatalog: async () => ({ ok: true as const }), sourceOwner,
+      revalidateOperationAuthorization: async (input: { authority: SignedProviderBrokerRouteGrantV1; expectedResourceRevision: number; signal?: AbortSignal }) => {
+        input.signal?.throwIfAborted();
+        expect(input.expectedResourceRevision).toBe(7);
+        const key = operationKey(input.authority.payload.consumer);
+        homeReads.push(key);
+        if (homeUnavailable) throw new Error('Home unavailable');
+        return consumers.get(key) === true;
+      },
+      revalidateOperationCurrentness: async (input: { operation: TeamCredentialBrokerOperation; application: ProviderBrokerApplicationBindingV1 }, signal?: AbortSignal) => {
+        await custody.revalidateRetainedClaims(signal, {
+          identity: input.application.implementationIdentity,
+          operationClaim: { kind: 'providerBroker', operation: input.operation },
+        });
+        streamChecks.push(operationKey(input.operation));
+      },
+    };
+    const runtime = await startDaemonProviderBrokerRuntime(runtimeInput);
+    closeTasks.push(runtime.close);
+    const streamHandshake = (consumer: Consumer = authority.payload.consumer, expired = false) => {
+      const occurrence = consumer.kind === 'execution_run' ? { executionRunOccurrenceId: 'run-occurrence-1' } : {};
+      if (personalAuthority) {
+        const payload = { ...personalAuthority.payload, consumer, ...occurrence, ...(expired ? { expiresAt: 149 } : {}) };
+        const signed: SignedProviderBrokerRouteGrantV2 = { payload, signature: { alg: 'Ed25519', keyId: 'home',
+          valueBase64Url: Buffer.from(tweetnacl.sign.detached(
+            Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), homeKey.secretKey,
+          )).toString('base64url') } };
+        return { v: 2 as const, kind: 'provider_broker' as const, authority: signed };
+      }
+      const signed = signedAuthority({ ...authority.payload, consumer, ...occurrence });
+      return { v: 1 as const, kind: 'provider_broker' as const, authority: signed };
+    };
+    const admitStream = async (consumer: Consumer = authority.payload.consumer, expired = false) => await startBrokerAdmission(runtime, 150, streamHandshake(consumer, expired))();
+    const infer = async (consumer: Consumer = authority.payload.consumer) => {
+      const key = operationKey(consumer);
+      if (!consumers.has(key)) consumers.set(key, true);
+      const target = await admitStream(consumer);
+      expect(target.statusCode).toBe(204);
+      const response = await rawRequestThroughApplicationTarget({ ...target, method: 'POST', path: '/v1/responses',
+        body: JSON.stringify({ model: 'gpt-5', input: 'hello' }) });
+      expect(response, JSON.stringify(diagnostics.mock.calls) + String(personalOpenFailure)).toContain('HTTP/1.1 200');
+      return target;
+    };
+    const openInferenceStream = async () => {
+      consumers.set(operationKey(authority.payload.consumer), true);
+      const target = await admitStream();
+      expect(target.statusCode).toBe(204);
+      const socket = connect({ host: '127.0.0.1', port: target.port });
+      closeTasks.push(async () => { socket.destroy(); });
+      await once(socket, 'connect');
+      let buffer: Buffer = Buffer.alloc(0);
+      const response = new Promise<string>((resolve, reject) => {
+        socket.once('error', reject);
+        socket.on('data', (chunk: Buffer) => {
+          buffer = Buffer.concat([buffer, chunk]);
+          const parsed = takeHttpResponse(buffer);
+          if (parsed) resolve(parsed.response);
+        });
+      });
+      const body = JSON.stringify({ model: 'gpt-5', input: 'hello' });
+      socket.write(target.localCapability, 'ascii');
+      socket.write(['POST /v1/responses HTTP/1.1', 'Host: 127.0.0.1', 'Connection: keep-alive',
+        'Content-Type: application/json', `Content-Length: ${Buffer.byteLength(body)}`, '', body].join('\r\n'), 'utf8');
+      expect(await response).toContain('HTTP/1.1 200');
+    };
+    const closeUnusedStream = async (consumer: Consumer = authority.payload.consumer, expired = false) => {
+      const target = await admitStream(consumer, expired);
+      expect(target.statusCode).toBe(204);
+      const socket = connect({ host: '127.0.0.1', port: target.port });
+      closeTasks.push(async () => { socket.destroy(); });
+      await once(socket, 'connect');
+      const closed = once(socket, 'close');
+      // Authenticate the admitted transport, then close it before any HTTP
+      // request can select or acquire a source.
+      socket.end(target.localCapability, 'ascii');
+      await closed;
+    };
+    const abortUnusedStream = async (expired = false) => {
+      const handshake = streamHandshake(undefined, expired);
+      const nativeStream = new AbortController();
+      const target = await runtime.resolveProviderBrokerApplicationTarget({
+        handshake, authority: handshake.authority, signal: nativeStream.signal,
+        authenticatedRemoteEndpointId: handshake.authority.payload.initiator.endpointId,
+        localEndpointId: handshake.authority.payload.target.endpointId,
+      });
+      expect(target).not.toBeNull();
+      nativeStream.abort();
+    };
+    return {
+      custody, homeReads, streamChecks, infer, admitStream, openInferenceStream, closeUnusedStream, abortUnusedStream, closeRuntime: runtime.close,
+      child: (consumer: Consumer = authority.payload.consumer) => children.get(operationKey(consumer))!,
+      endConsumer: (consumer: Consumer = authority.payload.consumer) => consumers.set(operationKey(consumer), false),
+      endOnRequest: () => { endConsumerOnRequest = true; },
+      setHomeUnavailable: (unavailable: boolean) => { homeUnavailable = unavailable; },
+      failCleanupOnRequest: () => { failCleanupOnRequest = true; },
+      onChildRetired: (callback: () => void) => { onChildRetired = callback; },
+      key: operationKey,
+    };
+  }
+
+  describe('retained consumer currentness through signed private acquisition', () => {
+    it('retains an active Run after stream close and retires its ended occurrence without retiring a same-source Session', async () => {
+      const target = await startRetainedTarget();
+      const run = { kind: 'execution_run' as const, executionRunId: 'run-1' };
+      await target.infer(run);
+      await vi.waitFor(() => expect(target.streamChecks).toEqual([target.key(run)]));
+      expect(target.child(run)).toMatchObject({ current: true, starts: 1, cleanupAttempts: 0 });
+
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(2));
+      target.endConsumer(run);
+      const readsBeforeClose = target.homeReads.length;
+      await target.closeUnusedStream(run);
+      await vi.waitFor(() => expect(target.child(run).current).toBe(false));
+
+      expect(target.homeReads.slice(readsBeforeClose)).toEqual([target.key(run)]);
+      expect(target.streamChecks).toEqual([target.key(run), target.key(authority.payload.consumer), target.key(run)]);
+      expect(target.child(run)).toMatchObject({ starts: 1, cleanupAttempts: 1 });
+      expect(target.child()).toMatchObject({ current: true, starts: 1, cleanupAttempts: 0 });
+    });
+
+    it.each([
+      { personal: false, expired: false, cancellation: 'tcp_disconnect' },
+      { personal: true, expired: false, cancellation: 'tcp_disconnect' },
+      { personal: true, expired: true, cancellation: 'tcp_disconnect' },
+      { personal: false, expired: false, cancellation: 'admission_cancelled' },
+      { personal: true, expired: false, cancellation: 'admission_cancelled' },
+      { personal: true, expired: true, cancellation: 'admission_cancelled' },
+    ])('revalidates retained custody when a later stream closes before source acquisition ($personal, expired=$expired, $cancellation)', async ({ personal, expired, cancellation }) => {
+      const target = await startRetainedTarget(personal);
+      const survivor = { kind: 'session' as const, sessionId: 'session-survivor' };
+      await target.infer();
+      await target.infer(survivor);
+      // Both first streams finish their currentness checks while their
+      // consumers are live, so they cannot supply the later retirement.
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(2));
+      target.endConsumer();
+      const readsBeforeClose = target.homeReads.length;
+      if (cancellation === 'admission_cancelled') await target.abortUnusedStream(expired);
+      else await target.closeUnusedStream(undefined, expired);
+      await vi.waitFor(() => expect(target.child().current, JSON.stringify({ streamChecks: target.streamChecks, homeReads: target.homeReads })).toBe(false));
+      expect(target.streamChecks).toEqual([target.key(authority.payload.consumer), target.key(survivor), target.key(authority.payload.consumer)]);
+      expect(target.homeReads).toHaveLength(readsBeforeClose + 1);
+      expect(target.child().cleanupAttempts).toBe(1);
+      expect(target.child(survivor)).toMatchObject({ current: true, cleanupAttempts: 0 });
+    });
+
+    it.each([false, true])('performs no Home read when a stream closes without a retained claim (personal=%s)', async personal => {
+      const target = await startRetainedTarget(personal);
+      await target.closeUnusedStream();
+      await target.closeRuntime();
+      expect(target.child()).toBeUndefined();
+      expect(target.homeReads).toHaveLength(0);
+    });
+
+    it('revalidates personal V2 retained custody once and retires an ended consumer on stream close', async () => {
+      const target = await startRetainedTarget(true);
+      await target.infer();
+      expect(target.child().current).toBe(true);
+      const before = target.homeReads.length;
+      expect(await target.custody.revalidateRetainedClaims()).toBe(0);
+      expect(target.homeReads.length - before).toBe(1);
+      target.endOnRequest();
+      await target.infer();
+      await vi.waitFor(() => expect(target.child().current).toBe(false));
+      expect(target.child().cleanupAttempts).toBe(1);
+      expect(await target.custody.revalidateRetainedClaims()).toBe(0);
+    });
+
+    it('retires the exact closed-stream claim on the Home wake after a release never reaches the target', async () => {
+      const target = await startRetainedTarget();
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(1));
+      expect(target.child().current).toBe(true);
+      expect(target.child().cleanupAttempts).toBe(0);
+
+      // This release loses transport authentication before its HTTP request
+      // reaches the live broker. There is no successful target retirement.
+      const release = await target.admitStream();
+      await rawRequestThroughApplicationTarget({ ...release, localCapability: 'x'.repeat(release.localCapability.length),
+        method: 'DELETE', path: PROVIDER_BROKER_PRIVATE_CLOSE_PATH });
+      expect(target.child().current).toBe(true);
+      target.endConsumer();
+      expect(await target.custody.revalidateRetainedClaims()).toBe(1);
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 });
+      expect(await target.custody.revalidateRetainedClaims()).toBe(0);
+    });
+
+    it('revalidates once on close and retires a consumer that already ended at Home', async () => {
+      const target = await startRetainedTarget();
+      target.endOnRequest();
+      await target.infer();
+      await vi.waitFor(() => expect(target.child().current).toBe(false));
+      expect(target.child().cleanupAttempts).toBe(1);
+      expect(target.homeReads).toEqual([target.key(authority.payload.consumer)]);
+      await Promise.resolve();
+      expect(target.homeReads).toHaveLength(1);
+    });
+
+    it('keeps another same-source consumer current with one Home read per stream close', async () => {
+      const target = await startRetainedTarget();
+      const survivor = { kind: 'session' as const, sessionId: 'session-survivor' };
+      await target.infer();
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(1));
+      await target.infer(survivor);
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(2));
+      expect(target.homeReads).toEqual([target.key(authority.payload.consumer), target.key(survivor)]);
+      expect(target.child().current).toBe(true);
+      target.endConsumer();
+      expect(await target.custody.revalidateRetainedClaims()).toBe(1);
+      expect(target.homeReads).toHaveLength(4);
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 });
+      expect(target.child(survivor)).toMatchObject({ current: true, cleanupAttempts: 0 });
+      await target.infer(survivor);
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(5));
+      expect(target.child(survivor).starts).toBe(1);
+      await Promise.resolve();
+      expect(target.homeReads).toHaveLength(5);
+    });
+
+    it('keeps failed target cleanup recoverable through the existing retained-currentness pass', async () => {
+      const target = await startRetainedTarget();
+      await target.infer();
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(1));
+      target.child().cleanupFailures = 1;
+      target.endConsumer();
+      await expect(target.custody.revalidateRetainedClaims()).rejects.toBeInstanceOf(AggregateError);
+      expect(target.child()).toMatchObject({ current: true, cleanupAttempts: 1 });
+      expect(await target.custody.revalidateRetainedClaims()).toBe(1);
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 2 });
+      expect(target.homeReads).toHaveLength(2);
+    });
+
+    it('preserves retained custody through an unreadable Home until a later currentness decision', async () => {
+      const target = await startRetainedTarget();
+      await target.infer();
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(1));
+      target.setHomeUnavailable(true);
+      target.endConsumer();
+      expect(await target.custody.revalidateRetainedClaims()).toBe(0);
+      expect(target.child()).toMatchObject({ current: true, cleanupAttempts: 0 });
+      target.setHomeUnavailable(false);
+      expect(await target.custody.revalidateRetainedClaims()).toBe(1);
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 });
+    });
+
+    it('stays clean after a successful retirement loses its release acknowledgement', async () => {
+      const target = await startRetainedTarget();
+      await target.infer();
+      await vi.waitFor(() => expect(target.homeReads).toHaveLength(1));
+      const release = await target.admitStream();
+      const releaseCaller = new AbortController();
+      target.onChildRetired(() => releaseCaller.abort());
+      const response = await rawRequestThroughApplicationTarget({ ...release, signal: releaseCaller.signal,
+        method: 'DELETE', path: PROVIDER_BROKER_PRIVATE_CLOSE_PATH });
+      // The child is retired before the release response can reach its caller.
+      expect(response).not.toContain('HTTP/1.1 204');
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 });
+      target.endConsumer();
+      expect(await target.custody.revalidateRetainedClaims()).toBe(0);
+      expect(target.child().cleanupAttempts).toBe(1);
+      expect(target.homeReads).toHaveLength(1);
+    });
+
+    it('lets stream close settle after child cleanup fails and recovers on the next Home wake', async () => {
+      const target = await startRetainedTarget();
+      target.endOnRequest();
+      target.failCleanupOnRequest();
+      await target.infer();
+      await vi.waitFor(() => expect(target.child().cleanupAttempts).toBe(1));
+      expect(target.child().current).toBe(true);
+      expect(await target.custody.revalidateRetainedClaims()).toBe(1);
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 2 });
+      expect(target.homeReads).toHaveLength(1);
+    });
+
+    it.each([false, true])('settles active streams before retiring daemon custody (personal=%s)', async personal => {
+      const target = await startRetainedTarget(personal);
+      await target.openInferenceStream();
+      const readsBeforeStop = target.homeReads.length;
+      await target.closeRuntime();
+      expect(target.homeReads).toHaveLength(readsBeforeStop + 1);
+      await target.custody.retireAll();
+      expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 });
+      expect(target.homeReads).toHaveLength(readsBeforeStop + 1);
+    });
+  });
 
   async function startTarget(
     admitRequest: Parameters<typeof startDaemonProviderBrokerRuntime>[0]['admitRequest'],

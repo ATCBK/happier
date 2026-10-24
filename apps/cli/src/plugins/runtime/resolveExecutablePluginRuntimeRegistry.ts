@@ -833,7 +833,10 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
         externalApiKeyId: string;
         operationId: string;
     }>): Promise<boolean>;
-    revalidateManagedProviderExplicitStarts?(signal?: AbortSignal): Promise<number>;
+    revalidateManagedProviderExplicitStarts?(
+        signal?: AbortSignal,
+        selector?: Parameters<NonNullable<ResolvedExecutablePluginRuntimeRegistry['retireManagedProviderExplicitStart']>>[0],
+    ): Promise<number>;
     retireManagedProviderExplicitStarts?(
         lifecycleKind: 'publicExplicitStart' | 'providerBroker',
     ): Promise<number>;
@@ -6264,10 +6267,22 @@ export async function resolveExecutablePluginRuntimeRegistry(
 
     async function revalidateManagedProviderExplicitStarts(
         signal?: AbortSignal,
+        selector?: Parameters<typeof retireManagedProviderExplicitStart>[0],
     ): Promise<number> {
-        const ordinary = await daemonManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal);
+        signal?.throwIfAborted();
+        const operationId = selector
+            ? resolveExplicitManagedProviderOperationClaimId(selector)
+            : null;
+        if (selector && !operationId) return 0;
+        const claim = selector && operationId ? {
+            operationId,
+            pluginId: selector.identity.pluginId,
+            contributionQualifiedId:
+                `${selector.identity.pluginId}/providers/${selector.identity.localId}`,
+        } : undefined;
+        const ordinary = await daemonManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim);
         return ordinary + (projectManagedServicesOwner === daemonManagedServicesOwner ? 0
-            : await projectManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal));
+            : await projectManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim));
     }
 
     async function retireManagedProviderExplicitStarts(

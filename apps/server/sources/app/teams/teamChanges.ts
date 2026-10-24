@@ -42,11 +42,25 @@ async function readTeamsChangedAudienceInTx(
         where: { teamId: { in: teamIds } },
         select: { accountId: true },
     });
+    const brokerResources = await tx.teamCredentialResource.findMany({
+        where: { teamId: { in: teamIds }, OR: [{ brokerMachineId: { not: null } }, { brokerPoolId: { not: null } }] },
+        select: { custodianAccountId: true },
+    });
     const administrators = await readTeamProjectionAdministratorAccountIdsInTx(tx);
     const audience = new Set<string>(memberships.map(({ accountId }) => accountId));
+    for (const resource of brokerResources) audience.add(resource.custodianAccountId);
     for (const accountId of administrators) audience.add(accountId);
     for (const accountId of input.additionalAccountIds ?? []) audience.add(accountId);
     return [...audience].filter((accountId) => !excluded.has(accountId)).sort();
+}
+
+/** Consumer retirement is a payload-free wake to the exact custodians, using
+ * the same Team feed that already invalidates retained broker authorization. */
+export async function publishTeamCredentialBrokerConsumersChangedInTx(
+    tx: Tx,
+    input: Readonly<{ custodianAccountIds: readonly string[] }>,
+): Promise<void> {
+    await markAccountsChanged(tx, { accountIds: input.custodianAccountIds, entityId: TEAM_CHANGE_ENTITY_ID });
 }
 
 /** Pure complete recipient census for the Team publisher and its resource effects. */
@@ -82,7 +96,7 @@ async function publishTeamsChangedInTx(
 /**
  * Wakes the Accounts whose Team projection one mutation can invalidate.
  *
- * The audience has two parts, and both are canonical readers of the state this
+ * The audience includes the canonical readers of the state this
  * mutation changed:
  *
  * - the Team's current membership, whose directory rows, capabilities, and Team
@@ -98,7 +112,8 @@ async function publishTeamsChangedInTx(
  * audience the Home-governance publisher already wakes — so this is a bounded
  * fanout over two reader sets, not a Home-wide broadcast. Inactive Accounts are
  * excluded because they hold no authority and therefore have no administered
- * directory to invalidate.
+ * directory to invalidate. Broker resource custodians, including departed
+ * members, also recheck retained consumer authorization after Team changes.
  *
  * Every Team mutation uses this one audience, including membership and directory
  * changes whose effect on an administrator is the Team detail rather than the

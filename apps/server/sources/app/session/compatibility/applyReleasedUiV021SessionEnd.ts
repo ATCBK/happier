@@ -22,6 +22,7 @@ import { inTx, transactionResult } from "@/storage/inTx";
 import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { resolveSessionTurnUpdateSkipSenderConnection } from "@/app/session/turns/publishSessionTurnMutationUpdate";
+import { publishSessionProviderBrokerConsumersChangedInTx } from '@/app/providers/brokerConsumerChanges';
 import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 function readMillis(value: unknown): number | null {
@@ -121,6 +122,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
                     thinkingAt: new Date(params.observedAt),
                 },
             });
+            await publishSessionProviderBrokerConsumersChangedInTx(tx, params.sessionId);
         }
 
         const turnApplied = turn?.ok === true && turn.didApply;

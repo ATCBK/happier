@@ -8,6 +8,7 @@ import { resolveCurrentSessionRecipientAccountIdsBySessionInTx, resolveSessionGr
 import { deleteAutomationTx } from '@/app/automations/automationCrudService';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { hasSessionFollowSessionSource } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { publishSessionProviderBrokerConsumersChangedInTx } from '@/app/providers/brokerConsumerChanges';
 
 import { deleteSessionTree, SessionDeleteConditionLostError } from './deleteSessionTree';
 import { emitSessionDeletedUpdate } from './emitSessionDeletedUpdate';
@@ -162,6 +163,7 @@ export async function deleteSessionWithRecipientsInTx(
         reason: params.reason,
         sessionDeleteWhere: Object.keys(sessionDeleteWhere).length > 0 ? sessionDeleteWhere : undefined,
         afterSessionWriteBoundary: async () => {
+            await publishSessionProviderBrokerConsumersChangedInTx(tx, params.sessionId);
             recipientCursors.push(...await markAccountsChanged(tx, { accountIds: [...recipientAccountIds],
                 kind: 'session', entityId: params.sessionId, hint: deletionHint }));
         },

@@ -33,6 +33,7 @@ import { scheduleSessionActivityRemoteAlerts } from '@/app/activity/remoteAlerts
 import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
 import type { InTxOptions, ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { AsyncLock } from "@/utils/runtime/lock";
+import { publishSessionProviderBrokerConsumersChangedInTx, readSessionProviderBrokerCustodianAccountIdsInTx } from '@/app/providers/brokerConsumerChanges';
 import { recordWebLatencyPhase, timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import {
     mapPendingActivationAuthorization,
@@ -247,7 +248,10 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
 }>): Promise<readonly ExpireSessionPublisherResult[]> {
     if (params.candidates.length === 0) return [];
     return await inTx(async (tx) => {
-        await acquireSessionAccountCursorLocksInTx(tx, params.candidates.map(candidate => candidate.sessionId));
+        await acquireSessionAccountCursorLocksInTx(tx, params.candidates.map(candidate => candidate.sessionId), [], {
+            readAdditionalAccountIdsInTx: currentTx => readSessionProviderBrokerCustodianAccountIdsInTx(currentTx,
+                params.candidates.map(candidate => candidate.sessionId)),
+        });
         const results: PresenceInTxResult<ExpireSessionPublisherResult>[] = [];
         for (const candidate of params.candidates) {
             const session = await tx.session.findUnique({
@@ -278,6 +282,7 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
                 continue;
             }
 
+            await publishSessionProviderBrokerConsumersChangedInTx(tx, candidate.sessionId);
             const recipientCursors = await markSessionProjectionRecipientsChanged({ tx, sessionId: candidate.sessionId });
             // This successful existing CAS is custody of the original stalled
             // transition. Never append a synthetic Message or advance a Follow cursor.
@@ -599,6 +604,9 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
     }>): Promise<CloseSessionPublisherResult> => await inTx(async (tx): Promise<PresenceInTxResult<CloseSessionPublisherResult>> => {
         await acquireSessionAccountCursorLocksInTx(tx, [params.binding.sessionId], [], {
             includeLifecyclePublications: params.settleLatestTurn !== false,
+            ...(params.settleLatestTurn === false ? {
+                readAdditionalAccountIdsInTx: (currentTx: Tx) => readSessionProviderBrokerCustodianAccountIdsInTx(currentTx, [params.binding.sessionId]),
+            } : {}),
         });
         const session = await tx.session.findUnique({
             where: { id: params.binding.sessionId },
@@ -688,6 +696,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             },
         });
         if (updated.count !== 1) return { status: "superseded" };
+        await publishSessionProviderBrokerConsumersChangedInTx(tx, params.binding.sessionId);
         if (runnerBindingState === "current") {
             await revokeMaterializedEphemeralRunnerBindingInTx(tx, params.binding);
         }

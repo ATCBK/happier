@@ -11,7 +11,6 @@ import { type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/proto
 import { type TeamCredentialUsageLimitDenialV1 } from '@happier-dev/protocol/teams';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/protocol/ephemeralRunner/principal';
 
-import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from '@/app/auth/auth';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
@@ -265,22 +264,16 @@ async function authorizeCurrentBrokerOperationInTx(
     if (!initiatorEndpoint || initiatorEndpoint.endpointId !== grant.initiator.endpointId) {
         return failure('operation_not_current');
     }
-    let session: NonNullable<AuthorizedBrokerOperation['session']> | null = null;
-    if (sessionId !== null) {
-        if (!await hasCurrentSessionScopedMachineAccessInTx({
-            tx,
-            accountId: grant.initiator.accountId,
-            machineId: grant.initiator.machineId,
-            sessionId,
-        })) return failure('operation_not_current');
-        session = await tx.session.findUnique({
-            where: { id: sessionId },
-            select: { accountId: true, active: true, primaryTeamId: true, latestTurnId: true, latestTurnStatus: true },
-        });
-        if (!session || session.accountId !== grant.initiator.accountId || !session.active) {
-            return failure('session_not_active');
-        }
+    const consumerAdmission = await admitProviderBrokerConsumerInTx(tx, {
+        accountId: grant.initiator.accountId, initiatorMachineId: grant.initiator.machineId,
+        consumer: grant.consumer, executionRun: input.executionRun ?? null,
+    });
+    if (!consumerAdmission.ok) {
+        // Preserve this established route's Machine-binding refusal code; the
+        // shared consumer owner decides currentness for both source arms.
+        return failure(consumerAdmission.reasonCode === 'resource_forbidden' ? 'operation_not_current' : consumerAdmission.reasonCode);
     }
+    const session = consumerAdmission.session;
     // The Team qualification of this request is always re-evaluated now, for
     // the exact credential this operation rests on. A Runner presents its
     // activation's persisted credential evidence. Every other initiator reaches

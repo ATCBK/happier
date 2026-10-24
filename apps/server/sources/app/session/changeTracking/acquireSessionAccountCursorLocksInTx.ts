@@ -16,6 +16,7 @@ import {
 } from '@/app/changes/markAccountChanged';
 import type { AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { portableQueryChunks } from '@/storage/portableQueryChunks';
+import { readSessionProviderBrokerCustodianAccountIdsInTx } from '@/app/providers/brokerConsumerChanges';
 
 export type SessionAccountCursorLockOptions = Readonly<{
   includeLifecyclePublications?: boolean;
@@ -102,12 +103,17 @@ export async function readSessionAccountCursorAudienceInTx(
     });
   const additionalAudience =
     (await options?.readAdditionalAccountIdsInTx?.(tx)) ?? [];
+  // Enclosing archive/erasure owners admit before the nested terminal writer.
+  // Broker custody therefore belongs in this shared lifecycle census too.
+  const brokerCustodians = options?.includeLifecyclePublications
+    ? await readSessionProviderBrokerCustodianAccountIdsInTx(tx, ids)
+    : [];
   const accountIds = [
     ...new Set(
       [...recipients.values()]
         .flat()
         .concat([...additionalAccountIds], lifecycle.accountIds, [
-          ...additionalAudience,
+          ...additionalAudience, ...brokerCustodians,
         ]),
     ),
   ].sort();

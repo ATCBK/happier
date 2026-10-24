@@ -647,6 +647,34 @@ matching Team source acquisition. The hub revalidates the source before returnin
 endpoint metadata or forwarding inference; a source refusal returns typed HTTP
 failure. Closing the stream cancels acquisition and releases its joined access;
 explicit retirement still ends only the exact signed consumer claim.
+In 0.3 development, retirement first withdraws the recipient's published
+listener; failure to withdraw still blocks runner stop. The carrier then uses
+the existing 30-second Provider endpoint budget for one private release attempt.
+Its `[provider-broker-release]` record ends with `released` after HTTP 204,
+`target_gone` when the authenticated endpoint differs from the signed target,
+or `abandoned` with a closed reason when the remote attempt fails. Each outcome
+settles that binding, so retained Session/daemon cleanup never redials it.
+An unacknowledged cleanup is not proof of remote retirement: Home still admits
+each effect. In 0.3 development, private Team V1 and personal Account V2 claims
+retain consumer authorization through the existing Home admission owner. Session
+stop, publisher expiry, archive and deletion publish the existing Team change to
+the broker custodian Accounts; Team resource/grant withdrawal uses that same
+feed. The broker's retained-currentness pass retires claims whose authority ended
+and re-enters the existing cleanup path for a previously failed retirement.
+Closing an application stream also runs one currentness pass for its exact
+claim, even if that stream closed before opening a source, independently of the
+closed stream's cancellation. Explicit release directly retires the exact claim
+without an additional authorization read. A still-authorized live consumer
+keeps its claim, and an unreadable Home retains custody until a later deciding
+change. These checks add no idle timer or release retry loop.
+Run currentness uses Home's existing daemon attestation when a pass runs. Home
+has no Run-end publication with the Run's broker custodian, by decision: Home
+does not record which custodian a Run used, and stream closure supplies the
+revalidation wake for an ended Run. The accepted residual is a race where the
+Run's stream closes before Home records the Run as ended; that claim then lives
+until the next deciding change, an explicit retirement or broker restart.
+Broker restart loses its in-memory claims; native runtime shutdown retains
+responsibility for failed private control closers.
 Recipient currentness, Team catalog, experimental-consent reads and the first
 fresh Home grant finish before the native connection is acquired. The carrier
 consumes that verified grant once, rechecking its expiry after dial; subsequent

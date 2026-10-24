@@ -121,6 +121,59 @@ it.each(['cold', 'activated'] as const)('acquires connected-account broker custo
   });
 });
 
+it('revalidates only the exact broker claim and Home consumer before retiring its process', async () => {
+  await withConfiguredDaemonTestHome({ prefix: 'broker-exact-currentness-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller, physicalGateway: true });
+    const gateway = fixture.gateway!;
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+    const currentConsumers = new Set(['ended', 'unrelated-stale', 'unrelated-live']);
+    const homeReads = new Map<string, number>();
+    const request = (sessionId: string) => ({
+      identity: gateway.identity,
+      contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`,
+      request: { reason: 'explicitStartLocal' as const, endpointTemplateIds: ['api'] },
+      purposeBindings: gateway.purposeBindings,
+      operationClaim: { kind: 'providerBroker' as const, operation: { kind: 'session' as const, sessionId } },
+      signal: new AbortController().signal,
+      isAuthorizationCurrent: () => true,
+      revalidateAuthorization: async () => true,
+      // Home's consumer-binding read is the external currentness boundary.
+      revalidateRetainedCurrentness: async () => {
+        homeReads.set(sessionId, (homeReads.get(sessionId) ?? 0) + 1);
+        return currentConsumers.has(sessionId);
+      },
+    });
+    try {
+      const claims = new Map<string, { projection: NonNullable<Awaited<ReturnType<typeof custody.acquire>>>; pid: number }>();
+      for (const sessionId of currentConsumers) {
+        const projection = await custody.acquire(request(sessionId));
+        if (!projection) throw new Error('Expected retained operation custody');
+        claims.set(sessionId, { projection, pid: Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8')) });
+      }
+      currentConsumers.delete('ended');
+      currentConsumers.delete('unrelated-stale');
+      homeReads.clear();
+      expect(await custody.revalidateRetainedClaims(undefined, request('ended'))).toBe(1);
+      expect(homeReads).toEqual(new Map([['ended', 1]]));
+      expect(await waitForProcessExit(claims.get('ended')!.pid)).toBe(true);
+      expect(claims.get('ended')!.projection.isCurrent()).toBe(false);
+      for (const sessionId of ['unrelated-stale', 'unrelated-live']) {
+        const claim = claims.get(sessionId)!;
+        expect(claim.projection.isCurrent()).toBe(true);
+        expect(process.kill(claim.pid, 0)).toBe(true);
+      }
+      expect(await custody.revalidateRetainedClaims(undefined, request('missing'))).toBe(0);
+      expect(homeReads).toEqual(new Map([['ended', 1]]));
+      expect(await custody.revalidateRetainedClaims()).toBe(1);
+      expect(homeReads).toEqual(new Map([['ended', 1], ['unrelated-stale', 1], ['unrelated-live', 1]]));
+      expect(await waitForProcessExit(claims.get('unrelated-stale')!.pid)).toBe(true);
+      expect(process.kill(claims.get('unrelated-live')!.pid, 0)).toBe(true);
+    } finally { await fixture.cleanup(); }
+  });
+});
+
 it('records only closed broker and Provider reasons when source custody acquisition is refused', async ({ onTestFinished }) => {
   const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
   onTestFinished(() => diagnostic.mockRestore());

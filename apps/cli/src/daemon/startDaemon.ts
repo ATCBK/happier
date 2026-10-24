@@ -279,8 +279,8 @@ import {
   daemonExternalProviderRequestPolicyAcceptsResource,
   revalidateExternalProviderBrokerAuthorization,
   resolveRunnerCredentialSelectionCurrentness,
-  startDaemonProviderBrokerRuntime,
 } from '@/providers/broker/daemonProviderBrokerRuntime';
+import { readTeamCredentialBrokerResource, startDaemonProviderBrokerRuntimeWithCustody } from '@/providers/broker/startDaemonProviderBrokerRuntimeWithCustody';
 import {
   createConnectedServicesBrokerSourceMemberSelect,
   createConnectedServicesBrokerSourceOpen,
@@ -3249,13 +3249,8 @@ export async function startDaemon(
                 const readResource = async (
                   resourceId: string,
                   signal: AbortSignal,
-                ): Promise<TeamCredentialResourceSummaryV1 | null> => {
-                  try {
-                    return await api.getTeamCredentialResource(resourceId, { signal });
-                  } catch {
-                    return null;
-                  }
-                };
+                ): Promise<TeamCredentialResourceSummaryV1 | null> =>
+                  await readTeamCredentialBrokerResource(api, resourceId, signal);
                 // The broker serves its own source, so its catalog is that
                 // source's canonical current projection — not the recipient
                 // catalog, which would require the custodian to be an audience
@@ -3367,7 +3362,7 @@ export async function startDaemon(
                   expectedResourceRevision: input.expectedResourceRevision,
                   application: input.application,
                 }, input.signal ? { signal: input.signal } : undefined);
-                const runtime = await startDaemonProviderBrokerRuntime({
+                const runtimeInput: Parameters<typeof startDaemonProviderBrokerRuntimeWithCustody>[0]['runtime'] = {
                   machineId: registeredMachineId,
                   ...(managedPolicyHomeId && externalActionAccountId ? {
                     accountConnection: {
@@ -3391,7 +3386,9 @@ export async function startDaemon(
                           if (!producer) throw new Error('provider_source_projection_unavailable');
                           return await producer.machineServices.projectModels(request);
                         },
-                        admitConsumer: async (authority, signal) => (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok,
+                        admitConsumer: async (authority, signal) => revalidateExternalProviderBrokerAuthorization(
+                          await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal }),
+                        ),
                       }),
                     },
                   } : {}),
@@ -3653,39 +3650,21 @@ export async function startDaemon(
                     relayAuthorization: request.relayAuthorization,
                     requestFacts: request.requestFacts,
                   }, { signal: request.request.signal }),
+                };
+                const runtime = await startDaemonProviderBrokerRuntimeWithCustody({
+                  runtime: runtimeInput,
+                  api,
+                  apiMachine: brokerApiMachine,
+                  custody: brokerManagedProviderCustody,
                 });
-                let current = true;
-                const revalidateRetainedClaims = async (
-                  invalidation: Readonly<{ signal: AbortSignal }>,
-                ): Promise<void> => {
-                  if (!current) return;
-                  await brokerManagedProviderCustody.revalidateRetainedClaims(
-                    invalidation.signal,
-                  );
-                };
-                const retireAllClaims = async (): Promise<void> => {
-                  if (!current) return;
-                  await brokerManagedProviderCustody.retireAll();
-                };
-                const unsubscribeCurrentness =
-                  brokerApiMachine.onManagedProviderRetainedCurrentnessInvalidation(
-                    revalidateRetainedClaims,
-                  );
-                retireProviderBrokerClaimsForFeatureDisable = retireAllClaims;
+                retireProviderBrokerClaimsForFeatureDisable = runtime.retireAllClaims;
                 return Object.freeze({
                   ...runtime,
                   async close() {
-                    if (!current) return;
-                    current = false;
-                    unsubscribeCurrentness();
-                    if (retireProviderBrokerClaimsForFeatureDisable === retireAllClaims) {
+                    if (retireProviderBrokerClaimsForFeatureDisable === runtime.retireAllClaims) {
                       retireProviderBrokerClaimsForFeatureDisable = null;
                     }
-                    try {
-                      await runtime.close();
-                    } finally {
-                      await brokerManagedProviderCustody.retireAll();
-                    }
+                    await runtime.close();
                   },
                 });
               },

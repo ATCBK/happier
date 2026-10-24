@@ -11,6 +11,15 @@ export type ProviderBrokerConsumerCurrentness = Readonly<{
     occurrenceId: string;
 }>;
 
+type AdmittedConsumerSession = Readonly<{
+    accountId: string;
+    active: boolean;
+    archivedAt: Date | null;
+    primaryTeamId: string | null;
+    latestTurnId: string | null;
+    latestTurnStatus: string | null;
+}>;
+
 /** Capture custody during preparation, then admit the complete Account cohort
  * before final deciding reads. Serializing admission excludes grant/lifecycle
  * publication (NO KEY UPDATE) and physical erasure (UPDATE), while reusing the
@@ -73,16 +82,21 @@ export async function admitProviderBrokerConsumerInTx(tx: Tx, input: Readonly<{
     initiatorMachineId: string;
     consumer: ProviderBrokerConsumerV1;
     executionRun: ProviderBrokerConsumerCurrentness | null;
-}>): Promise<Readonly<{ ok: true; executionRunOccurrenceId: string | null }> | Readonly<{ ok: false; reasonCode: ProviderBrokerAdmissionFailureCodeV1 }>> {
+}>): Promise<Readonly<{ ok: true; executionRunOccurrenceId: string | null; session: AdmittedConsumerSession | null }> | Readonly<{ ok: false; reasonCode: ProviderBrokerAdmissionFailureCodeV1 }>> {
     if (input.consumer.kind === 'execution_run' && !input.executionRun) {
         return { ok: false, reasonCode: 'execution_run_authority_unavailable' };
     }
     const sessionId = input.consumer.kind === 'session' ? input.consumer.sessionId : input.executionRun?.parentSessionId;
+    let session: AdmittedConsumerSession | null = null;
     if (sessionId) {
-        const session = await tx.session.findUnique({ where: { id: sessionId }, select: { accountId: true, active: true } });
-        if (!session || session.accountId !== input.accountId || !session.active) return { ok: false, reasonCode: 'session_not_active' };
+        session = await tx.session.findUnique({ where: { id: sessionId }, select: {
+            accountId: true, active: true, archivedAt: true, primaryTeamId: true, latestTurnId: true, latestTurnStatus: true,
+        } });
+        if (!session || session.accountId !== input.accountId || !session.active || session.archivedAt !== null) {
+            return { ok: false, reasonCode: 'session_not_active' };
+        }
         if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, accountId: input.accountId,
             machineId: input.initiatorMachineId, sessionId })) return { ok: false, reasonCode: 'resource_forbidden' };
     }
-    return { ok: true, executionRunOccurrenceId: input.consumer.kind === 'execution_run' ? input.executionRun!.occurrenceId : null };
+    return { ok: true, executionRunOccurrenceId: input.consumer.kind === 'execution_run' ? input.executionRun!.occurrenceId : null, session };
 }

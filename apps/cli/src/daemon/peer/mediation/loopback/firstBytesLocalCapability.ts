@@ -138,10 +138,10 @@ export async function startFirstBytesLocalCapabilityProxy(input: Readonly<{
           input.onTargetConnected?.({ localPort: targetAddress.port });
         }
         socket.setNoDelay(true);
-        socket.pipe(target!, { end: false });
-        target!.pipe(socket, { end: false });
-        socket.once('end', () => target?.end());
-        target!.once('end', () => { if (!socket.destroyed) socket.end(); });
+        // Pipe owns half-close propagation, including an EOF already observed
+        // while the outbound application connection was still connecting.
+        socket.pipe(target!);
+        target!.pipe(socket);
         socket.resume();
       });
       socket.once('error', () => { void close(); });

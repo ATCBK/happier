@@ -2886,7 +2886,10 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         pluginId: string;
         contributionQualifiedId: string;
     }>): Promise<boolean>;
-    revalidateManagedProviderExplicitStarts(signal?: AbortSignal): Promise<number>;
+    revalidateManagedProviderExplicitStarts(
+        signal?: AbortSignal,
+        selector?: Parameters<typeof managedProviderExplicitStartOperationEntryKey>[0],
+    ): Promise<number>;
     retireManagedProviderExplicitStarts(
         lifecycleKind: 'publicExplicitStart' | 'providerBroker',
     ): Promise<number>;
@@ -3201,6 +3204,18 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             || entry.occurrenceId !== scope.occurrenceId
         ) return null;
         return entry;
+    };
+    const resolveExplicitStartOperation = (
+        identity: Parameters<typeof managedProviderExplicitStartOperationEntryKey>[0],
+    ): ManagedProviderExplicitStartOperationEntry | null => {
+        const entry = semanticEntries.get(
+            managedProviderExplicitStartOperationEntryKey({
+                operationId: identity.operationId.trim(),
+                pluginId: identity.pluginId.trim(),
+                contributionQualifiedId: identity.contributionQualifiedId.trim(),
+            }),
+        );
+        return entry && !isManagedServiceSemanticEntry(entry) ? entry : null;
     };
     const retireExplicitStartOperation = async (
         entry: ManagedProviderExplicitStartOperationEntry,
@@ -4805,26 +4820,17 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 throw error;
             }
         },
-        async retireManagedProviderExplicitStart({
-            operationId,
-            pluginId,
-            contributionQualifiedId,
-        }) {
-            const entry = semanticEntries.get(
-                managedProviderExplicitStartOperationEntryKey({
-                    operationId: operationId.trim(),
-                    pluginId: pluginId.trim(),
-                    contributionQualifiedId:
-                        contributionQualifiedId.trim(),
-                }),
-            );
-            if (!entry || isManagedServiceSemanticEntry(entry)) return false;
+        async retireManagedProviderExplicitStart(identity) {
+            const entry = resolveExplicitStartOperation(identity);
+            if (!entry) return false;
             await retireExplicitStartOperation(entry);
             return true;
         },
-        async revalidateManagedProviderExplicitStarts(signal) {
+        async revalidateManagedProviderExplicitStarts(signal, selector) {
             signal?.throwIfAborted();
-            const candidates = [...semanticEntries.values()].filter(
+            const selected = selector ? resolveExplicitStartOperation(selector) : null;
+            const entries = selector ? (selected ? [selected] : []) : [...semanticEntries.values()];
+            const candidates = entries.filter(
                 (entry): entry is ManagedProviderExplicitStartOperationEntry => (
                     !isManagedServiceSemanticEntry(entry)
                     && (entry.terminal || entry.revalidateRetainedCurrentness !== null)

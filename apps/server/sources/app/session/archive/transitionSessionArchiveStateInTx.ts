@@ -3,6 +3,7 @@ import { applySessionArchiveTransitionToManagerInTx } from "@/app/session/follow
 import type { Tx } from "@/storage/inTx";
 import { admitSessionLifecycleAutomationRunsTx } from "@/app/automations/automationSessionLifecycleAdmission";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { publishSessionProviderBrokerConsumersChangedInTx } from '@/app/providers/brokerConsumerChanges';
 
 /** The canonical transactional Session archive-state write and its Follow lifecycle. */
 export async function transitionSessionArchiveStateInTx(params: Readonly<{
@@ -36,6 +37,7 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
         sessionId: params.sessionId, wasArchived: params.wasArchived, isArchived: params.archivedAt !== null,
     });
     if (!params.wasArchived && params.archivedAt !== null) {
+        await publishSessionProviderBrokerConsumersChangedInTx(params.tx, params.sessionId);
         await admitSessionLifecycleAutomationRunsTx({
             tx: params.tx,
             accountId: session.accountId,

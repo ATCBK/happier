@@ -123,7 +123,6 @@ export function createAccountConnectionManagedConsumerSourceOpen(input: AccountC
         && pluginJsonValuesEqual(row.application, payload.application)))) return null;
     const isSourceCurrent = async (currentSignal: AbortSignal): Promise<boolean> => {
       currentSignal.throwIfAborted();
-      if (!await input.admitConsumer(payload, currentSignal)) return false;
       const current = await readSource();
       return current !== null && current.securityFingerprint === source.securityFingerprint
         && current.grantFingerprint === source.grantFingerprint && current.purposeBasis === source.purposeBasis
@@ -141,7 +140,10 @@ export function createAccountConnectionManagedConsumerSourceOpen(input: AccountC
     if (!opened) return null;
     return {
       access: opened.projection.access,
-      revalidate: opened.revalidateAuthorization,
+      revalidate: async (currentSignal = signal) => {
+        if (currentSignal.aborted || !await input.admitConsumer(payload, currentSignal)) return false;
+        return await opened.revalidateAuthorization(currentSignal);
+      },
       cleanup: async () => await opened.projection.cleanup(),
       retire: async () => { await opened.retire(); await opened.projection.cleanup(); },
     };

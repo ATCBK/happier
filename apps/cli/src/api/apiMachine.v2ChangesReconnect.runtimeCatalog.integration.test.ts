@@ -1386,10 +1386,13 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const revalidate = vi.fn(async () => {
             throw new Error('managed_provider_revalidation_failed');
         });
-        client.onManagedProviderRetainedCurrentnessInvalidation(revalidate);
+        const withdraw = client.onManagedProviderRetainedCurrentnessInvalidation(revalidate);
+        const sync = () => (client as unknown as {
+            syncChangesOnConnect(options: { reason: 'live' }): Promise<void>;
+        }).syncChangesOnConnect({ reason: 'live' });
 
         try {
-            await expect((client as any).syncChangesOnConnect({ reason: 'live' }))
+            await expect(sync())
                 .rejects.toThrow('managed_provider_revalidation_failed');
 
             expect(revalidate).toHaveBeenCalledWith({
@@ -1398,7 +1401,12 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 directMaterialChanged: true,
             });
             expect(writeAccountChangesCursor).not.toHaveBeenCalled();
+            withdraw();
+            await sync();
+            expect(revalidate).toHaveBeenCalledOnce();
+            expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 1);
         } finally {
+            withdraw();
             clearActiveAccountSettingsSnapshot();
             if (priorSnapshot) setActiveAccountSettingsSnapshot(priorSnapshot);
         }

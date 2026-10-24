@@ -6597,6 +6597,53 @@ describe('managed-services SVC09 owner', () => {
         expect(cleanupByOperation.get('public-start')).toHaveBeenCalledOnce();
     });
 
+    it('retries only the exact terminal claim after selected currentness cleanup fails', async () => {
+        const harness = createLifecycleHarness([], 'daemon');
+        let cleanupBlocked = true;
+        const reads = new Map<string, number>();
+        const cleanup = vi.fn(async () => {
+            if (cleanupBlocked) throw new Error('child still held');
+        });
+        const unrelatedCleanup = vi.fn(async () => undefined);
+        const operation = (operationId: string) => ({
+            operationId,
+            pluginId: 'acme.providers',
+            contributionQualifiedId: 'acme.providers/providers/gateway',
+            occurrenceId: 'provider-p',
+            purposeBindingsEqualityKey: 'binding',
+            lifecycleKind: 'providerBroker' as const,
+            isCurrent: () => true,
+            revalidateRetainedCurrentness: async () => {
+                reads.set(operationId, (reads.get(operationId) ?? 0) + 1);
+                return false;
+            },
+            establish: async () => explicitStartOutcome(
+                operationId === 'selected' ? cleanup : unrelatedCleanup,
+            ),
+        });
+        try {
+            await harness.owner.runManagedProviderExplicitStart(operation('selected'));
+            await harness.owner.runManagedProviderExplicitStart(operation('unrelated'));
+            await expect(harness.owner.revalidateManagedProviderExplicitStarts(
+                undefined, operation('selected'),
+            )).rejects.toThrow();
+            expect(reads).toEqual(new Map([['selected', 1]]));
+            expect(unrelatedCleanup).not.toHaveBeenCalled();
+            expect(harness.owner.readRetainedSemanticCustodyCount()).toBe(2);
+            cleanupBlocked = false;
+            await expect(harness.owner.revalidateManagedProviderExplicitStarts(
+                undefined, operation('selected'),
+            )).resolves.toBe(1);
+            expect(reads).toEqual(new Map([['selected', 1]]));
+            expect(cleanup).toHaveBeenCalledTimes(2);
+            expect(unrelatedCleanup).not.toHaveBeenCalled();
+            expect(harness.owner.readRetainedSemanticCustodyCount()).toBe(1);
+        } finally {
+            cleanupBlocked = false;
+            await harness.owner.dispose();
+        }
+    });
+
     it('reports external operation retirement only after all application custody is actually released', async () => {
         const harness = createLifecycleHarness([], 'daemon');
         const notify = vi.fn(async () => undefined);
