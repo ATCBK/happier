@@ -79,4 +79,16 @@ describe('workspaceFavicon ops', () => {
 
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
     });
+
+    it('shares a refresh after a real source or reachability change without retaining a negative result forever', async () => {
+        const { resolveWorkspaceFavicon } = await import('./workspaceFavicon');
+        const input = { serverId: 'home', machineId: 'baseline', workspacePath: '/repo' };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ success: true, found: false });
+        await expect(resolveWorkspaceFavicon(input)).resolves.toEqual({ status: 'missing' });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ success: true, found: true,
+            relativePath: 'favicon.svg', mimeType: 'image/svg+xml', contentBase64: 'PHN2Zy8+', sizeBytes: 6 });
+        const results = await Promise.all(Array.from({ length: 3 }, () => resolveWorkspaceFavicon({ ...input, refresh: true })));
+        expect(results.map(result => result.status)).toEqual(['found', 'found', 'found']);
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(2);
+    });
 });

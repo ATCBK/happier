@@ -18,9 +18,13 @@ export type ResolveWorkspaceFaviconInput = Readonly<{
     workspacePath: string;
     serverId?: string | null;
     enabled?: boolean;
+    refresh?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
 }>;
+
+export type WorkspaceFaviconSource = Pick<ResolveWorkspaceFaviconInput, 'serverId' | 'machineId' | 'workspacePath'>;
+export type WorkspaceFavicon = Extract<WorkspaceFaviconResult, { status: 'found' }>;
 
 // Keep the existing process-lifetime result cache; only pending work belongs to its readers.
 const faviconCache = new ProbedResourceCache<WorkspaceFaviconResult>({
@@ -32,12 +36,24 @@ export function clearWorkspaceFaviconCacheForTests(): void {
     faviconCache.clear();
 }
 
+/** Observe the existing resource only: observation neither resolves nor retains pending work. */
+export function subscribeWorkspaceFaviconResult(source: WorkspaceFaviconSource | null, listener: () => void): () => void {
+    return source ? faviconCache.subscribe(buildWorkspaceFaviconCacheKey(source), listener) : () => {};
+}
+
+/** Return the stable resource value, not an allocating cache snapshot. Refresh/error means fallback. */
+export function readWorkspaceFaviconResult(source: WorkspaceFaviconSource | null): WorkspaceFavicon | null {
+    const snapshot = source ? faviconCache.read(buildWorkspaceFaviconCacheKey(source)) : null;
+    return snapshot && !snapshot.inflight && !snapshot.error && snapshot.data?.status === 'found'
+        ? snapshot.data : null;
+}
+
 export async function resolveWorkspaceFavicon(input: ResolveWorkspaceFaviconInput): Promise<WorkspaceFaviconResult> {
     if (input.enabled === false) return { status: 'disabled' };
     const cacheKey = buildWorkspaceFaviconCacheKey(input);
     const result = await faviconCache.ensure(cacheKey,
         (signal) => resolveWorkspaceFaviconUncached({ ...input, signal }),
-        { signal: input.signal });
+        { signal: input.signal, force: input.refresh === true });
     if (input.signal?.aborted) {
         throw Object.assign(new Error('Workspace favicon request was aborted'), { name: 'AbortError' });
     }
@@ -72,7 +88,7 @@ async function resolveWorkspaceFaviconUncached(input: ResolveWorkspaceFaviconInp
     };
 }
 
-function buildWorkspaceFaviconCacheKey(input: ResolveWorkspaceFaviconInput): string {
+function buildWorkspaceFaviconCacheKey(input: WorkspaceFaviconSource): string {
     return [
         input.serverId ?? '',
         input.machineId,
