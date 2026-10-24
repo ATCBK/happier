@@ -9646,6 +9646,7 @@ const sessionBoardTranslations = { pl: {
             network: {
                 title: 'Dostęp do sieci',
                 hint: 'Z jakimi witrynami ta wizualizacja może się łączyć z przeglądarki, która ją pokazuje.',
+                reach: 'Może łączyć się z',
                 none: 'Brak',
                 sites: 'Wybrane witryny',
                 open: 'Dowolna witryna',

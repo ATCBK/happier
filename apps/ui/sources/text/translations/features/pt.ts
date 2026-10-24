@@ -9632,6 +9632,7 @@ const sessionBoardTranslations = { pt: {
             network: {
                 title: 'Acesso à rede',
                 hint: 'Que sites este visual pode contactar a partir do navegador que o mostra.',
+                reach: 'Pode contactar',
                 none: 'Nenhum',
                 sites: 'Sites específicos',
                 open: 'Qualquer site',

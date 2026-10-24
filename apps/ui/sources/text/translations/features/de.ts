@@ -9619,6 +9619,7 @@ const sessionBoardTranslations = { de: {
             network: {
                 title: 'Netzwerkzugriff',
                 hint: 'Welche Seiten diese Ansicht im Browser, der sie zeigt, erreichen darf.',
+                reach: 'Darf erreichen',
                 none: 'Keiner',
                 sites: 'Bestimmte Seiten',
                 open: 'Jede Seite',

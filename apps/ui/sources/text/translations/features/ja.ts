@@ -9621,6 +9621,7 @@ const sessionBoardTranslations = { ja: {
             network: {
                 title: 'ネットワークアクセス',
                 hint: 'このビジュアルを表示するブラウザーから接続できるサイトです。',
+                reach: '接続先',
                 none: 'なし',
                 sites: '指定したサイト',
                 open: 'すべてのサイト',

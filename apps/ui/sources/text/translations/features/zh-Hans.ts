@@ -9616,6 +9616,7 @@ const sessionBoardTranslations = { 'zh-Hans': {
             network: {
                 title: '网络访问',
                 hint: '此可视内容可通过显示它的浏览器访问哪些网站。',
+                reach: '可访问',
                 none: '无',
                 sites: '指定网站',
                 open: '任意网站',

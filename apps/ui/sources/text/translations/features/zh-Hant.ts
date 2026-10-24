@@ -9616,6 +9616,7 @@ const sessionBoardTranslations = { 'zh-Hant': {
             network: {
                 title: '網路存取',
                 hint: '此視覺內容可透過顯示它的瀏覽器存取哪些網站。',
+                reach: '可存取',
                 none: '無',
                 sites: '指定網站',
                 open: '任何網站',

@@ -9632,6 +9632,7 @@ const sessionBoardTranslations = { ca: {
             network: {
                 title: 'Accés a la xarxa',
                 hint: 'Quins llocs pot contactar aquest visual des del navegador que el mostra.',
+                reach: 'Pot contactar',
                 none: 'Cap',
                 sites: 'Llocs concrets',
                 open: 'Qualsevol lloc',

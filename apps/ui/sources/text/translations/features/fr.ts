@@ -9633,6 +9633,7 @@ const sessionBoardTranslations = { fr: {
             network: {
                 title: 'Accès réseau',
                 hint: 'Les sites que ce visuel peut contacter depuis le navigateur qui l’affiche.',
+                reach: 'Peut contacter',
                 none: 'Aucun',
                 sites: 'Sites précis',
                 open: 'N’importe quel site',

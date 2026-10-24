@@ -33,7 +33,7 @@ describe('buildSessionBoardItemActions', () => {
         const onEditNetwork = vi.fn();
         const withHandler = buildSessionBoardItemActions({ density: 'full', canEdit: true, item, onEditNetwork });
         expect(withHandler.find(action => action.id === 'network')).toMatchObject({ group: { id: 'content' } });
-        withHandler.find(action => action.id === 'network')?.onPress();
+        withHandler.find(action => action.id === 'network')?.onPress?.();
         expect(onEditNetwork).toHaveBeenCalledOnce();
         expect(buildSessionBoardItemActions({ density: 'full', canEdit: true, item }).some(action => action.id === 'network')).toBe(false);
         expect(buildSessionBoardItemActions({ density: 'full', canEdit: false, item, onEditNetwork }).some(action => action.id === 'network')).toBe(false);
