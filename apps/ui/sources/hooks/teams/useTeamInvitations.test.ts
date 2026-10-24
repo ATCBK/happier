@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook, teamInvitationRowFixture } from '@/dev/testkit';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -13,6 +14,26 @@ beforeEach(async () => {
 });
 
 describe('useTeamInvitations', () => {
+    it('withdraws an obsolete Ask-first invitation read when its filter is replaced', async () => {
+        const serverId = await harness.addHome({ name: 'Invitations', serverUrl: 'https://invitation-demand.example.test', accountId: 'account-a', teamsEnabled: true });
+        const path = '/v1/teams/invitations/list';
+        await harness.requireUiApproval(serverId, 'teams.invitations.list');
+        harness.answer(serverId, path, { body: { items: [], nextCursor: null, emailDelivery: 'available', linkDelivery: 'available' } });
+        const rendered = await renderHook((props: Readonly<{ state: 'active' | 'revoked' }>) => useTeamInvitations({
+            scope: { serverId, accountId: 'account-a' }, address: { serverId, teamId: 'team-1' }, state: props.state, enabled: true,
+        }), { initialProps: { state: 'active' } });
+        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list().length).toBe(1));
+        const obsolete = harness.artifacts(serverId).list()[0]!;
+        await rendered.rerender({ state: 'revoked' });
+        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list().length).toBe(2));
+        await act(async () => { await decideApprovalAsInbox(serverId, obsolete.id, 'approve'); });
+        expect(harness.requestsFor(path)).toHaveLength(0);
+        await act(async () => { await decideApprovalAsInbox(serverId, harness.artifacts(serverId).list()[1]!.id, 'approve'); });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().status).toBe('ready'));
+        expect(harness.requestsFor(path).map(request => request.input)).toEqual([expect.objectContaining({ state: 'revoked' })]);
+        await rendered.unmount();
+    });
+
     it('retains 400 admitted invitation identities across a full reread while independently merging delivery changes', async () => {
         const serverId = await harness.addHome({ name: 'Invitations', serverUrl: 'https://invitation-admission.example.test', accountId: 'account-a', teamsEnabled: true });
         const path = '/v1/teams/invitations/list';

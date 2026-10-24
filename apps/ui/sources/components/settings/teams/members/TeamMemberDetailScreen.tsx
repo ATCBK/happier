@@ -257,6 +257,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
     /** The Home's own refusal, kept until the next attempt clears it. */
     const [notice, setNotice] = React.useState<string | null>(null);
     const generation = React.useRef(0);
+    const readRequest = React.useRef<AbortController | null>(null);
 
     const serverId = context.scope.serverId;
     const accountId = context.scope.accountId;
@@ -271,13 +272,20 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
 
     const reload = React.useCallback(() => {
         const currentGeneration = (generation.current += 1);
+        readRequest.current?.abort();
+        const controller = new AbortController();
+        readRequest.current = controller;
         void (async () => {
             const outcome = await getTeamMember({
                 scope: { serverId, accountId },
                 address: { serverId, teamId },
                 membershipId,
+                signal: controller.signal,
+            }).catch(error => {
+                if (controller.signal.aborted) return null;
+                throw error;
             });
-            if (currentGeneration !== generation.current) return;
+            if (!outcome || currentGeneration !== generation.current) return;
             if (outcome.kind === 'succeeded') {
                 setReadFailure(null);
                 setLoad(Object.freeze({ kind: 'ready' as const, membership: outcome.value }));
@@ -298,6 +306,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
         reload();
         return () => {
             generation.current += 1;
+            readRequest.current?.abort();
         };
     }, [reload]);
 

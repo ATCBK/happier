@@ -188,6 +188,13 @@ export function useSessionAccessDirectory(input: Readonly<{
     const firstTeamPageRequest = React.useRef<Promise<Readonly<{ rows: readonly SessionAccessCandidateRowModel[]; teamContexts?: readonly SessionAccessDirectoryTeamContext[]; nextCursor: string | null }>> | null>(null);
     const contextTeamsRef = React.useRef(contextTeams);
     contextTeamsRef.current = contextTeams;
+    const directoryLifetime = React.useMemo(() => ({ controller: new AbortController() }), [scopeKey, enabled]);
+
+    React.useEffect(() => {
+        if (directoryLifetime.controller.signal.aborted) directoryLifetime.controller = new AbortController();
+        const controller = directoryLifetime.controller;
+        return () => controller.abort();
+    }, [directoryLifetime]);
 
     React.useEffect(() => {
         firstTeamPageRequest.current = null;
@@ -247,6 +254,7 @@ export function useSessionAccessDirectory(input: Readonly<{
         const outcome = await runTeamAction({
             scope,
             actionId: 'teams.list',
+            signal: directoryLifetime.controller.signal,
             input: { v: 1, scope: 'member', archived: 'active', ...(cursor ? { cursor } : {}) },
             parse: (value): TeamsPageV1 => TeamsPageV1Schema.parse(value),
         });
@@ -264,7 +272,7 @@ export function useSessionAccessDirectory(input: Readonly<{
             })),
             nextCursor: outcome.value.nextCursor,
         };
-    }, [scope]);
+    }, [scope, directoryLifetime]);
 
     const loadFirstTeamPage = React.useCallback(() => {
         const acknowledged = pagesRef.current.team;
@@ -285,6 +293,7 @@ export function useSessionAccessDirectory(input: Readonly<{
         const cursor = source.initialized ? source.nextCursor : null;
         const outcome = await listTeamGroups({
             scope,
+            signal: directoryLifetime.controller.signal,
             address: { serverId: scope.serverId, teamId: source.team.teamId },
             archived: 'active',
             ...(cursor ? { cursor } : {}),
@@ -305,7 +314,7 @@ export function useSessionAccessDirectory(input: Readonly<{
             initialized: true,
             failed: false,
         };
-    }, [scope]);
+    }, [scope, directoryLifetime]);
 
     const advanceGroups = React.useCallback((mode: 'initial' | 'more' | 'retry'): Promise<GroupDirectoryPage> => {
         if (groupRequest.current) return groupRequest.current;

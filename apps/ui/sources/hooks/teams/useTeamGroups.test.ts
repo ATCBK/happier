@@ -1,48 +1,39 @@
 import { act } from 'react-test-renderer';
 import { projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
-import { createSessionFixture } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storage';
-import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
-import { useSessionAudienceContext } from './useSessionAudienceContext';
+import { createSessionFixture, standardCleanup } from '@/dev/testkit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_TEAM_GROUP_CAPABILITIES_V1, type TeamGroupV1 } from '@happier-dev/protocol/teams';
 
-const runtimeFetchMock = vi.hoisted(() => vi.fn());
-const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal: importOriginal as <T = typeof import('@/auth/storage/tokenStorage')>() => Promise<T>,
-        tokenStorage: { getCredentialsForServerUrl: getCredentialsForServerUrlMock },
-    });
-});
-
 import { renderHook } from '@/dev/testkit';
-import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { createTeamAddress } from '@/sync/domains/teams/teamAddress';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
-import {
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const runtimeFetchMock = vi.fn<(request: { url: string; init: RequestInit | undefined }) => Promise<Response>>();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sessionAddressKey } = await import('@/sync/domains/session/sessionAddress');
+const { useSessionAudienceContext } = await import('./useSessionAudienceContext');
+const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+const { createTeamAddress } = await import('@/sync/domains/teams/teamAddress');
+const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const {
     applyTeamGroupProjection,
     clearTeamsSnapshotsForServer,
     readTeamGroup,
     readTeamGroups,
     resetTeamsSnapshotsForTests,
-} from '@/sync/store/teams/teamsSnapshots';
+} = await import('@/sync/store/teams/teamsSnapshots');
 
-import { useTeamGroups } from './useTeamGroups';
+const { useTeamGroups } = await import('./useTeamGroups');
 
-function tokenForSub(sub: string): string {
-    const payload = globalThis.btoa(JSON.stringify({ sub }))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    return `e30.${payload}.signature`;
+async function addHome(serverUrl: string, name: string, accountId = 'account'): Promise<string> {
+    const serverId = await home.addHome({ serverUrl, name, accountId, teamsEnabled: true });
+    home.answer(serverId, '/v1/teams/groups/list', { select: async (_input, request) => {
+        const response = await runtimeFetchMock(request);
+        return { status: response.status, body: await response.json() };
+    } });
+    return serverId;
 }
 
 function group(id: string, name = `Group ${id}`): TeamGroupV1 {
@@ -63,23 +54,24 @@ function page(items: TeamGroupV1[], nextCursor: string | null): Response {
     return new Response(JSON.stringify({ items, nextCursor }), { status: 200 });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+    await home.reset();
     runtimeFetchMock.mockReset();
-    getCredentialsForServerUrlMock.mockReset();
-    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    standardCleanup();
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
     vi.clearAllMocks();
+    await home.reset();
 });
 
 describe('useTeamGroups', () => {
     it('reads its rows from the shared Teams snapshot owner rather than its own pages', async () => {
-        const serverId = (await upsertServerProfile({ serverUrl: 'https://home-a.example', name: 'A' })).id;
+        const serverId = await addHome('https://home-a.example', 'A');
         await setActiveServerId(serverId, { scope: 'device' });
         const scope = createServerAccountScope(serverId, 'account')!;
         const address = createTeamAddress(serverId, 'team-1')!;
@@ -92,7 +84,7 @@ describe('useTeamGroups', () => {
             enabled: true,
         }));
 
-        await vi.waitFor(() => expect(harness.getCurrent().status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(harness.getCurrent().status).toBe('ready'));
         expect(harness.getCurrent().rows.map((row) => row.name)).toEqual(['Platform']);
 
         // The same rows are readable synchronously, without this hook, by a
@@ -107,7 +99,7 @@ describe('useTeamGroups', () => {
     });
 
     it('keeps rows visible after its own surface unmounts and loses them with the credential', async () => {
-        const serverId = (await upsertServerProfile({ serverUrl: 'https://home-b.example', name: 'B' })).id;
+        const serverId = await addHome('https://home-b.example', 'B');
         await setActiveServerId(serverId, { scope: 'device' });
         const scope = createServerAccountScope(serverId, 'account')!;
         const address = createTeamAddress(serverId, 'team-1')!;
@@ -119,7 +111,7 @@ describe('useTeamGroups', () => {
             archived: 'active',
             enabled: true,
         }));
-        await vi.waitFor(() => expect(harness.getCurrent().rows).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(harness.getCurrent().rows).toHaveLength(1));
         await harness.unmount();
 
         // The projection outlives the surface, which is the point: another
@@ -131,7 +123,7 @@ describe('useTeamGroups', () => {
     });
 
     it('reports no rows and performs no read while disabled', async () => {
-        const serverId = (await upsertServerProfile({ serverUrl: 'https://home-c.example', name: 'C' })).id;
+        const serverId = await addHome('https://home-c.example', 'C');
         await setActiveServerId(serverId, { scope: 'device' });
         const scope = createServerAccountScope(serverId, 'account')!;
         const address = createTeamAddress(serverId, 'team-1')!;
@@ -153,7 +145,7 @@ describe('useTeamGroups', () => {
 
 describe('Session audience surface binding', () => {
     it('encodes a large audience membership once per address, rather than inside sort comparisons', async () => {
-        const serverId = (await upsertServerProfile({ serverUrl: 'https://audience-key-cost.example', name: 'Key cost' })).id;
+        const serverId = await addHome('https://audience-key-cost.example', 'Key cost');
         runtimeFetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
         const addresses = Array.from({ length: 2_000 }, (_, index) => ({ serverId, sessionId: `sort-session-${(index * 997) % 2_000}` }));
         let membership = addresses;
@@ -186,7 +178,7 @@ describe('Session audience surface binding', () => {
         }
     });
     it('does not join list labels or rescan audiences for unrelated store updates', async () => {
-        const serverId = (await upsertServerProfile({ serverUrl: 'https://audience-perf.example', name: 'Performance' })).id;
+        const serverId = await addHome('https://audience-perf.example', 'Performance');
         runtimeFetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
         const addresses = Array.from({ length: 200 }, (_, index) => ({ serverId, sessionId: `session-${index}` }));
         let rowReads = 0;
@@ -202,7 +194,7 @@ describe('Session audience surface binding', () => {
         storage.setState({ sessionListRowsByServerId: { [serverId]: rows }, sessionListIndexByServerId: { [serverId]: measuredIndex } });
         const hook = await renderHook(() => useSessionAudienceContext(addresses));
         try {
-            await vi.waitFor(() => expect(hook.getCurrent().credentialBindingsByServerId.size).toBe(1));
+            await waitForHomeGovernance(() => expect(hook.getCurrent().credentialBindingsByServerId.size).toBe(1));
             const before = hook.getCurrent();
             rowReads = 0;
             indexScans = 0;
@@ -226,11 +218,8 @@ describe('Session audience surface binding', () => {
         }
     });
     it('keeps same-ID Home labels separate and observes shared-cache renames without a card subscription', async () => {
-        const homeA = (await upsertServerProfile({ serverUrl: 'https://audience-a.example', name: 'A' })).id;
-        const homeB = (await upsertServerProfile({ serverUrl: 'https://audience-b.example', name: 'B' })).id;
-        getCredentialsForServerUrlMock.mockImplementation(async (url: string) => ({
-            token: tokenForSub(url.includes('audience-b') ? 'viewer-b' : 'viewer-a'),
-        }));
+        const homeA = await addHome('https://audience-a.example', 'A', 'viewer-a');
+        const homeB = await addHome('https://audience-b.example', 'B', 'viewer-b');
         runtimeFetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
         const addresses = [homeA, homeB].map((serverId) => ({ serverId, sessionId: 'same-session' }));
         const scopes = [
@@ -251,7 +240,7 @@ describe('Session audience surface binding', () => {
         }
         const hook = await renderHook(() => useSessionAudienceContext(addresses));
         try {
-            await vi.waitFor(() => {
+            await waitForHomeGovernance(() => {
                 expect(hook.getCurrent().labelsBySessionKey.get(sessionAddressKey(addresses[0]))).toBe('A group');
                 expect(hook.getCurrent().labelsBySessionKey.get(sessionAddressKey(addresses[1]))).toBe('B group');
             });

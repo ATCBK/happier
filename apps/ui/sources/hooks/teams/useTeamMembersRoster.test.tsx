@@ -5,6 +5,7 @@ import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions
 
 import { createDeferred, renderHook, standardCleanup, teamMembershipFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -41,6 +42,40 @@ async function setupRoster() {
 }
 
 describe('Team member roster demand', () => {
+    it('releases an obsolete Ask-first read so reobservation needs only its own approval', async () => {
+        const { serverId, scope, address, path, rows, input } = await setupRoster();
+        await home.requireUiApproval(serverId, 'teams.members.list');
+        home.answer(serverId, path, { body: { items: rows, nextCursor: null } });
+        const first = await renderHook(() => useTeamMembersRoster(input));
+        await waitForHomeGovernance(() => expect(home.artifacts(serverId).list().length).toBe(1));
+        expect(home.requestsFor(path)).toHaveLength(0);
+        await first.unmount();
+        const second = await renderHook(() => useTeamMembersRoster(input));
+        await waitForHomeGovernance(() => expect(home.artifacts(serverId).list().length).toBe(2));
+        expect(home.requestsFor(path)).toHaveLength(0);
+        const current = home.artifacts(serverId).list()[1]!;
+        await act(async () => { await decideApprovalAsInbox(serverId, current.id, 'approve'); });
+        await waitForHomeGovernance(() => expect(second.getCurrent().rows).toEqual(rows));
+        expect(getTeamMembersSnapshot(scope, address, teamMembersQueryKey('all'))?.stale).toBe(false);
+        expect(home.requestsFor(path)).toHaveLength(1);
+        await second.unmount();
+    });
+
+    it('keeps a shared Ask-first read alive until its last observer leaves', async () => {
+        const { serverId, path, rows, input } = await setupRoster();
+        await home.requireUiApproval(serverId, 'teams.members.list');
+        home.answer(serverId, path, { body: { items: rows, nextCursor: null } });
+        const first = await renderHook(() => useTeamMembersRoster(input));
+        const second = await renderHook(() => useTeamMembersRoster(input));
+        await waitForHomeGovernance(() => expect(home.artifacts(serverId).list().length).toBe(1));
+        await first.unmount();
+        await act(async () => { await decideApprovalAsInbox(serverId, home.artifacts(serverId).list()[0]!.id, 'approve'); });
+        await waitForHomeGovernance(() => expect(second.getCurrent().rows).toEqual(rows));
+        expect(home.requestsFor(path)).toHaveLength(1);
+        expect(home.artifacts(serverId).list().length).toBe(1);
+        await second.unmount();
+    });
+
     it.each(['last observer leaves', 'query changes'] as const)('stops an abandoned multi-page refresh when the %s', async retirement => {
         const { serverId, scope, address, path, input } = await setupRoster();
         const rows = Array.from({ length: 150 }, (_, index) => teamMembershipFixture({ id: `member-${index}`, accountId: `account-${index}` }));

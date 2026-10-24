@@ -33,11 +33,12 @@ export function useTeamMemberGroups(params: Readonly<{
     const { membershipId } = params;
 
     const loadPage = React.useCallback(
-        (cursor: string | null) => listTeamMemberGroups({
+        (cursor: string | null, signal: AbortSignal) => listTeamMemberGroups({
             scope: { serverId, accountId },
             address: { serverId, teamId },
             membershipId,
             cursor,
+            signal,
         }),
         [serverId, accountId, teamId, membershipId],
     );

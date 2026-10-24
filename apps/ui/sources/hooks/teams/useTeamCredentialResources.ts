@@ -268,11 +268,12 @@ export function useTeamCredentialActivity(params: Readonly<{
     const { resourceId } = params;
 
     const loadPage = React.useCallback(
-        async (cursor: string | null) => {
+        async (cursor: string | null, signal: AbortSignal) => {
             const outcome = await listTeamCredentialActivity({
                 scope: { serverId, accountId },
                 resourceId,
                 cursor,
+                signal,
             });
             return outcome.kind === 'succeeded'
                 ? Object.freeze({
@@ -328,6 +329,7 @@ export function useTeamCredentialSourceCandidates(params: Readonly<{
     providerSourceOffers?: readonly TeamCredentialProviderSourceOfferV1[];
 }>): TeamCredentialSourceCandidatesProjection {
     const requestEpoch = React.useRef(0);
+    const request = React.useRef<AbortController | null>(null);
     const [state, setState] = React.useState<Readonly<{
         candidates: readonly TeamCredentialSourceCandidateV1[];
         supportedKinds: readonly TeamCredentialSourceCandidateV1['source']['kind'][];
@@ -341,9 +343,15 @@ export function useTeamCredentialSourceCandidates(params: Readonly<{
     const load = React.useCallback(async () => {
         if (!active || !scope || !address) return;
         const epoch = ++requestEpoch.current;
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
         setState((previous) => ({ ...previous, status: 'loading', error: null }));
-        const outcome = await listTeamCredentialSourceCandidates({ scope, address });
-        if (epoch !== requestEpoch.current) return;
+        const outcome = await listTeamCredentialSourceCandidates({ scope, address, signal: controller.signal }).catch(error => {
+            if (controller.signal.aborted) return null;
+            throw error;
+        });
+        if (!outcome || epoch !== requestEpoch.current) return;
         if (outcome.kind === 'succeeded') {
             setState({
                 candidates: outcome.value.candidates,
@@ -361,7 +369,7 @@ export function useTeamCredentialSourceCandidates(params: Readonly<{
 
     React.useEffect(() => {
         void load();
-        return () => { requestEpoch.current += 1; };
+        return () => { requestEpoch.current += 1; request.current?.abort(); };
     }, [load]);
 
     return React.useMemo(() => Object.freeze({
@@ -397,6 +405,7 @@ export function useTeamCredentialRequestPolicySupport(params: Readonly<{
     enabled: boolean;
 }>): TeamCredentialRequestPolicySupportProjection {
     const requestEpoch = React.useRef(0);
+    const request = React.useRef<AbortController | null>(null);
     const [state, setState] = React.useState<Omit<TeamCredentialRequestPolicySupportProjection, 'reload'>>({
         result: null,
         status: 'loading',
@@ -411,16 +420,22 @@ export function useTeamCredentialRequestPolicySupport(params: Readonly<{
         const input = inputRef.current;
         if (!active || !scope || !input) return;
         const epoch = ++requestEpoch.current;
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
         setState((previous) => ({ ...previous, status: 'loading', error: null }));
-        const outcome = await getTeamCredentialRequestPolicySupport({ scope, input });
-        if (epoch !== requestEpoch.current) return;
+        const outcome = await getTeamCredentialRequestPolicySupport({ scope, input, signal: controller.signal }).catch(error => {
+            if (controller.signal.aborted) return null;
+            throw error;
+        });
+        if (!outcome || epoch !== requestEpoch.current) return;
         setState(outcome.kind === 'succeeded'
             ? { result: outcome.value, status: 'ready', error: null }
             : { result: null, status: 'error', error: outcome.failure });
     }, [active, inputKey, scope]);
     React.useEffect(() => {
         void load();
-        return () => { requestEpoch.current += 1; };
+        return () => { requestEpoch.current += 1; request.current?.abort(); };
     }, [load]);
     return React.useMemo(() => ({ ...state, reload: load }), [load, state]);
 }
@@ -433,6 +448,7 @@ export function useTeamCredentialUsageLimits(params: Readonly<{
     enabled: boolean;
 }>): TeamCredentialLimitsProjection {
     const requestEpoch = React.useRef(0);
+    const request = React.useRef<AbortController | null>(null);
     const [state, setState] = React.useState<Readonly<{
         rows: readonly TeamCredentialUsageLimitV1[];
         status: TeamCredentialLimitsProjection['status'];
@@ -443,9 +459,15 @@ export function useTeamCredentialUsageLimits(params: Readonly<{
     const load = React.useCallback(async () => {
         if (!active || !scope) return;
         const epoch = ++requestEpoch.current;
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
         setState((previous) => ({ ...previous, status: 'loading', error: null }));
-        const outcome = await listTeamCredentialUsageLimits({ scope, resourceId: params.resourceId });
-        if (epoch !== requestEpoch.current) return;
+        const outcome = await listTeamCredentialUsageLimits({ scope, resourceId: params.resourceId, signal: controller.signal }).catch(error => {
+            if (controller.signal.aborted) return null;
+            throw error;
+        });
+        if (!outcome || epoch !== requestEpoch.current) return;
         if (outcome.kind === 'succeeded') {
             setState({ rows: outcome.value.limits, status: 'ready', error: null });
         } else {
@@ -454,7 +476,7 @@ export function useTeamCredentialUsageLimits(params: Readonly<{
     }, [active, params.resourceId, params.resourceRevision, scope]);
     React.useEffect(() => {
         void load();
-        return () => { requestEpoch.current += 1; };
+        return () => { requestEpoch.current += 1; request.current?.abort(); };
     }, [load]);
     return React.useMemo(() => Object.freeze({ ...state, reload: load }), [load, state]);
 }
@@ -489,6 +511,7 @@ export function useTeamCredentialUsage(params: Readonly<{
     enabled: boolean;
 }>): TeamCredentialUsageProjection {
     const requestEpoch = React.useRef(0);
+    const request = React.useRef<AbortController | null>(null);
     const [state, setState] = React.useState<Readonly<{
         key: string;
         continuityKey: string;
@@ -525,6 +548,9 @@ export function useTeamCredentialUsage(params: Readonly<{
         const cursor = continuing ? current.nextCursor : null;
         if (mode === 'more' && (cursor === null || current.loadingMore)) return;
         const epoch = ++requestEpoch.current;
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
         setState((previous) => continuing
             ? { ...previous, loadingMore: true, error: null }
             : {
@@ -541,8 +567,12 @@ export function useTeamCredentialUsage(params: Readonly<{
         const outcome = await queryTeamCredentialUsage({
             scope,
             input: cursor === null ? input : { ...input, cursor },
+            signal: controller.signal,
+        }).catch(error => {
+            if (controller.signal.aborted) return null;
+            throw error;
         });
-        if (epoch !== requestEpoch.current) return;
+        if (!outcome || epoch !== requestEpoch.current) return;
         if (outcome.kind === 'succeeded') {
             setState((previous) => ({
                 key,
@@ -571,7 +601,7 @@ export function useTeamCredentialUsage(params: Readonly<{
     }, [active, continuityKey, input, key, scope]);
     React.useEffect(() => {
         void load('reload');
-        return () => { requestEpoch.current += 1; };
+        return () => { requestEpoch.current += 1; request.current?.abort(); };
     }, [load]);
     const reload = React.useCallback(() => load('reload'), [load]);
     const loadMore = React.useCallback(() => load('more'), [load]);

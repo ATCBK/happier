@@ -231,9 +231,11 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
         if (acceptedTarget.current.key !== requestedTargetKey) return;
         if (listingTargetKey.current === requestedTargetKey) return;
         listingTargetKey.current = requestedTargetKey;
+        const signal = actionLifetime.current?.signal;
         setListing(true);
         try {
-            const outcome = await listTeamCredentialExternalApiKeys({ scope: context.scope, resourceId });
+            const outcome = await listTeamCredentialExternalApiKeys({ scope: context.scope, resourceId,
+                signal });
             if (currentTargetKey.current !== requestedTargetKey) return;
             setResolved(true);
             if (outcome.kind === 'succeeded') {
@@ -244,6 +246,8 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
                 setListError(true);
                 setNotice(t('teams.credentials.externalApi.keysLoadFailed'));
             }
+        } catch (error) {
+            if (!signal?.aborted) throw error;
         } finally {
             if (listingTargetKey.current === requestedTargetKey) listingTargetKey.current = null;
             if (currentTargetKey.current === requestedTargetKey) setListing(false);

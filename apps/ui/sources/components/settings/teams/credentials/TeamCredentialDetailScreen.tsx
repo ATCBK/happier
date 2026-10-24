@@ -460,6 +460,7 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                     scope: context.scope,
                                     teamId: context.address.teamId,
                                     resourceId,
+                                    signal: actionLifetime.current?.signal,
                                 });
                                 if (currentTargetKey.current !== requestedTargetKey) return;
                                 if (outcome.kind === 'failed') {

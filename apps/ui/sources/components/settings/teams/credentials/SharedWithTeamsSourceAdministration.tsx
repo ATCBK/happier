@@ -102,14 +102,21 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     // The ref also withdraws admission before React commits the disabled controls.
     const rowsCurrentRef = React.useRef(false);
     const generation = React.useRef(0);
+    const readRequest = React.useRef<AbortController | null>(null);
     const actionLifetime = React.useRef<AbortController | null>(null);
 
     const reload = React.useCallback(async () => {
         const requestGeneration = ++generation.current;
+        readRequest.current?.abort();
+        const controller = new AbortController();
+        readRequest.current = controller;
         rowsCurrentRef.current = false;
         setRowsCurrent(false);
-        const outcome = await listTeamCredentialSourceResources({ scope, source });
-        if (generation.current !== requestGeneration) return;
+        const outcome = await listTeamCredentialSourceResources({ scope, source, signal: controller.signal }).catch(error => {
+            if (controller.signal.aborted) return null;
+            throw error;
+        });
+        if (!outcome || generation.current !== requestGeneration) return;
         if (outcome.kind === 'succeeded') {
             setRows(outcome.value.resources);
             setNextCursor(readSourceResourceNextCursor(outcome.value));
@@ -123,9 +130,11 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     const loadMore = React.useCallback(async () => {
         if (!nextCursor || !rowsCurrentRef.current) return;
         const requestGeneration = generation.current;
+        const signal = readRequest.current?.signal;
         setLoadingMore(true);
         try {
-            const outcome = await listTeamCredentialSourceResources({ scope, source, cursor: nextCursor });
+            const outcome = await listTeamCredentialSourceResources({ scope, source, cursor: nextCursor,
+                signal });
             if (generation.current !== requestGeneration) return;
             if (outcome.kind === 'succeeded') {
                 setRows((current) => [...(current ?? []), ...outcome.value.resources.filter(
@@ -133,6 +142,8 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 )]);
                 setNextCursor(readSourceResourceNextCursor(outcome.value));
             } else setError(credentialFailureMessage(outcome.failure));
+        } catch (error) {
+            if (!signal?.aborted) throw error;
         } finally { setLoadingMore(false); }
     }, [nextCursor, scope, source]);
     const approval = useActionApprovalContinuation({
@@ -150,6 +161,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         void reload();
         return () => {
             controller.abort();
+            readRequest.current?.abort();
             generation.current += 1;
             rowsCurrentRef.current = false;
         };

@@ -148,6 +148,8 @@ export function useTeamPagedList<TRow>(params: Readonly<{
                 cursor: outcome.value.nextCursor,
                 hasMore: outcome.value.nextCursor !== null,
             });
+        } catch (error) {
+            if (!controller.signal.aborted) throw error;
         } finally {
             if (currentGeneration === generation.current) inFlight.current = false;
         }

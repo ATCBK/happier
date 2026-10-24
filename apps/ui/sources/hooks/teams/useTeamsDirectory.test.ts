@@ -4,17 +4,7 @@ import { NO_TEAM_CAPABILITIES_V1, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, Te
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/http/client')>(),
-    serverFetch: serverFetchMock,
-}));
-
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
 
 // `@/auth/storage/tokenStorage` is an internal domain owner, not a boundary, and a hoisted
 // `vi.mock` factory for it deadlocks any suite that also imports `@/dev/testkit`: the barrel
@@ -25,21 +15,18 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
 // credential store is spied on instead, which is the one thing here that genuinely leaves the
 // process.
 
-import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readAccountAgentProviderRequirements, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createDeferred, createRenderCommitCounter, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook, renderScreen, useRenderCommitCounter } from '@/dev/testkit';
+import { createDeferred, createRenderCommitCounter, homeGovernanceProjectionFixture, renderHook, renderScreen, useRenderCommitCounter } from '@/dev/testkit';
 import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
-    primeServerFeaturesSnapshot,
     resetServerFeaturesClientForTests,
 } from '@/sync/api/capabilities/serverFeaturesClient';
-import { resolveServerProfileScopeIdForIdentifier, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveServerProfileScopeIdForIdentifier, setActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
@@ -55,13 +42,7 @@ import { useTeamsDirectory } from './useTeamsDirectory';
 import { useHomeTeamCredentialModelCatalog } from './useHomeTeamCredentialModelCatalog';
 import { useTeamsDestinationShown } from './useTeamsDestinationShown';
 
-function tokenForSub(sub: string): string {
-    const payload = globalThis.btoa(JSON.stringify({ sub }))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    return `e30.${payload}.signature`;
-}
+const directoryHome = createHomeGovernanceHarness();
 
 function team(id: string, name = `Team ${id}`, archivedAt: number | null = null): TeamSummaryV1 {
     return {
@@ -87,17 +68,8 @@ function team(id: string, name = `Team ${id}`, archivedAt: number | null = null)
 }
 
 async function addHome(name: string, serverUrl: string, teamsEnabled: boolean): Promise<string> {
-    const id = (await upsertServerProfile({ serverUrl, name })).id;
-    // The real Home payload, with only the canonical `teams` bit varied through
-    // its own writer: the enabled-bit path is the feature owner's, not this
-    // test's, so a moved bit fails here instead of silently reading as absent.
-    const features = createRootLayoutFeaturesResponse();
-    // The shared Home fixture predates this feature, so its container is seeded
-    // here; the bit's location stays owned by the protocol writer, so a moved
-    // enabled-bit path fails this test instead of reading as a silent absence.
-    (features.features as Record<string, unknown>).teams = { enabled: false };
-    expect(tryWriteServerEnabledBitInPlace(features, 'teams', teamsEnabled)).toBe(true);
-    primeServerFeaturesSnapshot({ serverId: id, snapshot: { status: 'ready', features } });
+    const id = await directoryHome.addHome({ name, serverUrl, teamsEnabled,
+        accountId: 'account', currentAccount: true, credentialResourcesEnabled: true });
     await updateEffectiveHomeViewState((current) => ({
         ...current, activeTargetKind: 'server', activeTargetId: id,
     }), { scope: 'device' });
@@ -106,22 +78,34 @@ async function addHome(name: string, serverUrl: string, teamsEnabled: boolean): 
 
 let getCredentialsForServerUrlMock: MockInstance<typeof TokenStorage.getCredentialsForServerUrl>;
 
-beforeEach(() => {
-    serverFetchMock.mockReset();
+beforeEach(async () => {
+    await directoryHome.reset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
-    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
+    getCredentialsForServerUrlMock.mockImplementation(async url => {
+        const token = directoryHome.findByServerUrl(url)?.token;
+        return token ? { token } : null;
+    });
+    // Only the Team directory HTTP leaf is varied by these cases. The real
+    // Action owner also reads Account settings/currentness before dispatch.
+    setRuntimeFetch((input, init) => {
+        const url = String(input);
+        return new URL(url).pathname === '/v1/teams/list'
+            ? runtimeFetchMock({ url, init }) : directoryHome.request(input, init);
+    });
     resetServerFeaturesClientForTests();
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
     resetServerFeaturesClientForTests();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    resetRuntimeFetch();
+    await directoryHome.reset();
 });
 
 describe('useTeamsDirectory', () => {
@@ -137,7 +121,7 @@ describe('useTeamsDirectory', () => {
             useRenderCommitCounter(counter);
             return useTeamsDirectory();
         });
-        await vi.waitFor(() => expect(rendered.getCurrent().rows).toHaveLength(400));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().rows).toHaveLength(400));
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'account' };
         const queryKey = teamDirectoryQueryKeyV1({ v: 1, scope: 'member', archived: 'active' });
         const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
@@ -177,14 +161,14 @@ describe('useTeamsDirectory', () => {
         });
         const rendered = await renderHook(() => useTeamsDirectory({ archived: 'all' }));
         try {
-            await vi.waitFor(() => {
+            await waitForHomeGovernance(() => {
                 expect(rendered.getCurrent().rows.map((row) => row.team.name)).toEqual(['active-1']);
                 expect(rendered.getCurrent().archivedRows.map((row) => row.team.name)).toEqual(['archived-1']);
             });
             expect(rendered.getCurrent().partial).toBe(false);
             expect(rendered.getCurrent().hasMore).toBe(true);
             await act(async () => { rendered.getCurrent().loadMore(); });
-            await vi.waitFor(() => {
+            await waitForHomeGovernance(() => {
                 expect(rendered.getCurrent().rows.map((row) => row.team.name)).toEqual(['active-1', 'active-2']);
                 expect(rendered.getCurrent().archivedRows.map((row) => row.team.name)).toEqual(['archived-1', 'archived-2']);
                 expect(rendered.getCurrent().hasMore).toBe(false);
@@ -218,20 +202,20 @@ describe('useTeamsDirectory', () => {
         });
         const rendered = await renderHook(() => useTeamsDirectory({ archived: 'all' }));
         try {
-            await vi.waitFor(() => expect(rendered.getCurrent().rows).toHaveLength(1));
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().rows).toHaveLength(1));
             expect(rendered.getCurrent().kind).toBe('ready');
             expect(rendered.getCurrent().partial).toBe(true);
             expect(rendered.getCurrent().unavailableHomes).toEqual([
                 expect.objectContaining({ serverId: home, reason: 'loading' }),
             ]);
             await act(async () => { archivedPage.reject(new Error('network down')); });
-            await vi.waitFor(() => expect(rendered.getCurrent().unavailableHomes).toEqual([
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().unavailableHomes).toEqual([
                 expect.objectContaining({ serverId: home, reason: 'offline', retryable: true }),
             ]));
             expect(rendered.getCurrent().rows).toHaveLength(1);
             retrying = true;
             await act(async () => { rendered.getCurrent().refresh(); });
-            await vi.waitFor(() => {
+            await waitForHomeGovernance(() => {
                 expect(rendered.getCurrent().archivedRows).toHaveLength(1);
                 expect(rendered.getCurrent().partial).toBe(false);
                 expect(rendered.getCurrent().unavailableHomes).toEqual([]);
@@ -272,7 +256,6 @@ describe('useTeamsDirectory', () => {
             if (request.token) headers.set('Authorization', `Bearer ${request.token}`);
             return home.request(request.url, { ...request.init, headers });
         });
-        serverFetchMock.mockImplementation((path, init) => home.request(new URL(path, getActiveServerSnapshot().serverUrl), init));
         // Action preparation uses the real endpoint fetch, below the reachability
         // fetch used by directory reads. Both HTTP leaves answer from the same Home.
         setRuntimeFetch((input, init) => home.request(input, init));
@@ -533,11 +516,11 @@ describe('useTeamsDirectory', () => {
         await setActiveServerId(home, { scope: 'device' });
         runtimeFetchMock.mockRejectedValue(new Error('network down'));
         const rendered = await renderHook(() => useHomeTeamCredentialModelCatalog({ serverId: home, enabled: true }));
-        await vi.waitFor(() => expect(rendered.getCurrent().condition).toEqual({ reason: 'offline', retryable: true }));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().condition).toEqual({ reason: 'offline', retryable: true }));
         expect(rendered.getCurrent().resources).toEqual([]);
         runtimeFetchMock.mockResolvedValue(new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 }));
         await act(async () => { await rendered.getCurrent().reload(); });
-        await vi.waitFor(() => expect(rendered.getCurrent().current).toBe(true));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().current).toBe(true));
         expect(rendered.getCurrent().condition).toBeNull();
         await rendered.unmount();
     });
@@ -559,7 +542,7 @@ describe('useTeamsDirectory', () => {
         ));
 
         const rendered = await renderHook(() => useTeamsDirectory());
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(rendered.getCurrent().rows).toHaveLength(1);
         });
 
@@ -588,18 +571,21 @@ describe('useTeamsDirectory', () => {
 
         const rendered = await renderHook(() => useTeamsDirectory());
         // Neither a spinner that never settles nor a silent sign-out.
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(rendered.getCurrent().unavailableHomes).toEqual([
                 expect.objectContaining({ serverId: home, reason: 'credential_unreadable', retryable: true }),
             ]);
         });
         expect(runtimeFetchMock).not.toHaveBeenCalled();
 
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
+        getCredentialsForServerUrlMock.mockImplementation(async url => {
+            const token = directoryHome.findByServerUrl(url)?.token;
+            return token ? { token } : null;
+        });
         await act(async () => {
             rendered.getCurrent().refresh();
         });
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(rendered.getCurrent().rows).toHaveLength(1);
         });
         expect(rendered.getCurrent().unavailableHomes).toEqual([]);
@@ -613,7 +599,7 @@ describe('useTeamsDirectory', () => {
         const rendered = await renderHook(() => useTeamsDirectory());
         // Nothing is claimed about a Home that said no, and nothing is asked of
         // it: an admission refusal is a settled answer, not an empty directory.
-        await vi.waitFor(() => expect(rendered.getCurrent().kind).toBe('loading'));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().kind).toBe('loading'));
         expect(runtimeFetchMock).not.toHaveBeenCalled();
         expect(rendered.getCurrent().rows).toEqual([]);
         expect(rendered.getCurrent().unavailableHomes).toEqual([]);
@@ -628,8 +614,10 @@ describe('useTeamsDirectory', () => {
         });
 
         const rendered = await renderHook(() => useTeamsDirectory());
-        await vi.waitFor(() => {
-            expect(rendered.getCurrent().unavailableHomes).toHaveLength(1);
+        await waitForHomeGovernance(() => {
+            expect(rendered.getCurrent().unavailableHomes).toEqual([
+                expect.objectContaining({ reason: 'offline' }),
+            ]);
         });
 
         const current = rendered.getCurrent();
@@ -662,7 +650,7 @@ describe('useTeamsDirectory', () => {
             scope: 'administered',
             serverIds: [administered],
         }));
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(rendered.getCurrent().rows).toHaveLength(1);
         });
 
@@ -683,7 +671,7 @@ describe('useTeamsDirectory', () => {
             scope: 'administered',
             serverIds: [named],
         }));
-        await vi.waitFor(() => expect(rendered.getCurrent().kind).toBe('loading'));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().kind).toBe('loading'));
         expect(runtimeFetchMock).not.toHaveBeenCalled();
         await rendered.unmount();
     });
@@ -702,7 +690,7 @@ describe('useTeamsDirectory', () => {
         await disabled.unmount();
 
         const opened = await renderHook(() => useTeamsDirectory({ archived: 'archived' }));
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(runtimeFetchMock).toHaveBeenCalled();
         });
         const listRequest = runtimeFetchMock.mock.calls.find(([request]) => request.url === 'https://home-a.example/v1/teams/list')?.[0];

@@ -68,18 +68,19 @@ export function useTeamInvitations(params: Readonly<{
     }, [sequenceKey]);
 
     const loadPage = React.useCallback(
-        async (cursor: string | null) => {
+        async (cursor: string | null, signal: AbortSignal) => {
             const outcome = await listTeamInvitations({
                 scope: { serverId, accountId },
                 address: { serverId, teamId },
                 state,
                 cursor,
+                signal,
                 ...(limit === undefined ? {} : { limit }),
             });
             // Read from the answer rather than kept as separate state to refresh:
             // every page of one sequence carries the same Home fact, and a failed
             // page leaves the last answer standing instead of blanking the offer.
-            if (outcome.kind === 'succeeded' && activeSequenceKeyRef.current === sequenceKey) {
+            if (outcome.kind === 'succeeded' && !signal.aborted && activeSequenceKeyRef.current === sequenceKey) {
                 setEmailDelivery(outcome.value.emailDelivery);
                 setLinkDelivery(outcome.value.linkDelivery);
             }
