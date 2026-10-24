@@ -46,7 +46,9 @@ export function normalizeMarkdownLinkUrl(raw: string, options: MarkdownLinkNorma
     if (isStreamingIncompleteLinkHref(trimmed)) return null;
 
     const lowerTrimmed = trimmed.toLowerCase();
-    const candidate = lowerTrimmed.startsWith('www.') ? `https://${trimmed}` : trimmed;
+    // Markdown unescapes punctuation in URI schemes before emitting the href.
+    const candidate = (lowerTrimmed.startsWith('www.') ? `https://${trimmed}` : trimmed)
+        .replace(/^([A-Za-z](?:[A-Za-z0-9]|\\?[+.-])*)\\?:/, (_match, scheme: string) => `${scheme.replace(/\\/g, '')}:`);
     const lower = candidate.toLowerCase();
 
     if (lower.startsWith(INLINE_REFERENCE_HREF_PREFIX_V1)) return null;
@@ -54,6 +56,8 @@ export function normalizeMarkdownLinkUrl(raw: string, options: MarkdownLinkNorma
     if (/\s|[\u0000-\u001F\u007F]/.test(candidate)) return null;
     if (isExternallyOpenableMarkdownLink(candidate) || lower.startsWith('file://')) return candidate;
     if (hasMarkdownPathCharacterReference(candidate)) return null;
+    // A URI's payload can contain slashes without becoming a workspace path.
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(candidate) && !/^[A-Za-z]:[\\/]/.test(candidate)) return null;
     if (isLocalPathLikeMarkdownTarget(candidate, options)) return candidate;
     return null;
 }
@@ -311,6 +315,29 @@ function normalizeMarkdownAutolinks(markdown: string, options: MarkdownLinkNorma
     });
 }
 
+function normalizeMarkdownReferenceDefinitions(markdown: string, options: MarkdownLinkNormalizationOptions): string {
+    if (!markdown.includes(']:')) return markdown;
+    const chunks: string[] = [];
+    let cursor = 0;
+    parseMarkdownSyntax(markdown).iterate({ enter(node) {
+        if (node.name !== 'LinkReference') return;
+        const url = node.node.getChild('URL');
+        if (!url) return false;
+        const extracted = extractMarkdownLinkDestination(markdown.slice(url.from, url.to));
+        const normalized = extracted ? normalizeMarkdownLinkUrl(extracted.destination, options) : null;
+        if (normalized) {
+            chunks.push(markdown.slice(cursor, url.from), normalized);
+            cursor = url.to;
+        } else {
+            // Without a definition, its references remain ordinary text in every renderer.
+            chunks.push(markdown.slice(cursor, node.from));
+            cursor = node.to;
+        }
+        return false;
+    } });
+    return chunks.length ? chunks.join('') + markdown.slice(cursor) : markdown;
+}
+
 export function sanitizeEnrichedMarkdownLinkTargets(markdown: string, options: MarkdownLinkNormalizationOptions = {}): string {
     return sanitizeEnrichedMarkdownWithInlineReferences(markdown, undefined, options).markdown;
 }
@@ -322,7 +349,8 @@ export function sanitizeEnrichedMarkdownWithInlineReferences(markdown: string, r
 }> {
     const resolved = new Map<string, MarkdownInlineReference>();
     const withoutImages = applyEnrichedMarkdownImagePolicy(String(markdown ?? ''));
-    return { markdown: normalizeMarkdownAutolinks(normalizeExplicitMarkdownLinks(withoutImages, references, resolved, options), options), references: resolved };
+    const normalizedReferences = normalizeMarkdownReferenceDefinitions(withoutImages, options);
+    return { markdown: normalizeMarkdownAutolinks(normalizeExplicitMarkdownLinks(normalizedReferences, references, resolved, options), options), references: resolved };
 }
 
 export async function openMarkdownLinkUrl(raw: string): Promise<void> {
