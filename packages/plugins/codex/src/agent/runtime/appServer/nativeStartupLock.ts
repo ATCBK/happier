@@ -29,18 +29,40 @@ async function resolveStartupRoot(configuration: StartupConfiguration, sqliteHom
   // Any uninspected config layer could select keyring auth, enabling a cloud
   // exact requirement even without auth.json. Do not guess its effective value.
   const configPaths = [join(home, 'config.toml'), '/etc/codex/config.toml'];
-  for (let cwd = resolve(configuration.cwd ?? process.cwd());;) {
-    configPaths.push(join(cwd, '.codex', 'config.toml'));
-    const parent = dirname(cwd);
-    if (parent === cwd) break;
-    cwd = parent;
-  }
-  if (configuration.configOverrides?.some(value => /^\s*cli_auth_credentials_store\s*=/u.test(value))) return null;
+  if (configuration.configOverrides?.some(value => /^\s*(?:cli_auth_credentials_store|project_root_markers)\s*=/u.test(value))) return null;
   if ((await Promise.all([
     '/etc/codex/requirements.toml', '/etc/codex/managed_config.toml',
     join(home, 'auth.json'), join(home, 'cloud-config-bundle-cache.json'),
     ...configPaths,
   ].map(mayExist))).some(Boolean)) return null;
+
+  // Native 0.162.1 chooses project markers from those earlier layers and CLI
+  // overrides. With all absent, its default is the nearest .git marker, or cwd
+  // when none exists. A .git directory only qualifies with a stat-able HEAD.
+  const cwd = resolve(configuration.cwd ?? process.cwd());
+  let projectRoot = cwd;
+  for (let directory = cwd;;) {
+    const marker = join(directory, '.git');
+    const metadata = await stat(marker).catch(() => null);
+    if (metadata && (!metadata.isDirectory() || await stat(join(marker, 'HEAD')).then(() => true, () => false))) {
+      projectRoot = directory;
+      break;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  const absoluteHome = resolve(home);
+  const canonicalHome = await realpath(absoluteHome).catch(() => absoluteHome);
+  for (let directory = cwd;; directory = dirname(directory)) {
+    const configDirectory = join(directory, '.codex');
+    // Native excludes CODEX_HOME itself (including symlink aliases) from the
+    // project layers; its user config was checked separately above.
+    if (configDirectory !== absoluteHome
+      && await realpath(configDirectory).catch(() => configDirectory) !== canonicalHome
+      && await mayExist(join(configDirectory, 'config.toml'))) return null;
+    if (directory === projectRoot) break;
+  }
   await mkdir(sqliteHome, { recursive: true });
   return await realpath(sqliteHome);
 }

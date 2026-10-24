@@ -17,7 +17,7 @@ beforeEach(async () => { osBoundary.home = await mkdtemp(join(tmpdir(), 'codex-s
 afterEach(async () => { await rm(osBoundary.home, { recursive: true, force: true }); });
 
 function startup(sqliteHome: string, versionOutput = 'codex-cli 0.162.1') {
-  return { processEnv: { CODEX_HOME: join(osBoundary.home, 'auth-home'), CODEX_SQLITE_HOME: sqliteHome }, versionOutput, cwd: osBoundary.home };
+  return { processEnv: { CODEX_HOME: join(osBoundary.home, 'auth-home'), CODEX_SQLITE_HOME: sqliteHome }, versionOutput, cwd: join(osBoundary.home, 'project') };
 }
 
 async function completeDatabase(root: string) {
@@ -26,6 +26,11 @@ async function completeDatabase(root: string) {
 }
 
 describe.skipIf(process.platform !== 'linux')('native SQLite startup admission', () => {
+  beforeEach(async () => {
+    await mkdir(join(osBoundary.home, '.codex'));
+    await writeFile(join(osBoundary.home, '.codex', 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
+    await mkdir(join(osBoundary.home, 'project'));
+  });
   it('serializes fresh roots on the predecessor seam, including a second start at the same root', async () => {
     const rootA = join(osBoundary.home, 'sqlite-a');
     const rootB = join(osBoundary.home, 'sqlite-b');
@@ -50,7 +55,13 @@ describe.skipIf(process.platform !== 'linux')('native SQLite startup admission',
     expect(entered.slice(1).sort()).toEqual(['a2', 'b']);
   });
 
-  it('does not queue warm same-version starts but serializes a version change', async () => {
+  it.each(['git-directory', 'git-file', 'no-marker', 'empty-git-directory'] as const)('does not queue warm same-version starts below an unrelated ancestor config (%s), but serializes a version change', async marker => {
+    const cwd = join(osBoundary.home, 'project');
+    if (marker === 'git-file') await writeFile(join(cwd, '.git'), 'gitdir: /fixture/worktree\n');
+    if (marker === 'git-directory' || marker === 'empty-git-directory') {
+      await mkdir(join(cwd, '.git'));
+      if (marker === 'git-directory') await writeFile(join(cwd, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    }
     const root = join(osBoundary.home, 'sqlite');
     await withCodexNativeStartupLock(async () => completeDatabase(root), undefined, undefined, startup(root));
     const bothEntered: string[] = [];
@@ -83,11 +94,13 @@ describe.skipIf(process.platform !== 'linux')('native SQLite startup admission',
     const alias = join(osBoundary.home, 'sqlite-alias');
     await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
     const debug = vi.fn();
+    let launchOverrides: readonly string[] | undefined;
     await expect(withCodexNativeStartupLock(async overrides => {
-      expect(overrides).toEqual(['model="kept"', `sqlite_home=${JSON.stringify(root)}`]);
+      launchOverrides = overrides;
       await completeDatabase(root);
       throw new Error('initialize failed');
     }, undefined, { debug }, { ...startup(alias), configOverrides: ['model="kept"'] })).rejects.toThrow('initialize failed');
+    expect(launchOverrides).toEqual(['model="kept"', `sqlite_home=${JSON.stringify(root)}`]);
     await expect(readFile(join(root, '.happier-codex-native-startup.version'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -100,6 +113,29 @@ describe.skipIf(process.platform !== 'linux')('native SQLite startup admission',
       expect(overrides).toEqual([`sqlite_home=${JSON.stringify(root)}`]);
       const owner = JSON.parse(await readFile(join(osBoundary.home, '.happier-codex-native-startup.lock'), 'utf8'));
       expect(owner.pid).toBe(process.pid);
+    }, undefined, undefined, configuration);
+    await expect(readFile(join(root, '.happier-codex-native-startup.version'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['cwd', 'project-root', 'custom-markers'] as const)('retains predecessor admission for a potentially effective config (%s)', async location => {
+    const root = join(osBoundary.home, 'sqlite');
+    const project = join(osBoundary.home, 'project');
+    const cwd = join(project, 'nested');
+    await mkdir(cwd);
+    await mkdir(join(project, '.git'));
+    await writeFile(join(project, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    if (location !== 'custom-markers') {
+      const configDir = join(location === 'cwd' ? cwd : project, '.codex');
+      await mkdir(configDir);
+      await writeFile(join(configDir, 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
+    }
+    const configuration = { ...startup(root), cwd,
+      ...(location === 'custom-markers' ? { configOverrides: ['project_root_markers=[".custom-root"]'] } : {}),
+    };
+    await withCodexNativeStartupLock(async () => {
+      const owner = JSON.parse(await readFile(join(osBoundary.home, '.happier-codex-native-startup.lock'), 'utf8'));
+      expect(owner.pid).toBe(process.pid);
+      await completeDatabase(root);
     }, undefined, undefined, configuration);
     await expect(readFile(join(root, '.happier-codex-native-startup.version'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -138,7 +174,7 @@ describe.skipIf(process.platform !== 'linux')('native SQLite startup admission',
       return await withCodexNativeStartupLock(async overrides => {
         await beforeReady?.();
         const child = spawn(process.env.HAPPIER_CODEX_NATIVE_TEST_BIN!, ['app-server', ...overrides.flatMap(value => ['-c', value])], {
-          cwd: osBoundary.home, env: configuration.processEnv, stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: configuration.cwd, env: configuration.processEnv, stdio: ['pipe', 'pipe', 'pipe'],
         });
         child.stderr.resume();
         const closed = new Promise<number | null>((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
