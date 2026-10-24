@@ -2,6 +2,7 @@ import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/Code
 import * as React from 'react';
 import { Platform, Pressable, View, type ScrollViewProps } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import {
     ChangedFileEvidenceDisclosure,
@@ -1268,6 +1269,17 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         if (!meta) return null;
         const file = meta.file;
         const safePath = toTestIdSafeValue(file.fullPath);
+        const collapseControl = (
+            <HappierPressable
+                testID={`scm-change-collapse-${safePath}`}
+                accessibilityRole="button"
+                accessibilityLabel={`${t(params.expanded ? 'common.collapse' : 'common.expand')}: ${file.fullPath}`}
+                expanded={params.expanded}
+                onPress={params.onToggleExpanded}
+            >
+                <Icon name={params.expanded ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
+            </HappierPressable>
+        );
 
         const stopPropagationIfPossible = (event: unknown) => {
             const maybeEvent: any = event as any;
@@ -1338,7 +1350,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     highlighted={highlightedPath === file.fullPath}
                     leadingElement={(
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
-                            <Icon name={params.expanded ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
+                            {collapseControl}
                             <FileIcon fileName={file.fileName} size={16} />
                         </View>
                     )}
@@ -1372,7 +1384,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 showChangeMark={false}
                 leadingElement={(
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
-                        <Icon name={params.expanded ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
+                        {collapseControl}
                         <FileIcon fileName={file.fileName} size={16} appearance="line" />
                     </View>
                 )}
