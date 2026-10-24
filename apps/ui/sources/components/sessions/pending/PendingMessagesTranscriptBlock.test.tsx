@@ -22,8 +22,7 @@ const QUEUE_CAP_PX = resolvePendingQueueHeadMaxHeightPx(LINE_PX) + 80;
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 async function loadPendingMessagesTranscriptBlock() {
-    const mod = await import('./PendingMessagesTranscriptBlock');
-    return mod.PendingMessagesTranscriptBlock;
+    return PendingMessagesTranscriptBlockComponent;
 }
 
 vi.mock('./PendingMessagesDragReorderList', () => ({
@@ -133,6 +132,9 @@ installPendingMessagesCommonModuleMocks({
         Ionicons: 'Ionicons',
     }),
 });
+
+// Install the suite's boundary fixtures before import, and charge cold transforms to collection.
+const { PendingMessagesTranscriptBlock: PendingMessagesTranscriptBlockComponent } = await import('./PendingMessagesTranscriptBlock');
 
 vi.mock('@/sync/sync', () => ({
     sync: {
@@ -1131,6 +1133,7 @@ describe('PendingMessagesTranscriptBlock', () => {
             source: 'server_pending',
             pendingDeliveryStatus: 'blocked',
             pendingDeliveryBlockedReason,
+            pendingRecovery: { canSendAsNew: true },
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',
@@ -1173,6 +1176,26 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sessionAbort).not.toHaveBeenCalled();
     });
 
+    it.each([true, false])('uses projected Send as new eligibility on the uncertain row and its menu (%s)', async canSendAsNew => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        const pendingMessage: PendingMessage = {
+            id: 'reply-custody', localId: 'reply-custody', text: 'uncertain original',
+            createdAt: 0, updatedAt: 0, rawRecord: {}, source: 'server_pending',
+            pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'delivery_outcome_uncertain',
+            pendingRecovery: { canSendAsNew },
+        };
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1', serverId: 'home-a', pendingMessages: [pendingMessage], discardedMessages: [],
+        }));
+        await hoverPendingMessageRow(screen, pendingMessage.id);
+        expect(Boolean(screen.findByTestId('pendingMessages.sendAsNew:reply-custody'))).toBe(canSendAsNew);
+        expect(screen.findByTestId('pendingMessages.dismissDelivery:reply-custody')).toBeTruthy();
+        await screen.pressByTestIdAsync('pendingMessages.message:reply-custody');
+        const menuItems = screen.findAllByType('DropdownMenuItem');
+        expect(menuItems.some(item => item.props.testID === 'pendingMessages.sendAsNew:reply-custody')).toBe(canSendAsNew);
+        expect(menuItems.some(item => item.props.testID === 'pendingMessages.dismissDelivery:reply-custody')).toBe(true);
+    });
+
     it.each([undefined, { kind: 'execution_run' as const, runId: 'run-a' }])('dismisses or sends an uncertain delivery as a new identity without retrying the original (%j)', async recipient => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         dismissPendingDelivery.mockResolvedValueOnce(undefined);
@@ -1181,6 +1204,7 @@ describe('PendingMessagesTranscriptBlock', () => {
             id: 'p1', localId: 'wire-local', recipient, text: 'uncertain delivery', displayText: undefined,
             createdAt: 0, updatedAt: 0, rawRecord: {}, source: 'server_pending',
             pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'delivery_outcome_uncertain',
+            pendingRecovery: { canSendAsNew: true },
         } as PendingMessage;
 
         const dismissScreen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
@@ -1324,6 +1348,7 @@ describe('PendingMessagesTranscriptBlock', () => {
             rawRecord: {},
             source: 'server_pending',
             pendingDeliveryStatus: 'server_delivering',
+            pendingRecovery: { canSendAsNew: true },
         } as PendingMessage;
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
             sessionId: 's1',

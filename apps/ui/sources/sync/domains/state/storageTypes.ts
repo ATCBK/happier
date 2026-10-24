@@ -206,6 +206,8 @@ export interface PendingMessage extends TranscriptAccountActorMetadata {
     pendingOutboxOperation?: 'enqueue' | 'cancel';
     sendState?: 'unconfirmed' | 'failed';
     pendingDeliveryStatus?: PendingDeliveryStatus;
+    /** Server-owned reply-custody eligibility; never inferred from message content. */
+    pendingRecovery?: import('@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1').PendingDeliveryRecoveryV1;
     /** Current server read diagnostic, never a delivery block or activation grant. */
     pendingActivationHoldReason?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationHoldReasonV1;
     /** Exact server-projected original input for this Account's held check-in. */

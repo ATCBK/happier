@@ -614,6 +614,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             ? t(deliveryBlockedPresentation.labelKey)
             : null;
         const canUseDirectDeliveryActions = canUseDirectPendingDeliveryActions(message, visualState);
+        const canSendAsNew = message.pendingRecovery?.canSendAsNew === true;
 
 	        const menuItems = (() => {
 	            const items: DropdownMenuItem[] = [];
@@ -642,12 +643,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	            } else if (hasDurableOutboxOperation) {
 	                items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	            } else if (isServerDeliveryInProgress) {
-	                items.push({ id: 'sendAsNew', testID: `pendingMessages.sendAsNew:${message.id}`, title: t('session.pendingMessages.actions.sendAsNew'), icon: <Icon name="paper-plane" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
+	                if (canSendAsNew) items.push({ id: 'sendAsNew', testID: `pendingMessages.sendAsNew:${message.id}`, title: t('session.pendingMessages.actions.sendAsNew'), icon: <Icon name="paper-plane" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	            } else if (isUncertainDelivery) {
 	                items.push({ id: 'continueWaiting', testID: `pendingMessages.continueWaiting:${message.id}`, title: t('session.pendingMessages.actions.continueWaiting'), icon: <Icon name="clock" size={16} color={theme.colors.text.secondary} /> });
 	                items.push({ id: 'markDeliveryHandled', testID: `pendingMessages.markDeliveryHandled:${message.id}`, title: t('session.pendingMessages.actions.markHandled'), icon: <Icon name="checks" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	                items.push({ id: 'dismissDelivery', testID: `pendingMessages.dismissDelivery:${message.id}`, title: t('session.pendingMessages.actions.dismiss'), icon: <Icon name="archive" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
-	                items.push({ id: 'sendAsNew', testID: `pendingMessages.sendAsNew:${message.id}`, title: t('session.pendingMessages.actions.sendAsNew'), icon: <Icon name="paper-plane" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
+	                if (canSendAsNew) items.push({ id: 'sendAsNew', testID: `pendingMessages.sendAsNew:${message.id}`, title: t('session.pendingMessages.actions.sendAsNew'), icon: <Icon name="paper-plane" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	            } else if (usesDeliveryResolutionActions) {
 	                items.push({ id: 'markDeliveryHandled', title: t('session.pendingMessages.actions.markHandled'), icon: <Icon name="checks" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	                items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
@@ -902,7 +903,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                         disabled={deliveryActionBusy}
                                     />
                                 ) : null}
-                                {isServerDeliveryInProgress ? (
+                                {isServerDeliveryInProgress && canSendAsNew ? (
                                     <IconAction
                                         testID={`pendingMessages.sendAsNew:${message.id}`}
                                         accessibilityLabel={t('session.pendingMessages.actions.sendAsNew')}
@@ -920,7 +921,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                         disabled={deliveryActionBusy}
                                     />
                                 ) : null}
-                                {isUncertainDelivery ? (
+                                {isUncertainDelivery && canSendAsNew ? (
                                     <IconAction
                                         testID={`pendingMessages.sendAsNew:${message.id}`}
                                         accessibilityLabel={t('session.pendingMessages.actions.sendAsNew')}

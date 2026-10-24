@@ -35,6 +35,27 @@ describe('pendingQueueV2 decrypt mapping', () => {
         await resetPendingQueueState();
     });
 
+    it('accepts only the server recovery projection and withdraws missing or malformed eligibility on refresh', async () => {
+        const sessionId = 'recovery-eligibility';
+        const encryption = await createPendingQueueEncryption({ sessionId });
+        const content = { t: 'encrypted', c: await encryptRawRecordForPending({ encryption, sessionId,
+            rawRecord: { role: 'user', content: { type: 'text', text: 'uncertain original' } } }) };
+        const row = { localId: 'original', messageRole: 'user', content, status: 'queued',
+            deliveryState: 'blocked', deliveryBlockedReason: 'delivery_outcome_uncertain',
+            position: 0, createdAt: 1, updatedAt: 1 };
+        for (const recovery of [{ canSendAsNew: true }, { canSendAsNew: false }, undefined,
+            { canSendAsNew: 'true' }, { canSendAsNew: true, replyProgress: {} }]) {
+            await fetchAndApplyPendingMessagesV2({ sessionId, encryption,
+                request: async () => Response.json({ pending: [{ ...row, recovery }] }) });
+            const message = storage.getState().sessionPending[sessionId]?.messages[0];
+            if (recovery && typeof recovery.canSendAsNew === 'boolean' && !('replyProgress' in recovery)) {
+                expect(message).toMatchObject({ pendingRecovery: recovery });
+            } else {
+                expect(message?.pendingRecovery).toBeUndefined();
+            }
+        }
+    });
+
     it('carries only a valid held exchange root through the real pending refresh and clears it when released', async () => {
         const sessionId = 'held-check-in';
         const encryption = await createPendingQueueEncryption({ sessionId });

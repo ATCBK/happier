@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SessionInputMachineTargetV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { pendingDeliveryStatusV1ToPersistedFields } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { SessionMessageReplyProgressV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
 import { sessionPendingRoutes } from '../../../../../server/sources/app/api/routes/session/pendingRoutes';
@@ -31,10 +32,20 @@ it('projects real pending receipts and retains external enqueue custody until ac
     const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(),
         encryptionMode: 'plain', metadata: '{}' } });
     const localId = randomUUID();
-    expect(await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
+    const enqueueOriginal = () => enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
         authentication: createPresentUserSessionAccessAuthentication(),
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'queued input' }, meta: {} } },
-        requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ ok: true });
+        requestedAction: { v: 1, kind: 'enqueue' } });
+    expect(await enqueueOriginal()).toMatchObject({
+            ok: true, pending: { recovery: { canSendAsNew: true } },
+        });
+    // Legacy role completion must retain the same recovery projection on rejoin.
+    await db.sessionPendingMessage.update({
+        where: { sessionId_localId: { sessionId: session.id, localId } }, data: { messageRole: null },
+    });
+    expect(await enqueueOriginal()).toMatchObject({
+        ok: true, pending: { messageRole: 'user', recovery: { canSendAsNew: true } },
+    });
     const app = createAuthenticatedTestApp();
     sessionPendingRoutes(app);
     await app.ready();
@@ -60,6 +71,19 @@ it('projects real pending receipts and retains external enqueue custody until ac
         expect(storage.getState().sessionPending[session.id]?.messages).toEqual([
             expect.objectContaining({ localId, text: 'queued input', pendingDeliveryStatus: 'server_queued' }),
         ]);
+        // Recovery eligibility crosses the real DB -> route -> client projection.
+        // A reply-bearing original cannot be copied; clearing custody refreshes eligibility.
+        const reply = SessionMessageReplyProgressV1Schema.parse({ v: 1, mode: 'wait', disposition: 'observing' });
+        for (const replyProgress of [null, reply, null]) {
+            const current = await db.sessionPendingMessage.findUniqueOrThrow({
+                where: { sessionId_localId: { sessionId: session.id, localId } },
+            });
+            await db.sessionPendingMessage.update({ where: { id: current.id }, data: { replyProgress } });
+            await refresh();
+            expect(storage.getState().sessionPending[session.id]?.messages[0]).toMatchObject({
+                pendingRecovery: { canSendAsNew: replyProgress === null },
+            });
+        }
         const actionPath = `/v2/sessions/${session.id}/pending/${localId}/action`;
         const actionBody = JSON.stringify({ requestedAction: { v: 1, kind: 'send_now' } });
         const sent = await request(actionPath, { method: 'PATCH', body: actionBody });

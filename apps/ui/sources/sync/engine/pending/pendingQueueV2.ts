@@ -46,7 +46,7 @@ import { settleReceivedSessionMessages } from '@/sync/engine/sessions/sessionMes
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema, normalizeParticipantRecipientRoutingIdentityV1, withParticipantRecipientV1, readParticipantRecipientRoutingIdentityV1, type ParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
-import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1, shouldExposePendingDeliveryInDiscardedHistoryV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1, shouldExposePendingDeliveryInDiscardedHistoryV1, PendingDeliveryRecoveryV1Schema, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { normalizePendingDeliveryBlockedReason, type PendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, PendingResetStartSetResultV1Schema, DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
@@ -161,6 +161,7 @@ function buildPreparedPendingComposerRecord<T extends RawRecord>(
 }
 
 type PendingRow = {
+    recovery?: PendingMessage['pendingRecovery'];
     autonomousExchangeRoot?: PendingMessage['pendingAutonomousExchangeRoot'];
     activationHoldReason?: PendingActivationHoldReasonV1;
     recipient?: PendingMessage['recipient'];
@@ -947,7 +948,9 @@ function parsePendingRows(raw: unknown, serverId: string): PendingRow[] | null {
 
         const activationHoldReason = PendingActivationHoldReasonV1Schema.safeParse(item.activationHoldReason);
         const autonomousExchangeRoot = AutonomousExchangeRootV1Schema.safeParse(item.autonomousExchangeRoot);
+        const recovery = PendingDeliveryRecoveryV1Schema.safeParse(item.recovery);
         out.push({
+            ...(recovery.success ? { recovery: recovery.data } : {}),
             ...(effectiveDeliveryStatus.status === 'blocked' && effectiveDeliveryStatus.reason === 'autonomous_check_in'
                 && autonomousExchangeRoot.success ? { autonomousExchangeRoot: autonomousExchangeRoot.data } : {}),
             ...(activationHoldReason.success ? { activationHoldReason: activationHoldReason.data } : {}),
@@ -1024,6 +1027,7 @@ function withPendingDeliveryState<T extends PendingMessage>(row: PendingRow, mes
         ...(row.autonomousExchangeRoot ? { pendingAutonomousExchangeRoot: row.autonomousExchangeRoot } : {}),
         messageRole: row.messageRole,
         pendingDeliveryStatus,
+        pendingRecovery: row.recovery,
         ...(row.deliveryStatus.status === 'delivering' && row.deliveryStatus.detail
             ? { pendingDeliveryDetail: row.deliveryStatus.detail }
             : {}),
