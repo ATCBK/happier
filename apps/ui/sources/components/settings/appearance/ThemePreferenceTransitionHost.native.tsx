@@ -75,7 +75,7 @@ function HorizonOverlay(props: Readonly<{ overlay: Overlay; size: { width: numbe
     const onLoadError = React.useCallback(() => setLoadError(true), []);
     const env = useNativeMomentEnvironment(props.size.width, props.size.height, PixelRatio.get(), onLoadError);
     const image = useImage(props.overlay.uri, onLoadError);
-    const state = useCanvasRenderState(props.size);
+    const state = useCanvasRenderState({ size: props.size });
     const [picture, setPicture] = React.useState<SkPicture | null>(null);
     const latest = React.useRef({ env, image }); latest.current = { env, image };
     const ready = env !== null && image !== null;

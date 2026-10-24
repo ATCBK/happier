@@ -14,7 +14,7 @@ import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 export const BackdropCanvas = React.memo(function BackdropCanvas(props: BackdropCanvasProps) {
     type Drawn = { localId: string | null; w: number; h: number };
-    const state = useCanvasRenderState(props.size);
+    const state = useCanvasRenderState({ size: props.size, span: props.span, horizon: props.horizon }, props.source);
     const [shown, setShown] = React.useState<{ uri: string }>();
     const [target, setTarget] = React.useState<Readonly<{ key: string; uri: string; settle: NonNullable<ReturnType<typeof backdropSettle>>; drawn: Drawn }> | null>(null);
     const targetRef = React.useRef(target); targetRef.current = target;
@@ -32,7 +32,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
     const failed = React.useRef(props.onError); failed.current = props.onError;
     const rendered = React.useRef(props.onRendered); rendered.current = props.onRendered;
     const dpr = props.dpr ?? PixelRatio.get();
-    const request = backdropRenderRequest({ ...props, size: state.size }, dpr);
+    const request = backdropRenderRequest({ ...props, ...state.geometry }, dpr);
     const displaySize = { width: request.width / dpr, height: request.height / dpr };
     const key = backdropRequestKey(request);
     const active = useHostActivelyViewed();

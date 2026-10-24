@@ -55,12 +55,12 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
     // What this canvas shows, and the last idle resettle it played (plan UD-4).
     const shown = React.useRef<{ localId: string | null; w: number; h: number } | null>(null);
     const settled = React.useRef<number | null>(null);
-    const state = useCanvasRenderState(props.size);
+    const state = useCanvasRenderState({ size: props.size, span: props.span, horizon: props.horizon }, props.source);
     const active = useHostActivelyViewed();
     const reducedMotion = useReducedMotionPreference();
     const paused = props.resettlePaused === true || !state.visible || !active;
     const dpr = props.dpr ?? (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
-    const request = backdropRenderRequest({ ...props, size: state.size }, dpr);
+    const request = backdropRenderRequest({ ...props, ...state.geometry }, dpr);
     const requestRef = React.useRef(request); requestRef.current = request;
     const key = backdropRequestKey(request);
     // The last projection releases the worker and every retained buffer. Ordinary canvases have one user.
@@ -132,7 +132,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         });
         return () => cancelAnimationFrame(frame);
     }, [playback, paused, reducedMotion, props.resettle]);
-    const box = snapCanvasBox(state.size.width, state.size.height, dpr);
+    const box = snapCanvasBox(state.geometry.size.width, state.geometry.size.height, dpr);
     return React.createElement('canvas', {
         ref, 'aria-hidden': true, 'data-testid': props.testID,
         style: { ...StyleSheet.flatten(props.style), width: box.width, height: box.height, pointerEvents: 'none', display: 'block' },

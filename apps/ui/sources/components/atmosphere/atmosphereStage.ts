@@ -54,7 +54,9 @@ function publishStage() {
   const panes = [...stages.values()].map(value => value.stage);
   if (stage === snapshot.stage && panes.length === snapshot.panes.length
     && panes.every((pane, index) => pane === snapshot.panes[index])) return;
-  emit({ ...snapshot, stage, panes, pictureShown: stage ? snapshot.pictureShown : false });
+  // Surface cleanup/re-registration can be batched while the shell keeps its ready canvas. Only
+  // the picture layer's readiness/unmount publishes pictureShown; stage selection cannot erase it.
+  emit({ ...snapshot, stage, panes });
 }
 
 export const atmosphereStageStore = {

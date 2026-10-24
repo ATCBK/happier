@@ -215,6 +215,9 @@ export function HomeHero(
         : HOME_HEADLINE_ABOVE_SEAM_PX),
   );
   const { frame } = props;
+  // Padding-only changes do not resize web's observed content box. Measure the committed layout
+  // when these choices move the headline or the next section, including entering/leaving Rise.
+  React.useLayoutEffect(() => { frame.measure(); }, [frame.measure, props.rise, top]);
   const atmosphereBoundary = React.useMemo(() => ({
     // Home measures its existing composer wrapper; only focus crosses this boundary here.
     ref: undefined,

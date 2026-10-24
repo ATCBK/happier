@@ -9,9 +9,9 @@ import type { WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze'
 
 /** Two blurred picture copies masked at the content column, prepared once off the UI thread. */
 export function WallpaperHaze(props: Readonly<{ source: BackdropCanvasProps['source']; size: BackdropCanvasProps['size']; job: Omit<BackdropCanvasProps, 'source' | 'size'>; focus: { x: number; y: number }; haze: WallpaperHazeComposition; onRendered?: BackdropCanvasProps['onRendered'] }>) {
-    const state = useCanvasRenderState(props.size);
-    const resizing = state.size.width !== props.size.width || state.size.height !== props.size.height;
-    const quarter = { width: Math.max(2, Math.round(state.size.width / 4)), height: Math.max(2, Math.round(state.size.height / 4)) };
+    const state = useCanvasRenderState({ size: props.size });
+    const resizing = state.geometry.size.width !== props.size.width || state.geometry.size.height !== props.size.height;
+    const quarter = { width: Math.max(2, Math.round(state.geometry.size.width / 4)), height: Math.max(2, Math.round(state.geometry.size.height / 4)) };
     const request = backdropRenderRequest({ source: props.source, size: quarter, ...props.job }, 1);
     const key = backdropRequestKey(request);
     const [uri, setUri] = React.useState<string | null>(null);
@@ -26,7 +26,7 @@ export function WallpaperHaze(props: Readonly<{ source: BackdropCanvasProps['sou
         void renderNativeBackdrop(latest.current).then(next => { if (live) setUri(next); }, error => { if (live) setError(error); });
         return () => { live = false; };
     }, [key, props.source, state.visible, resizing]);
-    const { width, height } = state.size;
+    const { width, height } = state.geometry.size;
     const { x, y } = props.focus;
     // The composition is derived each render; its content, not its identity, decides a redraw.
     const composition = React.useRef(props.haze); composition.current = props.haze;

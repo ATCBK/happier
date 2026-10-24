@@ -16,7 +16,7 @@ export const PairingQrMomentCanvas = React.memo(function PairingQrMomentCanvas(p
     const { size, scene, theme, reducedMotion, pairing, machines } = props;
     const dpr = PixelRatio.get();
     const env = useNativeMomentEnvironment(size, size, dpr);
-    const state = useCanvasRenderState({ width: size, height: size });
+    const state = useCanvasRenderState({ size: { width: size, height: size } });
     const build = React.useMemo(createPairingQrMomentFrames, []);
     const [pictures, setPictures] = React.useState<Readonly<{ current: SkPicture; previous: SkPicture | null }> | null>(null);
     const [opacity] = React.useState(() => new Animated.Value(0));

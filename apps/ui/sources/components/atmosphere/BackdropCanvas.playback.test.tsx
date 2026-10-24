@@ -10,7 +10,7 @@ import { atmosphereResettleFact } from './atmosphereStage';
 import type { BackdropCanvasProps, BackdropRenderRequest, BackdropWorkerRequest, BackdropWorkerResponse } from './backdropCanvas.types';
 import type { PictureRecord } from './pictureStore.types';
 
-const native = vi.hoisted(() => ({ painted: [] as number[] }));
+const native = vi.hoisted(() => ({ painted: [] as number[], requests: [] as BackdropRenderRequest[] }));
 const host = vi.hoisted(() => ({ emitter: null as ReturnType<typeof import('@/dev/testkit/mocks/reactNative').createReactNativeAppStateEmitter> | null }));
 vi.mock('react-native', async () => {
     const kit = await import('@/dev/testkit/mocks/reactNative');
@@ -20,7 +20,10 @@ vi.mock('react-native', async () => {
 // The off-thread native renderer owns Skia/file handles. This boundary preserves the real Brand
 // transition math while replacing native handle allocation and filesystem output in Node.
 vi.mock('./renderBackdrop.native', () => ({
-    renderNativeBackdrop: async (request: BackdropRenderRequest) => 'localId' in request.source ? request.source.localId : 'pixels',
+    renderNativeBackdrop: async (request: BackdropRenderRequest) => {
+        native.requests.push(request);
+        return 'localId' in request.source ? request.source.localId : 'pixels';
+    },
     createNativeBackdropTransition: async () => {
         const frames = createAtmosphereTransition('resettle', { from: pixels(10), to: pixels(210), page: [245, 245, 245], theme: 'light', dpr: 1 });
         return {
@@ -38,9 +41,10 @@ async function frames(ms: number) {
 
 describe.each([['web', WebCanvas], ['native', NativeCanvas]] as const)('%s resettle playback', (_platform, Canvas) => {
     beforeEach(() => {
-        vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'] });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance'] });
         setReducedMotionPreferenceOverride(false);
         native.painted.length = 0;
+        native.requests.length = 0;
         vi.stubGlobal('ImageData', class { constructor(public data: Uint8ClampedArray, public width: number, public height: number) {} });
         vi.stubGlobal('Worker', class {
             onmessage: ((event: { data: BackdropWorkerResponse }) => void) | null = null;
@@ -70,6 +74,21 @@ describe.each([['web', WebCanvas], ['native', NativeCanvas]] as const)('%s reset
         return { screen, next, paints: () => _platform === 'web' ? painted.length : native.painted.length,
             last: () => _platform === 'web' ? painted.at(-1) : native.painted.at(-1) };
     }
+
+    if (_platform === 'native') it('settles native size and crop span as one render input', async () => {
+        const source = record('native-span');
+        const picture = (width: number) => <Canvas source={source} size={{ width, height: 4 }}
+            span={{ x: 3, y: 0, W: width * 2, H: 4 }} horizon={{ src: 0.55, at: width / 20 }}
+            look="original" page={[245, 245, 245]} theme="light" dpr={1} />;
+        const screen = await renderScreen(picture(8));
+        native.requests.length = 0;
+        await screen.update(picture(10));
+        expect(native.requests).toHaveLength(0);
+        await act(async () => { vi.advanceTimersByTime(120); });
+        expect(native.requests).toHaveLength(1);
+        expect(native.requests[0]).toMatchObject({ width: 10, horizon: { src: 0.55, at: 0.5 }, job: { span: { x: 3, W: 20 } } });
+        await screen.unmount();
+    });
 
     it('paints a private static preview immediately without consuming a Home idle resettle', async () => {
         const canvas = await start(true);
