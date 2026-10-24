@@ -128,6 +128,11 @@ function createCapturingExec(
 
 describe('createCodexAppServerClient', () => {
     it.skipIf(process.platform !== 'linux')('pins projected SQLite in the real stdio launch and admits both warm clients before either initializes', async () => {
+        await mkdir(join(osBoundary.home, '.codex'));
+        await writeFile(join(osBoundary.home, '.codex', 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
+        const cwd = join(osBoundary.home, 'project');
+        await mkdir(join(cwd, '.git'), { recursive: true });
+        await writeFile(join(cwd, '.git', 'HEAD'), 'ref: refs/heads/main\n');
         const sqliteHome = join(osBoundary.home, 'shared-sqlite');
         const processEnv = { CODEX_HOME: join(osBoundary.home, 'auth'), CODEX_SQLITE_HOME: sqliteHome };
         await mkdir(sqliteHome);
@@ -137,7 +142,7 @@ describe('createCodexAppServerClient', () => {
                 ? 'codex-cli 0.162.1\n' : ''));
         }
         await writeFile(join(sqliteHome, 'state_5.sqlite'), 'SQLite format 3\0');
-        const first = await createCodexNativeAppServerClient({ exec: captures[0]!.exec, processEnv, cwd: osBoundary.home });
+        const first = await createCodexNativeAppServerClient({ exec: captures[0]!.exec, processEnv, cwd });
         await first.dispose();
         let release = () => {};
         const initialized = new Promise<void>(resolve => { release = resolve; });
@@ -152,7 +157,7 @@ describe('createCodexAppServerClient', () => {
                 return await handle.exec.clients.spawn(spec);
             });
         }
-        const opening = Promise.allSettled(captures.slice(1).map(capture => createCodexNativeAppServerClient({ exec: capture.exec, processEnv, cwd: osBoundary.home })));
+        const opening = Promise.allSettled(captures.slice(1).map(capture => createCodexNativeAppServerClient({ exec: capture.exec, processEnv, cwd })));
         try { await vi.waitFor(() => expect(entered).toHaveLength(2)); }
         finally {
             release();
@@ -272,9 +277,15 @@ describe('createCodexAppServerClient', () => {
                 { status: 'fulfilled', value: { ok: true } },
             ]);
             expect(debug).toHaveBeenCalledTimes(1);
-            expect(debug).toHaveBeenCalledWith(expect.any(String), {
-                pid: process.pid, heldForMs: expect.any(Number), waitedForMs: expect.any(Number),
-            });
+            // Admission can observe an occupied path before its owner record
+            // is readable. The canonical reporter preserves that as null.
+            const observation = debug.mock.calls[0]?.[1];
+            expect(debug).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+                waitedForMs: expect.any(Number),
+            }));
+            expect(observation).toEqual(expect.objectContaining(observation?.pid === null
+                ? { pid: null, heldForMs: null }
+                : { pid: process.pid, heldForMs: expect.any(Number) }));
         } finally {
             releaseInitialization();
             await opening;
