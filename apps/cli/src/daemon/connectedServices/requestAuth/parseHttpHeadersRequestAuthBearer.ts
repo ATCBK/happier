@@ -19,8 +19,12 @@ export function parseHttpHeadersRequestAuthBearer(
     const resultRecord = result as Readonly<Record<string, unknown>>;
     if (
         Reflect.ownKeys(resultRecord).some((key) =>
-            typeof key !== 'string' || (key !== 'kind' && key !== 'headers'))
+            typeof key !== 'string' || (key !== 'kind' && key !== 'headers' && key !== 'usageAccountScope'))
         || resultRecord.kind !== 'httpHeaders'
+        || (resultRecord.usageAccountScope !== undefined
+            && resultRecord.usageAccountScope !== 'personal'
+            && resultRecord.usageAccountScope !== 'workspace'
+            && resultRecord.usageAccountScope !== 'unknown')
         || !resultRecord.headers
         || typeof resultRecord.headers !== 'object'
         || Array.isArray(resultRecord.headers)
