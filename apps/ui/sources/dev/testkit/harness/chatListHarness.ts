@@ -405,9 +405,9 @@ export async function createChatListHarnessStorageMock(
     let cachedMessageIds: string[] = [];
     let cachedMessagesForMap: readonly any[] | null = null;
     let cachedMessagesById: Record<string, any> = {};
-    const cachedEmptyMessages: readonly any[] = [];
+    const cachedEmptyMessages: any[] = [];
     let cachedRefSelection: readonly (any | null)[] | null = null;
-    let cachedSnapshot: { messages: readonly any[]; isLoaded: boolean } | null = null;
+    let cachedSnapshot: { messages: any[]; isLoaded: boolean } | null = null;
     const readMessageIds = () => {
         const messages = readMessages();
         if (cachedMessagesForIds === messages) return cachedMessageIds;
