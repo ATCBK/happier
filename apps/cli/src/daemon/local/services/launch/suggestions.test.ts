@@ -119,24 +119,27 @@ describe('buildLocalServiceLauncherSnapshot', () => {
         expect(command.startsWith(parsed.targets[0]?.commandPreview?.slice(0, -1) ?? '')).toBe(true);
         expect(parsed.targets[0]?.sourceClass).toEqual({ kind: 'inventory_entry', inventoryEntryId: 'inventory-a' });
     });
-    it('preserves preview access both with and before observed listener evidence', () => {
+    it('projects preview access only through a currently listening Service', () => {
         const preview = {
             previewId: 'preview-a', sessionId: 'session-a', machineId: 'machine-a',
             owner: { kind: 'session' as const, id: 'session-a' },
             target: { scheme: 'http' as const, host: '127.0.0.1', port: 5173 },
             initialPath: { pathname: '/', search: '' }, display: { title: 'App', addressLabel: 'localhost:5173' }, originMode: 'host' as const,
         };
-        const input = { machineId: 'machine-a', updatedAt: 3_000, runTargets: [], previewResources: [preview] };
+        const input = { machineId: 'machine-a', updatedAt: 3_000, runTargets: [],
+            // Retained registrations never multiply the Services rows published per scan.
+            previewResources: [preview, ...Array.from({ length: 128 }, (_, index) => ({ ...preview, previewId: `preview-z-${index}` }))] };
         const withListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry()] });
         expect(withListener.targets).toHaveLength(1);
         expect(withListener.targets.find((target) => target.source === 'inventory_entry')).toMatchObject({ source: 'inventory_entry', actions: ['open_preview', 'register_preview'], browserTarget: { kind: 'localServicePreview', targetId: 'preview-a' } });
         const withoutListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [] });
-        expect(withoutListener.targets).toHaveLength(1);
-        expect(withoutListener.targets[0]).toMatchObject({ source: 'registered_preview', state: 'available', actions: ['open_preview'] });
+        expect(withoutListener.targets).toHaveLength(0);
         const foreign = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry({ machineId: 'other' })] });
-        expect(foreign.targets).toHaveLength(2);
+        expect(foreign.targets).toHaveLength(1);
         const stale = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry({ state: 'stale' })] });
-        expect(stale.targets.find(target => target.source === 'registered_preview')?.actions).toContain('open_preview');
+        expect(stale.targets).toHaveLength(1);
+        expect(stale.targets[0]).toMatchObject({ source: 'inventory_entry', state: 'unavailable', actions: [] });
+        expect(stale.targets[0]?.browserTarget).toBeUndefined();
     });
     it('projects scripts, inventory entries, and registered previews into stable launcher targets', () => {
         const snapshot = buildLocalServiceLauncherSnapshot({

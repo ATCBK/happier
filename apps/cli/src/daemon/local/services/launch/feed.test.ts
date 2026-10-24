@@ -8,6 +8,7 @@ import { createLocalServiceLauncherFeed } from './feed';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
+import { buildBrowserLaunchpadRows, selectRunningServiceForEndedPreview } from '../../../../../../../apps/ui/sources/sync/domains/browser/targets/suggestions';
 import { createProjectServiceRelocation } from '@/workspaces/execution/projectServiceRelocation';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { join } from 'node:path';
@@ -226,10 +227,18 @@ describe('createLocalServiceLauncherFeed', () => {
             });
             inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 2_000,
                 refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });
-            const preview = registerLocalServicePreview(previewRegistry, { previewId: 'owned-preview', machineId: 'machine-a',
+            const serviceTarget = { kind: 'managed_service' as const, machineId: handle.workspace.machineId,
+                workspaceId: handle.workspace.id, managedServiceId: handle.instanceId, cwd: handle.cwd, declaration: handle.declaration };
+            const retiredPreview = registerLocalServicePreview(previewRegistry, { previewId: 'a-retired-preview', machineId: 'machine-a',
+                serviceTarget: { ...serviceTarget, managedServiceId: 'retired-occurrence' },
+                owner: { kind: 'user', id: 'owner' }, target: { scheme: 'http', host: '127.0.0.1', port },
+                initialPath: { pathname: '/', search: '' }, display: { title: 'httpPort', addressLabel: `localhost:${port}` }, originMode: 'host' });
+            expect(retiredPreview.ok).toBe(true);
+            const preview = registerLocalServicePreview(previewRegistry, { previewId: 'owned-preview', machineId: 'machine-a', serviceTarget,
                 owner: { kind: 'user', id: 'owner' }, target: { scheme: 'http', host: '127.0.0.1', port },
                 initialPath: { pathname: '/', search: '' }, display: { title: 'httpPort', addressLabel: `localhost:${port}` }, originMode: 'host' });
             expect(preview.ok).toBe(true);
+            if (!preview.ok) throw new Error('Managed preview registration failed');
             const createFeed = () => createLocalServiceLauncherFeed({ machineId: 'machine-a', projectManagedServices: owner,
                 inventoryRegistry, previewRegistry, runTargets: scenario === 'inventory' ? [] : [{
                     id: handle.serviceId, cwd: handle.cwd, workspaceId: handle.workspace.id,
@@ -257,7 +266,7 @@ describe('createLocalServiceLauncherFeed', () => {
             inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 4_000,
                 refreshState: 'idle', entries: [], diagnostics: [] });
             expect((await feed.getSnapshot({ projection: 'managed_bindings' })).targets).toEqual([
-                expect.objectContaining({ id: handle.serviceId, actions: ['manage'] }),
+                expect.objectContaining({ id: handle.serviceId, actions: ['manage', 'open_preview'] }),
             ]);
             inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 5_000,
                 refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });
@@ -278,6 +287,8 @@ describe('createLocalServiceLauncherFeed', () => {
             expect(owner.listProjectServices()).toEqual([]);
             expect(owner.readProcessRoots()).toEqual([]);
             const stopped = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+            expect(selectRunningServiceForEndedPreview(buildBrowserLaunchpadRows({ launcherSnapshot: stopped }),
+                preview.resource.browserTarget!)).toBeNull();
             expect(stopped.targets.map(target => target.id)).toEqual(scenario === 'inventory' ? [
                 'inventory:owned-loopback', 'inventory:owned-wildcard', 'inventory:unrelated',
             ] : [handle.serviceId, 'inventory:unrelated']);
@@ -299,7 +310,7 @@ describe('createLocalServiceLauncherFeed', () => {
         } finally { await owner.dispose(); }
     });
 
-    it.each(['unknown', 'stopped'] as const)('projects %s native custody as uncertain while preserving exact manage rights', async nativePhase => {
+    it.each(['running', 'unknown', 'stopped'] as const)('projects %s plugin-native custody with its exact preview and manage rights', async nativePhase => {
         let phase: 'running' | 'stopped' | 'unknown' = nativePhase;
         const owner = createManagedServicesOwner({
             processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
@@ -314,15 +325,33 @@ describe('createLocalServiceLauncherFeed', () => {
             requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
             processSpec: { mode: { kind: 'native',
                 instance: { adapter: { pluginId: 'fixture.plugin', localId: 'native-service' }, nativeResourceId: 'exact-instance' },
-                lifecycle: { inspect: async () => ({ phase, readiness: 'not_reported', endpoint: null }),
+                lifecycle: { inspect: async () => ({ phase, readiness: phase === 'running' ? 'ready' : 'not_reported',
+                    endpoint: phase === 'running' ? ['http:', '//127.0.0.1:4312'].join('') : null }),
                     stop: async () => { phase = 'stopped'; return { status: 'stopped' }; } } } },
             authorizeLaunch: async () => ({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
                 env: {}, release: async () => undefined }),
         });
         try {
+            const previewRegistry = createLocalServicePreviewRegistry();
+            if (nativePhase === 'running') {
+                expect(registerLocalServicePreview(previewRegistry, { previewId: 'plugin-native-preview', machineId: 'machine-a',
+                    serviceTarget: { kind: 'managed_service', machineId: 'machine-a', managedServiceId: handle.instanceId,
+                        cwd: handle.cwd, declaration: handle.declaration }, owner: { kind: 'user', id: 'owner' },
+                    target: { scheme: 'http', host: '127.0.0.1', port: 4312 }, initialPath: { pathname: '/', search: '' },
+                    display: { title: 'Native service', addressLabel: 'localhost:4312' }, originMode: 'host' }).ok).toBe(true);
+            }
             const feed = createLocalServiceLauncherFeed({ machineId: 'machine-a', projectManagedServices: owner,
-                inventoryRegistry: createLocalServiceInventoryRegistry(), previewRegistry: createLocalServicePreviewRegistry() });
+                inventoryRegistry: createLocalServiceInventoryRegistry(), previewRegistry });
             const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+            if (nativePhase === 'running') {
+                expect(owner.readProcessRoots()).toEqual([]);
+                expect(snapshot.targets).toEqual([expect.objectContaining({ serviceState: 'healthy', actions: ['manage', 'open_preview'],
+                    browserTarget: expect.objectContaining({ targetId: 'plugin-native-preview',
+                        serviceTarget: expect.objectContaining({ managedServiceId: handle.instanceId }) }) })]);
+                await handle.stop();
+                expect((await feed.getSnapshot()).targets).toEqual([]);
+                return;
+            }
             expect(snapshot.targets).toEqual([expect.objectContaining({
                 state: 'available', serviceState: 'unhealthy', actions: ['manage'],
                 sourceClass: { kind: 'managed_service', managedServiceId: handle.instanceId },

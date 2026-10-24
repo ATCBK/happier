@@ -1,5 +1,4 @@
 import type {
-    BrowserLocalServicePreviewTargetV1,
     LocalServiceLauncherSnapshotV1,
     LocalServiceLaunchTargetActionV1,
     LocalServiceLaunchTargetV1,
@@ -11,7 +10,7 @@ import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 import { isWorkspacePathWithin } from '../inventory/provenance';
 import { resolveLocalServiceActionEligibility } from '../actions/policy';
-import { selectLocalServicePreviewForInventoryEntry } from '../preview/registry';
+import { buildLocalServicePreviewBrowserTarget, selectLocalServicePreviewForInventoryEntry } from '../preview/registry';
 
 /** Bound display text without changing the source/declaration used for admission. */
 export function formatLocalServiceLauncherTitle(value: string): string {
@@ -117,15 +116,6 @@ function hostMatchesCandidate(host: string, candidateHost: string): boolean {
         || (normalizedCandidateHost === 'localhost' && (normalizedHost === '127.0.0.1' || normalizedHost === '::1'));
 }
 
-function terminalUrlCandidateMatchesPreview(
-    candidate: LocalServiceTerminalUrlLaunchCandidate,
-    preview: LocalServicePreviewResourceV1,
-): boolean {
-    return typeof candidate.port === 'number'
-        && candidate.port === preview.target.port
-        && (!candidate.host || hostMatchesCandidate(preview.target.host, candidate.host));
-}
-
 function terminalUrlCandidateMatchesInventoryEntry(
     candidate: LocalServiceTerminalUrlLaunchCandidate,
     entry: NormalizedLocalServiceInventoryEntry,
@@ -133,22 +123,6 @@ function terminalUrlCandidateMatchesInventoryEntry(
     return typeof candidate.port === 'number'
         && candidate.port === entry.port
         && (!candidate.host || hostMatchesCandidate(entry.address.host, candidate.host));
-}
-
-function browserTargetForPreview(preview: LocalServicePreviewResourceV1): BrowserLocalServicePreviewTargetV1 {
-    return preview.browserTarget ?? {
-        kind: 'localServicePreview',
-        targetId: preview.previewId,
-        sessionId: preview.sessionId,
-        machineId: preview.machineId,
-        display: {
-            title: preview.display.title,
-            addressLabel: preview.display.addressLabel,
-            folderLabel: preview.display.folderLabel,
-            iconToken: preview.display.iconToken,
-            tone: preview.display.tone,
-        },
-    };
 }
 
 function targetFromTerminalUrlCandidate(
@@ -204,26 +178,6 @@ function targetFromWorkspaceFileAssetCandidate(
     };
 }
 
-function targetFromPreview(preview: LocalServicePreviewResourceV1): LocalServiceLaunchTargetV1 {
-    return {
-        id: `preview:${preview.previewId}`,
-        source: 'registered_preview',
-        sourceClass: {
-            kind: 'registered_preview',
-            previewId: preview.previewId,
-        },
-        machineId: preview.machineId,
-        sessionId: preview.sessionId,
-        title: preview.display.title,
-        subtitle: preview.display.addressLabel,
-        kind: preview.display.iconToken,
-        confidence: 'high',
-        state: 'available',
-        actions: ['open_preview'],
-        browserTarget: browserTargetForPreview(preview),
-    };
-}
-
 function targetFromInventoryEntry(
     entry: NormalizedLocalServiceInventoryEntry,
     preview: LocalServicePreviewResourceV1 | undefined,
@@ -253,7 +207,7 @@ function targetFromInventoryEntry(
     }
 
     // Every viewer resolves the resource through the same private-preview access owner.
-    const browserTarget = preview ? browserTargetForPreview(preview) : undefined;
+    const browserTarget = preview ? preview.browserTarget ?? buildLocalServicePreviewBrowserTarget(preview) : undefined;
 
     const actions: LocalServiceLaunchTargetActionV1[] = preview
         ? ['open_preview', 'register_preview']
@@ -362,15 +316,8 @@ export function buildLocalServiceLauncherSnapshot(
     const unavailableInventoryEntries = inventoryEntries.filter((entry) => entry.state !== 'listening');
     const previewByEntry = new Map(inventoryEntries.map(entry => [entry.id,
         selectLocalServicePreviewForInventoryEntry(previews, entry)]));
-    const joinedPreviewIds = new Set(availableInventoryEntries.flatMap(entry => {
-        const preview = previewByEntry.get(entry.id);
-        return preview ? [preview.previewId] : [];
-    }));
-    // A registered preview is access to the same listener, not a second service. Keep its
-    // resource/route on the listener row; previews without current listening evidence stay visible.
-    for (const preview of previews) {
-        if (!joinedPreviewIds.has(preview.previewId)) targets.push(targetFromPreview(preview));
-    }
+    // Registration grants access; it is not evidence of a running Service. Only
+    // inventory and the managed supervisor produce Services, and carry their preview.
 
     for (const entry of availableInventoryEntries) {
         const preview = previewByEntry.get(entry.id);
@@ -383,8 +330,7 @@ export function buildLocalServiceLauncherSnapshot(
     }
 
     for (const candidate of terminalUrlCandidates) {
-        const matchesCurrentTarget = previews.some((preview) => terminalUrlCandidateMatchesPreview(candidate, preview))
-            || availableInventoryEntries.some((entry) => terminalUrlCandidateMatchesInventoryEntry(candidate, entry));
+        const matchesCurrentTarget = availableInventoryEntries.some((entry) => terminalUrlCandidateMatchesInventoryEntry(candidate, entry));
         if (!matchesCurrentTarget) {
             targets.push(targetFromTerminalUrlCandidate(candidate, input.machineId));
         }

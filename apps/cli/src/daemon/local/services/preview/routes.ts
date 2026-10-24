@@ -193,6 +193,7 @@ export function createLocalServicePreviewRoutes(input: Readonly<{
                 const serviceTarget = request.serviceTarget;
                 if (request.sessionId !== undefined) return { ok: false, reasonCode: 'preview_target_unresolved' };
                 const resolved = input.projectManagedServices?.resolveProjectService(serviceTarget);
+                if (resolved?.status === 'unknown') return { ok: false, reasonCode: 'unknown_managed_service' };
                 if (resolved?.status !== 'found') return { ok: false, reasonCode: 'preview_target_unresolved' };
                 const handle = resolved.handle;
                 const endpoint = readProjectManagedServicePreviewEndpoint(handle);

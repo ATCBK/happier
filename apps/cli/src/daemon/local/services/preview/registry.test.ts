@@ -7,6 +7,29 @@ async function loadPreviewRegistryModule(): Promise<PreviewRegistryModule | null
 }
 
 describe("daemon local service preview registry", () => {
+    it('never lends an occurrence-bound preview to a scanned listener on the same endpoint', async () => {
+        const mod = await import('./registry');
+        const registry = mod.createLocalServicePreviewRegistry();
+        const input = {
+            previewId: 'managed-preview', machineId: 'machine_123', owner: { kind: 'user', id: 'account_123' },
+            target: { scheme: 'http', host: '127.0.0.1', port: 5173 },
+            initialPath: { pathname: '/', search: '' }, display: { title: 'Web', addressLabel: 'localhost:5173' }, originMode: 'host',
+        } as const;
+        expect(mod.registerLocalServicePreview(registry, { ...input, serviceTarget: {
+            kind: 'managed_service', machineId: 'machine_123', managedServiceId: 'retired-instance', cwd: '/repo',
+            declaration: { workspaceRefId: 'workspace_123', selection: { kind: 'manifest', name: 'web' } },
+        } }).ok).toBe(true);
+        const entry = { machineId: 'machine_123', port: 5173, address: { kind: 'loopback', host: '127.0.0.1' } };
+        // Only the address fields are needed by this registry selection boundary.
+        const scanned = { ...entry, address: { ...entry.address, kind: 'loopback' as const, family: 'ipv4' as const },
+            id: 'listener', protocol: 'tcp' as const, detectedAt: 1, lastSeenAt: 1, state: 'listening' as const,
+            source: 'detected' as const, labels: [], confidence: 'high' as const,
+            processOwnershipConfidence: 'high' as const, workspaceAssociationConfidence: 'high' as const, diagnostics: [] };
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned)).toBeUndefined();
+        expect(mod.registerLocalServicePreview(registry, { ...input, previewId: 'scanned-preview' }).ok).toBe(true);
+        expect(mod.selectLocalServicePreviewForInventoryEntry(mod.listLocalServicePreviewResources(registry), scanned)?.previewId)
+            .toBe('scanned-preview');
+    });
     it("keeps the managed service binding on the browser target it publishes", async () => {
         const mod = await import("./registry");
         const serviceTarget = {

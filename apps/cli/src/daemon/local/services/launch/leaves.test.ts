@@ -192,14 +192,16 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         expect(inventoryRegistry.getSnapshot().entries).toMatchObject([{ id: 'entry-vite:authority', state: 'listening' }]);
 
         inventoryRegistry.replaceSnapshot({ ...inventoryRegistry.getSnapshot(), entries: [] });
-        const retained = (await feed.getSnapshot()).targets.find(candidate => candidate.source === 'registered_preview');
-        if (!retained) throw new Error('Expected retained registered preview target');
+        // A registration survives independently, but cannot resurrect a running Service.
+        expect((await feed.getSnapshot()).targets).toEqual([]);
+        const absent = await execute({ actionId: 'localServices.launcher.registerPreview', input, context: {} });
+        assertActionOutputContract('localServices.launcher.registerPreview', absent);
+        expect(absent).toMatchObject({ status: 'unavailable', reasonCode: 'launcher_target_unknown' });
         const priorAdmission = (await previewRoutes.getSnapshot()).previews?.[0]?.accessUrl;
-        const reopened = await execute({ actionId: 'localServices.launcher.registerPreview',
-            input: { machineId: MACHINE_ID, targetId: retained.id }, context: {} });
-        assertActionOutputContract('localServices.launcher.registerPreview', reopened);
-        expect(reopened).toMatchObject({ status: 'existing', previewId: preview.previewId,
-            browserTarget: preview.resource.browserTarget });
+        const reopened = await execute({ actionId: 'localServices.preview.openOrCreate',
+            input: { machineId: MACHINE_ID, sessionId: 'session-1', launchTargetId: preview.previewId }, context: {} });
+        assertActionOutputContract('localServices.preview.openOrCreate', reopened);
+        expect(reopened).toMatchObject({ status: 'existing', preview: { resource: preview.resource } });
         const final = await previewRoutes.getSnapshot();
         expect(final.resources).toEqual([preview.resource]);
         expect(final.previews?.[0]?.accessUrl).not.toBe(priorAdmission);

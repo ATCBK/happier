@@ -110,16 +110,29 @@ describe('createLocalServicePreviewRoutes lifecycle', () => {
         try {
             const registry = createLocalServicePreviewRegistry();
             const routes = createLocalServicePreviewRoutes({ machineId: MACHINE_ID, registry, projectManagedServices: owner });
+            const handlers = new Map<string, (payload: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+            const registrar: RpcHandlerRegistrar = {
+                registerHandler(method, handler) {
+                    // Genuine RPC transport boundary; the registered parser and route stay real.
+                    handlers.set(method, handler as (payload: unknown, context?: RpcHandlerContext) => Promise<unknown>);
+                },
+            };
+            registerDaemonLocalServicePreviewSnapshotHandler(registrar, { localServicesPreview: routes });
+            const open = handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_OPEN_OR_CREATE);
+            if (!open) throw new Error('Expected preview RPC registration');
             expect(await routes.openOrCreate({ machineId: MACHINE_ID, serviceTarget: { ...serviceTarget, cwd: `${workspace.rootPath}/other` } }))
                 .toEqual({ ok: false, reasonCode: 'preview_target_unresolved' });
-            const result = await routes.openOrCreate({ machineId: MACHINE_ID, serviceTarget });
-            expect(result).toMatchObject({ ok: true, response: { status: 'created', preview: { resource: {
+            const result = await open({ machineId: MACHINE_ID, serviceTarget });
+            expect(result).toMatchObject({ status: 'created', preview: { resource: {
                 serviceTarget, owner: { kind: 'user', id: 'account-1' }, target: { scheme: 'http', host: '127.0.0.1', port: 4312 },
-            }, accessUrl: expect.stringContaining('previewToken=admission-') } } });
+            }, accessUrl: expect.stringContaining('previewToken=admission-') } });
             expect((await routes.getSnapshot()).resources).toHaveLength(1);
             await handle.stop();
             expect(await routes.openOrCreate({ machineId: MACHINE_ID, serviceTarget }))
-                .toEqual({ ok: false, reasonCode: 'preview_target_unresolved' });
+                .toEqual({ ok: false, reasonCode: 'unknown_managed_service' });
+            await expect(open({ machineId: MACHINE_ID, serviceTarget })).rejects.toMatchObject({
+                name: 'DaemonLocalServicePreviewLifecycleError', reasonCode: 'unknown_managed_service',
+            });
         } finally { await handle.stop(); await owner.dispose(); }
     });
 

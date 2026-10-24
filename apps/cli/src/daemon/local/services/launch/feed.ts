@@ -4,7 +4,7 @@ import { expandHomeDirPath } from '../../../../utils/path/expandHomeDirPath';
 import { isWorkspacePathWithin } from '../inventory/provenance';
 import type { LocalServiceInventoryRegistry } from '../inventory/registry';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
-import { listLocalServicePreviewResources, type LocalServicePreviewRegistry } from '../preview/registry';
+import { buildLocalServicePreviewBrowserTarget, listLocalServicePreviewResources, type LocalServicePreviewRegistry } from '../preview/registry';
 import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { LocalServiceLauncherHistoryStore } from './leaves';
 import { buildLocalServiceLauncherSnapshot, formatLocalServiceLauncherTitle } from './suggestions';
@@ -191,6 +191,9 @@ export function createLocalServiceLauncherFeed(
             // The scan publisher projects this same observation before deciding whether to wake
             // readers. Ordinary reads use the registry's annotated, visible inventory.
             const inventoryEntries = observedInventoryEntries ?? input.inventoryRegistry.getSnapshot().entries;
+            const previewResources = listLocalServicePreviewResources(input.previewRegistry);
+            const managedPreviews = new Map(previewResources.flatMap(resource => resource.machineId === input.machineId && resource.serviceTarget
+                ? [[resource.serviceTarget.managedServiceId, resource] as const] : []));
             const snapshot = buildLocalServiceLauncherSnapshot({
                 machineId: input.machineId,
                 sessionId,
@@ -198,7 +201,7 @@ export function createLocalServiceLauncherFeed(
                 updatedAt: now(),
                 runTargets,
                 inventoryEntries,
-                previewResources: listLocalServicePreviewResources(input.previewRegistry),
+                previewResources,
                 terminateDetectedEnabled: input.terminateDetectedEnabled?.() === true,
             });
             const processRoots = input.projectManagedServices?.readProcessRoots() ?? [];
@@ -212,7 +215,12 @@ export function createLocalServiceLauncherFeed(
                 .filter(handle => (!bindingsOnly || handle.isCurrent()) && handle.workspace.machineId === input.machineId
                     && (!workspaceScopePaths || workspaceScopePaths.some(root => isWorkspacePathWithin(root, handle.cwd))))
                 .map(handle => {
-                    const target = managedTarget(handle);
+                    const nativeTarget = managedTarget(handle);
+                    const preview = nativeTarget.endpointUrl ? managedPreviews.get(handle.instanceId) : undefined;
+                    const target = preview ? { ...nativeTarget,
+                        browserTarget: preview.browserTarget ?? buildLocalServicePreviewBrowserTarget(preview),
+                        actions: [...nativeTarget.actions, 'open_preview' as const],
+                    } : nativeTarget;
                     const root = processRoots.find(root => root.live === true && root.owner.kind === 'service'
                         && root.owner.serviceId === handle.instanceId);
                     if (!root) return target;
@@ -228,18 +236,16 @@ export function createLocalServiceLauncherFeed(
                     // Retiring serving authority does not make its cached listeners
                     // independent targets, but it must still remove preview authority.
                     if (!handle.isCurrent() || target.unavailableReason) return target;
-                    // Prefer usable preview evidence, then a direct-root binding. This only
-                    // chooses presentation; native endpoint authority stays with the supervisor.
-                    const entry = owned.sort((a, b) => Number(!inventoryTargets.get(a.id)?.browserTarget) - Number(!inventoryTargets.get(b.id)?.browserTarget)
-                        || Number(b.provenance?.process?.pid === root.pid) - Number(a.provenance?.process?.pid === root.pid)
+                    // Prefer a direct-root binding for listener presentation. Preview identity
+                    // comes only from this occurrence, never from an address-matched listener.
+                    const entry = owned.sort((a, b) => Number(b.provenance?.process?.pid === root.pid) - Number(a.provenance?.process?.pid === root.pid)
                         || a.id.localeCompare(b.id))[0];
                     const listener = entry ? inventoryTargets.get(entry.id) : undefined;
                     if (!entry || !listener) return target;
                     return { ...target,
                         sourceClass: { kind: 'managed_service' as const, managedServiceId: handle.instanceId, inventoryEntryId: entry.id },
                         subtitle: listener.subtitle, kind: listener.kind, commandPreview: listener.commandPreview,
-                        ...(listener.browserTarget ? { browserTarget: listener.browserTarget } : {}),
-                        actions: [...target.actions, ...listener.actions.filter(action => action === 'open_preview' || action === 'register_preview')],
+                        actions: [...target.actions, ...listener.actions.filter(action => action === 'register_preview')],
                     };
                 });
             if (bindingsOnly) return { v: 1, machineId: input.machineId, updatedAt: snapshot.updatedAt, targets: sortTargets(managed) };

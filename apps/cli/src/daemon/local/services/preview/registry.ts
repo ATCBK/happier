@@ -18,7 +18,7 @@ export type UnregisterLocalServicePreviewResult =
     | Readonly<{ ok: true }>
     | Readonly<{ ok: false; reasonCode: "not_found" }>;
 
-function toBrowserTarget(resource: RegisterLocalServicePreviewInput): BrowserLocalServicePreviewTargetV1 {
+export function buildLocalServicePreviewBrowserTarget(resource: RegisterLocalServicePreviewInput): BrowserLocalServicePreviewTargetV1 {
     return {
         kind: "localServicePreview",
         targetId: resource.previewId,
@@ -56,7 +56,7 @@ export function registerLocalServicePreview(
             ...input.target,
             host: normalizedHost,
         },
-        browserTarget: toBrowserTarget(input),
+        browserTarget: buildLocalServicePreviewBrowserTarget(input),
     });
     if (!parsed.success) {
         return { ok: false, reasonCode: "invalid_resource" };
@@ -99,6 +99,9 @@ export function selectLocalServicePreviewForInventoryEntry(
 ): LocalServicePreviewResourceV1 | undefined {
     const entryHost = normalizeHostnameForLoopbackCheck(entry.endpoint?.host ?? entry.address.host);
     return resources.filter((resource) => {
+        // A managed registration belongs to one native occurrence, never to an
+        // arbitrary listener or its replacement on the same endpoint.
+        if (resource.serviceTarget) return false;
         if (resource.machineId !== entry.machineId || resource.target.port !== entry.port) return false;
         if (sessionId !== undefined && resource.sessionId !== sessionId) return false;
         if (entry.endpoint && entry.endpoint.scheme !== 'unknown' && resource.target.scheme !== entry.endpoint.scheme) return false;
