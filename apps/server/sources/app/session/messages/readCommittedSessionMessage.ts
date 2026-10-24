@@ -2,7 +2,8 @@ import type { Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { buildSessionAccessWhere } from '@/app/session/access/sessionAccessWhere';
 import { resolveSessionAccessForOperation } from '@/app/session/access/sessionAccess';
-import { buildSessionMessagePublicationWhere, loadSessionTranscriptPublication } from '@/app/session/sessionTranscriptPublicationPolicy';
+import { buildSessionMessagePublicationWhere, loadSessionTranscriptPublication, isExternalShareableSessionTurnVisible } from '@/app/session/sessionTranscriptPublicationPolicy';
+import { parseStoredSessionTurn } from '@/app/session/turns/parseSessionTurnState';
 import { projectSessionMessageAccountActors } from './projectSessionMessageAccountActors';
 
 /** Exact committed reads share transcript publication and current credential admission. */
@@ -35,8 +36,13 @@ export async function readCommittedSessionMessageInTx(tx: Tx, input: Readonly<{
             transcriptObservationProvenance: true, inputAdmissionReceipt: true, authorAccountId: true,
         },
     });
+    const turnRow = 'localId' in input && row?.turnStartWitnessId ? await tx.sessionTurn.findUnique({ where: {
+        sessionId_turnId: { sessionId: input.sessionId, turnId: row.turnStartWitnessId },
+    } }) : null;
+    const turn = turnRow && isExternalShareableSessionTurnVisible({ row: turnRow, publication })
+        ? parseStoredSessionTurn(turnRow) : null;
     return {
-        row,
+        row: row ? { ...row, turn } : null,
         accessDecision,
         accountActor: row ? (await projectSessionMessageAccountActors(tx, [row]))[0] ?? null : null,
     };

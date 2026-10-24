@@ -15,6 +15,7 @@ import { MessageActionDurableResolutionV1Schema, MessageActionReferenceV1Schema 
 import { ExternalShareableActorV1Schema, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_REFERENCED_USER_ROWS_V1, EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SNAPSHOT_TURNS_V1, ExternalShareableTranscriptSnapshotV1Schema, deriveExternalShareableActorFromAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionExternalShareableTranscriptV1';
 import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionTurnV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/messages/sessionTranscriptPageLimits';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { SessionTranscriptObservationProvenanceV1Schema, isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
@@ -871,6 +872,9 @@ export function registerSessionMessageRoutes(app: Fastify) {
                         transcriptObservationProvenance: z.optional(SessionTranscriptObservationProvenanceV1Schema),
                         accountActor: z.nullable(SessionMessageAccountActorV1Schema),
                         inputAdmissionReceipt: z.optional(SessionInputAdmissionReceiptV1Schema),
+                        acceptedTurnId: z.optional(z.string()),
+                        turnStartWitnessId: z.optional(z.string()),
+                        turn: z.optional(SessionTurnV1Schema),
                     }),
                 }),
                 404: z.looseObject({ error: z.string() }),
@@ -924,6 +928,9 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 content: row.content,
                 accountActor,
                 ...projectSessionInputAdmissionReceipt(row.inputAdmissionReceipt),
+                ...(row.acceptedTurnId ? { acceptedTurnId: row.acceptedTurnId } : {}),
+                ...(row.turnStartWitnessId ? { turnStartWitnessId: row.turnStartWitnessId } : {}),
+                ...(row.turn ? { turn: row.turn } : {}),
                 ...(() => {
                     const deliveryResolution = readStoredSessionMessageDeliveryResolutionV1(row.deliveryResolution);
                     return deliveryResolution ? { deliveryResolution } : {};
