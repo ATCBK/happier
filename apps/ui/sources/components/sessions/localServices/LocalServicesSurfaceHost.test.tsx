@@ -6,8 +6,6 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
-  FeatureDecision,
-  FeatureId,
   ActionOperationSnapshotV1,
 } from '@happier-dev/protocol';
 import type { FrontDoorRuntimeActionExecute as RuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -41,8 +39,6 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 // host. Its credential lifetime, row projection and Action admission stay real.
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const inventoryMachineRpc =
-  await import('@/sync/domains/local/services/inventory/machineRpc');
 const operationMachineRpc = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
 const { storage } = await import('@/sync/domains/state/storage');
 const { resetLocalServiceInventoryStoreForTests } =
@@ -54,17 +50,6 @@ const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } =
 const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
 const { LocalServicesSurfaceHost } = await import('./LocalServicesSurfaceHost');
 
-const useFeatureDecisionMock = vi.hoisted(() =>
-  vi.fn((featureId: FeatureId, _scope?: unknown): FeatureDecision => ({
-    featureId,
-    state: 'enabled',
-    blockedBy: null,
-    blockerCode: 'none',
-    diagnostics: [],
-    evaluatedAt: 1,
-    scope: { scopeKind: 'runtime' },
-  })),
-);
 const pluginProjectionState = vi.hoisted(() => ({
   appShell: {
     pluginUiProjection: null as unknown,
@@ -86,11 +71,6 @@ vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock({ confirmResult: true }).module;
 });
-
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-  useFeatureDecision: (featureId: FeatureId, scope?: unknown) =>
-    useFeatureDecisionMock(featureId, scope),
-}));
 
 vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
   useAppShellPluginUiProjection: () => pluginProjectionState.appShell,
@@ -144,17 +124,6 @@ function buildLauncherState() {
 describe('LocalServicesSurfaceHost', () => {
   beforeEach(async () => {
     await home.reset();
-    useFeatureDecisionMock.mockImplementation(
-      (featureId: FeatureId): FeatureDecision => ({
-        featureId,
-        state: 'enabled',
-        blockedBy: null,
-        blockerCode: 'none',
-        diagnostics: [],
-        evaluatedAt: 1,
-        scope: { scopeKind: 'runtime' },
-      }),
-    );
     pluginProjectionState.appShell = {
       pluginUiProjection: null,
       machineId: 'machine-global',
@@ -1047,6 +1016,8 @@ describe('LocalServicesSurfaceHost', () => {
     // The regression this pins: the pane's rows are built from LAUNCH TARGETS, and inventory
     // entries only enrich them. Making the inventory fresh while leaving the launcher feed on
     // its mount-time read renders nothing new, which a store-level assertion cannot see.
+    const serverId = await home.addHome({ name: 'Services Watch Home', serverUrl: 'https://services-watch.test',
+      accountId: 'watch-account', currentAccount: true });
     const startedTarget: LocalServiceLaunchTarget = {
       ...openableTarget,
       id: 'inventory:vite-5199',
@@ -1093,23 +1064,20 @@ describe('LocalServicesSurfaceHost', () => {
       };
     });
 
-    let answerWatch: ((result: unknown) => void) | null = null;
-    const watchSpy = vi
-      .spyOn(
-        inventoryMachineRpc,
-        'watchLocalServiceInventorySnapshotViaMachineRpc',
-      )
-      .mockImplementation(
-        async () =>
-          (await new Promise((resolve) => {
-            answerWatch = resolve as (result: unknown) => void;
-          })) as never,
-      );
+    let answerWatch: ((snapshot: ReturnType<typeof inventorySnapshotAt>) => void) | undefined;
+    const watchSpy = vi.spyOn(operationMachineRpc, 'machineRpcWithServerScope').mockImplementation(async <Response,>(request: Parameters<typeof operationMachineRpc.machineRpcWithServerScope>[0]) => {
+      if (request.method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) throw new Error(`Unexpected RPC ${request.method}`);
+      return await new Promise<Response>((resolve, reject) => {
+        // Only the daemon transport is replaced; the watch adapter validates its real wire DTO.
+        answerWatch = snapshot => resolve({ protocolVersion: 1, changed: true, snapshot } as Response);
+        request.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      });
+    });
 
     const screen = await renderScreen(
       <LocalServicesSurfaceHost
         machineId="machine-a"
-        serverId="server-a"
+        serverId={serverId}
         sessionId="session-a"
         inventorySnapshotClient={inventorySnapshotClient as never}
         launcherSnapshotClient={launcherSnapshotClient as never}
@@ -1125,11 +1093,7 @@ describe('LocalServicesSurfaceHost', () => {
     // The dev server starts; the daemon answers the parked watch with the newer snapshot.
     await act(async () => {
       serviceStarted = true;
-      answerWatch?.({
-        ok: true,
-        changed: true,
-        snapshot: inventorySnapshotAt(2_000, []),
-      });
+      answerWatch?.(inventorySnapshotAt(2_000, []));
       await Promise.resolve();
     });
     await flushHookEffects({ cycles: 4, turns: 4 });

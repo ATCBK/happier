@@ -19,8 +19,7 @@ import {
 } from '@/components/sessions/localServices/useLocalServiceEntryActions';
 import { useLocalServiceLiveFeeds } from '@/components/sessions/localServices/useLocalServiceLiveFeeds';
 import {
-  useLocalServiceCapabilityDisabledReasons,
-  useLocalServicePublicPreviewFeatureEnabled,
+  useLocalServicePresentationFeatures,
   type LocalServiceCapabilityDisabledReasons,
 } from '@/components/sessions/localServices/useLocalServicePublicPreviewFeature';
 import {
@@ -155,12 +154,7 @@ function PortServicesHost(
     testID: 'machine-processes-port-services',
   });
   const runner = useLocalServiceActionRunner();
-  const publicPreviewEnabled = useLocalServicePublicPreviewFeatureEnabled(
-    props.serverId,
-  );
-  const capabilityDisabledReasons = useLocalServiceCapabilityDisabledReasons(
-    props.serverId,
-  );
+  const { publicPreviewFeatureEnabled: publicPreviewEnabled, publicPreviewCapabilityDisabledReasons: capabilityDisabledReasons } = useLocalServicePresentationFeatures(props.serverId);
   const previews = useLocalServicePreviewState({
     machineId: props.machineId,
     serverId: props.serverId,

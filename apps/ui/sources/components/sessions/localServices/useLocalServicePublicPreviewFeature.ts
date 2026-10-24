@@ -1,7 +1,10 @@
 import { useMemo } from 'react';
 
-import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useFeatureLocalPolicySettings } from '@/hooks/server/useFeatureLocalPolicySettings';
+import { getCachedServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import {
+    resolveRuntimeFeatureDecisionFromSnapshot,
     useServerFeaturesRuntimeSnapshot,
     useServerFeaturesSnapshotForServerId,
 } from '@/sync/domains/features/featureDecisionRuntime';
@@ -9,20 +12,6 @@ import {
 function normalizeServerId(value: string | null | undefined): string | null {
     const normalized = String(value ?? '').trim();
     return normalized.length > 0 ? normalized : null;
-}
-
-export function useLocalServicePublicPreviewFeatureEnabled(
-    serverId: string | null | undefined,
-): boolean {
-    const normalizedServerId = normalizeServerId(serverId);
-    const decision = useFeatureDecision(
-        'localServices.publicPreview',
-        normalizedServerId
-            ? { scopeKind: 'spawn', serverId: normalizedServerId }
-            : { scopeKind: 'runtime' },
-    );
-
-    return decision?.state === 'enabled';
 }
 
 export type LocalServiceCapabilityDisabledReasons = Readonly<{
@@ -37,6 +26,8 @@ const NO_DISABLED_REASONS: LocalServiceCapabilityDisabledReasons = {
     publicPreview: [],
 };
 
+const LOADING_SNAPSHOT = Object.freeze({ status: 'loading' as const });
+
 /**
  * The server's own account of which local-service preview prerequisite is unmet.
  *
@@ -44,32 +35,54 @@ const NO_DISABLED_REASONS: LocalServiceCapabilityDisabledReasons = {
  * prerequisite. Without a reader the client can only say "previews are disabled", and an operator
  * cannot tell which of eleven environment variables is wrong.
  *
- * This lives beside `useLocalServicePublicPreviewFeatureEnabled` and resolves the snapshot the same
- * way — by `serverId` when the surface is bound to one, otherwise the active runtime server — so the
- * gate and the reason for it can never come from two different servers. **Call it only from the
- * surface owner** (`LocalServicesSurfaceHost`), which already mounts this machinery for the feature
- * decision above, and pass the result down: it subscribes and can trigger a features load, which a
- * per-row leaf must not do.
+ * One surface-level observation supplies both the canonical feature decision and its reasons.
+ * Retained hidden Services panes keep their state, but do not own feature loads or retries. The
+ * existing exact-Home cache supplies last-known facts immediately on reopen while the presented
+ * observation revalidates them. Read that cache at render time: an observer can still hold its
+ * previous Home's snapshot before the Home-change effect runs.
  *
  * Reasons are empty while server features are loading or unreachable, so callers keep whatever
  * generic copy they already show rather than naming a prerequisite the server has not reported.
  */
-export function useLocalServiceCapabilityDisabledReasons(
+export function useLocalServicePresentationFeatures(
     serverId: string | null | undefined,
-): LocalServiceCapabilityDisabledReasons {
+    options?: Readonly<{ enabled?: boolean }>,
+): Readonly<{
+    publicPreviewFeatureEnabled: boolean;
+    publicPreviewCapabilityDisabledReasons: LocalServiceCapabilityDisabledReasons;
+}> {
     const normalizedServerId = normalizeServerId(serverId);
-    const spawnSnapshot = useServerFeaturesSnapshotForServerId(normalizedServerId, {
-        enabled: Boolean(normalizedServerId),
+    const presented = useLayoutPresentationActive();
+    const enabled = presented && (options?.enabled ?? true);
+    const settings = useFeatureLocalPolicySettings();
+    useServerFeaturesSnapshotForServerId(normalizedServerId, {
+        enabled: enabled && Boolean(normalizedServerId),
     });
-    const runtimeSnapshot = useServerFeaturesRuntimeSnapshot({ enabled: !normalizedServerId });
-    const snapshot = normalizedServerId ? spawnSnapshot : runtimeSnapshot;
+    useServerFeaturesRuntimeSnapshot({ enabled: enabled && !normalizedServerId });
+    const snapshot = enabled ? getCachedServerFeaturesSnapshot(normalizedServerId
+        ? { serverId: normalizedServerId }
+        : undefined) ?? LOADING_SNAPSHOT : LOADING_SNAPSHOT;
 
     return useMemo(() => {
-        if (snapshot.status !== 'ready') return NO_DISABLED_REASONS;
-        const localServices = snapshot.features.capabilities.localServices;
-        return {
-            preview: localServices.preview.disabledReasons,
-            publicPreview: localServices.publicPreview.disabledReasons,
+        if (!enabled) return {
+            publicPreviewFeatureEnabled: false,
+            publicPreviewCapabilityDisabledReasons: NO_DISABLED_REASONS,
         };
-    }, [snapshot]);
+        const decision = resolveRuntimeFeatureDecisionFromSnapshot({
+            featureId: 'localServices.publicPreview',
+            settings,
+            snapshot,
+            scope: normalizedServerId
+                ? { scopeKind: 'spawn', serverId: normalizedServerId }
+                : { scopeKind: 'runtime' },
+        });
+        const localServices = snapshot.status === 'ready' ? snapshot.features.capabilities.localServices : null;
+        return {
+            publicPreviewFeatureEnabled: decision?.state === 'enabled',
+            publicPreviewCapabilityDisabledReasons: localServices ? {
+                preview: localServices.preview.disabledReasons,
+                publicPreview: localServices.publicPreview.disabledReasons,
+            } : NO_DISABLED_REASONS,
+        };
+    }, [enabled, normalizedServerId, settings, snapshot]);
 }

@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { BrowserViewTargetV1 } from '@happier-dev/protocol';
 import { LocalServicePublicPreviewControls } from '@/components/sessions/localServices/LocalServicePublicPreviewControls';
 import { useLocalServiceEntryActions } from '@/components/sessions/localServices/useLocalServiceEntryActions';
-import { useLocalServiceCapabilityDisabledReasons, useLocalServicePublicPreviewFeatureEnabled } from '@/components/sessions/localServices/useLocalServicePublicPreviewFeature';
+import { useLocalServicePresentationFeatures } from '@/components/sessions/localServices/useLocalServicePublicPreviewFeature';
 import { useLocalServicePublicPreviewState } from '@/sync/domains/local/services/publicPreview/useLocalServicePublicPreviewState';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -18,8 +18,10 @@ export function BrowserLocalPreviewPublicLinkControls(props: Readonly<{
     serverId?: string | null;
     testID: string;
 }>): React.ReactElement | null {
-    const enabled = useLocalServicePublicPreviewFeatureEnabled(props.serverId);
-    const capabilityDisabledReasons = useLocalServiceCapabilityDisabledReasons(props.serverId);
+    const {
+        publicPreviewFeatureEnabled: enabled,
+        publicPreviewCapabilityDisabledReasons: capabilityDisabledReasons,
+    } = useLocalServicePresentationFeatures(props.serverId, { enabled: Boolean(props.target.sessionId) });
     const state = useLocalServicePublicPreviewState({
         machineId: props.target.machineId,
         sessionId: props.target.sessionId,

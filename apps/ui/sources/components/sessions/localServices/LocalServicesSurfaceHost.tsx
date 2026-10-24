@@ -20,10 +20,7 @@ import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 import type { ServiceRowOpenHandler } from './ServiceRowView';
 import { useLocalServiceEntryActions } from './useLocalServiceEntryActions';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
-import {
-    useLocalServiceCapabilityDisabledReasons,
-    useLocalServicePublicPreviewFeatureEnabled,
-} from './useLocalServicePublicPreviewFeature';
+import { useLocalServicePresentationFeatures } from './useLocalServicePublicPreviewFeature';
 
 export type LocalServicesSurfaceHostProps = Readonly<{
     machineId?: string | null;
@@ -64,10 +61,9 @@ export function LocalServicesSurfaceHost(props: LocalServicesSurfaceHostProps): 
     // The header line and the offline state name the machine and read its presence: one summary,
     // primitives only, so presence heartbeats that change nothing re-render nothing.
     const machine = useMachinePresenceSummary(serverId, machineId);
-    const publicPreviewFeatureEnabled = useLocalServicePublicPreviewFeatureEnabled(serverId);
     // Resolved once for the whole surface: the server names which prerequisite is unmet, and the
     // rows render it instead of one generic sentence for eleven different causes (audit P1-3).
-    const publicPreviewCapabilityDisabledReasons = useLocalServiceCapabilityDisabledReasons(serverId);
+    const { publicPreviewFeatureEnabled, publicPreviewCapabilityDisabledReasons } = useLocalServicePresentationFeatures(serverId);
     const feeds = useLocalServiceLiveFeeds({
         machineId,
         serverId,
