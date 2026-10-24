@@ -10,7 +10,7 @@ import { HappierSurfaceGradientLayer } from './SurfaceGradientLayer.js';
 import { useOptionalHappierUiTheme, useOptionalHappierUiPlatform } from '../../environment/context.js';
 import type { HappierRaisedEdgeState } from './raisedEdge.js';
 
-type HappierMaterialPlane = Readonly<{ role?: HappierMaterialRole; finish: boolean; translucentColor?: string; resolveMaterialColor?: PluginUiPresentationHost['resolveMaterialColor'] }>;
+type HappierMaterialPlane = Readonly<{ role?: HappierMaterialRole; finish: boolean; translucentColor?: string; resolveMaterialColor?: PluginUiPresentationHost['resolveMaterialColor']; openedOver?: true }>;
 const MaterialRoleContext = createContext<HappierMaterialPlane | null>(null);
 export function useContainingHappierMaterialRole(): HappierMaterialRole | undefined {
   return useContext(MaterialRoleContext)?.role;
@@ -22,6 +22,17 @@ export function HappierMaterialRoleProvider(props: Readonly<Omit<HappierMaterial
   const { role, finish = parent?.finish ?? false, translucentColor = parent?.translucentColor, resolveMaterialColor = parent?.resolveMaterialColor } = props;
   const plane = useMemo(() => ({ role, finish, translucentColor, resolveMaterialColor }), [role, finish, translucentColor, resolveMaterialColor]);
   return <MaterialRoleContext.Provider value={plane}>{props.children}</MaterialRoleContext.Provider>;
+}
+
+/**
+ * The boundary of a floating layer (a popover, a menu, a field's choices) opened from inside a surface. Context
+ * flows through the layer's portal, but the layer is not in that surface's flow: a surface directly in it is never
+ * nested in the opener's material or finish, whatever it asks. The host's popover owner places it.
+ */
+export function HappierOpenedLayer(props: Readonly<{ children?: ReactNode }>) {
+  const parent = useContext(MaterialRoleContext);
+  const plane = useMemo(() => parent ? { ...parent, openedOver: true as const } : null, [parent]);
+  return plane ? <MaterialRoleContext.Provider value={plane}>{props.children}</MaterialRoleContext.Provider> : <>{props.children}</>;
 }
 
 /** Descendant paint. Solid control roles keep their own fill and contrasting ink on every plane. */
@@ -68,7 +79,7 @@ export function HappierMaterialSurface(props: Omit<HappierSurfaceProps, 'onPress
   const parent = useContext(MaterialRoleContext);
   const theme = useOptionalHappierUiTheme();
   const dark = useOptionalHappierUiPlatform()?.colorScheme === 'dark';
-  const nested = props.nested ?? (props.materialRole !== undefined && parent?.role === props.materialRole);
+  const nested = parent?.openedOver !== true && (props.nested ?? (props.materialRole !== undefined && parent?.role === props.materialRole));
   const finishRole = props.finishRole ?? (props.materialRole === 'floating' ? 'floating' : 'card');
   const gradient = resolveHappierSurfaceFinish({ role: finishRole,
     gradients: props.gradient === undefined ? (props.materialRole ? theme?.surfaceFinish ?? {} : {}) : { [finishRole]: props.gradient },
@@ -85,7 +96,11 @@ export function HappierMaterialSurface(props: Omit<HappierSurfaceProps, 'onPress
       </View>;
   const role = props.materialRole ?? parent?.role;
   const hasFinish = Boolean(gradient) || Boolean(nested && parent?.finish);
-  const plane = useMemo(() => ({ ...parent, role, finish: hasFinish }), [parent, role, hasFinish]);
+  const plane = useMemo(() => {
+    // Surfaces inside this one are in its flow again.
+    const { openedOver: _openedOver, ...inFlow } = parent ?? { finish: false };
+    return { ...inFlow, role, finish: hasFinish };
+  }, [parent, role, hasFinish]);
   return <MaterialRoleContext.Provider value={plane}>{body}</MaterialRoleContext.Provider>;
 }
 
