@@ -152,6 +152,14 @@ export type HappierUiPalette = Readonly<{
    */
   versionControlAdded?: string;
   versionControlRemoved?: string;
+  /**
+   * Find's two marks in content a surface draws itself (a CI log): every match as a soft tint that keeps the
+   * text's own colour, the current match as the solid fill with its own ink. Absent (no host facts), the
+   * snapshot's control fill and accent stand in.
+   */
+  findMatch?: string;
+  findMatchCurrent?: string;
+  findMatchCurrentForeground?: string;
   /** Same-realm compact search radius; unhosted search uses its public theme's control radius. */
   searchFieldRadiusPx?: number;
   /** The raised edge of the compact search field (drawn on `sheetBorder`); absent, it draws flat. */

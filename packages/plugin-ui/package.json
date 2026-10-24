@@ -10,6 +10,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./ansi": {
+      "happier-source": "./src/ansi.ts",
+      "types": "./dist/ansi.d.ts",
+      "default": "./dist/ansi.js"
+    },
     ".": {
       "happier-source": "./src/index.ts",
       "types": "./dist/index.d.ts",

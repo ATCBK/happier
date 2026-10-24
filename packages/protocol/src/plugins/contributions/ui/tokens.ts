@@ -55,6 +55,26 @@ export const PLUGIN_UI_ICON_TOKENS_V1 = [
   'board',
   // What narrows and orders a collection, folded behind one round toolbar button on a phone.
   'filter',
+  // A PR the agent is watching for updates (an open eye), and linking one thing to another.
+  'watch',
+  'link',
+  // Forge objects a release or CI page names: a tag, a release asset, a branch and a commit; downloading
+  // an asset, a locked (immutable) release, running and stopping a job, handing work to a session and
+  // generating text from changes.
+  'tag',
+  'asset',
+  'branch',
+  'commit',
+  'download',
+  'locked',
+  'run',
+  'stop',
+  'send',
+  'generate',
+  // A CI workflow and its runs (a play mark in a ring), distinct from a Project script's bare play.
+  'workflow',
+  // Skipped or neutral CI work: the status owner's circle-and-dash mark.
+  'neutral',
 ] as const;
 
 export const PluginUiIconTokenV1Schema = lazyZodSchema(() => z.enum(PLUGIN_UI_ICON_TOKENS_V1));

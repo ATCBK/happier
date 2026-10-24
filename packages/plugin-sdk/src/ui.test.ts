@@ -301,6 +301,19 @@ describe('plugin UI public surface', () => {
             'list',
             'board',
             'filter',
+            'watch',
+            'link',
+            'tag',
+            'asset',
+            'branch',
+            'commit',
+            'download',
+            'locked',
+            'run',
+            'stop',
+            'send',
+            'generate',
+            'workflow',
         ]);
     });
 

@@ -70,9 +70,11 @@ const STATUS_GLYPH_PATHS: Partial<Record<HappierIconName, readonly string[]>> = 
   check: ['m8.6 12.2 2.3 2.3 4.6-4.8'],
   mention: ['M15.5 12v1.3a2.7 2.7 0 0 0 5.4 0V12a8.9 8.9 0 1 0-3.6 7.2'],
   denied: ['M8 10.5V8a4 4 0 0 1 8 0v2.5'],
+  // Skipped or neutral work (a CI job whose needs failed): a ring with a level dash, quieter than a stop.
+  neutral: ['M8.6 12h6.8'],
 });
 /** Glyphs drawn around a full circle (failure, stop, finished) or with a circle inside (@, lock body). */
-const STATUS_GLYPH_RING = new Set<HappierIconName>(['failure', 'pause', 'check']);
+const STATUS_GLYPH_RING = new Set<HappierIconName>(['failure', 'pause', 'check', 'neutral']);
 
 function HappierStatusGlyph(props: Readonly<{ glyph: HappierIconName; color: string; size: number }>) {
   const paths = STATUS_GLYPH_PATHS[props.glyph] ?? [];

@@ -61,6 +61,20 @@ const PLUGIN_UI_ICON_TOKEN_TO_ICON_NAME: Readonly<Record<PluginUiIconTokenV1, Ic
     list: 'list',
     board: 'kanban',
     filter: 'funnel-simple',
+    watch: 'eye',
+    link: 'link',
+    tag: 'tag',
+    asset: 'cube',
+    branch: 'git-branch',
+    commit: 'git-commit',
+    download: 'download',
+    locked: 'lock',
+    run: 'play',
+    stop: 'stop',
+    send: 'paper-plane-tilt',
+    generate: 'sparkle',
+    workflow: 'play-circle',
+    neutral: 'minus-circle',
 });
 
 /** Glyph rendered for a missing or non-canonical semantic icon token. */
