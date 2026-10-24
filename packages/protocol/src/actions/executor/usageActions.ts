@@ -7,6 +7,7 @@ import type { UsageActionId } from '../specs/usage.js';
 import { readActionFailureEnvelope } from './actionFailureEnvelope.js';
 import { UsageRecapComposeInputSchema, UsageRecapExportResultSchema, UsageRecapDeliveryInputSchema,
   UsageRecapDeliveryOutcomeSchema, UsageRecapDeliveryResultSchema, usageRecapImageFileName,
+  resolveUsageRecapQuery,
   type UsageRecapComposed, type UsageRecapImageResult, type UsageRecapDeliveryInput, type UsageRecapDeliveryOutcome } from '../../usage/usageRecap.js';
 import { composeUsageRecap } from '../../usage/composeUsageRecap.js';
 import { UsageCalendarExportInputSchema, buildUsageCalendarFileResult } from '../../usage/usageCalendarExport.js';
@@ -80,7 +81,7 @@ export async function executeUsageAction(actionId: UsageActionId, value: unknown
         const source = PublicProfileReadResultV1Schema.safeParse(raw);
         return source.success ? composePublicUsageRecap(request, source.data) : failure('usage_recap_result_invalid');
       }
-      const query = normalizeUsageQuery({ ...request.query, breakdown: [...request.query.breakdown,
+      const query = normalizeUsageQuery({ ...resolveUsageRecapQuery(request), breakdown: [...request.query.breakdown,
         ...(request.selectedFields.includes('agentMix') ? ['agent' as const] : []),
         ...(request.selectedFields.includes('modelMix') ? ['model' as const] : []),
       ] });

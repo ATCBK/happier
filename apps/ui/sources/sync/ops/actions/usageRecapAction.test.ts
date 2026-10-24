@@ -1,7 +1,7 @@
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
-import { UsageRecapExportResultSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageAnalyticsQueryRequestSchema, UsageRecapExportResultSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { standardCleanup } from '@/dev/testkit';
@@ -46,6 +46,48 @@ async function context(denied = false, route?: Parameters<typeof serveAccountHom
 const input = { query: normalizeUsageQuery({ period: { startMs: 100, endMs: 900 } }), style: 'holo', format: 'square', selectedFields: ['tokens', 'modelMix'] };
 
 describe('recap export through the real captured UI Account Action', () => {
+  it.each([400, 404])('refuses Happier-only composition on an unsupported %s query without broadening through legacy transport', async status => {
+    const caller = await context(false, request => request.path === '/v2/usage/query'
+      ? Response.json({ error: 'unsupported query' }, { status }) : undefined);
+    expect(await createDefaultActionExecutor().execute('usage.recap.compose', { ...input, sourceSelection: 'happier_only' }, caller))
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'accounting_unavailable' } });
+    expect(home!.requests.some(request => request.path === '/v1/usage/query')).toBe(false);
+    const requests = home!.requests.filter(request => request.path === '/v2/usage/query');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) expect(request.body).toHaveProperty('filters.execution', 'happier');
+  });
+  it('uses one independent witnessed source selection for compose, export and device delivery', async () => {
+    const requests: unknown[] = [];
+    const caller = await context(false, request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      const body = UsageAnalyticsQueryRequestSchema.parse(request.body);
+      requests.push(body);
+      const total = body.filters?.execution === 'happier' ? 8 : 12;
+      return Response.json({ ...accounting, totals: { ...accounting.totals,
+        tokens: { ...accounting.totals.tokens, input: total - 2, total } },
+        coverage: { status: 'partial', reasons: ['unknown_source'], sources: [], missingDimensions: [],
+          range: { startMs: 100, endMs: 900, complete: false }, ranked: [] } });
+    });
+    const rendered: unknown[] = [];
+    const executor = createDefaultActionExecutor({ usageRecapRender: async compose => {
+      rendered.push(compose);
+      return { kind: 'rendered', base64: 'iVBORw==' };
+    } });
+    for (const [sourceSelection, total] of [['whole_usage', 12], ['happier_only', 8]] as const) {
+      const selected = { ...input, query: normalizeUsageQuery({ ...input.query, sources: ['native'], execution: 'outside' }), sourceSelection };
+      const preview = await executor.execute('usage.recap.compose', selected, caller);
+      expect(preview).toMatchObject({ ok: true, result: { kind: 'composed', sourceSelection,
+        facts: { tokens: { total } }, coverage: { accounting: { reasons: ['unknown_source'] } } } });
+      const exported = await executor.execute('usage.recap.export', selected, caller);
+      expect(exported).toMatchObject({ ok: true, result: { kind: 'exported', compose: preview.ok ? preview.result : null } });
+      const delivered = await executor.execute('usage.recap.deliver', { ...selected, intent: 'copy' }, caller);
+      expect(delivered).toMatchObject({ ok: true, result: { kind: 'delivered', compose: preview.ok ? preview.result : null } });
+      expect(rendered.slice(-2)).toEqual([preview.ok ? preview.result : null, preview.ok ? preview.result : null]);
+    }
+    expect(requests.length).toBeGreaterThan(0);
+    for (const raw of requests) expect(raw).not.toHaveProperty('filters.sources');
+    expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ filters: expect.objectContaining({ execution: 'happier' }) })]));
+  });
   it.each(['updated', 'outcome_unknown', 'unavailable'] as const)('separates public views before, during and after an issued %s publication mutation', async outcome => {
     const heldReads = createDeferred<void>();
     const heldWrite = createDeferred<void>();

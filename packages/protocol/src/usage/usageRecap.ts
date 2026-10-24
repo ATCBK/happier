@@ -1,6 +1,6 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { UsageQuerySchema } from '../inputs/usageQuery.js';
+import { UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
 import { UsageObservationTokensSchema, UsageAnalyticsCostFactValueSchema, UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
 import { UsageQuerySourceStatusSchema } from './resolveUsagePageAggregation.js';
 import { UsageHowYouWorkSchema } from './resolveUsageHowYouWork.js';
@@ -12,15 +12,24 @@ export const USAGE_RECAP_FORMATS = ['square', 'story', 'link-preview'] as const;
 export const USAGE_RECAP_FIELDS = ['tokens', 'activeDays', 'streak', 'modelMix', 'agentMix', 'cache', 'rhythm', 'parallel', 'night', 'work', 'coach', 'highlights', 'names', 'dollars'] as const;
 export const UsageRecapFieldSchema = lazyZodSchema(() => z.enum(USAGE_RECAP_FIELDS));
 export type UsageRecapField = z.infer<typeof UsageRecapFieldSchema>;
+export const UsageRecapSourceSelectionSchema = lazyZodSchema(() => z.enum(['whole_usage', 'happier_only']));
+export type UsageRecapSourceSelection = z.infer<typeof UsageRecapSourceSelectionSchema>;
 
 /** One closed input for private preview and subsequent client image rendering. */
 export const UsageRecapPrivateComposeInputSchema = lazyZodSchema(() => z.strictObject({
   query: UsageQuerySchema,
+  sourceSelection: z._default(UsageRecapSourceSelectionSchema, 'whole_usage'),
   style: z._default(z.enum(USAGE_RECAP_STYLES), 'daybreak'),
   format: z._default(z.enum(USAGE_RECAP_FORMATS), 'square'),
   selectedFields: z._default(z.array(UsageRecapFieldSchema), ['tokens', 'activeDays', 'modelMix', 'cache', 'rhythm', 'highlights']),
 }));
 export type UsageRecapPrivateComposeInput = z.infer<typeof UsageRecapPrivateComposeInputSchema>;
+
+/** Recap source intent is independent of producer filters on the originating page. */
+export function resolveUsageRecapQuery(input: Pick<UsageRecapPrivateComposeInput, 'query' | 'sourceSelection'>): UsageQuery {
+  const { execution: _execution, ...query } = input.query;
+  return { ...query, sources: [], ...(input.sourceSelection === 'happier_only' ? { execution: 'happier' } : {}) };
+}
 export const USAGE_RECAP_PUBLIC_FIELDS = ['tokens', 'activeDays', 'streak', 'agentMix', 'rhythm', 'parallel', 'work', 'highlights'] as const;
 /** The captured Account selects the current public view; a caller cannot provide public data or a target. */
 export const UsageRecapPublicComposeInputSchema = lazyZodSchema(() => z.strictObject({
@@ -77,6 +86,7 @@ export const UsageRecapCoverageSchema = lazyZodSchema(() => z.strictObject({
   sourceCoverage: z.array(z.strictObject({ status: UsageQuerySourceStatusSchema, asOfMs: z.optional(count), eventCount: count, historyComplete: z.nullable(z.boolean()) })),
   sourceStatuses: z.array(z.strictObject({ status: UsageQuerySourceStatusSchema, asOfMs: z.optional(count) })),
   pending: z.boolean(),
+  execution: z.optional(z.strictObject({ status: z.enum(['complete', 'partial', 'unknown']) })),
   night: z.optional(z.strictObject({ detailStatus: z.enum(['available', 'partial', 'unknown']) })),
   coach: z.optional(z.strictObject({ currentness: z.enum(['current', 'stale', 'unknown']), asOfMs: z.nullable(count),
     findings: z.array(z.enum(['complete', 'partial', 'unknown'])) })),
@@ -93,6 +103,7 @@ export const UsageRecapComposeResultSchema = lazyZodSchema(() => z.discriminated
     period: z.strictObject({ startMs: count, endMs: count, timeZoneOffsetMinutes: UsageQuerySchema.shape.timeZoneOffsetMinutes }),
     asOfMs: z.nullable(count), coverage: UsageRecapCoverageSchema, facts: UsageRecapFactsSchema,
     source: z.optional(z.literal('public_profile')), publicSnapshot: z.optional(PublicProfileSnapshotV1Schema),
+    sourceSelection: z.optional(UsageRecapSourceSelectionSchema),
   }),
   z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['query_mismatch', 'accounting_unavailable', 'period_unavailable',
     'public_profile_source_unavailable', 'public_profile_unavailable']) }),

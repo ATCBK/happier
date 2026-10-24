@@ -3,7 +3,8 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { UsageRecapComposeResultSchema, UsageRecapDeliveryResultSchema, USAGE_RECAP_FIELDS } from '@happier-dev/protocol/usage/usageRecap';
+import { UsageRecapComposeResultSchema, UsageRecapDeliveryResultSchema, USAGE_RECAP_FIELDS,
+  resolveUsageRecapQuery, type UsageRecapSourceSelection } from '@happier-dev/protocol/usage/usageRecap';
 import { type UsageRecapField } from '@happier-dev/protocol';
 import {
   UsageQuerySchema,
@@ -64,7 +65,7 @@ const DEFAULT_FIELDS: readonly UsageRecapField[] = [
 ];
 
 export type UsageRecapComposerProps = Readonly<{
-  /** The widget's shown query: its scope and calendar; the composer chooses only the period. */
+  /** The widget's shown scope/calendar; the composer owns period and execution-source choice. */
   query: UsageQuery;
   serverId: string;
   initialPeriod?: UsagePeriod;
@@ -102,6 +103,7 @@ export function UsageRecapComposer(
   );
   const [fields, setFields] =
     React.useState<readonly UsageRecapField[]>(DEFAULT_FIELDS);
+  const [sourceSelection, setSourceSelection] = React.useState<UsageRecapSourceSelection>('whole_usage');
   const shown = publicProfiles ? output : 'image';
   return (
     <View style={styles.root} testID="usage-recap-composer">
@@ -128,11 +130,12 @@ export function UsageRecapComposer(
         <UsageRecapImageOutput
           query={props.query}
           serverId={props.serverId}
-          selection={{ style, format, period, fields }}
+          selection={{ style, format, period, fields, sourceSelection }}
           setStyle={setStyle}
           setFormat={setFormat}
           setPeriod={setPeriod}
           setFields={setFields}
+          setSourceSelection={setSourceSelection}
         />
       ) : (
         <UsageRecapPublicOutput kind={shown} serverId={props.serverId} onClose={props.onClose} />
@@ -159,18 +162,20 @@ function UsageRecapImageOutput(
   props: Readonly<{
     query: UsageQuery;
     serverId: string;
-    selection: Readonly<{ style: UsageRecapStyle; format: UsageRecapFormat; period: UsagePeriod; fields: readonly UsageRecapField[] }>;
+    selection: Readonly<{ style: UsageRecapStyle; format: UsageRecapFormat; period: UsagePeriod; fields: readonly UsageRecapField[];
+      sourceSelection: UsageRecapSourceSelection }>;
     setStyle: (style: UsageRecapStyle) => void;
     setFormat: (format: UsageRecapFormat) => void;
     setPeriod: (period: UsagePeriod) => void;
     setFields: React.Dispatch<React.SetStateAction<readonly UsageRecapField[]>>;
+    setSourceSelection: (source: UsageRecapSourceSelection) => void;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const phone = useDeviceType() === 'phone';
   const reducedMotion = useReducedMotionPreference();
   const tone = theme.dark ? 'dark' : 'light';
-  const { style, format, period, fields } = props.selection;
+  const { style, format, period, fields, sourceSelection } = props.selection;
   const { setStyle, setFormat, setPeriod, setFields } = props;
   const [state, setState] = React.useState<ComposeState>({ kind: 'composing' });
   const [composeAttempt, retryCompose] = React.useReducer((attempt: number) => attempt + 1, 0);
@@ -180,13 +185,14 @@ function UsageRecapImageOutput(
   const [notice, setNotice] = React.useState<string | null>(null);
   const cardRef = React.useRef<React.ElementRef<typeof View>>(null);
   const deliveryController = React.useRef<AbortController | null>(null);
-  // The composer owns its period. Equivalent parent scopes and field selections
+  // The composer owns its period and source. Equivalent parent scopes and field selections
   // must retain the admitted read rather than cancel it during live page updates.
-  const queryKey = getUsageQueryKey({ ...props.query, period: {}, granularity: getUsagePeriodDefinition(period).granularity });
+  const queryKey = getUsageQueryKey(resolveUsageRecapQuery({ query: { ...props.query, period: {},
+    granularity: getUsagePeriodDefinition(period).granularity }, sourceSelection }));
   const compositionQuery = React.useMemo(() => UsageQuerySchema.parse(JSON.parse(queryKey)), [queryKey]);
   const fieldsKey = USAGE_RECAP_FIELDS.filter(field => fields.includes(field)).join(',');
   const selectedFields = React.useMemo(() => USAGE_RECAP_FIELDS.filter(field => fields.includes(field)), [fieldsKey]);
-  React.useEffect(() => () => deliveryController.current?.abort(), [style, format, selectedFields, period, compositionQuery, props.serverId]);
+  React.useEffect(() => () => deliveryController.current?.abort(), [style, format, selectedFields, period, sourceSelection, compositionQuery, props.serverId]);
 
   // Every selected presentation is admitted with its period and fields by the same compose Action.
   React.useEffect(() => {
@@ -227,6 +233,7 @@ function UsageRecapImageOutput(
         'usage.recap.compose',
         {
           query,
+          sourceSelection,
           style,
           format,
           selectedFields: [...selectedFields],
@@ -260,7 +267,7 @@ function UsageRecapImageOutput(
       }
     });
     return () => { retirement?.dispose(); controller.abort(); };
-  }, [style, format, period, selectedFields, compositionQuery, props.serverId, composeAttempt]);
+  }, [style, format, period, sourceSelection, selectedFields, compositionQuery, props.serverId, composeAttempt]);
 
   const composed =
     state.kind === 'ready' ? state.result : null;
@@ -300,7 +307,7 @@ function UsageRecapImageOutput(
           }
           return { kind: 'rendered', base64: await captureUsageViewPng(cardRef.current,
             { signal: context.signal, isCurrent: lifetime.isCurrent }) };
-        } }).execute('usage.recap.deliver', { query: state.query, style, format, selectedFields: [...fields], intent }, {
+        } }).execute('usage.recap.deliver', { query: state.query, sourceSelection, style, format, selectedFields: [...fields], intent }, {
           surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: lifetime.scope.serverId,
           expectedAccountId: lifetime.scope.accountId, signal: controller.signal,
         });
@@ -329,7 +336,7 @@ function UsageRecapImageOutput(
         }
       }
     },
-    [composed, state, props.serverId, style, format, fields],
+    [composed, state, props.serverId, sourceSelection, style, format, fields],
   );
 
   const toggle = React.useCallback((field: UsageRecapField, on: boolean) => {

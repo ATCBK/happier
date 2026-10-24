@@ -24,6 +24,18 @@ const response = UsageAnalyticsQueryResponseSchema.parse({
 const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: response, status: 'available', asOfMs: 9500 }] }).results[0]!;
 
 describe('private recap composition', () => {
+  it('keeps unknown execution qualified without interpreting private producer ids as execution', () => {
+    const contribution = { id: 'unknown', observedAtMs: 2000, sessionId: 'private-session', turnId: null,
+      agentId: null, modelId: null, machineId: null, projectKey: null, workspaceId: null,
+      source: 'runtime', tokens: response.totals.tokens, cost: response.totals.cost };
+    const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, sourceSelection: 'whole_usage', selectedFields: [] }),
+      snapshot: { ...snapshot, accounting: { ...response, totals: { ...response.totals,
+        tokens: { ...response.totals.tokens, input: 200, output: 40, total: 240 } }, contributions: [contribution,
+        { ...contribution, id: 'native-linked', source: 'native', sourceContext: { path: 'native', execution: 'happier' } }] } } });
+    expect(result).toMatchObject({ kind: 'composed', sourceSelection: 'whole_usage', facts: {}, coverage: { execution: { status: 'partial' } } });
+    expect(JSON.stringify(result)).not.toContain('"tokens"');
+    expect(JSON.stringify(result)).not.toMatch(/native-linked|private-session|"source":"runtime"/);
+  });
   it('keeps public Agent identity when private names are off, while model labels stay private', () => {
     const agent = { ...response.breakdowns!.model![0]!, key: 'claude', label: 'Claude' };
     const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['agentMix', 'modelMix'] }),

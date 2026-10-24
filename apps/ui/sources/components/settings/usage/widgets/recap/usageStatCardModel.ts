@@ -74,6 +74,8 @@ export type UsageStatCardModel = Readonly<{
   period: UsageRecapComposed['period'];
   periodLabel: string;
   asOfMs: number | null;
+  sourceSelection?: UsageRecapComposed['sourceSelection'];
+  executionCoverage?: UsageRecapComposed['coverage']['execution'];
 }>;
 
 const HOUR_MS = 3_600_000;
@@ -265,6 +267,8 @@ export function buildUsageStatCardModel(
     period: result.period,
     periodLabel: formatUsageRecapPeriod(result.period),
     asOfMs: result.asOfMs,
+    sourceSelection: result.sourceSelection,
+    executionCoverage: result.coverage.execution,
   };
 }
 

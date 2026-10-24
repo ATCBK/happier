@@ -7,6 +7,7 @@ import { UsageCalendarExportInputSchema } from '../../usage/usageCalendarExport.
 import { UsageModelPriceCatalogSchema } from '../../usage/usageModelPriceSchemas.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import type { InputFieldHint } from '../../inputs/inputFields.js';
 
 export { USAGE_ACTION_IDS, type UsageActionId } from '../../usage/usageActionIdsV1.js';
 
@@ -16,6 +17,9 @@ const common = {
   cli: { commands: [], acceptsServerId: true },
 } satisfies Pick<PreNormalizedActionSpec, 'safety' | 'sideEffectClass' | 'requiredAuthority' | 'executionPlacement' | 'placements' | 'surfaces' | 'cli'>;
 
+const recapSourceSelectionField = { path: 'sourceSelection', title: 'Private usage sources', widget: 'select',
+  options: [{ value: 'whole_usage', label: 'Whole usage' }, { value: 'happier_only', label: 'Happier only' }] } satisfies InputFieldHint;
+
 export const USAGE_ACTION_SPECS = [
   { ...common, id: 'usage.recap.deliver', approval: {result: 'none'}, title: 'Copy, save or share a usage recap',
     approvalPolicy: { uiConfirmation: 'direct' },
@@ -24,6 +28,7 @@ export const USAGE_ACTION_SPECS = [
     bindings: { mcpToolName: 'usage_recap_deliver' }, inputSchema: UsageRecapDeliveryInputSchema, outputSchema: UsageRecapDeliveryResultSchema,
     inputHints: { fields: [{ path: 'query', title: 'Private Usage query', widget: 'json', inputType: { hostType: 'usageQuery' } },
       { path: 'source', title: 'Public source', widget: 'json' },
+      recapSourceSelectionField,
       { path: 'intent', title: 'Delivery', widget: 'select', required: true, options: ['copy', 'save', 'share'].map(value => ({ value, label: value })) },
       { path: 'style', title: 'Style', widget: 'select', options: USAGE_RECAP_STYLES.map(value => ({ value, label: value })) },
       { path: 'format', title: 'Format', widget: 'select', options: USAGE_RECAP_FORMATS.map(value => ({ value, label: value })) },
@@ -46,6 +51,7 @@ export const USAGE_ACTION_SPECS = [
     bindings: { mcpToolName: 'usage_recap_export' }, inputSchema: UsageRecapComposeInputSchema, outputSchema: UsageRecapExportResultSchema,
     inputHints: { fields: [{ path: 'query', title: 'Private Usage query', widget: 'json', inputType: { hostType: 'usageQuery' } },
       { path: 'source', title: 'Public source', widget: 'json' },
+      recapSourceSelectionField,
       { path: 'style', title: 'Style', widget: 'select', options: USAGE_RECAP_STYLES.map(value => ({ value, label: value })) },
       { path: 'format', title: 'Format', widget: 'select', options: USAGE_RECAP_FORMATS.map(value => ({ value, label: value })) },
       { path: 'selectedFields', title: 'Selected fields', widget: 'text_list', listSeparator: 'newline' }] } },
@@ -54,6 +60,7 @@ export const USAGE_ACTION_SPECS = [
     bindings: { mcpToolName: 'usage_recap_compose' }, inputSchema: UsageRecapComposeInputSchema, outputSchema: UsageRecapComposeResultSchema,
     inputHints: { fields: [{ path: 'query', title: 'Private Usage query', widget: 'json', inputType: { hostType: 'usageQuery' } },
       { path: 'source', title: 'Public source', widget: 'json' },
+      recapSourceSelectionField,
       { path: 'style', title: 'Style', widget: 'select', options: USAGE_RECAP_STYLES.map(value => ({ value, label: value })) },
       { path: 'format', title: 'Format', widget: 'select', options: USAGE_RECAP_FORMATS.map(value => ({ value, label: value })) },
       { path: 'selectedFields', title: 'Selected fields', widget: 'text_list', listSeparator: 'newline' }] } },

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -61,6 +61,23 @@ async function mount(route: Parameters<typeof serveAccountHomes>[0]['route'], qu
 }
 
 describe('recap composer through authorized query and composition', () => {
+  it('starts with Whole usage independently of page source filters and keeps its admitted preview on source-only updates', async () => {
+    const requests: unknown[] = [];
+    const { screen, updateQuery } = await mount(request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      requests.push(request.body);
+      return Response.json(accounting);
+    }, normalizeUsageQuery({ sources: ['native'], execution: 'outside' }));
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')!.props.accessibilityLabel).toContain('12'));
+    const beforePageChange = requests.length;
+    await act(async () => { updateQuery(normalizeUsageQuery({ sources: ['runtime'], execution: 'unknown' })); });
+    expect(requests).toHaveLength(beforePageChange);
+    expect(screen.findByTestId('usage-recap-composer.card')!.props.accessibilityLabel).toContain('12');
+    for (const request of requests) {
+      expect(request).not.toHaveProperty('filters.sources');
+      expect(UsageAnalyticsQueryRequestSchema.parse(request).filters).not.toHaveProperty('execution');
+    }
+  });
   it.each(['style', 'format'] as const)('admits %s changes through the same composition Action instead of altering an authorized preview locally', async choice => {
     const { screen } = await mount(request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined);
     await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull());

@@ -2,7 +2,9 @@ import { getUsageQueryKey } from '../inputs/usageQuery.js';
 import type { UsageQueryResultSlice } from './resolveUsagePageAggregation.js';
 import { projectUsagePageCost } from './usageCostFacts.js';
 import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
+import { summarizeUsageExecutionSources } from './usageSourceSummary.js';
 import { UsageRecapPrivateComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_FIELDS,
+  resolveUsageRecapQuery,
   type UsageRecapPrivateComposeInput, type UsageRecapComposeResult, type UsageRecapFacts } from './usageRecap.js';
 
 /** One selected-fact projection for all styles and formats, with no file or sharing effect. */
@@ -12,7 +14,7 @@ export function composeUsageRecap(args: Readonly<{
 }>): UsageRecapComposeResult {
   const input = UsageRecapPrivateComposeInputSchema.parse(args.input);
   const { snapshot } = args;
-  const key = getUsageQueryKey(input.query);
+  const key = getUsageQueryKey(resolveUsageRecapQuery(input));
   if (snapshot.key !== key || getUsageQueryKey(snapshot.requestedQuery) !== key || getUsageQueryKey(snapshot.shownQuery) !== key) {
     return { kind: 'unavailable', reason: 'query_mismatch' };
   }
@@ -81,10 +83,13 @@ export function composeUsageRecap(args: Readonly<{
   const coverage = accounting.coverage;
   const accountingCoverage = coverage ? (({ sources: _sources, ...value }) => value)(coverage) : null;
   const source = snapshot.sources.find(row => row.source === 'accounting');
+  const execution = summarizeUsageExecutionSources(accounting.contributions);
   return UsageRecapComposeResultSchema.parse({ kind: 'composed', v: 1, style: input.style, format: input.format,
+    sourceSelection: input.sourceSelection,
     selectedFields, unavailableFields: selectedFields.filter(field => field !== 'names' && !(field in facts)),
     period: { startMs, endMs, timeZoneOffsetMinutes: input.query.timeZoneOffsetMinutes }, asOfMs: source?.asOfMs ?? null,
     coverage: { accounting: accountingCoverage,
+      execution: { status: execution.coverage },
       sourceCoverage: coverage?.sources.map(row => ({ status: row.status, eventCount: row.eventCount, historyComplete: row.historyComplete ?? null,
         ...(row.asOfMs === undefined ? {} : { asOfMs: row.asOfMs }) })) ?? [],
       sourceStatuses: snapshot.sources.map(row => ({ status: row.status, ...(row.asOfMs === undefined ? {} : { asOfMs: row.asOfMs }) })), pending: snapshot.pending,
