@@ -7,6 +7,7 @@ import { DiscussionAttachmentUploadRequestV1Schema, DiscussionAttachmentUploadSe
   DISCUSSION_ATTACHMENT_ENCRYPTED_OVERHEAD_BYTES_V1 } from './attachmentsUpload.js';
 import { MAX_ATTACHMENT_UPLOAD_FILE_BYTES_V1 } from '../transfers/attachments/attachmentLimitsV1.js';
 import { AttachmentRelativePathV1Schema } from '../transfers/attachments/attachmentPathV1.js';
+import { getActionSpec } from '../actions/actionSpecs.js';
 
 const blobId = '00000000-0000-4000-8000-000000000001';
 const file = { blobId, mime: 'image/png', sizeBytes: 3, sha256: 'a'.repeat(64) };
@@ -17,6 +18,19 @@ const post = () => buildDiscussionMutationRequestBodyV1({ kind: 'post', localId:
   content: { t: 'plain', v: content }, authoredContent: content, mentionedAccountIds: [] });
 
 describe('Discussion attachment contracts', () => {
+  it.each(['discussion.create', 'discussion.post', 'discussion.reply'] as const)('admits typed Machine-local sources at the public %s Action boundary', actionId => {
+    const attachmentSources = [{ blobId, path: '/workspace/photo.png' }];
+    const input = actionId === 'discussion.create' ? { title: 'Photo', firstMessage: { content }, attachmentSources }
+      : { discussionId: 'discussion', content, attachmentSources,
+        ...(actionId === 'discussion.reply' ? { replyTarget: { kind: 'message', messageId: 'parent' } } : {}) };
+    expect(getActionSpec(actionId).inputSchema.safeParse(input).success).toBe(true);
+    expect(getActionSpec(actionId).inputSchema.safeParse({ ...input,
+      attachmentSources: [{ ...attachmentSources[0], accountId: 'forged' }] }).success).toBe(false);
+    expect(getActionSpec(actionId).inputSchema.safeParse({ ...input,
+      attachmentSources: [attachmentSources[0], attachmentSources[0]] }).success).toBe(false);
+    expect(getActionSpec(actionId).inputSchema.safeParse({ ...input,
+      attachmentSources: [{ blobId: '00000000-0000-4000-8000-000000000002', path: '/workspace/unselected.png' }] }).success).toBe(false);
+  });
   it('keeps one typed tree per inline root identity while allowing repeated inline references', () => {
     const attachment = { kind: 'folder', id: blobId, name: 'Pictures', entries: [], directories: [] };
     const repeated = { v: 1, parts: [

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResultV1Schema } from './attachments.js';
+import { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResultV1Schema, DiscussionAttachmentSourcesV1Schema, type DiscussionAttachmentSourceV1 } from './attachments.js';
 export { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResultV1Schema } from './attachments.js';
 export type { DiscussionAttachmentReadInputV1, DiscussionAttachmentReadResultV1 } from './attachments.js';
 import { DiscussionSettingsV1Schema, DiscussionSettingsResponseV1Schema } from './settings.js';
@@ -26,6 +26,8 @@ import {
   DiscussionLocalIdSchema,
   DiscussionMessageContentV1Schema,
   DiscussionTitleV1Schema,
+  readDiscussionAttachmentReferencesV1,
+  type DiscussionMessageContentV1,
 } from './content.js';
 import {
   DiscussionReadCursorV1Schema,
@@ -79,6 +81,14 @@ const SequenceSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0
  */
 const DiscussionActionTitleSchema = DiscussionTitleV1Schema.shape.title;
 
+function attachmentSourcesMatchContent(content: DiscussionMessageContentV1,
+  sources: readonly DiscussionAttachmentSourceV1[] | undefined): boolean {
+  if (sources === undefined) return true;
+  const references = readDiscussionAttachmentReferencesV1(content);
+  const ids = new Set(sources.map(source => source.blobId));
+  return references.length === sources.length && references.every(reference => ids.has(reference.blobId));
+}
+
 // ---------------------------------------------------------------------------
 // Inputs
 // ---------------------------------------------------------------------------
@@ -117,6 +127,7 @@ const DiscussionSessionParticipantTargetV1Schema = lazyZodSchema(() => z.strictO
 
 export const DiscussionCreateInputV1Schema = lazyZodSchema(() => z.strictObject({
   creationLocalId: DiscussionActionLocalIdSchema,
+  attachmentSources: z.optional(DiscussionAttachmentSourcesV1Schema),
   title: DiscussionActionTitleSchema,
   anchor: z.optional(DiscussionAnchorV1Schema),
   participants: z.optional(z.array(z.union([DiscussionAccountParticipantRefV1Schema, DiscussionSessionParticipantTargetV1Schema])).check(
@@ -136,22 +147,26 @@ export const DiscussionCreateInputV1Schema = lazyZodSchema(() => z.strictObject(
   || value.creationLocalId !== value.firstMessage.localId, {
   path: ['firstMessage', 'localId'],
   message: 'Discussion creation and first-message retry identities must be distinct',
+}), z.refine(value => attachmentSourcesMatchContent(value.firstMessage.content, value.attachmentSources), {
+  path: ['attachmentSources'], message: 'Attachment sources must match the message attachment leaves',
 })));
 export type DiscussionCreateInputV1 = z.infer<typeof DiscussionCreateInputV1Schema>;
 
 export const DiscussionPostInputV1Schema = lazyZodSchema(() => z.strictObject({
   discussionId: DiscussionIdSchema,
+  attachmentSources: z.optional(DiscussionAttachmentSourcesV1Schema),
   localId: DiscussionActionLocalIdSchema,
   content: DiscussionMessageContentV1Schema,
   mentionedAccountIds: z.optional(DiscussionMessageWriteV1Schema.shape.mentionedAccountIds),
   mentionedSessionIds: DiscussionMessageWriteV1Schema.shape.mentionedSessionIds,
   replyTarget: z.optional(DiscussionReplyTargetV1Schema),
-}));
+}).check(z.refine(value => attachmentSourcesMatchContent(value.content, value.attachmentSources), {
+  path: ['attachmentSources'], message: 'Attachment sources must match the message attachment leaves',
+})));
 export type DiscussionPostInputV1 = z.infer<typeof DiscussionPostInputV1Schema>;
 
 /** Human replies use the same committed post writer; addressed turns are host-bound. */
-export const DiscussionReplyInputV1Schema = lazyZodSchema(() => z.strictObject({
-  ...DiscussionPostInputV1Schema.shape,
+export const DiscussionReplyInputV1Schema = lazyZodSchema(() => z.safeExtend(DiscussionPostInputV1Schema, {
   replyTarget: DiscussionReplyTargetV1Schema,
 }));
 export type DiscussionReplyInputV1 = z.infer<typeof DiscussionReplyInputV1Schema>;

@@ -8,7 +8,7 @@ import { DiscussionInitialParticipantsV1Schema, DiscussionOwnedSessionV1Schema, 
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { WorkflowDiscussionOriginV1Schema } from '../workflows/workflowDestinationsV1.js';
-import { DiscussionAttachmentBindingsV1Schema } from './attachments.js';
+import { DiscussionAttachmentBindingsV1Schema, DiscussionAttachmentSourcesV1Schema } from './attachments.js';
 import { readDiscussionAttachmentReferencesV1 } from './content.js';
 
 import {
@@ -276,6 +276,8 @@ export const DiscussionAgentPostRequestV1Schema = lazyZodSchema(() => z.strictOb
   sessionId: DiscussionIdSchema,
   discussionId: DiscussionIdSchema,
   request: DiscussionPostRequestV1Schema,
+  /** Private host source operands; omitted from the authenticated server publication. */
+  attachmentSources: z.optional(DiscussionAttachmentSourcesV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   replyReturn: z.optional(SessionMessageDiscussionReplyReturnV1Schema),
   runId: z.optional(DiscussionIdSchema),
@@ -289,6 +291,7 @@ export const DiscussionAgentCreateRequestV1Schema = lazyZodSchema(() => z.strict
   operation: z.literal('create'),
   sessionId: DiscussionIdSchema,
   request: DiscussionCreateRequestV1Schema,
+  attachmentSources: z.optional(DiscussionAttachmentSourcesV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   runId: z.optional(DiscussionIdSchema),
   toolCallId: z.optional(DiscussionIdSchema),
@@ -311,7 +314,7 @@ export const DiscussionDraftReviewV1Schema = lazyZodSchema(() => z.strictObject(
 }));
 export type DiscussionDraftReviewV1 = z.infer<typeof DiscussionDraftReviewV1Schema>;
 /** Trusted host transport only; authoring requests cannot carry review authority. */
-export const DiscussionAgentPostPublicationV1Schema = lazyZodSchema(() => z.extend(DiscussionAgentPostRequestV1Schema, {
+export const DiscussionAgentPostPublicationV1Schema = lazyZodSchema(() => z.extend(z.omit(DiscussionAgentPostRequestV1Schema, { attachmentSources: true }), {
   draftReview: z.optional(DiscussionDraftReviewV1Schema),
   /** Verified host final/result return, never an authored explicit reply. */
   terminalReturn: z.optional(z.literal(true)),
@@ -355,12 +358,12 @@ export const DiscussionMachinePublicationV2Schema = lazyZodSchema(() => z.union(
     }) }),
 ]));
 export const DiscussionAgentPublisherPublicationV1Schema = lazyZodSchema(() => z.union([
-  DiscussionAgentPostPublicationV1Schema, DiscussionAgentCreateRequestV1Schema,
+  DiscussionAgentPostPublicationV1Schema, z.omit(DiscussionAgentCreateRequestV1Schema, { attachmentSources: true }),
 ]));
 export type DiscussionAgentPublisherPublicationV1 = z.infer<typeof DiscussionAgentPublisherPublicationV1Schema>;
 export type DiscussionAgentPublisherPublicationInputV1 =
   | Omit<z.infer<typeof DiscussionAgentPostPublicationV1Schema>, 'v' | 'sessionId'>
-  | Omit<DiscussionAgentCreateRequestV1, 'v' | 'sessionId'>;
+  | Omit<DiscussionAgentCreateRequestV1, 'v' | 'sessionId' | 'attachmentSources'>;
 
 export const DiscussionRenameRequestV1Schema = lazyZodSchema(() => z.strictObject({
   titleContent: StrictSessionStoredMessageContentEnvelopeSchema,
