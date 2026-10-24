@@ -54,23 +54,34 @@ test(`dev isolates a cold Expo ${failure} failure instead of terminating the dis
       HAPPIER_STACK_EXPO_TAILSCALE: '0', HAPPIER_STACK_EXPO_SOURCE_STACK: '',
     },
   });
-  const observed = await new Promise(resolve => {
-    let output = '';
-    const onAbort = () => resolve({ output, timedOut: true });
-    t.signal.addEventListener('abort', onAbort, { once: true });
-    const receive = chunk => {
-      output += chunk;
-      if (output.includes('expo startup failed; keeping other components running')) {
-        t.signal.removeEventListener('abort', onAbort); resolve({ output });
-      }
-    };
-    child.stdout.on('data', receive); child.stderr.on('data', receive);
-    child.once('exit', code => { t.signal.removeEventListener('abort', onAbort); resolve({ output, code }); });
-  });
+  const observed = await waitForExpoStartupFailure(child, t.signal);
   assert.match(observed.output, /expo startup failed; keeping other components running/);
   assert.equal(child.exitCode, null, observed.output);
   assert.match(observed.output, failure === 'preflight' ? /fixture preflight permission denied/ : /happier-ui/);
 });
+}
+
+function waitForExpoStartupFailure(child, signal) {
+  return new Promise(resolve => {
+    let output = '';
+    const finish = result => {
+      signal.removeEventListener('abort', onAbort);
+      child.stdout.off('data', receive);
+      child.stderr.off('data', receive);
+      child.off('exit', onExit);
+      resolve(result);
+    };
+    const onAbort = () => finish({ output, timedOut: true });
+    const receive = chunk => {
+      output += chunk;
+      if (output.includes('expo startup failed; keeping other components running')) finish({ output });
+    };
+    const onExit = code => finish({ output, code });
+    signal.addEventListener('abort', onAbort, { once: true });
+    child.stdout.on('data', receive);
+    child.stderr.on('data', receive);
+    child.once('exit', onExit);
+  });
 }
 
 async function stopProcess(child) {
@@ -140,8 +151,10 @@ test('run proves a projected proxy PID when proxy metadata is missing and never 
   const binDir = join(tempRoot, 'bin');
   const sideEffectMarker = join(tempRoot, 'side-effect');
   let server = null;
+  let dev = null;
 
   t.after(async () => {
+    await stopProcess(dev);
     await stopProcess(server?.child);
     await rm(tempRoot, { recursive: true, force: true });
   });
@@ -216,8 +229,10 @@ esac
   const finalRuntime = JSON.parse(await readFile(runtimeStatePath, 'utf8'));
   assert.equal(finalRuntime.processes.proxyPid, server.child.pid);
   assert.notEqual(finalRuntime.processes.serverPid, server.child.pid);
-  const devResult = await runNode([devScript, '--no-daemon', '--no-mobile'], {
+  dev = spawn(process.execPath, [devScript, '--no-daemon', '--no-mobile'], {
     cwd: repoRoot,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -229,13 +244,15 @@ esac
       HAPPIER_STACK_PRISMA_MIGRATE: '0', HAPPIER_STACK_DOCKER_AUTOSTART: '0', HAPPIER_STACK_SERVE_UI: '0',
     },
   });
-  assert.equal(devResult.code, 0, `stdout:\n${devResult.stdout}\nstderr:\n${devResult.stderr}`);
-  assert.match(devResult.stderr, /expo startup failed; keeping other components running/);
+  const devResult = await waitForExpoStartupFailure(dev, t.signal);
+  assert.match(devResult.output, /expo startup failed; keeping other components running/);
+  assert.equal(dev.exitCode, null, devResult.output);
   const afterDevRuntime = JSON.parse(await readFile(runtimeStatePath, 'utf8'));
   assert.equal(afterDevRuntime.processes.proxyPid, server.child.pid);
   assert.notEqual(afterDevRuntime.processes.serverPid, server.child.pid);
   const sideEffects = await readFile(sideEffectMarker, 'utf8').catch((error) => error?.code === 'ENOENT' ? '' : Promise.reject(error));
-  assert.match(`${devResult.stdout}\n${devResult.stderr}`, /expo|ui|package|workspace/i);
+  assert.match(devResult.output, /expo|ui|package|workspace/i);
   assert.doesNotMatch(sideEffects, /prisma|migrat|happier-server(?:-light)?/i);
   await assert.rejects(() => readFile(join(fakeRepo, 'pnpm-lock.yaml'), 'utf8'), /ENOENT/);
+  await stopProcess(dev);
 });
