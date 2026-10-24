@@ -592,6 +592,7 @@ describe("local service preview HTTP adapter", () => {
         };
         const sink = createSink();
         const abort = vi.fn();
+        const events: unknown[] = [];
 
         const result = await mod.proxyLocalServicePreviewHttpRequest({
             preview: sizeLimitedPreview,
@@ -603,6 +604,7 @@ describe("local service preview HTTP adapter", () => {
                 body: chunks([]),
             },
             response: sink,
+            observability: { emit: event => { events.push(event); } },
             openTunnel: async () => ({
                 ...previewTunnelIdentity(),
                 write: vi.fn(),
@@ -617,6 +619,28 @@ describe("local service preview HTTP adapter", () => {
         expect(abort).toHaveBeenCalledWith("response_body_too_large");
         expect(sink.write).not.toHaveBeenCalled();
         expect(sink.destroy).toHaveBeenCalled();
+        expect(events).toEqual([
+            expect.objectContaining({ kind: 'http.request.started' }),
+            expect.objectContaining({ kind: 'http.request.aborted', data: expect.objectContaining({ reasonCode: 'response_body_too_large' }) }),
+        ]);
+    });
+
+    it('finishes an admitted upload quota refusal with the actual 413 observation', async () => {
+        const sink = createSink();
+        const events: unknown[] = [];
+        const result = await httpAdapterModule.proxyLocalServicePreviewHttpRequest({
+            preview: { ...preview, policy: { ...preview.policy!, maxRequestBodyBytes: 4 } },
+            request: { method: 'POST', path: '/upload', search: '', headers: {}, body: chunks(['hello']) },
+            response: sink,
+            observability: { emit: event => { events.push(event); } },
+            openTunnel: async () => ({ ...previewTunnelIdentity(), write() {}, endWrite() {},
+                read: () => chunks([]), close() {}, abort() {} }),
+        });
+        expect(result).toMatchObject({ ok: false, reasonCode: 'request_body_too_large' });
+        expect(events).toEqual([
+            expect.objectContaining({ kind: 'http.request.started' }),
+            expect.objectContaining({ kind: 'http.request.finished', data: expect.objectContaining({ statusCode: 413, responseBytes: 0 }) }),
+        ]);
     });
 
     it("aborts upstream responses whose header block exceeds the preview header cap", async () => {

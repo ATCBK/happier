@@ -100,7 +100,7 @@ function requestTargetPath(request: LocalServicePreviewHttpRequest): string {
     return `${path}${request.search.startsWith("?") ? request.search : ""}`;
 }
 
-async function forwardNativeHttp(input: ProxyLocalServicePreviewHttpRequestInput, tunnel: LocalServicePreviewTunnelStream): Promise<Readonly<{ statusCode: number; responseBytes: number }>> {
+async function forwardNativeHttp(input: ProxyLocalServicePreviewHttpRequestInput, tunnel: LocalServicePreviewTunnelStream, onResponse: () => void): Promise<Readonly<{ statusCode: number; responseBytes: number }>> {
     const socket = createPreviewUpstreamSocket(input.preview, tunnel);
     socket.on("error", () => undefined);
     const requestHeaders = buildPreviewRequestHeaders({ preview: input.preview, headers: input.request.headers, externalProtocol: input.request.externalProtocol });
@@ -121,6 +121,7 @@ async function forwardNativeHttp(input: ProxyLocalServicePreviewHttpRequestInput
         request.on("error", reject);
         request.on("response", (response) => {
             void (async () => {
+                onResponse();
                 const headers = Object.fromEntries(Object.entries(response.headers).filter((entry): entry is [string, string | string[]] => entry[1] !== undefined));
                 input.response.writeHead(response.statusCode ?? 502, response.statusMessage ?? "", rewritePreviewResponseHeaders({
                     preview: input.preview, request: input.request, headers,
@@ -183,17 +184,19 @@ function readTunnelUnavailableReasonCode(error: unknown): string {
  * The wire reason stays generic on purpose: the specific prerequisite is server configuration, and
  * it belongs in the operator's log rather than in a preview visitor's response body.
  */
-function writePreviewTransportUnavailable(
+async function writePreviewTransportUnavailable(
     response: LocalServicePreviewHttpResponseSink,
     body: string,
-): void | Promise<void> {
+): Promise<number> {
     const payload = textEncoder.encode(body);
     response.writeHead(503, "Service Unavailable", {
         "content-type": "application/json; charset=utf-8",
         "content-length": String(payload.byteLength),
         "cache-control": "no-store",
     });
-    return Promise.resolve(response.write(payload)).then(() => response.end());
+    await response.write(payload);
+    await response.end();
+    return payload.byteLength;
 }
 
 export async function proxyLocalServicePreviewHttpRequest(
@@ -203,6 +206,16 @@ export async function proxyLocalServicePreviewHttpRequest(
     const startedAtMs = nowMs();
     const requestId = nextRequestId(input.preview.previewId);
     const observabilityAccountId = input.observabilityAccountId ?? "unknown";
+    const refuseTransport = async (reasonCode: string) => {
+        input.onTransportUnavailable?.({
+            module: "local-service-preview", level: "error", previewId: input.preview.previewId,
+            machineId: input.preview.machineId, requestId, method: input.request.method,
+            url: requestTargetPath(input.request), reasonCode,
+        });
+        return await writePreviewTransportUnavailable(input.response, JSON.stringify({
+            error: "preview_transport_unavailable", reasonCode: "pms_tunnel_unavailable",
+        }));
+    };
 
     // S-1 fail-closed backstop for the raw request line. Every route entry point re-encodes the
     // router-decoded path (`requestTarget.ts`) and `URL.pathname` is canonical by construction, so
@@ -239,21 +252,7 @@ export async function proxyLocalServicePreviewHttpRequest(
         // typed result. Opening the tunnel used to be the one that escaped as an exception, which
         // Fastify's global handler turned into an untyped `500 An unexpected error occurred` with
         // no product vocabulary attached (`F-PREVIEW-1`).
-        const reasonCode = readTunnelUnavailableReasonCode(error);
-        input.onTransportUnavailable?.({
-            module: "local-service-preview",
-            level: "error",
-            previewId: input.preview.previewId,
-            machineId: input.preview.machineId,
-            requestId,
-            method: input.request.method,
-            url: requestTargetPath(input.request),
-            reasonCode,
-        });
-        await writePreviewTransportUnavailable(input.response, JSON.stringify({
-            error: "preview_transport_unavailable",
-            reasonCode: "pms_tunnel_unavailable",
-        }));
+        await refuseTransport(readTunnelUnavailableReasonCode(error));
         return { ok: false, reasonCode: "preview_tunnel_unavailable" };
     }
     if (input.observability) {
@@ -270,35 +269,56 @@ export async function proxyLocalServicePreviewHttpRequest(
             nowMs: startedAtMs,
         });
     }
-    try {
-        const finished = await forwardNativeHttp(input, tunnel);
+    let responseStarted = false;
+    const observeFinished = (statusCode: number, responseBytes: number) => {
         input.observability?.createPeerMediationHttpRequestFinishedEvent?.({
             accountId: observabilityAccountId, machineId: input.preview.machineId,
             previewId: input.preview.previewId, requestId, tunnelId: tunnel.tunnelId,
             substreamId: tunnel.substreamId, method: input.request.method, url: requestTargetPath(input.request),
-            statusCode: finished.statusCode, responseBytes: finished.responseBytes,
+            statusCode, responseBytes,
             durationMs: Math.max(0, nowMs() - startedAtMs), nowMs: nowMs(),
         });
+    };
+    const observeAborted = (reasonCode: string) => {
+        input.observability?.createPeerMediationHttpRequestAbortedEvent?.({
+            accountId: observabilityAccountId, machineId: input.preview.machineId,
+            previewId: input.preview.previewId, requestId, tunnelId: tunnel.tunnelId,
+            substreamId: tunnel.substreamId, method: input.request.method, url: requestTargetPath(input.request),
+            reasonCode, durationMs: Math.max(0, nowMs() - startedAtMs), nowMs: nowMs(),
+        });
+    };
+    try {
+        const finished = await forwardNativeHttp(input, tunnel, () => { responseStarted = true; });
+        observeFinished(finished.statusCode, finished.responseBytes);
         return { ok: true };
     } catch (error) {
         const code = readPreviewUpstreamResponseFailure(error) ?? (error instanceof Error ? error.message : "");
         if (code === "request_body_too_large" || code === "response_body_too_large") {
             await tunnel.abort(code);
-            if (code === "request_body_too_large") {
+            if (code === "request_body_too_large" && !responseStarted) {
                 input.response.writeHead(413, "Payload Too Large", {});
                 await input.response.end();
-            } else input.response.destroy(error);
+                observeFinished(413, 0);
+            } else {
+                input.response.destroy(error);
+                observeAborted(code);
+            }
             return { ok: false, reasonCode: code };
+        }
+        // PMS admits its byte stream before the destination connects. A refused/stopped
+        // listener (including EOF without headers) must answer the same state probe as
+        // a tunnel-open refusal, rather than resetting the browser's document request.
+        if (!responseStarted && code !== "client_aborted" && code !== "response_header_too_large") {
+            await tunnel.abort("preview_upstream_unavailable");
+            const responseBytes = await refuseTransport("preview_upstream_unavailable");
+            observeFinished(503, responseBytes);
+            return { ok: false, reasonCode: code === "upstream_response_invalid"
+                ? code : "upstream_stream_failed" };
         }
         if (code === "client_aborted" || code === "response_header_too_large" || code === "upstream_response_invalid") {
             input.response.destroy(error);
             await tunnel.abort(code);
-            input.observability?.createPeerMediationHttpRequestAbortedEvent?.({
-                accountId: observabilityAccountId, machineId: input.preview.machineId,
-                previewId: input.preview.previewId, requestId, tunnelId: tunnel.tunnelId,
-                substreamId: tunnel.substreamId, method: input.request.method, url: requestTargetPath(input.request),
-                reasonCode: code, durationMs: Math.max(0, nowMs() - startedAtMs), nowMs: nowMs(),
-            });
+            observeAborted(code);
             return { ok: false, reasonCode: code === "client_aborted" ? "upstream_stream_failed" : code };
         }
         input.response.destroy(error);

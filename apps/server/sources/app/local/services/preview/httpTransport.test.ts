@@ -11,13 +11,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import type { LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
+import type { LocalServicePreviewResourceV1, PeerMediationObservabilityEventV1 } from "@happier-dev/protocol";
+import { applyPeerMediationObservabilityEventToFlowSnapshot } from '@happier-dev/protocol/machines/peer/mediation/observability/flowSnapshotFold';
 import { proxyLocalServicePreviewHttpRequest, type OpenLocalServicePreviewTunnel } from "./httpAdapter";
 import { registerLocalServicePreviewRoutes } from "@/app/api/routes/local/services/preview/registerRoutes";
 import { registerLocalServicePublicRoutes } from "@/app/api/routes/local/services/public/registerRoutes";
 import { proxyLocalServicePreviewWebSocketUpgrade } from "./websocketAdapter";
 import { runInNewContext } from 'node:vm';
 import { createLocalServicePublicRuntime } from '../public/runtime';
+import { createPublicExposureObservabilityEmitter } from '../public/websocket';
 import { LocalServicePublicExposureV1Schema, LocalServicePublicPreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 const servers: Server[] = [];
@@ -33,7 +35,7 @@ async function upstream(handler: (request: import("node:http").IncomingMessage, 
     return listenUpstream(server, "http");
 }
 
-async function listenUpstream(server: Server, scheme: "http" | "https", host = "127.0.0.1") {
+async function listenUpstream(server: Server, scheme: "http" | "https", host = "127.0.0.1", connectBeforeReturn = true) {
     servers.push(server);
     server.listen(0, host);
     await once(server, "listening");
@@ -47,7 +49,8 @@ async function listenUpstream(server: Server, scheme: "http" | "https", host = "
     };
     const openTunnel: OpenLocalServicePreviewTunnel = async () => {
         const socket = connect(address.port, host);
-        await once(socket, "connect");
+        // PMS admits a byte stream before the daemon has connected its destination.
+        if (connectBeforeReturn) await once(socket, "connect");
         return {
             tunnelId: "tcp", substreamId: "stream",
             write: (bytes) => new Promise<void>((resolve, reject) => socket.write(bytes, (error) => error ? reject(error) : resolve())),
@@ -60,20 +63,24 @@ async function listenUpstream(server: Server, scheme: "http" | "https", host = "
     return { preview, openTunnel };
 }
 
-async function proxy(fixture: Awaited<ReturnType<typeof upstream>>, headers: IncomingHttpHeaders = {}, externalProtocol: "http" | "https" = "http") {
+async function proxy(fixture: Awaited<ReturnType<typeof upstream>>, headers: IncomingHttpHeaders = {}, externalProtocol: "http" | "https" = "http", exposureId?: string) {
     let status = 0;
     let responseHeaders: Readonly<Record<string, string | readonly string[]>> = {};
     let failure: unknown;
     const bytes: Uint8Array[] = [];
+    const events: PeerMediationObservabilityEventV1[] = [];
     const request = { method: "GET", path: "/", search: "", headers, externalProtocol };
     const result = await proxyLocalServicePreviewHttpRequest({
         ...fixture,
         request,
+        observability: exposureId
+            ? createPublicExposureObservabilityEmitter({ emit: event => { events.push(event); } }, exposureId)
+            : { emit: event => { events.push(event); } },
         response: {
             writeHead(code, _message, headers) { status = code; responseHeaders = headers; }, write(chunk) { bytes.push(chunk); }, end() {}, destroy(error) { failure = error; },
         },
     });
-    return { result, status, body: Buffer.concat(bytes), failure, headers: responseHeaders };
+    return { result, status, body: Buffer.concat(bytes), failure, headers: responseHeaders, events };
 }
 
 async function echoRequest(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
@@ -86,6 +93,112 @@ async function echoRequest(request: import("node:http").IncomingMessage, respons
         response.destroy(error instanceof Error ? error : new Error(String(error)));
     }
 }
+
+describe('preview destination availability', () => {
+    it.each([true, false])('returns the typed transport refusal for a stopped listener (connect before stream=%s)', async (connectBeforeReturn) => {
+        const server = createServer((_request, response) => response.end('running'));
+        const fixture = await listenUpstream(server, 'http', '127.0.0.1', connectBeforeReturn);
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+
+        const response = await proxy(fixture);
+        expect(response.status).toBe(503);
+        expect(JSON.parse(response.body.toString())).toEqual({
+            error: 'preview_transport_unavailable', reasonCode: 'pms_tunnel_unavailable',
+        });
+        expect(response.failure).toBeUndefined();
+        expect(response.events.map(event => event.kind)).toEqual(connectBeforeReturn ? [] : ['http.request.started', 'http.request.finished']);
+        if (!connectBeforeReturn) {
+            expect(response.events[1]?.data).toMatchObject({ statusCode: 503, responseBytes: response.body.byteLength });
+            expect(applyPeerMediationObservabilityEventToFlowSnapshot(undefined, response.events[1]!).lifecycleState).toBe('closed');
+        }
+    });
+
+    it.each(['eof', 'malformed'] as const)('finishes admitted %s before headers with the actual 503 observation', async failure => {
+        const fixture = await upstream((request) => {
+            request.socket.end(failure === 'malformed' ? 'invalid HTTP response\r\n' : '');
+        });
+        const response = await proxy(fixture);
+        expect(response.status).toBe(503);
+        expect(response.events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.finished']);
+        expect(response.events[1]?.data).toMatchObject({ statusCode: 503, responseBytes: response.body.byteLength });
+    });
+
+    it('finishes a transport refusal in its original public exposure scope', async () => {
+        const server = createServer((_request, response) => response.end('running'));
+        const fixture = await listenUpstream(server, 'http', '127.0.0.1', false);
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        const response = await proxy(fixture, {}, 'http', 'observed-public-exposure');
+        expect(response.events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.finished']);
+        expect(response.events.map(event => event.scope)).toEqual([
+            { kind: 'publicPreview', publicExposureId: 'observed-public-exposure' },
+            { kind: 'publicPreview', publicExposureId: 'observed-public-exposure' },
+        ]);
+        const started = applyPeerMediationObservabilityEventToFlowSnapshot(undefined, response.events[0]!);
+        expect(applyPeerMediationObservabilityEventToFlowSnapshot(started, response.events[1]!).lifecycleState).toBe('closed');
+    });
+
+    it('preserves the stopped-listener refusal and CORS through the real collector state route', async () => {
+        const server = createServer((_request, response) => response.end('running'));
+        const fixture = await listenUpstream(server, 'http', '127.0.0.1', false);
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+            collector: { collectorId: 'c', nonce: 'n', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        registerLocalServicePreviewRoutes(app as never, { resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: () => fixture.preview, hostOriginBaseDomain: 'example.test',
+            validateAccess: () => ({ ok: true }), openTunnel: fixture.openTunnel });
+        try {
+            const response = await app.inject({ url: `/?__happierCollector=${encodeURIComponent(JSON.stringify(config))}&__happierCollectorState=1`,
+                headers: { host: 'preview.example.test', origin: config.webPostMessageTargetOrigin } });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: 'preview_transport_unavailable', reasonCode: 'pms_tunnel_unavailable' });
+            expect(response.headers['access-control-allow-origin']).toBe(config.webPostMessageTargetOrigin);
+            expect(response.headers['access-control-allow-credentials']).toBe('true');
+        } finally { await app.close(); }
+    });
+
+    it('aborts an already-started upstream response instead of appending a transport refusal', async () => {
+        const fixture = await upstream((_request, response) => {
+            response.writeHead(200, { 'content-type': 'text/plain' });
+            response.write('partial', () => response.destroy());
+        });
+        const response = await proxy(fixture);
+        expect(response.status).toBe(200);
+        expect(response.body.toString()).toBe('partial');
+        expect(response.failure).toBeInstanceOf(Error);
+        expect(response.result).toMatchObject({ ok: false });
+        expect(response.events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.aborted']);
+    });
+
+    it('aborts an upload quota crossed after headers without replacing the response', async () => {
+        const fixture = await upstream((request, response) => {
+            request.once('data', () => { response.writeHead(200); response.write('partial'); });
+        });
+        fixture.preview.policy = { allowedMethods: ['POST'], cookiePolicy: 'drop', compressionPolicy: 'identity',
+            redirectPolicy: 'preserve_host_origin', maxRequestBodyBytes: 4, maxResponseBodyBytes: 1024 };
+        let beginOverflow!: () => void;
+        const responseArrived = new Promise<void>(resolve => { beginOverflow = resolve; });
+        const statuses: number[] = [];
+        const events: PeerMediationObservabilityEventV1[] = [];
+        let destroyed = false;
+        const result = await proxyLocalServicePreviewHttpRequest({ ...fixture,
+            request: { method: 'POST', path: '/', search: '', headers: {}, body: (async function* () {
+                yield Buffer.from('ab');
+                await responseArrived;
+                yield Buffer.from('cde');
+            })() },
+            response: { writeHead: status => { statuses.push(status); }, write() { beginOverflow(); },
+                end() {}, destroy() { destroyed = true; } },
+            observability: { emit: event => { events.push(event); } },
+        });
+        expect(result).toMatchObject({ ok: false, reasonCode: 'request_body_too_large' });
+        expect(statuses).toEqual([200]);
+        expect(destroyed).toBe(true);
+        expect(events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.aborted']);
+        expect(events[1]?.data).toMatchObject({ reasonCode: 'request_body_too_large' });
+    });
+});
 
 describe('public preview sharing and withdrawal through real routes', () => {
     async function publicApp(fixture: Awaited<ReturnType<typeof upstream>>, options: Readonly<{ wallClock?: boolean; ttlMs?: number }> = {}) {
@@ -743,11 +856,17 @@ describe("preview native HTTP transport", () => {
             const wrongIdentity = await proxy({ ...fixture, preview: { ...fixture.preview,
                 target: { ...fixture.preview.target, host: "127.0.0.2" } } });
             expect(wrongIdentity.result).toEqual({ ok: false, reasonCode: "upstream_stream_failed" });
-            expect(wrongIdentity.failure).toBeInstanceOf(Error);
+            expect(wrongIdentity.status).toBe(503);
+            expect(JSON.parse(wrongIdentity.body.toString()).error).toBe('preview_transport_unavailable');
+            expect(wrongIdentity.events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.finished']);
+            expect(wrongIdentity.events[1]?.data).toMatchObject({ statusCode: 503, responseBytes: wrongIdentity.body.byteLength });
             trustStore.setDefaultCACertificates(originalTrust);
             const denied = await proxy(fixture);
             expect(denied.result).toEqual({ ok: false, reasonCode: "upstream_stream_failed" });
-            expect(denied.failure).toBeInstanceOf(Error);
+            expect(denied.status).toBe(503);
+            expect(JSON.parse(denied.body.toString()).error).toBe('preview_transport_unavailable');
+            expect(denied.events.map(event => event.kind)).toEqual(['http.request.started', 'http.request.finished']);
+            expect(denied.events[1]?.data).toMatchObject({ statusCode: 503, responseBytes: denied.body.byteLength });
         } finally {
             trustStore.setDefaultCACertificates(originalTrust);
             await rm(scratch, { recursive: true, force: true });
