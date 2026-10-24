@@ -5,7 +5,7 @@ import { View, Platform, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
-import type { Message, ToolCall } from "@happier-dev/session-core/messages";
+import { readMessageDisplayText, type Message, type ToolCall } from "@happier-dev/session-core/messages";
 import type { Metadata } from '@happier-dev/session-core/state';
 import { t } from '@/text';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -90,7 +90,7 @@ export const projectSubAgentSummaryDisplayText: ToolDisplayTextProjector = (tool
     ...collectSubAgentSummaryTools({ tool, metadata: metadata ?? null, messages: context?.messages ?? [] })
         .flatMap((item, index) => toolTextBlock(`tool-child-title-${index}`, item.title)),
     ...(context?.messages ?? []).filter((message) => message.kind === 'user-text' || message.kind === 'agent-text')
-        .flatMap((message, index) => toolTextBlock(`tool-thread-text-${index}`, message.text)),
+        .flatMap((message, index) => toolTextBlock(`tool-thread-text-${index}`, readMessageDisplayText(message))),
 ];
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -254,7 +254,7 @@ export const SubAgentSummarySection = React.memo<{
                             key={`thread-text-${idx}`}
                             messageId={messageId}
                             blockId={`tool-thread-text-${idx}`}
-                            text={m.text}
+                            text={readMessageDisplayText(m)}
                             style={styles.summaryText}
                             numberOfLines={isFullView ? undefined : 3}
                         />

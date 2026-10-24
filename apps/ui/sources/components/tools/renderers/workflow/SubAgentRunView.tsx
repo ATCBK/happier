@@ -14,6 +14,8 @@ import { SubAgentSummarySection, projectSubAgentSummaryDisplayText } from './Sub
 import { ToolFindText, useToolFindState } from '../core/ToolFindText';
 import { t } from '@/text';
 import { toolTextBlock, type ToolDisplayTextProjector } from '../core/toolDisplayTextTypes';
+import { resolveExecutionRunVisibleMessages } from '@/sync/domains/session/subagents/visibleMessages/resolveSessionSubagentVisibleMessages';
+import { readExecutionRunIdFromToolPayload } from '@/sync/domains/session/participants/deriveExecutionRunPollingRefreshKey';
 
 
 type FindingsDigest = Readonly<{
@@ -67,10 +69,17 @@ function readString(value: unknown, key: string): string | null {
     return typeof text === 'string' ? text : null;
 }
 
+function resolveRunThreadMessages(tool: ToolViewProps['tool'], messages: readonly Message[]): readonly Message[] {
+    const runId = readExecutionRunIdFromToolPayload(tool);
+    return runId ? resolveExecutionRunVisibleMessages({ runId, messages: [], focusedMessages: messages }) : messages;
+}
+
 export const projectSubAgentRunDisplayText: ToolDisplayTextProjector = (tool, _metadata, context) => {
-    if (tool.state === 'running') return projectSubAgentSummaryDisplayText(tool, null, context);
-    if (shouldRenderInterruptedSidechain(tool, context?.messages ?? [])) {
-        return projectSubAgentSummaryDisplayText({ ...tool, state: 'running', result: null }, null, context);
+    const messages = resolveRunThreadMessages(tool, context?.messages ?? []);
+    const visibleContext = { ...context, messages };
+    if (tool.state === 'running') return projectSubAgentSummaryDisplayText(tool, null, visibleContext);
+    if (shouldRenderInterruptedSidechain(tool, messages)) {
+        return projectSubAgentSummaryDisplayText({ ...tool, state: 'running', result: null }, null, visibleContext);
     }
     if (tool.state === 'error') return projectStructuredResultDisplayText({ ...tool, state: 'completed' });
     if (tool.state !== 'completed' || !tool.result) return [];
@@ -89,8 +98,9 @@ export const projectSubAgentRunDisplayText: ToolDisplayTextProjector = (tool, _m
     ];
 };
 
-export const SubAgentRunView = React.memo<ToolViewProps>(({ tool, messages, detailLevel, sessionId, serverId, messageId, interaction }) => {
+export const SubAgentRunView = React.memo<ToolViewProps>(({ tool, messages: rawMessages, detailLevel, sessionId, serverId, messageId, interaction }) => {
     const find = useToolFindState(messageId);
+    const messages = resolveRunThreadMessages(tool, rawMessages ?? []);
     if (tool.state === 'running') {
         return (
             <SubAgentSummarySection

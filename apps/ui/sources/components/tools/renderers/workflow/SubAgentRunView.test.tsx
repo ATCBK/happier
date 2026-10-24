@@ -3,6 +3,7 @@ import renderer from 'react-test-renderer';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderWithSessionTranscriptSource, createTestSessionTranscriptSource } from '@/dev/testkit';
 import { collectHostText } from '@/dev/testkit';
+import type { Message, ToolCall } from '@happier-dev/session-core/messages';
 
 
 function renderScreen(element: React.ReactElement<React.ComponentProps<typeof import('./SubAgentRunView')['SubAgentRunView']>>) {
@@ -43,6 +44,29 @@ describe('SubAgentRunView', () => {
 
         const text = collectHostText(tree).join('\n');
         expect(text).toContain('Working...');
+    });
+
+    it('uses the Run visibility projection for parent previews and Find text', async () => {
+        const tool: ToolCall = { name: 'SubAgentRun', state: 'running', input: { runId: 'run_7425823b-704c-445f-aa46-a2ceb57bcfa1' },
+            result: null, createdAt: 1, startedAt: 1, completedAt: null, description: null };
+        const host: Message = { kind: 'user-text', id: 'host', realID: 'cmvlva2g0007mmcdtsorblbuf',
+            localId: '96fbe1db-c2de-4d0f-a564-e1076982ef2b', createdAt: 1792814190028, seq: 14,
+            text: '[host startup context]', meta: {
+                happierProvenanceV1: { v: 1, kind: 'host', producer: 'happierApp' },
+                happierInputAuthorityV1: { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: { admittedPermissionCeiling: 'default' } },
+            } };
+        const question: Message = { kind: 'user-text', id: 'question', realID: 'cmvlvcymq007ymcdtu4qqa7xj',
+            localId: '9e38ea44-a338-4e25-bc57-cef1250b0856', createdAt: 1792814325035, seq: 16,
+            text: '[expanded question context]', displayText: '[person question]' };
+        const screen = await renderScreen(<SubAgentRunView tool={tool} metadata={null} messages={[host, question]} detailLevel="full" />);
+        expect(screen.getTextContent()).toContain(question.displayText);
+        expect(screen.getTextContent()).not.toContain(question.text);
+        expect(screen.getTextContent()).not.toContain(host.text);
+        const { projectSubAgentRunDisplayText } = await import('./SubAgentRunView');
+        const findText = projectSubAgentRunDisplayText(tool, null, { messages: [host, question] }).map(block => block.text).join('\n');
+        expect(findText).toContain(question.displayText);
+        expect(findText).not.toContain(question.text);
+        expect(findText).not.toContain(host.text);
     });
 
     it('keeps nested +N tool navigation inert when the source withholds navigation', async () => {
