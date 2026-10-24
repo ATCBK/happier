@@ -19,6 +19,13 @@ does not activate plugins, import app UI, or supply installed Agent metadata.
 Unknown ids return `null`; the shared `getNeutralAgentIdentityColor` supplies
 the existing neutral hue when a host has no admitted color.
 
+In 0.3 development source, `agents.backends.list` publishes each resolved
+selection as optional `agentTarget: AgentExecutionTargetV1`, retaining Custom
+ACP's `definitionId`. The SDK's `/agents` entrypoint exposes the same strict
+composable parser as `AgentExecutionTargetV1Schema`. Plugin `readSession`
+returns its admitted metadata target separately from catalog presentation;
+an unknown or unavailable target stays absent.
+
 ---
 
 ## Key concepts (shared language)
@@ -954,15 +961,29 @@ helper request/application evidence remains part of the composed Provider QA
 journey; launch-environment assertions alone do not prove that evidence.
 
 In development source, the existing native effective-model evidence feed also
-projects observed effort onto admitted model controls. SDK initialization
-acknowledges the explicit effort captured for that actual query launch;
-statusline and verified terminal-control results report native effective truth.
+projects observed effort onto admitted model controls. The SDK pairs captured
+launch effort with the first actual main-assistant model from that same query;
+initialization alone supplies no model or effort proof. An interrupted query
+retains its unpublished launch effort when reused. Statusline and verified
+terminal-control results report native effective truth.
 Pending configuration, deferred controls, and unverified delivery do not supply
 an observed effort. Context-only evidence and model catalog enrichment retain
 the last observation without advancing catalog freshness. When no effort has
 been observed, the existing catalog default remains a fallback, not proof of
 native application. Known aliases continue to use the plugin's canonical
 effort-support policy rather than catalog membership.
+
+In 0.3 development, Claude's native model source starts without an observed model.
+Opening a Session or accepting configuration does not turn the selected model into
+runtime evidence. SDK launch controls acknowledge the next-query boundary through
+the existing deferred configuration result; effective-model observations remain
+the only writer of the reported current model. Aggregate usage cannot select a
+pending requested model or let an older background query replace the current
+query's model. Actual launch-setting changes
+retire interrupted-query reuse through the SDK query lifecycle, including model,
+fallback, effort, effective Ultracode, workspace policy and skill-root changes.
+Unchanged settings and permission-only updates preserve eligible query reuse;
+background work retains its existing activity-owned cleanup.
 
 ##### Internal transcript event classification (development)
 
