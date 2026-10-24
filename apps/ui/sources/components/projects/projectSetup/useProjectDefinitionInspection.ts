@@ -10,6 +10,7 @@ import { createSharedSubscriptionStore, type SharedSubscriptionStore } from '@/s
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { createProjectManifestActionClient } from './projectManifestActionClient';
 
@@ -54,7 +55,22 @@ function createInspectionStore(currentBinding: () => ServerCredentialAccountScop
             const binding = currentBinding();
             if (!binding) return null;
             const value = await snapshotClient({ workspace: input, expectedAccountId: binding.accountId, signal }).inspect();
-            return binding.isCurrent() || currentBinding() ? { key: projectDefinitionInspectionKey(input), value, refreshing: false } : null;
+            return current => {
+                if (!binding.isCurrent() && !currentBinding()) return null;
+                let facts = value;
+                if (current && 'value' in current) {
+                    if (sameStrictJsonValue(current.value, value)) facts = current.value;
+                    else {
+                        facts = { ...value };
+                        for (const field of Object.keys(value) as Array<keyof ProjectDefinitionInspection>) {
+                            if (sameStrictJsonValue(current.value[field], value[field])) {
+                                Object.assign(facts, { [field]: current.value[field] });
+                            }
+                        }
+                    }
+                }
+                return { key: projectDefinitionInspectionKey(input), value: facts, refreshing: false };
+            };
         },
         failRefresh: (state, input, _now, error: unknown) => {
             if (!currentBinding()) return null;
