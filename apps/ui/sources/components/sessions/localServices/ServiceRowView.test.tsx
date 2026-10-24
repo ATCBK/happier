@@ -825,7 +825,8 @@ describe('ServiceRowView', () => {
             startedAtMs, startedByAccountId: 'viewer-account' }));
         const ownScreen = await renderScreen(<ServiceRowView row={own} machineName="devbox"
             startedByName={null} testID="row" />);
-        expect(ownScreen.getTextContent()).toContain('42m ago');
+        expect(ownScreen.getTextContent()).toContain('42 min');
+        expect(ownScreen.getTextContent()).not.toContain('ago');
         expect(ownScreen.getTextContent()).not.toContain('Started by');
 
         const teammate = projectRow(projectTarget({ state: 'available', serviceState: 'running', actions: ['manage'],

@@ -12,12 +12,13 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
+import { formatMachineDuration } from '@/components/machines/durationWords';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 import type { ServicesOpenInBrowserResult } from '@/components/browser/surfaces/openBrowserTargetInWorkspace';
 import type { ServiceRow, ServiceRowStatus } from '@/sync/domains/local/services/serviceRow';
@@ -136,8 +137,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: ROW_ACTION_GAP_PX,
         paddingHorizontal: SURFACE_CARD_PADDING_PX.sm.horizontal,
+        // Under the open row's header on the tile: the buttons start where the row's title does.
+        paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
         paddingTop: 0,
         paddingBottom: SURFACE_CARD_PADDING_PX.sm.vertical,
+    },
+    /** First row of the pushed page's sheet: it keeps the sheet rows' inset and clears the sheet's top edge. */
+    actionsInSheet: {
+        paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+        paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+        paddingTop: SURFACE_CARD_PADDING_PX.sm.vertical,
     },
     actionsSpacer: {
         flex: 1,
@@ -247,7 +256,7 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
         : on ?? (row.sourceBadge ? null : t(row.sourceLabel));
     // How long it has run, from the feed's own start time (lab `42 min`): read at render, no timer.
     const age = row.status === 'running' && typeof row.target.startedAtMs === 'number'
-        ? formatRelativeTimeShort(row.target.startedAtMs, Date.now())
+        ? formatMachineDuration(Date.now() - row.target.startedAtMs)
         : null;
     return {
         lead: [address].filter((part): part is string => Boolean(part)),
@@ -650,7 +659,7 @@ export function ServiceRowView(props: Readonly<{
         />
     ) : null;
     const actionBar = addressValue || shareControl || (overflowControl && !overflowOnRow) ? (
-        <View style={styles.actions}>
+        <View style={[styles.actions, props.presentation === 'detail' ? styles.actionsInSheet : null]}>
             {addressValue ? (
                 <CopyAddressButton
                     addressValue={addressValue}
