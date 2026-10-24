@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import React from 'react';
+import type { EnvironmentVariableCardProps } from './EnvironmentVariableCard';
 import { renderScreen } from '@/dev/testkit';
 import { installProfilesCommonModuleMocks } from '../profilesTestHelpers';
 
@@ -22,6 +23,7 @@ installProfilesCommonModuleMocks({
 vi.doUnmock('@/sync/domains/state/storage');
 const { Switch } = await import('@/components/ui/forms/Switch');
 const { EnvironmentVariableCard } = await import('./EnvironmentVariableCard');
+const { EnvironmentVariablesList } = await import('./EnvironmentVariablesList');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: (props: Record<string, unknown>) => React.createElement('Ionicons', props),
@@ -30,11 +32,18 @@ vi.mock('@expo/vector-icons', () => ({
 
 
 
+// The daemon RPC is the system boundary; keep the list, card and preview hook real.
+vi.mock('@/sync/ops', () => ({
+    machinePreviewEnv: vi.fn(async () => ({ supported: true, response: { values: {}, policy: 'none' } })),
+    machineBash: vi.fn(),
+}));
+
 type RenderedCard = Awaited<ReturnType<typeof renderScreen>>;
 
 async function renderCard(params: {
     value: string;
     onUpdate: ReturnType<typeof vi.fn<(index: number, next: string) => void>>;
+    overrides?: Partial<EnvironmentVariableCardProps>;
 }): Promise<RenderedCard> {
     return renderScreen(
         React.createElement(EnvironmentVariableCard, {
@@ -44,6 +53,7 @@ async function renderCard(params: {
             onUpdate: params.onUpdate,
             onDelete: () => {},
             onDuplicate: () => {},
+            ...params.overrides,
         }),
     );
 }
@@ -58,6 +68,84 @@ function findUseMachineSwitch(screen: RenderedCard) {
 }
 
 describe('EnvironmentVariableCard', () => {
+    it.each([null, 'machine-1'])('keeps rapid edits through the real list and preview hook (machine: %s)', async (machineId) => {
+        function Editor() {
+            const [variables, setVariables] = React.useState([{ name: 'FOO', value: '' }]);
+            return React.createElement(EnvironmentVariablesList, {
+                environmentVariables: variables,
+                machineId,
+                onChange: setVariables,
+                sourceRequirementsByName: {},
+                onUpdateSourceRequirement: () => {},
+                getDefaultSecretNameForSourceVar: () => null,
+                onPickDefaultSecretForSourceVar: () => {},
+            });
+        }
+        const screen = await renderScreen(React.createElement(Editor));
+        for (const value of ['a', 'ab', 'abc', 'abcd']) {
+            await act(async () => { findTextInputs(screen)[0].props.onChangeText(value); });
+        }
+        expect(findTextInputs(screen)[0]?.props.value).toBe('abcd');
+        expect(screen.findByType(EnvironmentVariablesList).props.environmentVariables).toEqual([{ name: 'FOO', value: 'abcd' }]);
+        if (machineId) {
+            const { machinePreviewEnv } = await import('@/sync/ops');
+            expect(machinePreviewEnv).toHaveBeenLastCalledWith(machineId, {
+                keys: ['FOO'], extraEnv: { FOO: 'abcd' }, sensitiveKeys: [],
+            }, { serverId: undefined, signal: expect.any(AbortSignal) });
+        }
+    });
+
+    it('publishes every rapid literal edit directly without waiting for effects', async () => {
+        const onUpdate = vi.fn<(index: number, next: string) => void>();
+        const screen = await renderCard({ value: '', onUpdate });
+        const [input] = findTextInputs(screen);
+
+        await act(async () => {
+            input.props.onChangeText('a');
+            input.props.onChangeText('ab');
+            input.props.onChangeText('abc');
+            input.props.onChangeText('');
+            expect(onUpdate.mock.calls).toEqual([[0, 'a'], [0, 'ab'], [0, 'abc'], [0, '']]);
+        });
+        expect(findTextInputs(screen)[0]?.props.value).toBe('');
+    });
+
+    it('keeps machine mode and the fallback while clearing and retyping the source', async () => {
+        const onUpdate = vi.fn<(index: number, next: string) => void>();
+        const screen = await renderCard({ value: '${BAR:=baz}', onUpdate });
+        const [, source] = findTextInputs(screen);
+
+        await act(async () => { source.props.onChangeText(''); });
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(findUseMachineSwitch(screen)?.props.value).toBe(true);
+        expect(findTextInputs(screen)[1]?.props.value).toBe('');
+
+        await act(async () => { findTextInputs(screen)[1].props.onChangeText('other'); });
+        expect(onUpdate.mock.calls).toEqual([[0, '${OTHER:=baz}']]);
+    });
+
+    it('waits for a source when enabling machine mode and writes through when disabling it', async () => {
+        const onUpdate = vi.fn<(index: number, next: string) => void>();
+        const screen = await renderCard({ value: 'literal', onUpdate });
+        await act(async () => { findUseMachineSwitch(screen)?.props.onValueChange(true); });
+        expect(onUpdate).not.toHaveBeenCalled();
+        await act(async () => { findTextInputs(screen)[1].props.onChangeText('source'); });
+        expect(onUpdate.mock.calls.at(-1)).toEqual([0, '${SOURCE:-literal}']);
+        await act(async () => { findUseMachineSwitch(screen)?.props.onValueChange(false); });
+        expect(findTextInputs(screen)[0]?.props.value).toBe('literal');
+    });
+
+    it.each(['literal', '${BAR:=fallback}'])('clears vault plaintext or fallback from %s', async (value) => {
+        const onUpdate = vi.fn<(index: number, next: string) => void>();
+        const screen = await renderCard({
+            value,
+            onUpdate,
+            overrides: { sourceRequirement: { required: true, useSecretVault: true } },
+        });
+        expect(onUpdate.mock.calls).toEqual([[0, value.startsWith('${') ? '${BAR}' : '']]);
+        expect(findTextInputs(screen).every((input) => input.props.value !== 'fallback')).toBe(true);
+    });
+
     describe('remote-template state synchronization', () => {
         it('syncs remote-variable toggle state when variable value changes externally', async () => {
             const onUpdate = vi.fn<(index: number, next: string) => void>();
@@ -81,6 +169,8 @@ describe('EnvironmentVariableCard', () => {
 
             const updatedUseMachineSwitch = findUseMachineSwitch(screen);
             expect(updatedUseMachineSwitch?.props.value).toBe(false);
+            expect(findTextInputs(screen)[0]?.props.value).toBe('literal');
+            expect(onUpdate).not.toHaveBeenCalled();
         });
     });
 
