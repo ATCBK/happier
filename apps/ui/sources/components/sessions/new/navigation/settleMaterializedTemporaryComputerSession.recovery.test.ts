@@ -263,9 +263,16 @@ describe('materialized Runner attachment recovery integration', () => {
             metaOverrides?: Record<string, unknown>;
         }>;
         expect(followUp.messageLocalId).toBe('first-turn-a');
-        expect(followUp.initialMessageText).toContain('.happier/uploads/one.txt');
-        expect(followUp.initialMessageText).toContain('.happier/uploads/empty.txt');
-        expect(followUp.initialMessageText.match(/\[attachments\]/gu)).toHaveLength(1);
+        // Attachments travel as structured message metadata; the prompt text no longer lists their paths.
+        expect(followUp.metaOverrides).toMatchObject({
+            happierAttachments: {
+                kind: 'attachments.v1',
+                payload: { attachments: [
+                    { id: 'file-one', path: '.happier/uploads/one.txt' },
+                    { id: 'file-empty', path: '.happier/uploads/empty.txt' },
+                ] },
+            },
+        });
         expect(followUp.metaOverrides).toMatchObject({
             happier: {
                 kind: 'review_comments.v1',

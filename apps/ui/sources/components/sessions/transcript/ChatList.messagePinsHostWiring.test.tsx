@@ -32,10 +32,14 @@ const buildChatListItemsMock = vi.fn((opts: Readonly<{
         const message = opts.messagesById?.[id];
         if (message?.kind === 'tool-call') {
             return {
-                kind: 'tool-calls-group',
-                id: `tool-group:${id}`,
+                kind: 'tool-group-tool',
+                id: `tool-group:${id}#tool:${id}`,
+                groupId: `tool-group:${id}`,
+                toolMessageId: id,
                 toolMessageIds: [id],
+                expanded: true,
                 createdAt: message.createdAt,
+                seq: typeof message.seq === 'number' ? message.seq : null,
             };
         }
         return {
@@ -103,6 +107,15 @@ vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
     ToolCallsGroupRowWithSessionCommon: (props: Record<string, any>) => {
         capturedToolGroupRowProps.push(props);
         return React.createElement('ToolCallsGroupRowWithSessionCommon', props);
+    },
+}));
+
+// Plain feed Tool call groups render as header, per-tool and footer unit rows; the per-tool row owns pinning.
+vi.mock('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitToolRow', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitToolRow')>(),
+    ToolCallsGroupUnitToolRowWithSessionCommon: (props: Record<string, any>) => {
+        capturedToolGroupRowProps.push(props);
+        return React.createElement('ToolCallsGroupUnitToolRowWithSessionCommon', props);
     },
 }));
 
@@ -275,7 +288,7 @@ describe('ChatList message pins host wiring', () => {
         const userRowProps = capturedMessageViewProps.filter((props) => props.message?.id === 'u1').at(-1);
         const assistantRowProps = capturedMessageViewProps.filter((props) => props.message?.id === 'a1').at(-1);
         const toolRowProps = capturedMessageViewProps.filter((props) => props.message?.id === 'tool1').at(-1)
-            ?? capturedToolGroupRowProps.filter((props) => props.toolMessageIds?.includes('tool1')).at(-1);
+            ?? capturedToolGroupRowProps.filter((props) => props.message?.id === 'tool1' || props.toolMessageIds?.includes('tool1')).at(-1);
 
         expect(userRowProps?.messagePins).toEqual([scopedUserPin]);
         expect(assistantRowProps?.messagePins).toEqual([scopedUserPin]);

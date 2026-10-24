@@ -32,6 +32,11 @@ import {
     SessionHumanPresenceVisibleReplaceResultV1Schema,
 } from '@happier-dev/protocol/sessions';
 
+// This harness statically imports runtime owners through storage and Home governance.
+// Install the external transport before those imports, then configure it below.
+vi.mock('socket.io-client', async (importOriginal) => (
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
+));
 installDisconnectedServerSocketBoundary();
 // The connected Account lifecycle must use the real store beneath transport fixtures.
 vi.doUnmock('@/sync/domains/state/storage');

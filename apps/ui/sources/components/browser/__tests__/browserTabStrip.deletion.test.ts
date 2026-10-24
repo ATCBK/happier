@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,31 +15,22 @@ const sourcesRoot = path.join(uiRoot, 'sources');
  * `selectFocusedBrowserView`) must be gone with zero non-test importers — there is exactly one
  * tab system, host-owned.
  */
-function ripgrepNonTest(pattern: string): string {
-    try {
-        const out = execFileSync(
-            'rg',
-            [
-                '-n',
-                pattern,
-                sourcesRoot,
-                '--glob',
-                '!**/*.test.*',
-                '--glob',
-                '!**/__tests__/**',
-            ],
-            { encoding: 'utf8' },
-        );
-        return out.trim();
-    } catch (error) {
-        // ripgrep exits non-zero with no output when there are no matches — that is success here.
-        const status = (error as { status?: number }).status;
-        const stdout = (error as { stdout?: string }).stdout ?? '';
-        if (status === 1 && stdout.trim().length === 0) {
-            return '';
-        }
-        throw error;
-    }
+function nonTestSourceFiles(): string[] {
+    return readdirSync(sourcesRoot, { recursive: true, encoding: 'utf8' })
+        .map((relative) => relative.split(path.sep).join('/'))
+        .filter((relative) => /\.[cm]?[jt]sx?$/u.test(relative))
+        .filter((relative) => !/\.test\.[^/]*$/u.test(relative) && !relative.split('/').includes('__tests__'))
+        .filter((relative) => !relative.split('/').includes('node_modules'));
+}
+
+let nonTestSourceLines: ReadonlyArray<readonly [location: string, line: string]> | null = null;
+
+/** Matching non-test source lines, as `file:line` entries; empty when the pattern is fully retired. */
+function grepNonTest(pattern: string): string {
+    // One read of the tree serves every pattern; the guard only needs the text once.
+    nonTestSourceLines ??= nonTestSourceFiles().flatMap((relative) => readFileSync(path.join(sourcesRoot, relative), 'utf8')
+        .split('\n').map((line, index) => [`${relative}:${index + 1}`, line] as const));
+    return nonTestSourceLines.filter(([, line]) => line.includes(pattern)).map(([location]) => location).join('\n');
 }
 
 describe('BrowserTabStrip retirement', () => {
@@ -49,13 +39,13 @@ describe('BrowserTabStrip retirement', () => {
     });
 
     it('has zero non-test importers of BrowserTabStrip', () => {
-        expect(ripgrepNonTest('BrowserTabStrip')).toBe('');
+        expect(grepNonTest('BrowserTabStrip')).toBe('');
     });
 
     it('has zero non-test references to the retired browser ordering authority', () => {
-        expect(ripgrepNonTest('selectBrowserTabs')).toBe('');
-        expect(ripgrepNonTest('selectFocusedBrowserView')).toBe('');
-        expect(ripgrepNonTest('orderedViewIdsBySessionId')).toBe('');
-        expect(ripgrepNonTest('focusedViewIdBySessionId')).toBe('');
+        expect(grepNonTest('selectBrowserTabs')).toBe('');
+        expect(grepNonTest('selectFocusedBrowserView')).toBe('');
+        expect(grepNonTest('orderedViewIdsBySessionId')).toBe('');
+        expect(grepNonTest('focusedViewIdBySessionId')).toBe('');
     });
 });

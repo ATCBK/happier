@@ -19,6 +19,7 @@ import {
 } from '@/dev/testkit/harness/chatListHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
@@ -99,7 +100,7 @@ async function prepareHistory() {
     connection = await restoreServerAccountForTest({
         serverUrl: 'https://forward-history.example.test',
         accountId: 'reader',
-        request: async (input, init) => {
+        request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const url = new URL(String(input));
             if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/active')
                 return Response.json({ sessions: [wireSession(serverSeq)], hasNext: false, nextCursor: null });
@@ -114,7 +115,7 @@ async function prepareHistory() {
                 });
             }
             return sessionHttp.handle(input, init) ?? http.request(input, init);
-        },
+        }),
     });
     await sync.refreshSessions({ awaitSessionListHydration: true });
     await sync.ensureSessionVisibleForMessageRoute(SESSION_ID);

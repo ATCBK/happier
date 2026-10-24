@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -6,6 +6,12 @@ vi.mock('react-native', async () => {
 });
 // MMKV is a native/browser persistence boundary; embed storage must never open it.
 vi.mock('react-native-mmkv', () => ({ MMKV: class { constructor() { throw new Error('durable storage opened'); } } }));
+
+// The shared per-test setup loads the Machine reachability graph, which evaluates the immutable embed
+// context. Drop it so each test's window stub is what the realm boots from.
+beforeEach(() => {
+    vi.resetModules();
+});
 
 afterEach(() => {
     vi.unstubAllGlobals();

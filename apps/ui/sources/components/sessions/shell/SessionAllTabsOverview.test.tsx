@@ -9,6 +9,8 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installSessionShellCommonModuleMocks({
+    // The overview reads no Sync state; the real storage graph re-enters this mock through the Socket owner.
+    storage: async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({}),
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });

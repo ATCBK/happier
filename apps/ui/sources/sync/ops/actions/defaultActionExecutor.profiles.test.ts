@@ -53,7 +53,7 @@ import { useSaveLaunchProfile } from '@/components/profiles/edit/useSaveLaunchPr
 import { useProfilePromptStack } from '@/sync/store/useProfilePromptStack';
 import { Modal } from '@/modal';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
-import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactListHttpResponse, projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary();
@@ -265,7 +265,7 @@ async function fixture() {
         }
         if (target.pathname === '/v1/account/saved-secrets/resources/materials') return Response.json(savedSecretResources);
         if (approvalEnabled || ownedArtifactEnabled) {
-            const response = approvalArtifacts.handle(target.pathname, init);
+            const response = approvalArtifacts.handle(`${target.pathname}${target.search}`, init);
             if (response) {
                 const result = await response;
                 if (ownedArtifactEnabled && target.pathname === '/v1/artifacts/owned-definition' && init?.method === 'POST' && result.ok)
@@ -282,9 +282,8 @@ async function fixture() {
                 artifacts.set(stored.id, stored);
                 return Response.json(stored);
             }
-            // The unfiltered inventory is the released array; a kind-filtered one is wrapped with its classification flag.
-            const items = [...artifacts.values()].filter(row => !target.searchParams.has('kind') || (row as { kind?: string }).kind === target.searchParams.get('kind'));
-            return Response.json(target.searchParams.has('kind') ? { items, hasUnclassified: false } : items);
+            // The shared Home list framing owns kind, kinds, unclassified and coverage selection.
+            return createArtifactListHttpResponse(target, [...artifacts.values()]);
         }
         if (target.pathname.startsWith('/v1/artifacts/')) {
             const artifact = artifacts.get(decodeURIComponent(target.pathname.slice('/v1/artifacts/'.length)));

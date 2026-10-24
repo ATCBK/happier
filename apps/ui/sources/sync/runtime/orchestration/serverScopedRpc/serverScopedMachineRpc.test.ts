@@ -15,10 +15,10 @@ import * as deviceLocalStorage from '@/auth/storage/deviceLocalStorage';
 import { resetRunnerCreatorMachineContentKeyTrustProjectionForTests } from '@/sync/domains/ephemeralRunner/runnerCreatorMachineContentKeyTrust';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import { MachineEncryption } from '@/sync/encryption/machineEncryption';
-import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
+import { AES256Encryption } from '@/sync/encryption/encryptor';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
-import { Encryption } from '@/sync/encryption/encryption';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import type { AuthCredentials, HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
+import { createDeferred, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -30,21 +30,9 @@ import {
     isMachineReachable,
 } from '@/sync/domains/machines/reachability/machineReachability';
 
-let machineContextOwner: Encryption;
-const machineContextAuthority = {
-    captureMachineEncryptionContext: (...args: Parameters<Encryption['captureMachineEncryptionContext']>) => machineContextOwner.captureMachineEncryptionContext(...args),
-    captureMachineEncryptionContextForRead: (...args: Parameters<Encryption['captureMachineEncryptionContextForRead']>) => machineContextOwner.captureMachineEncryptionContextForRead(...args),
-    getMachineEncryptionContext: (...args: Parameters<Encryption['getMachineEncryptionContext']>) => machineContextOwner.getMachineEncryptionContext(...args),
-    removeMachineEncryption: (id: string) => machineContextOwner.removeMachineEncryption(id),
-};
-
-function createMachineEncryption() {
-    const cipher = new MachineEncryption('machine-1', new SecretBoxEncryption(new Uint8Array(32).fill(17)), new EncryptionCache());
-    vi.spyOn(cipher, 'encryptRaw');
-    vi.spyOn(cipher, 'decryptRaw');
-    return cipher;
-}
-const responder = { mode: 'e2ee' as const, cipher: createMachineEncryption() };
+const machineDataKey = new Uint8Array(32).fill(17);
+const responder = { mode: 'e2ee' as const,
+    cipher: new MachineEncryption('machine-1', new AES256Encryption(machineDataKey), new EncryptionCache()) };
 async function boundResponse(payload: { method: string; params: unknown }, value: unknown) {
     const request = await socketRpcCodec.decodeRequestParams(responder, payload.params, payload.method);
     return socketRpcCodec.encodeResponse(responder, value, request.callId);
@@ -59,8 +47,8 @@ type MachineRpcSpy = (machineId: string, method: string, params: unknown, option
 const machineRpcSpy = vi.hoisted(() => vi.fn<MachineRpcSpy>());
 const createEphemeralSocketSpy = vi.hoisted(() => vi.fn());
 const getReadyServerFeaturesSpy = vi.hoisted(() => vi.fn());
-const getCredentialsSpy = vi.hoisted(() => vi.fn());
-const homeCredentialMutationListeners = vi.hoisted(() => new Set<(event: { serverId: string }) => void>());
+const getCredentialsSpy = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<AuthCredentials | null>>());
+const homeCredentialMutationListeners = vi.hoisted(() => new Set<(event: HomeCredentialMutationEvent) => void>());
 const createEncryptionSpy = vi.hoisted(() => vi.fn());
 const listServerProfilesSpy = vi.hoisted(() => vi.fn());
 const getActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
@@ -81,9 +69,17 @@ vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
     getReadyServerFeatures: (...args: unknown[]) => getReadyServerFeaturesSpy(...args),
 }));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
-    createEphemeralServerSocketClient: (...args: unknown[]) => createEphemeralSocketSpy(...args),
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', async () => {
+    const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
+    return {
+        createEphemeralServerSocketClient: async (...args: unknown[]) => {
+            const overrides = await createEphemeralSocketSpy(...args);
+            const { socket } = createSocketIoBoundaryStub();
+            // This adapter resolves only after the external socket is ready.
+            return Object.assign(socket, { connected: true }, overrides);
+        },
+    };
+});
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
@@ -94,7 +90,7 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
 
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/auth/storage/tokenStorage')>(),
-    subscribeHomeCredentialMutations: (listener: (event: { serverId: string }) => void) => {
+    subscribeHomeCredentialMutations: (listener: (event: HomeCredentialMutationEvent) => void) => {
         homeCredentialMutationListeners.add(listener);
         return () => { homeCredentialMutationListeners.delete(listener); };
     },
@@ -120,13 +116,15 @@ vi.mock('./resolveServerScopedContext', async (importOriginal) => {
     };
 });
 
-vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
+vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/auth/encryption/createEncryptionFromAuthCredentials')>(),
     createEncryptionFromAuthCredentials: (...args: unknown[]) => createEncryptionSpy(...args),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', async () => {
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
     const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
     return {
+        ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
         ...createServerProfilesModuleMock({
         listServerProfiles: (...args: unknown[]) => listServerProfilesSpy(...args),
         }),
@@ -165,6 +163,27 @@ function mockScopedMachineFetch(machine: Readonly<{
                 id => id === machine.id ? { metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, ...machine } : null).json()
             : { machine },
     }));
+}
+
+async function useRealScopedMachineEncryption() {
+    const credentials = await getCredentialsSpy();
+    if (!credentials) throw new Error('Expected Account fixture credentials');
+    const serverId = credentials.token === TOKEN_A ? 'server-a' : 'server-b';
+    const { resolveScopedAccountEncryption } = await import('@/sync/encryption/scopedAccountEncryption');
+    const encryption = await resolveScopedAccountEncryption({ serverId,
+        serverUrl: `https://${serverId}.example.test`, credentials });
+    if (!encryption) throw new Error('Expected encrypted Account fixture credentials');
+    const dataEncryptionKey = Buffer.from(await encryption.encryptEncryptionKey(machineDataKey)).toString('base64');
+    mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey });
+    return encryption;
+}
+
+function retireFixtureAccountMaterial(): void {
+    for (const serverId of ['server-a', 'server-b']) {
+        for (const listener of [...homeCredentialMutationListeners]) listener({
+            kind: 'credentials_removed', serverId, serverUrl: `https://${serverId}.example.test`,
+        });
+    }
 }
 
 function filesystemActionHomeResponse(input: string | URL | Request): Response | null {
@@ -219,9 +238,7 @@ describe('machineRpcWithServerScope', () => {
         getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
         listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' }]);
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
-        createEncryptionSpy.mockResolvedValue({ ...machineContextAuthority, decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}), getMachineEncryption: () => responder.cipher });
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
         const emitWithAck = vi.fn(async () => ({ ok: false, error: 'Target denied handoff status', errorCode: RPC_ERROR_CODES.FORBIDDEN }));
         createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck }), emitWithAck, emit: vi.fn(), disconnect: vi.fn() });
         const { getSessionHandoffStatus } = await import('@/sync/ops/sessionHandoffs');
@@ -235,9 +252,7 @@ describe('machineRpcWithServerScope', () => {
             getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
             machineRpcSpy.mockRejectedValue(Object.assign(new Error('unavailable'), { rpcErrorCode }));
             getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
-            createEncryptionSpy.mockResolvedValue({ ...machineContextAuthority, decryptEncryptionKey: vi.fn(async () => null),
-                initializeMachines: vi.fn(async () => {}), getMachineEncryption: () => responder.cipher });
-            mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+            await useRealScopedMachineEncryption();
             const emitWithAck = async () => ({ ok: false, error: 'unavailable', errorCode: rpcErrorCode });
             createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck }), emitWithAck,
                 emit: vi.fn(), disconnect: vi.fn() });
@@ -255,17 +270,15 @@ describe('machineRpcWithServerScope', () => {
         },
     );
     it.each(['envelope', 'custody'] as const)('rejects unavailable Machine %s before dispatch, closes its prepared socket and retires its previous cipher', async (failure) => {
-        const { Encryption } = await import('@/sync/encryption/encryption');
-        const encryption = await Encryption.create(new Uint8Array(32).fill(1));
-        await encryption.initializeMachines(new Map([['machine-1', new Uint8Array(32).fill(2)]]));
         getActiveServerSnapshotSpy.mockReturnValue({
             serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1,
         });
         listServerProfilesSpy.mockReturnValue([
             { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' },
         ]);
-        getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        createEncryptionSpy.mockResolvedValue(encryption);
+        getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
+        const encryption = await useRealScopedMachineEncryption();
+        await encryption.initializeMachines(new Map([['machine-1', new Uint8Array(32).fill(2)]]));
         if (failure === 'custody') {
             vi.spyOn(deviceLocalStorage, 'readDeviceLocalStorageString').mockRejectedValue(new Error('storage unavailable'));
         }
@@ -294,7 +307,12 @@ describe('machineRpcWithServerScope', () => {
             url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
             init,
         }));
-        machineContextOwner = await Encryption.create(new Uint8Array(32).fill(17));
+        retireFixtureAccountMaterial();
+        const actual = await vi.importActual<typeof import('@/auth/encryption/createEncryptionFromAuthCredentials')>(
+            '@/auth/encryption/createEncryptionFromAuthCredentials');
+        createEncryptionSpy.mockImplementation(actual.createEncryptionFromAuthCredentials);
+        vi.spyOn(MachineEncryption.prototype, 'encryptRaw');
+        vi.spyOn(MachineEncryption.prototype, 'decryptRaw');
         resetRunnerCreatorMachineContentKeyTrustProjectionForTests();
         // Device custody is an external persistent boundary; successful absence
         // lets real Account-material trust resolution run beneath it.
@@ -305,7 +323,7 @@ describe('machineRpcWithServerScope', () => {
 
     afterEach(() => {
         resetRuntimeFetch();
-        homeCredentialMutationListeners.clear();
+        retireFixtureAccountMaterial();
         vi.restoreAllMocks();
         machineRpcSpy.mockReset();
         createEphemeralSocketSpy.mockReset();
@@ -706,6 +724,7 @@ describe('machineRpcWithServerScope', () => {
     });
 
     it('keeps recovery Account custody independent of the completed upload signal and retires it on actual Home credential replacement', async () => {
+        const baselineListeners = homeCredentialMutationListeners.size;
         listServerProfilesSpy.mockReturnValue([{ id: 'server-a', serverUrl: 'https://server-a.example.test' }]);
         getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A });
@@ -718,10 +737,13 @@ describe('machineRpcWithServerScope', () => {
             expect(account.signal.aborted).toBe(true);
             expect(account.accountLifetime.isCurrent()).toBe(true);
             getCredentialsSpy.mockResolvedValue({ token: TOKEN_B });
-            for (const listener of [...homeCredentialMutationListeners]) listener({ serverId: 'server-a' });
+            for (const listener of [...homeCredentialMutationListeners]) listener({
+                kind: 'credentials_set', serverId: 'server-a', serverUrl: 'https://server-a.example.test',
+                credentials: { token: TOKEN_B },
+            });
             expect(account.accountLifetime.isCurrent()).toBe(false);
         } finally { account.dispose(); }
-        expect(homeCredentialMutationListeners.size).toBe(0);
+        expect(homeCredentialMutationListeners.size).toBe(baselineListeners);
     });
 
     it('refuses a public prepared entry descriptor without replacing its original export custody', async () => {
@@ -889,24 +911,21 @@ describe('machineRpcWithServerScope', () => {
     });
 
     it('decrypts a scoped E2EE observation after its caller-owned wait without an expired setup budget', async () => {
-        const { Encryption } = await import('@/sync/encryption/encryption');
         const { createFakeCryptoWorker } = await import('@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker');
-        const encryption = await Encryption.create(new Uint8Array(32).fill(1));
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' }]);
+        getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
+        const encryption = await useRealScopedMachineEncryption();
         const worker = createFakeCryptoWorker();
         encryption.configureNativeCryptoWorker({ worker: {
             ...worker,
             // Native crypto completion is an OS boundary; retain its real codec
             // while making response work outlast the exhausted 1ms setup budget.
-            decryptSecretboxJson: async (request) => {
+            decryptAesGcmJson: async (request) => {
                 await new Promise((resolve) => setTimeout(resolve, 10));
-                return await worker.decryptSecretboxJson(request);
+                return await worker.decryptAesGcmJson(request);
             },
         }, routing: { mode: 'require', minPayloadBytes: 0 } });
-        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
-        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' }]);
-        getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
-        createEncryptionSpy.mockResolvedValue(encryption);
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
         let resolveAck!: (value: unknown) => void;
         let issuedRequest!: { method: string; params: unknown };
         const emitWithAck = vi.fn((_event: string, request: { method: string; params: unknown }) => {
@@ -946,14 +965,7 @@ describe('machineRpcWithServerScope', () => {
                 return { source: 'late-active' };
             });
             getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
-            const machineEncryption = createMachineEncryption();
-            createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-                decryptEncryptionKey: vi.fn(async () => null),
-                initializeMachines: vi.fn(async () => {}),
-                getMachineEncryption: vi.fn(() => machineEncryption),
-            });
-            mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+            await useRealScopedMachineEncryption();
             const scopedEmit = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { source: 'scoped' }) }));
             createEphemeralSocketSpy.mockResolvedValue({
                 timeout: vi.fn(() => ({ emitWithAck: scopedEmit })),
@@ -996,15 +1008,8 @@ describe('machineRpcWithServerScope', () => {
         machineRpcSpy.mockResolvedValueOnce({ ok: true });
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }, _opts?: { timeoutMs?: number }) => ({
             ok: true,
@@ -1042,15 +1047,8 @@ describe('machineRpcWithServerScope', () => {
         ]);
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
@@ -1375,15 +1373,8 @@ describe('machineRpcWithServerScope', () => {
         machineRpcSpy.mockRejectedValue(new Error('Machine encryption not found for machine-1'));
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
@@ -1425,15 +1416,8 @@ describe('machineRpcWithServerScope', () => {
         machineRpcSpy.mockRejectedValue(new Error("Cannot read properties of null (reading 'getMachineEncryption')"));
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
@@ -1475,15 +1459,8 @@ describe('machineRpcWithServerScope', () => {
         }));
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
@@ -1584,8 +1561,8 @@ describe('machineRpcWithServerScope', () => {
             kind: 'custom',
             generation: 1,
         });
-        getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
-        createEncryptionSpy.mockImplementation(() => new Promise(() => {}));
+        // Credential persistence is the external setup boundary that stalls.
+        getCredentialsSpy.mockImplementation(() => new Promise(() => {}));
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         const rpcPromise = machineRpcWithServerScope({
@@ -1617,15 +1594,8 @@ describe('machineRpcWithServerScope', () => {
         });
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
         createEphemeralSocketSpy.mockImplementation(() => new Promise(() => {}));
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
@@ -1662,17 +1632,14 @@ describe('machineRpcWithServerScope', () => {
         });
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
+
+        const emitted = createDeferred<void>();
+        const emitWithAck = vi.fn(() => {
+            emitted.resolve();
+            return new Promise(() => {});
         });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
-
-        const emitWithAck = vi.fn(() => new Promise(() => {}));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
             emitWithAck,
@@ -1694,7 +1661,11 @@ describe('machineRpcWithServerScope', () => {
         });
         const capturedError = rpcPromise.catch((error: unknown) => error);
 
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(999);
+        // Actual platform AES completes outside the fake clock. Observe its
+        // physical emit before spending the final millisecond of the budget.
+        await Promise.race([emitted.promise, capturedError.then(error => { throw error; })]);
+        await vi.advanceTimersByTimeAsync(1);
 
         await expect(capturedError).resolves.toMatchObject({
             code: 'MACHINE_RPC_TIMEOUT',
@@ -1718,15 +1689,8 @@ describe('machineRpcWithServerScope', () => {
         });
         getCredentialsSpy.mockResolvedValue({ token: TOKEN_A, secret: SECRET_A });
 
-        const machineEncryption = createMachineEncryption();
-        createEncryptionSpy.mockResolvedValue({
-                ...machineContextAuthority,
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
-
-        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        await useRealScopedMachineEncryption();
+        const machineEncryption = MachineEncryption.prototype;
 
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {

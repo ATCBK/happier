@@ -120,6 +120,7 @@ export function installChatListHarnessCommonModuleMocks(
         return {
             ...actual,
             useActiveServerAccountScope: () => chatListHarnessState.activeServerAccountScope,
+            useSessionCatchingUpNewer: (_sessionId: string, enabled: boolean = true) => enabled && chatListHarnessState.sessionCatchingUpNewer,
         };
     });
 }
