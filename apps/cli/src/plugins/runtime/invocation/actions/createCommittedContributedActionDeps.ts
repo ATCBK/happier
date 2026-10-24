@@ -1,14 +1,13 @@
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ActionDefinitionV1, WorkflowAcceptedAuthorizationV1 } from '@happier-dev/protocol';
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk/errors';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { inputTypeResourceReference } from '@happier-dev/protocol/inputs/runtime';
 import { PluginActionExecutionV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 
 import type { ResolvedActionContribution, ResolvedActionDefinition } from '@/plugins/projection/registry/types';
-import { executeContributedAction } from './executeContributedAction';
 import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '../actionExecutor';
 import {
   acquireAuthoritativePluginRuntimeRegistryLease,
@@ -135,6 +134,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
     }
     const lease = await acquire();
     try {
+      const { executeContributedAction } = await import('./executeContributedAction');
       invocationSignal.throwIfAborted();
       const attempt = await executeContributedAction({
         runtimeRegistry: lease.registry,
