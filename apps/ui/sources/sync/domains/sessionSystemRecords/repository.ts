@@ -164,7 +164,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
                     publishBoardCount(count, ids.size);
                     return;
                 }
-                const cursor = data.nextCursor;
+                const cursor: SessionSystemRecordStoredPageResponse['nextCursor'] = data.nextCursor;
                 entry = cursor ? pages.find(page => page.query.type === 'list' && page.query.cursor === cursor) : undefined;
             }
         }
