@@ -556,7 +556,6 @@ pub struct MachineTunnelStatus {
 
 #[derive(Default)]
 struct TunnelState {
-    connection_active: AtomicBool,
     streams_opened: AtomicU64,
     streams_active: AtomicU64,
     single_stream: bool,
@@ -566,13 +565,70 @@ struct TunnelState {
 
 pub struct MachineTunnel {
     local_addr: SocketAddr,
-    connection: iroh::endpoint::Connection,
+    connection: Arc<MachineTunnelConnection>,
     remote_endpoint_id: String,
     local_capability: Option<String>,
     task: JoinHandle<()>,
-    watcher_task: JoinHandle<()>,
     shutdown: watch::Sender<bool>,
     state: Arc<TunnelState>,
+}
+
+/// One authenticated connection owner for every local stream of a tunnel.
+/// Opening the listener still proves the remote identity. Subsequent requests
+/// replace a closed connection on demand, after obtaining their admission
+/// witness; no idle task keeps an unused target connection in custody.
+struct MachineTunnelConnection {
+    endpoint: iroh::Endpoint,
+    remote: iroh::EndpointAddr,
+    remote_id: iroh::EndpointId,
+    cap_profile: IrohCapProfile,
+    current: Mutex<iroh::endpoint::Connection>,
+    dial: tokio::sync::Mutex<()>,
+}
+
+impl MachineTunnelConnection {
+    fn current(&self) -> iroh::endpoint::Connection {
+        self.current.lock().expect("machine connection").clone()
+    }
+
+    async fn for_local_stream(&self) -> Result<iroh::endpoint::Connection> {
+        let connection = self.current();
+        if connection.close_reason().is_none() {
+            return Ok(connection);
+        }
+        // Concurrent local requests share the replacement, not separate dials.
+        let _dial = self.dial.lock().await;
+        let connection = self.current();
+        if connection.close_reason().is_none() {
+            return Ok(connection);
+        }
+        let connection = dial_machine_connection(
+            &self.endpoint, self.remote.clone(), self.remote_id, self.cap_profile,
+        ).await?;
+        *self.current.lock().expect("machine connection") = connection.clone();
+        Ok(connection)
+    }
+
+    fn close(&self) {
+        self.current().close(0u32.into(), b"machine_tunnel_released");
+    }
+}
+
+async fn dial_machine_connection(
+    endpoint: &iroh::Endpoint,
+    remote: iroh::EndpointAddr,
+    remote_id: iroh::EndpointId,
+    cap_profile: IrohCapProfile,
+) -> Result<iroh::endpoint::Connection> {
+    let connecting = endpoint.connect_with_opts(
+        remote,
+        MACHINE_ALPN,
+        iroh::endpoint::ConnectOptions::new()
+            .with_transport_config(cap_profile.transport_config()?),
+    ).await.map_err(IrohError::from)?;
+    let connection = connecting.await.map_err(IrohError::from)?;
+    verified_remote_endpoint_id(connection.remote_id(), remote_id)?;
+    Ok(connection)
 }
 
 /// Qualified provider-broker/readiness HTTP adapter over the capability-gated
@@ -1130,23 +1186,23 @@ impl MachineTunnel {
         for addr in config.direct_addresses {
             remote = remote.with_ip_addr(addr);
         }
-        let connecting = endpoint
-            .endpoint()
-            .connect_with_opts(
-                remote,
-                MACHINE_ALPN,
-                iroh::endpoint::ConnectOptions::new()
-                    .with_transport_config(config.cap_profile.transport_config()?),
-            )
-            .await
-            .map_err(IrohError::from)?;
-        let connection = connecting.await.map_err(IrohError::from)?;
+        let connection = dial_machine_connection(
+            &endpoint.endpoint(), remote.clone(), endpoint_id, config.cap_profile,
+        ).await?;
         // The authenticated transport identity — not the requested descriptor
         // copy — is the only honest remote identity this tunnel reports. A
         // mismatch fails the start closed with the shared
         // endpoint-identity-mismatch classification before any loopback
         // listener is published.
-        let remote_endpoint_id = verified_remote_endpoint_id(connection.remote_id(), endpoint_id)?;
+        let remote_endpoint_id = connection.remote_id().to_string();
+        let connection = Arc::new(MachineTunnelConnection {
+            endpoint: endpoint.endpoint(),
+            remote,
+            remote_id: endpoint_id,
+            cap_profile: config.cap_profile,
+            current: Mutex::new(connection),
+            dial: tokio::sync::Mutex::new(()),
+        });
         let listener = TcpListener::bind(config.bind_addr)
             .await
             .map_err(|_| IrohError::LoopbackBindFailed)?;
@@ -1168,20 +1224,11 @@ impl MachineTunnel {
             )
         });
         let state = Arc::new(TunnelState {
-            connection_active: AtomicBool::new(true),
             streams_opened: AtomicU64::new(0),
             streams_active: AtomicU64::new(0),
             single_stream: purpose.accepts_one_local_stream(),
             local_stream_claimed: AtomicBool::new(false),
             last_failure: Mutex::new(None),
-        });
-        let watcher_state = Arc::clone(&state);
-        let watcher_connection = connection.clone();
-        let watcher_task = tokio::spawn(async move {
-            watcher_connection.closed().await;
-            watcher_state
-                .connection_active
-                .store(false, Ordering::Release);
         });
         let loop_connection = connection.clone();
         let loop_state = Arc::clone(&state);
@@ -1193,7 +1240,6 @@ impl MachineTunnel {
                     _ = shutdown_rx.changed() => { break; }
                     accepted = listener.accept() => {
                         let Ok((socket, _)) = accepted else { break };
-                        if !loop_state.connection_active.load(Ordering::Acquire) { break; }
                         loop_state.streams_active.fetch_add(1, Ordering::AcqRel);
                         streams.spawn(pump_local(
                             loop_connection.clone(),
@@ -1208,6 +1254,7 @@ impl MachineTunnel {
                 }
             }
             streams.shutdown().await;
+            loop_connection.close();
         });
         Ok(Self {
             local_addr,
@@ -1215,7 +1262,6 @@ impl MachineTunnel {
             remote_endpoint_id,
             local_capability,
             task,
-            watcher_task,
             shutdown,
             state,
         })
@@ -1230,33 +1276,30 @@ impl MachineTunnel {
         self.local_capability.as_deref()
     }
     pub fn status(&self) -> MachineTunnelStatus {
+        let connection = self.connection.current();
         MachineTunnelStatus {
             local_port: self.local_addr.port(),
-            connection_active: self.state.connection_active.load(Ordering::Acquire),
+            connection_active: connection.close_reason().is_none(),
             streams_opened: self.state.streams_opened.load(Ordering::Relaxed),
             remote_endpoint_id: self.remote_endpoint_id.clone(),
-            observed_path: snapshot_for_connection(&self.connection),
+            observed_path: snapshot_for_connection(&connection),
             last_failure: self.state.last_failure.lock().ok().and_then(|value| *value),
         }
     }
     pub fn stop(self) {
         let _ = self.shutdown.send(true);
-        self.connection
-            .close(0u32.into(), b"machine_tunnel_released");
+        self.connection.close();
     }
 
     pub async fn stop_and_wait(self) {
         let _ = self.shutdown.send(true);
-        self.watcher_task.abort();
-        self.connection
-            .close(0u32.into(), b"machine_tunnel_released");
+        self.connection.close();
         let _ = self.task.await;
-        let _ = self.watcher_task.await;
     }
 }
 
 async fn pump_local(
-    connection: iroh::endpoint::Connection,
+    connection: Arc<MachineTunnelConnection>,
     mut socket: TcpStream,
     handshake: Arc<[u8]>,
     handshake_provider: Option<MachineHandshakeProvider>,
@@ -1340,6 +1383,12 @@ async fn pump_local(
         Arc::<[u8]>::from(handshake.into_bytes())
     } else {
         handshake
+    };
+    let Ok(connection) = connection.for_local_stream().await else {
+        if let Ok(mut last) = _active.0.last_failure.lock() {
+            *last = Some(MachineFailureCode::Transport);
+        }
+        return;
     };
     _active.0.streams_opened.fetch_add(1, Ordering::Relaxed);
     let Ok((mut send, mut recv)) = connection.open_bi().await else {

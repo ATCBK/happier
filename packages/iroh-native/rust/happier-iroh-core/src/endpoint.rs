@@ -163,13 +163,11 @@ pub(crate) const MAX_PENDING_HANDSHAKES: usize = CONSUMER_CHANNEL_CAPACITY * ALP
 /// long-lived Socket.IO owns its own liveness, which also means a connection
 /// that never does application work is never reclaimed by an idle timer.
 ///
-/// Every current caller opens its first stream immediately after the connection
-/// is established: the Home supervisor probes through its loopback origin before
-/// it publishes the origin at all, and the machine carrier acquires its lease per
-/// transfer operation and runs the transfer engine straight after. The window
-/// stops applying at the first stream, so a lease that is acquired long before
-/// its first application request is the observable condition that would
-/// invalidate it.
+/// The Home supervisor probes its loopback origin before publication. Machine
+/// listeners may outlive an unused connection: their initiator replaces a closed
+/// connection on local demand after obtaining any fresh admission witness. The
+/// window stops applying at the first application stream; holding a loopback
+/// listener never extends target-side pre-application custody.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const PRE_APPLICATION_CUSTODY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(10);

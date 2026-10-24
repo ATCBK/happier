@@ -54,8 +54,30 @@ async fn echo_server(contacts: Arc<AtomicUsize>) -> SocketAddr {
     addr
 }
 
-async fn read_http_request(socket: &mut TcpStream) -> Vec<u8> {
-    let mut request = Vec::new();
+/// Loopback discovery can contact any fixture listener with a root HTTP probe,
+/// TLS handshake, or an empty connection. Only admission requests belong to
+/// these fixtures; once the request line matches, keep all strict framing and
+/// payload assertions so a broken admission client still fails its test.
+async fn accept_admission_request(listener: &TcpListener) -> (TcpStream, Vec<u8>) {
+    const REQUEST_LINE: &[u8] = b"POST /v1/iroh/machine/admit HTTP/1.1\r\n";
+    loop {
+        let (mut socket, _) = listener.accept().await.expect("accept admission");
+        let mut matched = true;
+        for expected in REQUEST_LINE {
+            let mut byte = [0u8; 1];
+            if socket.read_exact(&mut byte).await.is_err() || byte[0] != *expected {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            let request = read_http_request(&mut socket, REQUEST_LINE.to_vec()).await;
+            return (socket, request);
+        }
+    }
+}
+
+async fn read_http_request(socket: &mut TcpStream, mut request: Vec<u8>) -> Vec<u8> {
     let header_end = loop {
         let mut chunk = [0u8; 1024];
         let read = socket.read(&mut chunk).await.expect("read request head");
@@ -117,9 +139,9 @@ async fn admission_server(
         .expect("bind admission");
     let addr = listener.local_addr().expect("admission addr");
     tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
+        loop {
+            let (mut socket, request) = accept_admission_request(&listener).await;
             contacts.fetch_add(1, Ordering::Relaxed);
-            let request = read_http_request(&mut socket).await;
             let request = String::from_utf8_lossy(&request);
             assert!(request.starts_with("POST /v1/iroh/machine/admit HTTP/1.1\r\n"));
             assert!(request.contains(&format!(
@@ -164,13 +186,8 @@ async fn recording_admission_server(
         .expect("bind recording admission");
     let addr = listener.local_addr().expect("recording admission addr");
     tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            // A closed loopback connection carries no admission request.
-            let mut first_byte = [0u8; 1];
-            if !matches!(socket.peek(&mut first_byte).await, Ok(1)) {
-                continue;
-            }
-            let request = read_http_request(&mut socket).await;
+        loop {
+            let (mut socket, request) = accept_admission_request(&listener).await;
             let request = String::from_utf8(request).expect("utf8 admission request");
             let (_, body) = request.split_once("\r\n\r\n").expect("request head/body");
             handshakes.lock().expect("handshakes").push(body.to_owned());
@@ -200,8 +217,7 @@ async fn node_default_half_close_admission_server(
         .expect("bind node-like admission");
     let addr = listener.local_addr().expect("node-like admission addr");
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept admission");
-        let _request = read_http_request(&mut socket).await;
+        let (mut socket, _request) = accept_admission_request(&listener).await;
 
         let mut early_fin_probe = [0u8; 1];
         if matches!(
@@ -221,6 +237,68 @@ async fn node_default_half_close_admission_server(
             .expect("write node-like admission response");
     });
     addr
+}
+
+#[tokio::test]
+async fn admission_fixtures_ignore_unrelated_loopback_connections() {
+    for fixture in ["queued", "recording", "node-half-close"] {
+        let contacts = Arc::new(AtomicUsize::new(0));
+        let ports = Arc::new(Mutex::new(VecDeque::from([vec!["12345".to_owned()]])));
+        let handshakes = Arc::new(Mutex::new(Vec::new()));
+        let addr = match fixture {
+            "queued" => admission_server(
+                "expected-peer".to_owned(),
+                Arc::clone(&ports),
+                Arc::clone(&contacts),
+            )
+            .await,
+            "recording" => recording_admission_server(
+                "expected-peer".to_owned(),
+                12345,
+                Arc::clone(&handshakes),
+            )
+            .await,
+            _ => node_default_half_close_admission_server("expected-peer".to_owned(), 12345)
+                .await,
+        };
+        for stray in [
+            b"HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n".as_slice(),
+            b"GET / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            b"".as_slice(),
+            b"\x16\x03\x01\x00\x00".as_slice(),
+        ] {
+            let mut socket = TcpStream::connect(addr).await.expect("stray connect");
+            socket.write_all(stray).await.expect("stray request");
+            socket.shutdown().await.expect("stray half close");
+            let mut response = Vec::new();
+            // Closing a rejected socket may surface as either EOF or reset.
+            let _ = tokio::time::timeout(Duration::from_secs(5), socket.read_to_end(&mut response))
+                .await
+                .expect("stray connection closes");
+            assert!(response.is_empty(), "{fixture} served unrelated traffic");
+        }
+        let mut socket = TcpStream::connect(addr).await.expect("admission connect");
+        socket
+            .write_all(b"POST /v1/iroh/machine/admit HTTP/1.1\r\nX-Happier-Iroh-Remote-Endpoint-Id: expected-peer\r\nContent-Length: 2\r\n\r\n{}")
+            .await
+            .expect("admission request");
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), socket.read_to_end(&mut response))
+            .await
+            .expect("admission response completes")
+            .expect("read admission response");
+        let response = String::from_utf8(response).expect("utf8 response");
+        assert!(response.starts_with("HTTP/1.1 204 No Content\r\n"), "{fixture}");
+        assert!(response.contains(&format!("{IROH_MACHINE_APPLICATION_PORT_HEADER}: 12345\r\n")));
+        match fixture {
+            "queued" => {
+                assert_eq!(contacts.load(Ordering::Relaxed), 1);
+                assert!(ports.lock().expect("port queue").is_empty());
+            }
+            "recording" => assert_eq!(*handshakes.lock().expect("handshakes"), ["{}"]),
+            _ => {}
+        }
+    }
 }
 
 /// One full local-loop duplex exchange through a machine tunnel: distinct
@@ -1056,11 +1134,11 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
         move || {
             let witness = sequence.fetch_add(1, Ordering::SeqCst) + 1;
             Box::pin(async move {
-                if witness == 2 {
+                if witness <= 2 {
                     // Fresh Home authorization is application work, governed
                     // by its caller's lifetime rather than wire framing.
                     tokio::time::sleep(
-                        crate::machine::MACHINE_CONTROL_TIMEOUT + Duration::from_millis(1),
+                        crate::endpoint::PRE_APPLICATION_CUSTODY_TIMEOUT + Duration::from_secs(1),
                     )
                     .await;
                 }
@@ -1114,10 +1192,65 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
         tunnel.status()
     );
     assert_eq!(sequence.load(Ordering::SeqCst), 2);
+    assert_eq!(acceptor.status().connections_accepted, 2,
+        "the expired pre-application connection is replaced only when needed");
     tunnel.stop_and_wait().await;
     acceptor.stop_and_wait().await;
     client.shutdown().await;
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn machine_raw_tunnels_reconnect_after_unused_custody_without_changing_stream_contracts() {
+    for flow in ["finite_transfer", "workspace_sync"] {
+        let server = endpoint(IrohCapProfile::MachineBulk).await;
+        let client = endpoint(IrohCapProfile::MachineBulk).await;
+        let contacts = Arc::new(AtomicUsize::new(0));
+        let application = echo_server(Arc::clone(&contacts)).await;
+        let handshakes = Arc::new(Mutex::new(Vec::new()));
+        let admission_target = recording_admission_server(
+            client.id().to_string(), application.port(), Arc::clone(&handshakes),
+        ).await;
+        let acceptor = MachineAcceptor::start(&server, MachineAcceptorConfig { admission_target }).unwrap();
+        let tunnel = MachineTunnel::start(&client, MachineTunnelConfig {
+            endpoint_id: server.id().to_string(),
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            direct_addresses: vec![direct_addr(&server).await],
+            relay_urls: vec![],
+            handshake_json: format!(r#"{{"v":1,"flow":"{flow}"}}"#),
+            cap_profile: IrohCapProfile::MachineBulk,
+        }).await.unwrap();
+        tokio::time::sleep(crate::endpoint::PRE_APPLICATION_CUSTODY_TIMEOUT + Duration::from_secs(1)).await;
+        assert!(!tunnel.status().connection_active);
+        assert_eq!(acceptor.status().connections_accepted, 1, "no idle redial");
+        assert_eq!(acceptor.status().streams_accepted, 0, "no keep-alive stream");
+        let mut request = tunnel.local_capability().unwrap_or_default().as_bytes().to_vec();
+        request.extend_from_slice(b"delayed request");
+        let addr = tunnel.local_addr().unwrap();
+        if flow == "finite_transfer" {
+            // Two actual requests share one replacement connection.
+            let (first, second) = tokio::join!(exchange_echo(addr, &request), exchange_echo(addr, &request));
+            assert_eq!(first, b"app-reply:delayed request");
+            assert_eq!(second, b"app-reply:delayed request");
+            assert_eq!(contacts.load(Ordering::Relaxed), 2);
+        } else {
+            assert_eq!(exchange_echo(addr, &request).await, b"app-reply:delayed request");
+            let mut refused = TcpStream::connect(addr).await.unwrap();
+            refused.write_all(&request).await.unwrap();
+            refused.shutdown().await.unwrap();
+            let mut bytes = Vec::new();
+            let result = refused.read_to_end(&mut bytes).await;
+            assert!(result.is_ok() || matches!(result, Err(ref error) if error.kind() == std::io::ErrorKind::ConnectionReset));
+            assert!(bytes.is_empty(), "workspace is still single-stream");
+            assert_eq!(contacts.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(acceptor.status().connections_accepted, 2, "one demand-driven replacement");
+        assert_eq!(tunnel.status().last_failure, None);
+        tunnel.stop_and_wait().await;
+        acceptor.stop_and_wait().await;
+        client.shutdown().await;
+        server.shutdown().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1614,8 +1747,7 @@ async fn machine_acceptor_presents_and_strips_the_admission_selected_local_capab
     let admission_target = admission_listener.local_addr().expect("admission addr");
     let expected_remote = client.id().to_string();
     tokio::spawn(async move {
-        let (mut socket, _) = admission_listener.accept().await.expect("accept admission");
-        let _request = read_http_request(&mut socket).await;
+        let (mut socket, _request) = accept_admission_request(&admission_listener).await;
         let response = format!(
             "HTTP/1.1 204 No Content\r\nX-Happier-Iroh-Remote-Endpoint-Id: {expected_remote}\r\n{IROH_MACHINE_APPLICATION_PORT_HEADER}: {app_port}\r\n{IROH_MACHINE_APPLICATION_CAPABILITY_HEADER}: {target_capability}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -1682,8 +1814,7 @@ async fn finite_transfer_connects_the_prepared_port_without_an_application_capab
     let admission_target = admission_listener.local_addr().expect("admission addr");
     let expected_remote = client.id().to_string();
     tokio::spawn(async move {
-        let (mut socket, _) = admission_listener.accept().await.expect("accept admission");
-        let _request = read_http_request(&mut socket).await;
+        let (mut socket, _request) = accept_admission_request(&admission_listener).await;
         let response = format!(
             "HTTP/1.1 204 No Content\r\nX-Happier-Iroh-Remote-Endpoint-Id: {expected_remote}\r\n{IROH_MACHINE_APPLICATION_PORT_HEADER}: {app_port}\r\n{IROH_MACHINE_APPLICATION_CAPABILITY_HEADER}: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             "e".repeat(64),
@@ -1992,9 +2123,9 @@ async fn denied_machine_handshake_never_contacts_any_application_listener() {
     let admission_target = listener.local_addr().expect("admission addr");
     let admission_contacts_for_task = Arc::clone(&admission_contacts);
     tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
+        loop {
+            let (mut socket, _request) = accept_admission_request(&listener).await;
             admission_contacts_for_task.fetch_add(1, Ordering::Relaxed);
-            let _request = read_http_request(&mut socket).await;
             socket
                 .write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -2126,9 +2257,9 @@ async fn admission_endpoint_echo_mismatch_never_contacts_any_application_listene
     let wrong_remote = server.id().to_string();
     let admission_contacts_for_task = Arc::clone(&admission_contacts);
     tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
+        loop {
+            let (mut socket, _request) = accept_admission_request(&listener).await;
             admission_contacts_for_task.fetch_add(1, Ordering::Relaxed);
-            let _request = read_http_request(&mut socket).await;
             let response = format!(
                 "HTTP/1.1 204 No Content\r\nX-Happier-Iroh-Remote-Endpoint-Id: {wrong_remote}\r\n{IROH_MACHINE_APPLICATION_PORT_HEADER}: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
@@ -2202,9 +2333,9 @@ async fn duplicate_or_comma_folded_remote_endpoint_echo_rejects_before_any_appli
     let admission_target = listener.local_addr().expect("admission addr");
     let admission_contacts_for_task = Arc::clone(&admission_contacts);
     tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
+        loop {
+            let (mut socket, _request) = accept_admission_request(&listener).await;
             admission_contacts_for_task.fetch_add(1, Ordering::Relaxed);
-            let _request = read_http_request(&mut socket).await;
             let response = responses
                 .lock()
                 .expect("response queue")
