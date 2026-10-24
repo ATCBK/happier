@@ -15,6 +15,8 @@ export {
   type TriageSourcePanelActionsV1,
   type TriageSourcePanelCommandV1,
   type TriageSourcePanelHandlerV1,
+  type TriageDetailPrimaryWriteV1,
+  type TriageDetailPrimaryWriteHostV1,
 } from './ui/evidenceDisclosure.js';
 export * from './ui/sourcePanelProtocol.js';
 export { useTriageSourcePanelIntentV1 } from './ui/sourcePanelActions.js';

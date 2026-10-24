@@ -12,6 +12,26 @@ export type TriageSourcePanelActionsV1 = Readonly<{
   execute(operation: TriageSourcePanelOperationV1, signal?: AbortSignal): Promise<TriageSourcePanelResultV1>;
 }>;
 
+/** A source's existing confirmed write, offered to its mounted detail header. */
+export type TriageDetailPrimaryWriteV1 = Readonly<{
+  title: string;
+  /** Null means offered; a reason keeps an unavailable write explainable. */
+  disabledReason: string | null;
+  pending: boolean;
+  /** Source-owned choices, with no implicit selection by the header. */
+  methods?: readonly Readonly<{ id: string; title: string }>[];
+  /** Source-rendered settled feedback, through the incumbent write presenter. */
+  feedback?: React.ReactNode;
+  /** Enters the source's ordinary Action/confirmation path. Never bypass approval. */
+  execute(methodId?: string): Promise<void>;
+}>;
+
+export type TriageDetailPrimaryWriteHostV1 = Readonly<{
+  /** Allows the source's existing actions panel to consume the same offer. */
+  value?: TriageDetailPrimaryWriteV1 | null;
+  offer(write: TriageDetailPrimaryWriteV1 | null): void;
+}>;
+
 /**
  * The child-to-parent half of Triage's selected-evidence disclosure seam.
  *
@@ -82,6 +102,8 @@ export function triageEvidenceDisclosureActionResultV1(outcome: TriageEvidenceDi
 export type TriageEvidenceDisclosureV1 = Readonly<{
   /** Mounted intents share the parent's existing Action address, never its draft authority. */
   panelActions?: TriageSourcePanelActionsV1;
+  /** Optional header placement of a source-owned write; no new mutation authority. */
+  primaryWrite?: TriageDetailPrimaryWriteHostV1;
   /**
    * Whether a Composer origin is currently addressable for this detail. A
    * source offers its disclosure control only while this is true: a control

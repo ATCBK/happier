@@ -160,10 +160,17 @@ describe('Triage evidence disclosure across independently bundled artifacts', ()
     });
     let available: boolean | null = null;
     let outcome: TriageEvidenceDisclosureOutcomeV1 | null = null;
+    const primaryWrite = { title: 'Complete change', pending: false, disabledReason: null,
+      execute: vi.fn(async () => {}) };
+    const offer = vi.fn();
 
     function SourceDetail(): React.ReactElement {
       const disclosure = sourceDetail.useTriageEvidenceDisclosure();
       available = disclosure.available;
+      React.useLayoutEffect(() => {
+        disclosure.primaryWrite?.offer(primaryWrite);
+        return () => { disclosure.primaryWrite?.offer(null); };
+      }, [disclosure.primaryWrite]);
       return (
         <button
           disabled={!disclosure.available}
@@ -177,7 +184,7 @@ describe('Triage evidence disclosure across independently bundled artifacts', ()
     }
 
     mount(
-      <aggregate.TriageEvidenceDisclosureProvider disclosure={{ available: true, disclose }}>
+      <aggregate.TriageEvidenceDisclosureProvider disclosure={{ available: true, disclose, primaryWrite: { offer } }}>
         <SourceDetail />
       </aggregate.TriageEvidenceDisclosureProvider>,
     );
@@ -186,6 +193,9 @@ describe('Triage evidence disclosure across independently bundled artifacts', ()
     expect(available).toBe(true);
     expect(disclose).toHaveBeenCalledTimes(1);
     expect(outcome).toEqual({ kind: 'applied' });
+    expect(offer).toHaveBeenCalledWith(primaryWrite);
+    await offer.mock.calls[0]?.[0]?.execute();
+    expect(primaryWrite.execute).toHaveBeenCalledOnce();
   });
 
   it('does not depend on which artifact copy was loaded first', async () => {
