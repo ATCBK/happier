@@ -69,7 +69,7 @@ import { getCurrentReactOwnerHint, getUnexpectedPrimitiveViewChildInfo } from '@
 import { resolveForegroundNotificationBehavior } from '@/activity/notifications/resolveForegroundNotificationBehavior';
 import { configureNotificationCategories } from '@/activity/notifications/configureNotificationCategories';
 import { resolveBootCredentials } from '@/boot/resolveBootCredentials';
-import { runAppBootSequence, type AppBootReadyState } from '@/boot/runAppBootSequence';
+import { runAppBootSequence, reportDesktopAppBootPhase, type AppBootReadyState } from '@/boot/runAppBootSequence';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { prepareWarmCacheStorage } from '@/sync/domains/state/warmCachePersistence';
 import { installTauriMcpBridgeOnce } from '@/desktop/mcp/maybeInstallTauriMcpBridge';
@@ -640,6 +640,7 @@ function EmbedAppBoot() {
     React.useEffect(() => {
         let cancelled = false;
         void runAppBootSequence({
+            onPhase: reportDesktopAppBootPhase,
             context: 'embed',
             loadFonts,
             sodiumReady: sodium.ready,
@@ -751,6 +752,7 @@ function AppBoot() {
     React.useEffect(() => {
         let cancelled = false;
         void runAppBootSequence({
+            onPhase: reportDesktopAppBootPhase,
             loadFonts,
             sodiumReady: sodium.ready,
             resolveCredentials: () => resolveBootCredentials(Platform.OS),

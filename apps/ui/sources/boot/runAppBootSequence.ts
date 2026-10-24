@@ -4,6 +4,16 @@ export type AppBootReadyState = Readonly<{
     credentials: AuthCredentials | null;
 }>;
 
+export type AppBootPhase = 'session-drafts' | 'credentials' | 'crypto' | 'translations' | 'ready';
+
+/** Only a debug desktop launched with its explicit QA observer installs this sink. */
+export function reportDesktopAppBootPhase(phase: AppBootPhase): void {
+    const observer = (globalThis as typeof globalThis & {
+        __HAPPIER_DESKTOP_BOOT_OBSERVER__?: { setPhase: (phase: AppBootPhase) => void };
+    }).__HAPPIER_DESKTOP_BOOT_OBSERVER__;
+    observer?.setPhase(phase);
+}
+
 export type AppBootSequence = Readonly<{
     context?: 'app' | 'embed';
     loadFonts: () => Promise<unknown>;
@@ -29,6 +39,7 @@ export type AppBootSequence = Readonly<{
      */
     restoreSync: ((credentials: AuthCredentials) => Promise<unknown>) | null;
     onReady: (state: AppBootReadyState) => void;
+    onPhase?: (phase: AppBootPhase) => void;
 }>;
 
 type CredentialOutcome = Readonly<{ credentials: AuthCredentials | null }>;
@@ -77,8 +88,11 @@ export async function runAppBootSequence(sequence: AppBootSequence): Promise<voi
     if (sequence.context === 'embed') {
         // The bridge is the credential authority in this realm. No persisted app state belongs
         // to the frame, including drafts or a warm cache from another signed-in Account.
+        sequence.onPhase?.('crypto');
         await Promise.resolve(sequence.sodiumReady);
+        sequence.onPhase?.('translations');
         await start(sequence.prepareTranslations);
+        sequence.onPhase?.('ready');
         sequence.onReady({ credentials: null });
         return;
     }
@@ -97,23 +111,27 @@ export async function runAppBootSequence(sequence: AppBootSequence): Promise<voi
             console.error('Failed to prepare the warm cache key during init, continuing startup:', error);
         },
     );
-    const sodiumReady = Promise.resolve(sequence.sodiumReady);
+    const sodiumReady = Promise.resolve(sequence.sodiumReady).catch((error: unknown) => {
+        sequence.onPhase?.('crypto');
+        throw error;
+    });
 
     // Unlike the disposable warm cache, drafts cannot degrade to an empty snapshot on failure.
     // Attach this await immediately so a rejected storage open reaches the boot recovery owner.
-    await start(sequence.prepareSessionDrafts);
+    sequence.onPhase?.('session-drafts');
+    // Both prerequisites are mandatory. Observe crypto immediately: an early
+    // rejection must reach recovery even if authoritative storage is still opening.
+    await Promise.all([start(sequence.prepareSessionDrafts), sodiumReady]);
 
-    let initialCredentials: AuthCredentials | null = null;
-    try {
-        initialCredentials = (await credentialsResolved).credentials;
-        await sodiumReady;
-    } catch (error) {
-        console.error('Error initializing:', error);
-    }
+    sequence.onPhase?.('credentials');
+    const initialCredentials = (await credentialsResolved).credentials;
+    sequence.onPhase?.('crypto');
 
     if (initialCredentials) {
         startSyncRestore(sequence, initialCredentials);
     }
+    sequence.onPhase?.('translations');
     await start(sequence.prepareTranslations);
+    sequence.onPhase?.('ready');
     sequence.onReady({ credentials: initialCredentials });
 }
