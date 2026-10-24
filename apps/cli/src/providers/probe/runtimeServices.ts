@@ -1674,6 +1674,11 @@ export function createRuntimeProviderServices(input: Readonly<{
           const settingsRead = { settings: input.providerSettings, diagnostics: [] };
           return resolveSavedFromConnectionContext(identity, {
             connection: input.resolution.record,
+            // A point-in-time description carries no Account custody; the ordinary settings path applies.
+            accountReadScope: undefined,
+            isAccountCurrent: undefined,
+            savedSecretOperationContext: undefined,
+            managedRuntimeAccount: undefined,
             snapshot: null,
             providerSettings: settingsRead.settings,
             settingsRead,

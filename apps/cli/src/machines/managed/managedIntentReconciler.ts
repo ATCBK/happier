@@ -55,7 +55,7 @@ async function waitForIdle(params: Readonly<{
             deadlineAt = Date.now() + remaining;
         }
         for (;;) {
-            let change: 'activity' | 'currentness' | void;
+            let change: 'activity' | 'currentness' | void | undefined;
             const outcome = await waitForChangeOrDeadline({ waitForChange: async signal => {
                 change = await params.bridge.waitForChange(signal);
             }, signal: params.signal, remainingMs: deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()) });

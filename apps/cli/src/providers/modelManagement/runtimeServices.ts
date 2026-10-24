@@ -13,7 +13,7 @@ import { resolveProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderCatalogDeclarationV1, ProviderBoundModelRef, ProviderConnectionId, ProviderCredentialTransportV1, ProviderBrokerApplicationBindingV1, ProviderModelDescriptorV1, ProviderWireProtocol, PersistedBackendTargetRefV2, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import { projectProviderConnectionBrokerApplication } from '@/providers/broker/providerConnectionCpxBridge';
-import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderModelProjectionRowV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
+import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import type { TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams';
 import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import type { ProviderContributionRegistryView, ProviderEndpointDnsEvidence } from '@/providers/registry';
@@ -47,7 +47,7 @@ import {
   projectProviderCatalogCurrentSelectionRecoveryRows,
   projectProviderCatalogForPicker,
 } from '@/providers/catalog';
-import type { ProviderConnectionCatalog } from '@/providers/catalog';
+import type { ProviderCatalogRowPresentation, ProviderConnectionCatalog, ProviderConnectionCatalogRow } from '@/providers/catalog';
 import { resolveProviderModelCompatibility } from '@/providers/catalog/compatibility';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
@@ -752,7 +752,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         });
         const catalogs: ProviderConnectionCatalog[] = [];
         const modelLoadProjectionByConnectionId = new Map<string, Readonly<{
-          action: 'available' | 'descriptor_absent' | 'feature_disabled';
+          action: 'available' | 'descriptor_absent' | 'feature_disabled' | 'machine_required';
           preflightPolicy: 'advisory' | 'required' | null;
         }>>();
         const confirmedByRef = new Map<string, boolean>();
@@ -870,8 +870,10 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           // protocols. The worker's one compatibility owner chooses among
           // them; ordinary presentation still has one group per connection.
           const rowsByModelId = new Map(placed.groups.flatMap(source => source.rows.map(row => [row.ref.modelId, row] as const)));
-          const rows: Array<Pick<DaemonProviderModelProjectionRowV1,
-            'ref' | 'descriptor' | 'sources' | 'confidence' | 'gatewaySlots' | 'catalog' | 'loadState'>> = [...rowsByModelId.values()];
+          // A Provider connection's catalog serves only Provider-bound refs; native Agent rows have no connection.
+          const rows: Array<Pick<ProviderConnectionCatalogRow, 'ref' | 'descriptor' | 'sources' | 'confidence' | 'gatewaySlots'>
+            & Pick<ProviderCatalogRowPresentation, 'catalog' | 'loadState'>> = [...rowsByModelId.values()]
+            .flatMap(row => row.ref.providerConnectionId === null ? [] : [{ ...row, ref: row.ref }]);
           const recoveryRows = projectProviderCatalogCurrentSelectionRecoveryRows({ connection: record,
             agentTargetKey: request.agentTargetKey, modelNameCatalog,
             currentSelectionForRecovery: request.currentSelection,

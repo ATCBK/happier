@@ -72,6 +72,9 @@
     "paths": {
       "@/*": [
         "./sources/*"
+      ],
+      "react-native": [
+        "./sources/app/account/profile/render/reactNativeTypes.d.ts"
       ]
     }
   },

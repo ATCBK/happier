@@ -8,14 +8,12 @@ import { StoredJsonContentEnvelopeSchema } from '../storage/storedJsonContentEnv
 import type { AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.js';
 import {
   CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-  type PluginConnectedAccountAuthenticationV2,
 } from './pluginConnectedAccountAuthenticationV2.js';
 import {
   ConnectedServiceAuthGroupIdSchema,
   ConnectedServiceCredentialHealthV1Schema,
   ConnectedServiceCredentialRevisionV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
-  isConnectedServiceCredentialHealthStatusUsable,
 } from './connectedServiceSchemas.js';
 import {
   ProviderAccountUsageRecordIdSchema,
@@ -68,6 +66,9 @@ export {
   QualifiedConnectedAccountProviderIdentityV4Schema,
   QualifiedConnectedAccountServiceRefSchema,
   sameQualifiedConnectedAccountGroupRef,
+  isQualifiedConnectedAccountProfileActiveV4,
+  isQualifiedConnectedAccountProfileUsableV4,
+  resolveQualifiedConnectedAccountGroupActiveAccountV4,
   type QualifiedConnectedAccountGroupRef,
 } from './qualifiedConnectedAccountProjectionsV4.js';
 
@@ -490,73 +491,6 @@ export type QualifiedConnectedAccountGroupV4 = z.infer<
   incarnation: z.infer<typeof QualifiedConnectedAccountGroupIncarnationV4Schema>;
 }>;
 
-/**
- * A V4 account is eligible to authorize a current purpose only while its
- * revision-fenced credential is usable and unexpired. Direct targets and
- * group targets share this exact policy.
- */
-export function isQualifiedConnectedAccountProfileActiveV4(
-  account: QualifiedConnectedAccountProfileV4,
-  now: number,
-): boolean {
-  return isConnectedServiceCredentialHealthStatusUsable(account.status)
-    && account.revisionSemantics === 'revisioned'
-    && (typeof account.expiresAt !== 'number' || account.expiresAt > now);
-}
-
-/**
- * Determines whether a current V4 credential can be used for a purpose under
- * the exact descriptor mode that created it. `configurationReady` remains a
- * projection fact: it gates only modes whose configuration is account-scoped.
- */
-export function isQualifiedConnectedAccountProfileUsableV4(input: Readonly<{
-  profile: QualifiedConnectedAccountProfileV4;
-  authentication: PluginConnectedAccountAuthenticationV2;
-  now: number;
-}>): boolean {
-  if (!isQualifiedConnectedAccountProfileActiveV4(input.profile, input.now)) {
-    return false;
-  }
-  const authenticationModeId = input.profile.authenticationModeId;
-  if (authenticationModeId === null) return false;
-  const mode = input.authentication.modes.find((candidate) => (
-    candidate.id === authenticationModeId
-  ));
-  if (!mode) return false;
-  return mode.configuration?.scope !== 'account'
-    || input.profile.configurationReady;
-}
-
-/**
- * Resolve the one account that makes a qualified group passively usable.
- * Group runtime status is diagnostic state; authority comes from the active,
- * enabled member and a current usable revisioned account projection.
- */
-export function resolveQualifiedConnectedAccountGroupActiveAccountV4(input: Readonly<{
-  group: QualifiedConnectedAccountGroupV4;
-  accounts: readonly QualifiedConnectedAccountProfileV4[];
-  authentication: PluginConnectedAccountAuthenticationV2;
-  now: number;
-}>): QualifiedConnectedAccountProfileV4 | null {
-  const activeAccountId = input.group.activeConnectedAccountId;
-  if (!activeAccountId) return null;
-  if (!input.group.members.some((member) => (
-    member.connectedAccountId === activeAccountId
-    && member.enabled !== false
-  ))) return null;
-  const activeAccountRef = {
-    service: input.group.ref.service,
-    accountId: activeAccountId,
-  };
-  return input.accounts.find((account) => (
-    sameQualifiedConnectedAccountRef(account.ref, activeAccountRef)
-    && isQualifiedConnectedAccountProfileUsableV4({
-      profile: account,
-      authentication: input.authentication,
-      now: input.now,
-    })
-  )) ?? null;
-}
 export type QualifiedConnectedServiceUsageSourceV4 = z.infer<
   typeof QualifiedConnectedServiceUsageSourceV4Schema
 >;

@@ -202,7 +202,7 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
       operationContext: input.operationContext,
     };
-    const projectEntries = input.projectEntries ?? (input.credentials ? await (input.projectPreparation
+    const projectEntries: readonly PromptStackEntryV1[] = input.projectEntries ?? (input.credentials ? await (input.projectPreparation
       ? input.projectPreparation.resolve({ metadata, machineId: input.machineId, directory: input.directory })
       : resolveSessionProjectPromptStack({
         credentials: input.credentials, ...projectInput,

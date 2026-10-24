@@ -12,7 +12,7 @@ import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connected
 import { SessionModelSelectionV2Schema } from '../../providers/selection/v2.js';
 import { qualifiedPurposeKey, type QualifiedConnectedAccountPurposeBindingsV1, type QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
 import { readDeclaredConnectedAccountPurposeV1, resolveConnectedAccountPurposeSelectedAccountV1 } from '../../connect/connectedAccountPurposeSelectionV1.js';
-import { isQualifiedConnectedAccountProfileUsableV4 } from '../../connect/qualifiedConnectedAccountsV4.js';
+import { isQualifiedConnectedAccountProfileUsableV4 } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 import type { TeamCredentialResourceCatalogEntryV1 } from '../../teams/credentials/resourceV1.js';
 import type { TeamResourceConnectedServiceSelectionV2 } from '../../connect/connectedServiceBindings.js';
 import type { AccessibleMachineAccessV1 } from '../../machines/machineAccessV1.js';

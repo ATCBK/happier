@@ -7,7 +7,7 @@ import { resolveConnectedAccountPurposeSelectedAccountV1 } from '../connect/conn
 import type { PluginConnectedAccountAuthenticationV2 } from '../connect/pluginConnectedAccountAuthenticationV2.js';
 import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import { QualifiedConnectedAccountRefSchema, sameQualifiedConnectedAccountRef, type QualifiedConnectedAccountRef } from '../connect/qualifiedConnectedAccountPersistence.js';
-import { isQualifiedConnectedAccountProfileActiveV4 } from '../connect/qualifiedConnectedAccountsV4.js';
+import { isQualifiedConnectedAccountProfileActiveV4 } from '../connect/qualifiedConnectedAccountProjectionsV4.js';
 import type { InputFieldHint, InputOption } from '../inputs/inputFields.js';
 import { WidgetConnectedAccountPurposeBindingV1Schema, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import type { WidgetInputBindingV1, WidgetInputIssueV1, WidgetInstanceV1, WidgetSurfaceRefV1 } from './widgetInstanceV1.js';

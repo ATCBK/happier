@@ -412,7 +412,9 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       // Account/plugin sources and the lead's per-field Session overrides.
       const startContext = await createCliActionDeps({ token: deps.credentials.token, credentials: deps.credentials,
         sessionId: deps.originSessionId, serverId: deps.serverId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
-        rawSession: lead.target.rawSession, getCurrentSessionMetadata: () => lead.metadata,
+        rawSession: lead.target.rawSession,
+        ...(lead.target.mode === 'plain' ? { mode: 'plain' as const, ctx: null } : { mode: 'e2ee' as const, ctx: lead.target.ctx }),
+        getCurrentSessionMetadata: () => lead.metadata,
         getCurrentSessionBackendTarget: () => leadAgent?.backendTarget,
       }).resolveAgentStartContext!({ surface: 'agent', defaultSessionId: deps.originSessionId,
         callerPermissionMode: permissionMode ?? 'default', ...(signal ? { signal } : {}) });

@@ -1,7 +1,8 @@
 import { qualifiedPurposeKey, type QualifiedConnectedAccountPurposeBindingsV1 } from './connectedAccountPurposeBindings.js';
 import type { QualifiedConnectedAccountPurposeV1 } from './connectedAccountPurposeIdentity.js';
 import { sameQualifiedConnectedAccountRef } from './qualifiedConnectedAccountPersistence.js';
-import { isQualifiedConnectedAccountProfileActiveV4, resolveQualifiedConnectedAccountGroupActiveAccountV4, type QualifiedConnectedAccountProfileV4, type QualifiedConnectedAccountGroupV4 } from './qualifiedConnectedAccountsV4.js';
+import { isQualifiedConnectedAccountProfileActiveV4, resolveQualifiedConnectedAccountGroupActiveAccountV4 } from './qualifiedConnectedAccountProjectionsV4.js';
+import type { QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountGroupV4 } from './qualifiedConnectedAccountsV4.js';
 import type { PluginConnectedAccountAuthenticationV2 } from './pluginConnectedAccountAuthenticationV2.js';
 import type { PluginProjectedActionV2, PluginProjectedMachineProvisionerEntryV1, PluginProjectedResourceV2, PluginProjectionInstalledPackageV2 } from '../daemon/contributionRegistryProjection.js';
 

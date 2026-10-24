@@ -1,5 +1,5 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { isQualifiedConnectedAccountProfileUsableV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { isQualifiedConnectedAccountProfileUsableV4 } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import type { PluginProjectedAgentConnectedAccountPurposeV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { isConnectedServiceProfileStatusSelectable, type ConnectedServicesProfileOption } from '@happier-dev/agents';
 

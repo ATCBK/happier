@@ -29,13 +29,15 @@ import {
   QualifiedProviderAccountUsageWriteV4Schema,
   QualifiedConnectedAccountRefSchema,
   QualifiedConnectedServiceUsageSourceV4Schema,
-  isQualifiedConnectedAccountProfileActiveV4,
-  isQualifiedConnectedAccountProfileUsableV4,
   openQualifiedConnectedAccountQuotaResponseV4,
   projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4,
-  resolveQualifiedConnectedAccountGroupActiveAccountV4,
   sameQualifiedConnectedAccountGroupRef,
 } from './qualifiedConnectedAccountsV4.js';
+import {
+  isQualifiedConnectedAccountProfileActiveV4,
+  isQualifiedConnectedAccountProfileUsableV4,
+  resolveQualifiedConnectedAccountGroupActiveAccountV4,
+} from './qualifiedConnectedAccountProjectionsV4.js';
 import {
   CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
   PluginConnectedAccountAuthenticationV2Schema,
