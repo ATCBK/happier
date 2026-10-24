@@ -23,7 +23,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('B
     it('bounds an inventory-sized owned Pool selector without losing first or last results', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
         const other = await db.account.create({ data: { encryptionMode: 'plain' } });
-        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const machine = await db.machine.create({ data: {
+            id: randomUUID(), accountId: owner.id, metadata: '{}',
+            operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
         const ids = Array.from({ length: 1100 }, () => randomUUID());
         await db.machinePool.createMany({ data: ids.map((id, index) => ({ id, accountId: owner.id, name: `Pool ${index}`, revision: index })) });
         await db.machinePoolMember.createMany({ data: ids.map(poolId => ({ poolId, machineId: machine.id, priorityTier: 0, enabled: true })) });
@@ -43,6 +47,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('B
             expect(snapshots.size).toBe(ids.length);
             for (const index of [0, ids.length - 1]) expect(snapshots.get(ids[index]!)).toMatchObject({
                 poolId: ids[index], revision: index, availableMachineIds: new Set([machine.id]), presenceState: 'known',
+                machineEndpointIds: new Map([[machine.id, '1'.repeat(64)]]),
             });
             expect(snapshots.has(foreign.id)).toBe(false);
             expect(snapshots.has(missing)).toBe(false);

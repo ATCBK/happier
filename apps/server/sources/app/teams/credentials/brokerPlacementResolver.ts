@@ -11,6 +11,7 @@ import {
 } from "@/app/machines/pools/machinePoolService";
 import { selectMachinePoolCandidate } from "@happier-dev/protocol/machines/pools";
 import { acquireMachinePoolMutationFenceInTx } from "@/app/machines/pools/machinePoolMutationFence";
+import { admitProviderBrokerTopology } from "@/app/providers/brokerConsumerAdmission";
 import {
     classifyTeamCredentialBrokerMachineEligibility,
     resolveTeamCredentialBrokerMachinePresentInTx,
@@ -314,6 +315,8 @@ export async function resolveTeamCredentialBrokerPlacementInTx(
         presence: MachineDaemonPresenceInventory;
         requestKey: string;
         pinnedMachineId?: string | null;
+        /** Private peer opens filter before source RPC; relay consumers omit it. */
+        poolInitiator?: Readonly<{ machineId: string; endpointId: string }>;
         poolEligibleMachineIds?: ReadonlySet<string>;
         expectedPoolMachineId?: string;
     }>,
@@ -348,6 +351,16 @@ export async function resolveTeamCredentialBrokerPlacementInTx(
                 ? [member.machineId]
                 : []
         ));
+        if (input.poolInitiator !== undefined) {
+            const initiator = input.poolInitiator;
+            const topologyCandidates = candidateMachineIds.filter(machineId => admitProviderBrokerTopology(initiator, {
+                machineId, endpointId: snapshot.value.machineEndpointIds.get(machineId) ?? null,
+            }).ok);
+            if (candidateMachineIds.length > 0 && topologyCandidates.length === 0) {
+                return { ok: false, error: 'resource_unavailable' };
+            }
+            candidateMachineIds = topologyCandidates;
+        }
         if (input.poolEligibleMachineIds === undefined) {
             return { ok: true, broker: null, poolSnapshot, candidateMachineIds };
         }

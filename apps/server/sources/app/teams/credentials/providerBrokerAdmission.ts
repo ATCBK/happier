@@ -804,6 +804,7 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
             brokerOperationIdentity(parsedRequest.consumer),
         ].join('\u0000'),
         pinnedMachineId,
+        poolInitiator: { machineId: parsedRequest.initiatorMachineId, endpointId: initiatorEndpoint.endpointId },
         ...(poolEligibleMachineIds === null ? {} : { poolEligibleMachineIds }),
         ...(selectedPoolMachineId === null ? {} : { expectedPoolMachineId: selectedPoolMachineId }),
     });

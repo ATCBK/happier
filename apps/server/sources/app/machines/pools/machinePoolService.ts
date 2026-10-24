@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
+import { readMachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import type { MachinePoolCreateInputV1, MachinePoolDeleteInputV1, MachinePoolDeleteOutputV1, MachinePoolErrorV1, MachinePoolResolveInputV1, MachinePoolResolveResultV1, MachinePoolUpdateInputV1, MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
 
 import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
@@ -35,6 +36,22 @@ const poolAggregate = {
 } as const satisfies Prisma.MachinePoolDefaultArgs;
 
 type StoredPool = Prisma.MachinePoolGetPayload<typeof poolAggregate>;
+const poolCandidateAggregate = {
+    include: {
+        members: {
+            include: {
+                machine: {
+                    select: {
+                        ...poolAggregate.include.members.include.machine.select,
+                        operationProtocolCapabilities: true,
+                        operationProtocolCapabilitiesRevision: true,
+                    },
+                },
+            },
+        },
+    },
+} as const satisfies Prisma.MachinePoolDefaultArgs;
+type StoredCandidatePool = Prisma.MachinePoolGetPayload<typeof poolCandidateAggregate>;
 type PoolResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: MachinePoolErrorV1 }>;
 type StoredPoolMember = StoredPool["members"][number];
 
@@ -45,6 +62,7 @@ export type MachinePoolCandidateSnapshot = Readonly<{
     revision: number;
     members: readonly Readonly<{ machineId: string; priorityTier: number; enabled: boolean }>[];
     availableMachineIds: ReadonlySet<string>;
+    machineEndpointIds: ReadonlyMap<string, string | null>;
     presenceState: "known" | "partial" | "unavailable";
 }>;
 
@@ -354,13 +372,17 @@ async function readMachinePoolCandidateSnapshot(
     client: Tx | typeof db,
     params: MachinePoolCandidateSnapshotInput,
 ): Promise<PoolResult<MachinePoolCandidateSnapshot>> {
-    const stored = await readOwnedPool(client, params.accountId, params.poolId);
+    const stored = await readOwnedCandidatePool(client, params.accountId, params.poolId);
     if (!stored) return { ok: false, error: { code: "pool_not_found" } };
     return { ok: true, value: projectMachinePoolCandidateSnapshot(stored, params.presence) };
 }
 
+async function readOwnedCandidatePool(client: Tx | typeof db, accountId: string, poolId: string): Promise<StoredCandidatePool | null> {
+    return await client.machinePool.findFirst({ where: { id: poolId, accountId }, ...poolCandidateAggregate });
+}
+
 function projectMachinePoolCandidateSnapshot(
-    stored: StoredPool,
+    stored: StoredCandidatePool,
     presence: MachineDaemonPresenceInventory,
 ): MachinePoolCandidateSnapshot {
     const queriedMachineIds = presence.state === 'known' ? presence.queriedMachineIds : undefined;
@@ -376,19 +398,23 @@ function projectMachinePoolCandidateSnapshot(
             enabled: member.enabled,
         }))),
         availableMachineIds,
+        machineEndpointIds: new Map(stored.members.map(member => [member.machineId, readMachineIrohEndpointAuthorityV1({
+            capabilities: member.machine.operationProtocolCapabilities,
+            revision: member.machine.operationProtocolCapabilitiesRevision,
+        })?.endpointId ?? null])),
         presenceState: queriedMachineIds
             && stored.members.some(member => member.enabled && !queriedMachineIds.has(member.machineId))
             ? 'partial' : presence.state,
     });
 }
 
-async function readOwnedPools(accountId: string, poolIds: readonly string[]): Promise<StoredPool[]> {
-    const stored: StoredPool[] = [];
+async function readOwnedPools(accountId: string, poolIds: readonly string[]): Promise<StoredCandidatePool[]> {
+    const stored: StoredCandidatePool[] = [];
     // The native aggregate query binds the Account and OFFSET in addition to IDs.
     for (const ids of portableQueryChunks({ values: poolIds, bindingsPerValue: 1, fixedBindings: 2 })) {
         stored.push(...await db.machinePool.findMany({
             where: { accountId, id: { in: [...ids] } },
-            ...poolAggregate,
+            ...poolCandidateAggregate,
         }));
     }
     return stored;
@@ -443,22 +469,12 @@ export async function getMachinePoolCandidateSnapshot(params: Readonly<{
     | { io: MachineDaemonPresenceSocketServer; presence?: never }
     | { presence: MachineDaemonPresenceInventory; io?: never }
 )>): Promise<PoolResult<MachinePoolCandidateSnapshot>> {
-    const initial = await readOwnedPool(db, params.accountId, params.poolId);
+    const initial = await readOwnedCandidatePool(db, params.accountId, params.poolId);
     if (!initial) return { ok: false, error: { code: "pool_not_found" } };
     if (!initial.members.some((member) => member.enabled)) {
         return {
             ok: true,
-            value: Object.freeze({
-                poolId: initial.id,
-                revision: initial.revision,
-                members: Object.freeze(initial.members.map((member) => Object.freeze({
-                    machineId: member.machineId,
-                    priorityTier: member.priorityTier,
-                    enabled: member.enabled,
-                }))),
-                availableMachineIds: new Set<string>(),
-                presenceState: "known" as const,
-            }),
+            value: projectMachinePoolCandidateSnapshot(initial, { state: 'known', machineIds: new Set() }),
         };
     }
     if (params.presence) return await readMachinePoolCandidateSnapshot(db, {
@@ -467,7 +483,7 @@ export async function getMachinePoolCandidateSnapshot(params: Readonly<{
     const machineIds = initial.members.filter(member => member.enabled).map(member => member.machineId);
     const initialDemand = new Set(machineIds);
     let inventory = await getMachineDaemonPresenceInventory({ accountId: params.accountId, io: params.io, machineIds });
-    let current = await readOwnedPool(db, params.accountId, params.poolId);
+    let current = await readOwnedCandidatePool(db, params.accountId, params.poolId);
     if (!current) return { ok: false, error: { code: 'pool_not_found' } };
     const currentMachineIds = current.members.filter(member => member.enabled).map(member => member.machineId);
     if (currentMachineIds.some(machineId => !initialDemand.has(machineId))) {
@@ -476,7 +492,7 @@ export async function getMachinePoolCandidateSnapshot(params: Readonly<{
         // through the same exact census instead of treating them as disconnected.
         inventory = await getMachineDaemonPresenceInventory({ accountId: params.accountId, io: params.io,
             machineIds: currentMachineIds });
-        current = await readOwnedPool(db, params.accountId, params.poolId);
+        current = await readOwnedCandidatePool(db, params.accountId, params.poolId);
         if (!current) return { ok: false, error: { code: 'pool_not_found' } };
     }
     return { ok: true, value: projectMachinePoolCandidateSnapshot(current, inventory) };

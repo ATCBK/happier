@@ -442,6 +442,10 @@ describe("machinePoolService (SQLite integration)", () => {
 
     it('shares one exact enabled-member union across many requested Pools and never widens empty demand', async () => {
         await seed();
+        await db.machine.update({ where: { id: 'm-fast' }, data: {
+            operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
         const ids = Array.from({ length: 12 }, () => crypto.randomUUID());
         await db.machinePool.createMany({ data: ids.map(id => ({ id, accountId: ownerId, name: 'Bulk snapshot' })) });
         await db.machinePoolMember.createMany({ data: ids.flatMap(poolId => ['m-fast', 'm-slow'].map(machineId => ({
@@ -462,7 +466,10 @@ describe("machinePoolService (SQLite integration)", () => {
         const snapshots = await getMachinePoolCandidateSnapshots({ accountId: ownerId, poolIds: [...ids, foreign.id], io: transport });
         expect(snapshots.size).toBe(ids.length);
         expect(snapshots.has(foreign.id)).toBe(false);
-        for (const snapshot of snapshots.values()) expect(snapshot).toMatchObject({ presenceState: 'known', availableMachineIds: new Set(['m-fast', 'm-slow']) });
+        for (const snapshot of snapshots.values()) expect(snapshot).toMatchObject({
+            presenceState: 'known', availableMachineIds: new Set(['m-fast', 'm-slow']),
+            machineEndpointIds: new Map([['m-fast', '1'.repeat(64)], ['m-slow', null]]),
+        });
         expect(rooms.map(scope => scope.slice().sort())).toEqual([['m-fast', 'm-slow'].map(id => getMachineSocketRoom(ownerId, id)).sort()]);
         expect(transportedIdentities).toBe(2);
         rooms.length = 0;

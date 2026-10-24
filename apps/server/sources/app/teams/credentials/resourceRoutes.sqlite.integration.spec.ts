@@ -896,6 +896,62 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(rpc).not.toHaveBeenCalled();
     });
 
+    it("requires consensus before reporting a Pool-wide request-policy broker refusal", async () => {
+        const owner = await createAccount();
+        const team = await db.team.create({ data: {
+            name: "Request-policy refusal consensus",
+            memberships: { create: { accountId: owner.id, role: "owner" } },
+        } });
+        const machines = await Promise.all(["first", "second"].map(label => db.machine.create({ data: {
+            id: `${label}-consensus-broker-${owner.id}`, accountId: owner.id, metadata: "{}", kind: "persistent",
+            operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1,
+        } })));
+        const pool = await db.machinePool.create({ data: {
+            id: crypto.randomUUID(), accountId: owner.id, name: "Refusal consensus brokers",
+            members: { create: machines.map(machine => ({ machineId: machine.id, priorityTier: 0, enabled: true })) },
+        } });
+        const source = {
+            v: 1, kind: "provider_connection", connectionId: "consensus-policy-connection",
+            connectionSecurityFingerprint: `connection-security:v1:${"c".repeat(43)}`, credentialSlotId: "apiKey",
+        } as const;
+        const previousPresence = app.machineDaemonPresence;
+        const previousRpc = app.forwardRpcForUser;
+        try {
+            // Socket discovery and daemon RPC are network boundaries; source admission,
+            // Pool selection, refusal aggregation and response schemas remain real.
+            app.machineDaemonPresence = { in: () => ({ fetchSockets: async () => machines.map(machine => ({
+                data: { clientType: "machine-scoped", userId: owner.id, machineId: machine.id },
+            })) }) };
+            const applicationUnavailable = { status: "unavailable", reason: "application_unavailable" };
+            const modelUnavailable = { status: "unavailable", reason: "model_unavailable" };
+            const sourceUnavailable = { status: "unavailable", reason: "source_unavailable" };
+            for (const scenario of [
+                { responses: [applicationUnavailable, modelUnavailable], reason: "broker_unavailable" },
+                { responses: [applicationUnavailable, null], reason: "broker_unavailable" },
+                { responses: [applicationUnavailable, { status: "invalid" }], reason: "broker_unavailable" },
+                { responses: [applicationUnavailable, applicationUnavailable], reason: "unsupported_application" },
+                { responses: [modelUnavailable, modelUnavailable], reason: "model_catalog_unavailable" },
+                { responses: [sourceUnavailable, sourceUnavailable], reason: "source_unavailable" },
+            ]) {
+                app.forwardRpcForUser = async (input: { method: string }) => {
+                    const index = machines.findIndex(machine => input.method.startsWith(`${machine.id}:`));
+                    const result = scenario.responses[index];
+                    return result === null ? { ok: false } : { ok: true, result };
+                };
+                const response = await post("/v1/teams/credential-resources/request-policy-support/get", owner.id, {
+                    scope: "source_draft", teamId: team.id, source,
+                    brokerPlacement: { kind: "machine_pool", poolId: pool.id },
+                });
+                expect(response.statusCode, response.body).toBe(200);
+                expect.soft(response.json(), JSON.stringify(scenario.responses)).toEqual({ status: "unavailable", reason: scenario.reason });
+            }
+        } finally {
+            app.machineDaemonPresence = previousPresence;
+            app.forwardRpcForUser = previousRpc;
+        }
+    });
+
     it.each(["machine", "machine_pool"] as const)("uses positive partial presence for %s request-policy support and save preflights", async (placementKind) => {
         const owner = await createAccount();
         const team = await db.team.create({ data: { name: "Partial request-policy census" } });

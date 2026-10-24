@@ -78,6 +78,7 @@ import {
 } from "./providerModelProjection";
 import {
     prepareTeamCredentialRequestPolicySupportInTx,
+    readTeamCredentialBrokerRefusalReason,
     resolveTeamCredentialRequestPolicySupport,
     type TeamCredentialRequestPolicySupportEvidence,
 } from "./resourceRequestPolicySupport";
@@ -180,14 +181,6 @@ async function readTeamCredentialResourceCandidates(
         // Preserve the Home's content-free parse observation without echoing broker payloads.
         return { machineId, candidate: parsed.success ? parsed.data : { status: 'unavailable', reason: 'response_invalid' } as const };
     }));
-}
-
-function readTeamCredentialBrokerRefusalReason(reasons: readonly (string | null)[]) {
-    const first = reasons[0];
-    return (first === 'application_unavailable' || first === 'model_unavailable' || first === 'response_invalid')
-        && reasons.every(reason => reason === first)
-        ? first
-        : null;
 }
 
 async function readTeamCredentialBrokerSourceEligibility(

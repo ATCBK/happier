@@ -227,6 +227,18 @@ export async function prepareTeamCredentialRequestPolicySupportInTx(
 }
 
 /**
+ * The one interpreter of daemon broker refusals: a refusal is reported only
+ * when every candidate observation agrees on the same reason.
+ */
+export function readTeamCredentialBrokerRefusalReason(reasons: readonly (string | null)[]) {
+    const first = reasons[0];
+    return (first === 'application_unavailable' || first === 'model_unavailable' || first === 'response_invalid')
+        && reasons.every(reason => reason === first)
+        ? first
+        : null;
+}
+
+/**
  * Calls the one daemon-owned source/application discovery contract and narrows
  * its answer to the value-free Team editor projection. This is shared by the
  * public support action and update preflight so neither path authors Provider
@@ -304,20 +316,22 @@ export async function resolveTeamCredentialRequestPolicySupport(
             models: [...byModelAndApplication.values()],
         });
     }
-    const parsedResponses = projections.flatMap(({ response }) => {
+    const parsedResponses = projections.map(({ response }) => {
         const parsed = DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema.safeParse(response);
-        return parsed.success ? [parsed.data] : [];
+        return parsed.success ? parsed.data : null;
     });
-    const unavailableReasons = new Set(parsedResponses.flatMap(response => (
-        response.status === "unavailable" ? [response.reason] : []
+    // A refusal is a Pool-wide fact only when every observed candidate agrees;
+    // mixed, missing or malformed observations stay `broker_unavailable`.
+    const refusal = readTeamCredentialBrokerRefusalReason(parsedResponses.map(response => (
+        response?.status === "unavailable" ? response.reason : null
     )));
-    const reason = parsedResponses.some(response => response.status === "success")
+    const reason = parsedResponses.some(response => response?.status === "success")
         ? "update_required"
-        : unavailableReasons.has("application_unavailable")
+        : refusal === "application_unavailable"
             ? "unsupported_application"
-            : unavailableReasons.has("model_unavailable")
+            : refusal === "model_unavailable"
                 ? "model_catalog_unavailable"
-                : unavailableReasons.has("source_unavailable")
+                : parsedResponses.some(response => response?.status === "unavailable" && response.reason === "source_unavailable")
                     ? "source_unavailable"
                     : "broker_unavailable";
     return TeamCredentialRequestPolicySupportOutputV1Schema.parse({ status: "unavailable", reason });
