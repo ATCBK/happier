@@ -5,6 +5,7 @@ import { ApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/approva
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { listTranscriptApprovalArtifactsForSession, type OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { resolveMessageRouteIdForDisplay } from '@happier-dev/session-core/messages';
 import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests, selectToolApprovalRequestsForMessages, useToolApprovalRequestsIndex } from './toolApprovalPromptMatching';
 
@@ -12,7 +13,7 @@ afterEach(standardCleanup);
 
 const fixtureSession = { serverId: 'fixture-home', sessionId: 'fixture' };
 
-function requestArtifact(index: number): Extract<OpenApprovalArtifactForSession['artifact'], { isDecrypted: true }> {
+function requestArtifact(index: number): Extract<DecryptedArtifact, { isDecrypted: true }> {
     const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId: 'fixture' }, actionId: 'skills.rules.set',
             actionArgs: { id: String(index), state: 'on' }, summary: 'Change reach',
