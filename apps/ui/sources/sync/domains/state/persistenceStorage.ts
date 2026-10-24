@@ -4,6 +4,18 @@ import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 type PersistenceStorage = Pick<MMKV, 'set' | 'getString' | 'delete' | 'getAllKeys' | 'clearAll'>;
 
 let persistedStorage: PersistenceStorage | null = null;
+const clearedListeners = new Set<() => void>();
+
+/** Device state projections retire together with their canonical backing storage. */
+export function subscribePersistenceStorageCleared(listener: () => void): () => void {
+    clearedListeners.add(listener);
+    return () => { clearedListeners.delete(listener); };
+}
+
+export function clearPersistenceStorage(): void {
+    getPersistenceStorage().clearAll();
+    for (const listener of clearedListeners) listener();
+}
 
 function createMemoryStorage(): PersistenceStorage {
     const values = new Map<string, boolean | string | number | ArrayBuffer>();
@@ -60,5 +72,5 @@ export function getPersistenceStorage(): PersistenceStorage {
 
 /** Hard embed retirement clears only this frame's already-created volatile adapter. */
 export function clearEmbedMemoryStorage(): void {
-    if (isEmbedWindowContext()) persistedStorage?.clearAll();
+    if (isEmbedWindowContext() && persistedStorage) clearPersistenceStorage();
 }
