@@ -455,7 +455,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      * label/value rows and its foot.
      */
     kindCard: {
-        ...resolveAgentInputPanelLayoutStyle(theme, true),
+        ...resolveAgentInputPanelLayoutStyle(theme),
         paddingTop: 0,
         paddingBottom: 0,
         paddingHorizontal: 0,
