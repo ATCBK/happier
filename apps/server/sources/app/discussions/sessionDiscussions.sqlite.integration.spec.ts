@@ -64,6 +64,8 @@ import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, ty
 import { registerPermissionModeMessageQueueBinding } from '../../../../cli/src/agent/runtime/permissions/bindModeQueue';
 import { runPermissionModePromptLoop } from '../../../../cli/src/agent/runtime/runPermissionModePromptLoop';
 import { createNativeAgentSessionOperations } from '../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createSessionTurnLifecycle } from '../../../../cli/src/agent/runtime/session/turn/lifecycle';
+import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
 import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeBinding } from '../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
 import { MessageBuffer } from '../../../../cli/src/ui/ink/messageBuffer';
 import { createInitialHostRuntimeActivityMutation } from '../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
@@ -1975,87 +1977,142 @@ describe('First-class Discussions service (SQLite)', () => {
         await db.sessionTurn.create({ data: { sessionId: source.id, turnId: sourceTurnId, status: 'completed', startedAt: 1n, updatedAt: 2n,
             transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1] }) } });
         const sourceSession = { sourceSessionId: source.id, sourceTurnId, sourceInputId, via: 'action' as const, discussionAddressing: originalAddressing };
-        let response: unknown;
-        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: source.id, discussionId, sourceSession,
-            request: { ...postRequest('Agent question'), mentionedSessionIds: [target.id], content: { t: 'plain', v: { v: 1,
-                parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } } } }, (value: unknown) => { response = value; });
-        const posted = DiscussionAgentPostResponseV1Schema.parse(response);
-        expect(posted).toMatchObject({ ok: true });
-        if (!posted.ok) throw new Error(posted.error);
-        const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
-            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: target.id }));
-        const observation = observed.observations.find(row => 'source' in row);
-        if (!observation || !('source' in observation)) throw new Error('Addressed target observation missing');
-        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
-        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
-        // Only authentication and the Machine socket are replaced. Resource
-        // reads, opening, protected admission and database acceptance are real.
-        app.decorate('authenticate', async (httpRequest: FastifyRequest) => {
-            httpRequest.userId = owner.id; httpRequest.authAuthority = 'present_user'; httpRequest.authTokenKind = 'account';
-        });
-        registerDiscussionRoutes(app); registerAccountEncryptionRoutes(app); registerSessionListingRoutes(app);
-        registerSessionLookupByTagsRoute(app); registerSessionFollowRoutes(app); registerSessionMessageRoutes(app);
-        const origin = 'http://discussion-follow-composed.test';
-        const restoreHttp = installAxiosFastifyAdapter({ app, origin });
-        const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: owner.id })).toString('base64url')}.fixture`, encryption: null };
-        const admissions: string[] = [];
-        const session = createMutableApiSessionClientFixture({ sessionId: target.id, overrides: {
-            getServerBinding: () => ({ serverId, serverUrl: origin }),
-            getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
-                sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
-                capabilities: { serverIdentity: { serverIdentityId: serverId } } }) }),
-            runSessionFollowSourceRequest: ({ request: read }) => runWithServerHttpBaseUrl(origin, read),
-            getMachineAdmissionTransport: () => async payload => {
-                const result = await enqueuePendingMessageByAuthenticatedMachine({ ...SessionPendingEnqueueByMachineRequestV1Schema.parse(payload),
-                    accountId: owner.id, sourceMachineId: machine.id });
-                admissions.push(result.status === 'rejected' ? result.code : result.status);
-                return result;
-            },
-        } });
-        try {
-            // Current placement is supplied by the real Session read owner.
-            await db.session.update({ where: { id: target.id }, data: { active: true,
-                metadata: JSON.stringify({ machineId: targetPublisher.machine.id, path: '/repo', claudeSessionId: 'target-native' }) } });
-            const intake = createDiscussionFollowInputIntake({ session, credentials });
-            expect(await intake({ observation, signal: new AbortController().signal }), JSON.stringify(admissions)).toBe(true);
-            const localId = deriveDiscussionFollowInputLocalIdV1(observation.addressing);
-            expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
-                .toMatchObject({ replyProgress: { sourceSession, discussion: observation.addressing }, inputAdmissionReceipt: { discussionAddressing: observation.addressing } });
-            expect((await db.sessionFollowEdge.findFirstOrThrow({ where: { destinationSessionId: target.id, sourceDiscussionId: discussionId } })).deliveredTranscriptSeq)
-                .toBe(posted.value.message.seq);
-            const current = await db.session.findUniqueOrThrow({ where: { id: target.id } });
-            const publisherAuthority = { accountId: owner.id, sessionId: target.id,
-                machineId: targetPublisher.machine.id, committedFence: current.lastActiveAt };
-            expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: target.id, publisherAuthority,
-                deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }))
-                .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
-            const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } });
-            if (pending.content.t !== 'plain') throw new Error('Expected plain test input');
-            const body = pending.content.v as Record<string, unknown>;
-            const targetRequest = SessionInputRequestV1Schema.parse(readSessionInputRequest(body.meta, 'stored'));
-            const targetReceipt = SessionInputAdmissionReceiptV1Schema.parse(pending.inputAdmissionReceipt);
-            const finalContent = { t: 'plain' as const, v: { ...body, meta: {
-                ...withSessionInputAuthorityV1(body.meta, settleSessionInputRequestV1({ request: targetRequest,
-                    currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: targetReceipt })),
-                [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request: targetRequest,
-                    requestedProvenance: readSessionMessageProvenance(body.meta, 'stored'), inputAdmissionReceipt: targetReceipt }),
-            } } };
-            let settlement: unknown;
-            await getSocketHandler(targetPublisher.socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1,
-                sessionId: target.id, localId, decision: { kind: 'admit', finalContent,
-                    validation: { sourceSession, reply: { mode: 'return', sourceSession, discussion: observation.addressing,
-                        ...(targetRequest.actionRequestAttributionV1 ? { actionRequestAttributionV1: targetRequest.actionRequestAttributionV1 } : {}) },
-                    autonomousCheckIn: { afterTurns: 2 } } } }, (value: unknown) => { settlement = value; });
-            const settled = SessionPendingAdmissionSettlementResponseV1Schema.parse(settlement);
-            expect(settled, settled.result.status === 'rejected' || settled.result.status === 'held' ? settled.result.code : settled.result.status)
-                .toMatchObject({ v: 1, result: { status: 'accepted', localId } });
-            expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
-                .toMatchObject({ autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: sourceInputId,
-                    autonomousExchangeCause: 'agent_session' });
-            // The person's initial Discussion wake is not an autonomous start.
-            expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: sourceInputId } } }))
-                .toMatchObject({ autonomousExchangeCause: null, autonomousExchangeState: { afterTurns: 2, observedStarts: 0 } });
-        } finally { restoreHttp(); await app.close(); }
+        for (let start = 0; start < 3; start++) {
+            let response: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: source.id, discussionId, sourceSession,
+                request: { ...postRequest('Agent question'), mentionedSessionIds: [target.id], content: { t: 'plain', v: { v: 1,
+                    parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } } } }, (value: unknown) => { response = value; });
+            const posted = DiscussionAgentPostResponseV1Schema.parse(response);
+            expect(posted).toMatchObject({ ok: true });
+            if (!posted.ok) throw new Error(posted.error);
+            const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+                principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: target.id }));
+            const observation = observed.observations.find(row => 'source' in row);
+            if (!observation || !('source' in observation)) throw new Error('Addressed target observation missing');
+            const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+            app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+            // Only authentication and the Machine socket are replaced. Resource
+            // reads, opening, protected admission and database acceptance are real.
+            app.decorate('authenticate', async (httpRequest: FastifyRequest) => {
+                httpRequest.userId = owner.id; httpRequest.authAuthority = 'present_user'; httpRequest.authTokenKind = 'account';
+            });
+            registerDiscussionRoutes(app); registerAccountEncryptionRoutes(app); registerSessionListingRoutes(app);
+            registerSessionLookupByTagsRoute(app); registerSessionFollowRoutes(app); registerSessionMessageRoutes(app);
+            const origin = 'http://discussion-follow-composed.test';
+            const restoreHttp = installAxiosFastifyAdapter({ app, origin });
+            const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: owner.id })).toString('base64url')}.fixture`, encryption: null };
+            const admissions: string[] = [];
+            const session = createMutableApiSessionClientFixture({ sessionId: target.id, overrides: {
+                getServerBinding: () => ({ serverId, serverUrl: origin }),
+                getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+                    sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+                    capabilities: { serverIdentity: { serverIdentityId: serverId } } }) }),
+                runSessionFollowSourceRequest: ({ request: read }) => runWithServerHttpBaseUrl(origin, read),
+                getMachineAdmissionTransport: () => async payload => {
+                    const result = await enqueuePendingMessageByAuthenticatedMachine({ ...SessionPendingEnqueueByMachineRequestV1Schema.parse(payload),
+                        accountId: owner.id, sourceMachineId: machine.id });
+                    admissions.push(result.status === 'rejected' ? result.code : result.status);
+                    return result;
+                },
+            } });
+            try {
+                // Current placement is supplied by the real Session read owner.
+                await db.session.update({ where: { id: target.id }, data: { active: true,
+                    metadata: JSON.stringify({ machineId: targetPublisher.machine.id, path: '/repo', claudeSessionId: 'target-native' }) } });
+                const intake = createDiscussionFollowInputIntake({ session, credentials });
+                expect(await intake({ observation, signal: new AbortController().signal }), JSON.stringify(admissions)).toBe(true);
+                const localId = deriveDiscussionFollowInputLocalIdV1(observation.addressing);
+                expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                    .toMatchObject({ replyProgress: { sourceSession, discussion: observation.addressing }, inputAdmissionReceipt: { discussionAddressing: observation.addressing } });
+                expect((await db.sessionFollowEdge.findFirstOrThrow({ where: { destinationSessionId: target.id, sourceDiscussionId: discussionId } })).deliveredTranscriptSeq)
+                    .toBe(posted.value.message.seq);
+                const current = await db.session.findUniqueOrThrow({ where: { id: target.id } });
+                const publisherAuthority = { accountId: owner.id, sessionId: target.id,
+                    machineId: targetPublisher.machine.id, committedFence: current.lastActiveAt };
+                expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: target.id, publisherAuthority,
+                    deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }))
+                    .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+                const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } });
+                if (pending.content.t !== 'plain') throw new Error('Expected plain test input');
+                const body = pending.content.v as Record<string, unknown>;
+                const targetRequest = SessionInputRequestV1Schema.parse(readSessionInputRequest(body.meta, 'stored'));
+                const targetReceipt = SessionInputAdmissionReceiptV1Schema.parse(pending.inputAdmissionReceipt);
+                const finalContent = { t: 'plain' as const, v: { ...body, meta: {
+                    ...withSessionInputAuthorityV1(body.meta, settleSessionInputRequestV1({ request: targetRequest,
+                        currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: targetReceipt })),
+                    [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request: targetRequest,
+                        requestedProvenance: readSessionMessageProvenance(body.meta, 'stored'), inputAdmissionReceipt: targetReceipt }),
+                } } };
+                let settlement: unknown;
+                await getSocketHandler(targetPublisher.socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1,
+                    sessionId: target.id, localId, decision: { kind: 'admit', finalContent,
+                        validation: { sourceSession, reply: { mode: 'return', sourceSession, discussion: observation.addressing,
+                            ...(targetRequest.actionRequestAttributionV1 ? { actionRequestAttributionV1: targetRequest.actionRequestAttributionV1 } : {}) },
+                        autonomousCheckIn: { afterTurns: 2 } } } }, (value: unknown) => { settlement = value; });
+                const settled = SessionPendingAdmissionSettlementResponseV1Schema.parse(settlement);
+                if (start === 2) {
+                    expect(settled.result).toMatchObject({ status: 'held', code: 'autonomous_check_in' });
+                    expect(await db.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                        .toBeNull();
+                    expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: sourceInputId } } }))
+                        .autonomousExchangeState).toMatchObject({ observedStarts: 2 });
+                    continue;
+                }
+                expect(settled, settled.result.status === 'rejected' || settled.result.status === 'held' ? settled.result.code : settled.result.status)
+                    .toMatchObject({ v: 1, result: { status: 'accepted', localId } });
+                expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                    .toMatchObject({ autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: sourceInputId,
+                        autonomousExchangeCause: 'agent_session' });
+                // The person's initial Discussion wake is not an autonomous start.
+                expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: sourceInputId } } }))
+                    .toMatchObject({ autonomousExchangeCause: null, autonomousExchangeState: { afterTurns: 2, observedStarts: start } });
+                // The real native adapter must expose its immutable input witness
+                // while the real host lifecycle consumes the synchronous start.
+                let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+                let sequence = 0;
+                const runtime = createNativeAgentSessionOperations({
+                    async send(input) {
+                        emitNative?.({ sequence: ++sequence, sessionId: target.id, emittedAtMs: sequence,
+                            kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+                        emitNative?.({ sequence: ++sequence, sessionId: target.id, emittedAtMs: sequence,
+                            kind: 'turn-start', turnId: input.delivery.turnId, startedBy: 'host' });
+                        return { status: 'admitted' };
+                    },
+                    watch(listener) { emitNative = listener; return { dispose() { emitNative = undefined; } }; },
+                    dispose() {},
+                }, target.id, undefined, undefined, undefined, undefined, undefined, {
+                    context: {} as AgentSessionRuntimeContext, cwd: '/repo', connectedAccounts: [],
+                    capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+                    cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+                });
+                const turnId = `discussion-accepted-${start}`;
+                const applied: boolean[] = [];
+                const lifecycle = createSessionTurnLifecycle({ agentId: 'codex',
+                    readTurnFacts: () => ({ initiator: 'agent_session', workDepth: 1 }),
+                    readStartingInput: id => {
+                        const inputId = runtime.readTurnStartingInputId?.(id);
+                        return inputId ? { turnId: id, inputId } : null;
+                    },
+                    session: { sessionId: target.id, enqueueSessionTurnMutation: async mutation => {
+                        applied.push((await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation })).ok);
+                    } },
+                });
+                const unsubscribe = runtime.subscribeRuntimeEvents(event => lifecycle.observeRuntimeEvent(event));
+                try {
+                    await runtime.sendTurnPrompt('Addressed agent question', { localId, turnId, userMessageSeq: 1 });
+                    await lifecycle.drainAcceptedLifecycle();
+                    expect(applied).toEqual([true]);
+                    const accepted = { actorUserId: owner.id, sessionId: target.id, localId, publisherAuthority,
+                        acceptedTurn: { kind: 'newTurn' as const, turnId } };
+                    expect(await resolveAcceptedPendingDelivery(accepted)).toMatchObject({ ok: true, didResolve: true });
+                    expect(await resolveAcceptedPendingDelivery(accepted)).toMatchObject({ ok: true, didResolve: false });
+                    expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: sourceInputId } } }))
+                        .autonomousExchangeState).toMatchObject({ afterTurns: 2, observedStarts: start + 1 });
+                    expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                        .toMatchObject({ turnStartWitnessId: turnId, acceptedTurnCounted: true });
+                } finally { unsubscribe(); await runtime.resetOrDisposeRuntime('runtime_recovery'); }
+            } finally { restoreHttp(); await app.close(); }
+        }
     });
     it('commits one immutable addressed set and cutoff, with reply addressing and silent negative controls', async () => {
         const { owner, discussionId } = await fixture();
