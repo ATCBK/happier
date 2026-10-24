@@ -1144,10 +1144,22 @@ export class ConnectedServiceRefreshCoordinator {
     }
 
     const qualifiedRuntime = this.params.qualifiedConnectedAccountRuntime;
-    if (
-      !options?.skipQualified && qualifiedRuntime?.resolvePeerClass() === 'advertised_v4'
-      && qualifiedRuntime.listScheduledAccounts
-    ) {
+    const shouldRefreshBinding = (binding: BoundProfile): boolean => !options?.skipQualified
+      || this.resolveOperationTransport(binding, 'credential_health')?.kind !== 'v4';
+    const wantsQualifiedInventory = (): boolean => !options?.skipQualified
+      && qualifiedRuntime?.resolvePeerClass() === 'advertised_v4'
+      && qualifiedRuntime.listScheduledAccounts !== undefined;
+    let hasSelectedBinding = false;
+    for (const binding of unique.values()) {
+      if (shouldRefreshBinding(binding)) { hasSelectedBinding = true; break; }
+    }
+    // Empty or quota-owned wakes need no admission. Selected work retains the
+    // incumbent negative-currentness parking result and fresh operation fences.
+    if ((hasSelectedBinding || wantsQualifiedInventory())
+      && this.params.isAccountRuntimeCurrent && !await this.params.isAccountRuntimeCurrent()) {
+      return { nextAutomaticRunAfterMs: null };
+    }
+    if (wantsQualifiedInventory() && qualifiedRuntime?.listScheduledAccounts) {
       try {
         for (const profile of await qualifiedRuntime.listScheduledAccounts()) {
           qualified.set(qualifiedAccountKey(profile.ref), profile);
@@ -1158,7 +1170,7 @@ export class ConnectedServiceRefreshCoordinator {
     }
 
     for (const binding of unique.values()) {
-      if (options?.skipQualified && this.resolveOperationTransport(binding, 'credential_health')?.kind === 'v4') continue;
+      if (!shouldRefreshBinding(binding)) continue;
       try {
         const key = bindingKey(binding);
         const compatibility = BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[binding.serviceId];
