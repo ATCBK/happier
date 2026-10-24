@@ -8,6 +8,7 @@ import {
   openQualifiedConnectedAccountContentEnvelope,
   parseQualifiedConnectedAccountCredentialPlaintextV1,
   QualifiedConnectedAccountCredentialSnapshotV4Schema,
+  QualifiedConnectedAccountCredentialHealthPatchV4Schema,
   QualifiedConnectedAccountCredentialMutationV4Schema,
   QualifiedConnectedAccountRefreshLeaseV4Schema,
   QualifiedProviderAccountUsageWriteV4Schema,
@@ -373,6 +374,11 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         ? { accountId: null, organizationId: null, email: null } : { accountId: 'work' },
       displayName: 'work', scopes: ['openid'],
     };
+    const initialHealth: QualifiedConnectedAccountCredentialSnapshotV4['health'] = contextEnrichment
+      ? { v: 1, status: 'refresh_failed_retryable', reconnectRequired: false,
+          providerErrorCode: 'network_error', lastRefreshFailureAt: now - 1 }
+      : undefined;
+    let qualifiedHealth = initialHealth;
     const readCredential = vi.fn(async () => {
       if (entryPoint === 'owner_read_revoked' || entryPoint === 'owner_invoke_revoked'
         || entryPoint === 'coordinator_read_revoked') accountRuntimeCurrent = false;
@@ -384,6 +390,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         configurationRevision: null,
         content: qualifiedContent,
         metadata: qualifiedMetadata,
+        ...(qualifiedHealth ? { health: qualifiedHealth } : {}),
       };
     });
     const establishedRuntimeOwner =
@@ -435,6 +442,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       const patch = _input.patch;
       if (patch && typeof patch === 'object' && 'health' in patch) {
         const health = patch.health;
+        qualifiedHealth = QualifiedConnectedAccountCredentialHealthPatchV4Schema.parse(patch).health;
         if (health && typeof health === 'object' && 'status' in health
           && (health.status === 'connected' || health.status === 'needs_reauth' || health.status === 'refresh_failed_retryable')) {
           profileStatus = health.status;
@@ -470,6 +478,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       qualifiedContent = mutation.content;
       qualifiedMetadata = mutation.metadata;
       qualifiedRevision = secondRevision;
+      // Credential CAS preserves committed health; its separate settlement
+      // decides whether a refresh recovered, as the server repository does.
       legacyRecord = buildConnectedServiceCredentialRecord({
         now,
         serviceId,
@@ -589,6 +599,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       // the old credential's health failure suppression.
       qualifiedRevision = secondRevision;
       profileStatus = 'connected';
+      qualifiedHealth = undefined;
       await failedRefresh();
       expect(tokenExchangeRequests()).toHaveLength(3);
       return;
@@ -610,6 +621,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         plaintext: openQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', envelope: current.content }),
       });
       expect(after.values).toEqual(before.values);
+      expect(current.health).toEqual(initialHealth);
       expect(current.metadata.providerIdentity).toEqual({ accountId: 'work', organizationId: 'organization-known' });
       expect(mutateCredential).toHaveBeenCalledOnce();
       expect(acquireRefreshLease).toHaveBeenCalledOnce();
@@ -638,6 +650,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       // reconnect flag may prevent refreshing that replacement revision.
       qualifiedRevision = secondRevision;
       profileStatus = 'connected';
+      qualifiedHealth = undefined;
       clock += 60_001;
       await coordinator.tickOnce();
       expect(tokenExchangeRequests()).toHaveLength(2);
@@ -653,8 +666,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         },
       })).resolves.toEqual({ status: providerStatus === 400 ? 'reconnect_required'
         : providerStatus === 503 ? 'refresh_failed' : 'ready' });
-      expect(requestedInventoryServices.length).toBeGreaterThan(0);
-      expect(requestedInventoryServices).toEqual(requestedInventoryServices.map(() => account.service));
+      expect(requestedInventoryServices).toHaveLength(0);
+      expect(readCredential).toHaveBeenCalled();
       expect(tokenExchangeRequests()).toHaveLength(1);
       if (providerStatus === 200) {
         expect(qualifiedRevision).toBe(secondRevision);

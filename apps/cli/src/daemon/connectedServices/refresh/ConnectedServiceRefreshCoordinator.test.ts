@@ -758,14 +758,13 @@ describe('ConnectedServiceRefreshCoordinator', () => {
         providerEmail: null,
       },
     });
-    let reads = 0;
+    let persisted = false;
     const updateConnectedServiceCredentialHealth = vi.fn(async () => undefined);
     const api = {
       getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
       getConnectedServiceCredentialPlain: vi.fn(async () => {
-        reads += 1;
         return {
-          credentialRevision: reads <= 2 ? sourceRevision : supersedingRevision,
+          credentialRevision: persisted ? supersedingRevision : sourceRevision,
           content: { t: 'plain' as const, v: record },
         };
       }),
@@ -777,6 +776,9 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       })),
       registerConnectedServiceCredentialPlain: vi.fn(async (params: { content: { v: typeof record } }) => {
         record = params.content.v;
+        // A replacement commits after this refresh's write, retaining its token
+        // values but advancing the canonical revision before adoption.
+        persisted = true;
         return { success: true as const, credentialRevision: mintedRevision };
       }),
       updateConnectedServiceCredentialHealth,
@@ -810,7 +812,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     });
 
     expect(result).toBeNull();
-    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(persisted).toBe(true);
     expect(updateConnectedServiceCredentialHealth).not.toHaveBeenCalled();
   });
 

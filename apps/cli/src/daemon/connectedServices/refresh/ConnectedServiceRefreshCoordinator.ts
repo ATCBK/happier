@@ -434,6 +434,13 @@ function buildCredentialHealthFromPluginStatus(
   };
 }
 
+function credentialHealthStatusFacts(health: ConnectedServiceCredentialHealthV1 | null) {
+  if (!health) return null;
+  const { lastRefreshAttemptAt: _attempt, lastRefreshSuccessAt: _success,
+    lastRefreshFailureAt: _failure, lastRuntimeAuthFailureAt: _runtime, ...facts } = health;
+  return facts;
+}
+
 function recordCredentialHealthWrite(input: Readonly<{
   path: 'status' | 'result' | 'legacy-refresh-result' | 'materialization-failure' | 'configuration-reconnect';
   serviceKind: string;
@@ -441,12 +448,6 @@ function recordCredentialHealthWrite(input: Readonly<{
   beforeStatus?: ConnectedServiceCredentialHealthV1['status'];
   after: ConnectedServiceCredentialHealthV1;
 }>): void {
-  const substantiveHealth = (health: ConnectedServiceCredentialHealthV1 | null) => {
-    if (!health) return null;
-    const { lastRefreshAttemptAt: _attempt, lastRefreshSuccessAt: _success,
-      lastRefreshFailureAt: _failure, lastRuntimeAuthFailureAt: _runtime, ...facts } = health;
-    return facts;
-  };
   logger.debug('[ConnectedServiceRefreshCoordinator] credential health write', {
     path: input.path,
     serviceKind: input.serviceKind,
@@ -454,7 +455,7 @@ function recordCredentialHealthWrite(input: Readonly<{
     afterStatus: input.after.status,
     // An unavailable prior value is explicitly unknown; never read credentials just to log.
     substantiveChanged: input.before === undefined ? null
-      : !isDeepStrictEqual(substantiveHealth(input.before), substantiveHealth(input.after)),
+      : !isDeepStrictEqual(credentialHealthStatusFacts(input.before), credentialHealthStatusFacts(input.after)),
   });
 }
 
@@ -938,7 +939,7 @@ export class ConnectedServiceRefreshCoordinator {
           providerErrorCode: 'connected_account_configuration_changed',
         });
         recordCredentialHealthWrite({ path: 'configuration-reconnect', serviceKind: input.account.service.localId,
-          before: expectedCredential.metadata.health ?? null, after: health });
+          before: expectedCredential.health ?? null, after: health });
         const mutation = await runtime.mutateCredentialHealth({
           token: this.params.credentials.token,
           patch: Object.freeze({
@@ -2449,10 +2450,14 @@ export class ConnectedServiceRefreshCoordinator {
     account: QualifiedConnectedAccountRef,
     credentialRevision?: ConnectedServiceCredentialRevisionV1,
   ): Promise<boolean> {
-    const profiles = await this.params.qualifiedConnectedAccountRuntime?.listScheduledAccounts?.(account.service);
-    return profiles?.some((profile) => qualifiedAccountKey(profile.ref) === qualifiedAccountKey(account)
-      && (!credentialRevision || (profile.revisionSemantics === 'revisioned' && profile.credentialRevision === credentialRevision))
-      && isReconnectRequiredProfileStatus(profile.status)) === true;
+    const credential = await this.params.qualifiedConnectedAccountRuntime?.readCredential({
+      token: this.params.credentials.token,
+      ref: account,
+    });
+    return credential != null
+      && qualifiedAccountKey(credential.ref) === qualifiedAccountKey(account)
+      && (!credentialRevision || (credential.revisionSemantics === 'revisioned' && credential.credentialRevision === credentialRevision))
+      && (credential.health?.reconnectRequired === true || isReconnectRequiredProfileStatus(credential.health?.status));
   }
 
   private shouldDeferCredentialHealthReprobe(
@@ -2541,34 +2546,13 @@ export class ConnectedServiceRefreshCoordinator {
         throw new Error('connected_service_credential_revision_mismatch');
       }
       const health = buildCredentialHealthFromPluginStatus(invocation.result);
-      const expectedConfigurationRevision =
-        invocation.basis.credentialConfigurationRevision;
       if (!invocation.basis.isCurrent()) {
         throw new Error(
           'Qualified Connected Account status generation is no longer current',
         );
       }
       if (!options.refreshPending || health.reconnectRequired) {
-        recordCredentialHealthWrite({ path: 'status', serviceKind: account.service.localId,
-          before: invocation.basis.credentialHealth, after: health });
-        const mutation = await runtime.mutateCredentialHealth({
-          token: this.params.credentials.token,
-          patch: Object.freeze({
-            ref: account,
-            expectedCredentialRevision: invocation.basis.credentialRevision,
-            expectedConfigurationRevision,
-            health,
-          }),
-        });
-        if (
-          mutation.credentialRevision !== invocation.basis.credentialRevision
-          || mutation.configurationRevision !== expectedConfigurationRevision
-          || !invocation.basis.isCurrent()
-        ) {
-          throw new Error(
-            'Qualified Connected Account health mutation settled against a different invocation basis',
-          );
-        }
+        await this.settleQualifiedConnectedAccountHealth({ account, basis: invocation.basis, health, healthWritePath: 'status' });
       }
       if (health.reconnectRequired) {
         this.armCredentialHealthReprobeBackoff(binding);
@@ -2636,6 +2620,12 @@ export class ConnectedServiceRefreshCoordinator {
     const expectedConfigurationRevision =
       input.basis.credentialConfigurationRevision;
     const expectedCredentialRevision = input.settledCredentialRevision ?? input.basis.credentialRevision;
+    // Status observes no new attempt/success timestamp. Keep committed history
+    // intact when this admission already carries exactly the same status facts.
+    // Result settlement still owns refresh effects and replacement revisions.
+    if (input.healthWritePath === 'status'
+      && input.settledCredentialRevision === undefined
+      && isDeepStrictEqual(credentialHealthStatusFacts(input.basis.credentialHealth), input.health)) return;
     recordCredentialHealthWrite({ path: input.healthWritePath ?? 'result', serviceKind: input.account.service.localId,
       before: input.basis.credentialHealth, after: input.health });
     const mutation = await runtime.mutateCredentialHealth({
@@ -2799,8 +2789,9 @@ export class ConnectedServiceRefreshCoordinator {
           }),
         };
       }
+      let settlement: QualifiedConnectedAccountRefreshSettlement | undefined;
       try {
-        const settlement = await this.refreshQualifiedAccount({
+        settlement = await this.refreshQualifiedAccount({
           account,
           token: this.params.credentials.token,
           ownerId,
@@ -2920,8 +2911,10 @@ export class ConnectedServiceRefreshCoordinator {
         // Another controller may have consumed the lease basis. Adopt its exact
         // current credential only when this caller did not supply a revision
         // fence and the actual usable access token changed; never replay the
-        // predecessor or treat revision-only ABA as a successful refresh.
-        if (!options.expectedCredentialRevision && source.record.kind === 'oauth') {
+        // predecessor or treat revision-only ABA after our own committed
+        // rotation as a successful refresh.
+        if (settlement?.status !== 'refreshed'
+          && !options.expectedCredentialRevision && source.record.kind === 'oauth') {
           try {
             const current = await this.readCredentialForRefresh({
               api: this.params.api, credentials: this.params.credentials, binding,
@@ -3515,7 +3508,7 @@ export class ConnectedServiceRefreshCoordinator {
       ref: material.snapshot.ref,
       expectedCredentialRevision: material.snapshot.credentialRevision,
       expectedConfigurationRevision: material.snapshot.configurationRevision,
-      previousHealth: material.snapshot.metadata.health ?? null,
+      previousHealth: material.snapshot.health ?? null,
     };
   }
 

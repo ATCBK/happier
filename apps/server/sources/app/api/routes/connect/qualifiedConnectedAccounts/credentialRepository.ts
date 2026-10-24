@@ -2183,6 +2183,7 @@ type QualifiedConnectedServiceCredentialSnapshotBase = Readonly<{
     configurationRevision: string | null;
     content: StoredJsonContentEnvelope;
     metadata: QualifiedConnectedAccountCredentialSnapshotV4['metadata'];
+    health?: ConnectedServiceCredentialHealthV1;
 }>;
 
 type QualifiedConnectedServiceCredentialSnapshot =
@@ -2325,10 +2326,8 @@ async function readQualifiedConnectedServiceCredentialInTx(
         configurationRevision: row.configurationRevision,
         content,
         expiresAt: row.expiresAt?.getTime() ?? null,
-        metadata: {
-            ...projection.presentation,
-            ...(projection.health ? { health: projection.health } : {}),
-        },
+        metadata: projection.presentation,
+        ...(projection.health ? { health: projection.health } : {}),
     };
     const revision =
         projectQualifiedConnectedAccountCredentialRevisionSemantics(
@@ -2482,6 +2481,7 @@ export async function readQualifiedConnectedServiceCredential(params: Readonly<{
                 configurationRevision: credential.configurationRevision,
                 content: credential.content,
                 metadata: credential.metadata,
+                ...(credential.health ? { health: credential.health } : {}),
             },
         }
         : {
@@ -2493,6 +2493,7 @@ export async function readQualifiedConnectedServiceCredential(params: Readonly<{
                 configurationRevision: credential.configurationRevision,
                 content: credential.content,
                 metadata: credential.metadata,
+                ...(credential.health ? { health: credential.health } : {}),
             },
         };
 }

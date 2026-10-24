@@ -196,7 +196,7 @@ export type QualifiedConnectedAccountEstablishedRuntimeOwner = Readonly<{
 
 export type QualifiedConnectedAccountEstablishedInvocationBasis = Readonly<{
   credentialRevision: string;
-  credentialHealth?: QualifiedConnectedAccountCredentialSnapshotV4['metadata']['health'] | null;
+  credentialHealth?: QualifiedConnectedAccountCredentialSnapshotV4['health'] | null;
   credentialConfigurationRevision: string | null;
   runtimeConfigurationRevision: string;
   occurrenceId: string;
@@ -791,6 +791,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       }
       const authenticationModeId =
         initial.credential.authenticationModeId;
+      let observedCredentialHealth = initial.credential.health ?? null;
       if (!authenticationModeId) {
         throw new Error(
           'Connected-account authentication mode is unavailable in the current descriptor',
@@ -1018,15 +1019,19 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
               ref: input.account,
               signal: input.signal,
             });
-            return Boolean(
-              latest
-              && sameQualifiedConnectedAccountRef(latest.ref, input.account)
-              && latest.revisionSemantics === 'revisioned'
-              && latest.credentialRevision === expectedCredentialRevision
+            if (
+              !latest
+              || !sameQualifiedConnectedAccountRef(latest.ref, input.account)
+              || latest.revisionSemantics !== 'revisioned'
+              || latest.credentialRevision !== expectedCredentialRevision
               // The credential row owns both revisions. Check their linkage in
               // this read rather than reopening it in the parallel configuration guard.
-              && latest.configurationRevision === initial.credential.configurationRevision,
-            );
+              || latest.configurationRevision !== initial.credential.configurationRevision
+            ) return false;
+            // Health can change without replacing either revision. Carry the
+            // already-required final read into status settlement as well.
+            observedCredentialHealth = latest.health ?? null;
+            return true;
           },
           ...(input.signal ? { signal: input.signal } : {}),
         })));
@@ -1034,7 +1039,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           result,
           basis: Object.freeze({
             credentialRevision: initial.credential.credentialRevision,
-            credentialHealth: initial.credential.metadata.health ?? null,
+            credentialHealth: observedCredentialHealth,
             credentialConfigurationRevision:
               initial.credential.configurationRevision,
             runtimeConfigurationRevision,

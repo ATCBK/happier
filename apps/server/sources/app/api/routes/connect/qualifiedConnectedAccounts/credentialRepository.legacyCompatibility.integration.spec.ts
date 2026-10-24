@@ -9,6 +9,7 @@ import {
 import {
     buildConnectedServiceCredentialRecord,
     encodeQualifiedConnectedAccountV4StructuredQueryValue,
+    QualifiedConnectedAccountCredentialSnapshotV4Schema,
     QualifiedConnectedAccountRefSchema,
     type ConnectedServiceCredentialRecordV1,
 } from "@happier-dev/protocol";
@@ -211,6 +212,38 @@ describe("qualified Connected Account activated legacy compatibility", () => {
         harness.resetEnv();
         await db.serviceAccountToken.deleteMany();
         await db.account.deleteMany();
+    });
+
+    it('returns committed health through the strict credential HTTP reader without publishing on reads', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const ref = { service: { pluginId: 'fixture.health', localId: 'health' }, accountId: 'health-account' };
+        const created = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { v: 1, values: { token: 'fixture' } } }, metadata: { scopes: [] } });
+        if (created.status !== 'written') throw new Error('Fixture credential did not settle');
+        await withAuthenticatedTestApp(app => registerQualifiedConnectedAccountCredentialRoutesV4(app), async app => {
+            for (const health of [
+                { v: 1, status: 'connected', reconnectRequired: false },
+                { v: 1, status: 'refresh_failed_retryable', reconnectRequired: false, providerErrorCode: 'network_error' },
+                { v: 1, status: 'connected', reconnectRequired: false },
+            ] as const) {
+                const beforeCursor = (await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq;
+                expect((await mutateQualifiedConnectedServiceCredentialHealth({ accountId: account.id, ref,
+                    expectedCredentialRevision: created.credentialRevision,
+                    expectedConfigurationRevision: created.configurationRevision, health })).status).toBe('written');
+                const cursor = (await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq;
+                expect(cursor).toBe(beforeCursor + 1);
+                const response = await app.inject({ method: 'GET',
+                    url: `/v4/connect/qualified/credential?${new URLSearchParams({ ref: JSON.stringify(ref) })}`,
+                    headers: { 'x-test-user-id': account.id } });
+                expect(response.statusCode).toBe(200);
+                expect(QualifiedConnectedAccountCredentialSnapshotV4Schema.parse(response.json())).toMatchObject({
+                    ref, credentialRevision: created.credentialRevision, metadata: { scopes: [] }, health,
+                });
+                expect(response.json().metadata).not.toHaveProperty('health');
+                expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(cursor);
+            }
+        });
     });
 
     it.each([

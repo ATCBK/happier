@@ -178,10 +178,8 @@ export const QualifiedConnectedAccountCredentialSnapshotV4Schema =
     content: StoredJsonContentEnvelopeSchema,
     // Health is server-owned and read-only here. Credential replacement metadata
     // stays presentation-only; health mutations use the fenced health endpoint.
-    metadata: z.strictObject({
-      ...QualifiedConnectedAccountCredentialMetadataV4Schema.shape,
-      health: z.optional(ConnectedServiceCredentialHealthV1Schema),
-    }),
+    metadata: QualifiedConnectedAccountCredentialMetadataV4Schema,
+    health: z.optional(ConnectedServiceCredentialHealthV1Schema),
   });
 
 export const QualifiedConnectedAccountGroupMemberV4Schema = lazyZodSchema(() => z.strictObject({

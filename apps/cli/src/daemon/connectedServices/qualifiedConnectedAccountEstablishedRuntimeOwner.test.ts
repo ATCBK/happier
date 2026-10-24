@@ -1124,6 +1124,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
         token: null,
       }),
       metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' }, scopes: [] },
+      health: { v: 1, status: 'connected', reconnectRequired: false },
     };
     const configurationSnapshot: QualifiedConnectedAccountConfigurationSnapshotV4 = {
       target: { kind: 'account', ref: account },
@@ -1238,6 +1239,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
       },
       basis: {
         credentialRevision: 'credential-1',
+        credentialHealth: { v: 1, status: 'connected', reconnectRequired: false },
         credentialConfigurationRevision: 'configuration-1',
         runtimeConfigurationRevision: 'configuration-1',
         occurrenceId: 'generation-1',
@@ -1259,6 +1261,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
       authenticationModeId: 'oauth',
       metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' }, scopes: [] },
     });
+    expect(replacement.metadata).not.toHaveProperty('health');
     const changedContext = await receipt.basis.prepareCredentialReplacement({
       set: { accessToken: 'access-new-context' },
       delete: [],
