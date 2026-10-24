@@ -11,7 +11,7 @@ import type { RunSessionModels } from './resolveExecutionRunSelectionLabel';
  * The Session's own Agent and model list, for naming a Run model before any Machine catalog arrives.
  * Selects only those two stored references, so Session activity does not rerender the caller.
  */
-export function useRunSessionModels(sessionId: string | undefined, serverId: string | null | undefined): RunSessionModels | undefined {
+export function useRunSessionModels(sessionId: string | null | undefined, serverId: string | null | undefined): RunSessionModels | undefined {
     const source = useSessionSelector(sessionId ?? '', serverId, useShallow(session => (session ? {
         agentId: readSessionPresentationAgentId(session),
         metadata: session.composerOptionsInput === undefined ? readSessionOwnerMetadataView(session) : session.composerOptionsInput,
