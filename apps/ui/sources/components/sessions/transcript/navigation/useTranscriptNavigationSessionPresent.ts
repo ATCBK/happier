@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useSessionTranscriptSource } from '../source/SessionTranscriptSourceContext';
-import { presentSessionAwarenessV1 } from '@/utils/sessions/sessionUtils';
+import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 /**
  * What the Navigate pane needs to know about the session's present, from the canonical awareness
@@ -21,7 +21,7 @@ export function useTranscriptNavigationSessionPresent(): TranscriptNavigationSes
     const source = useSessionTranscriptSource();
     const awareness = source.useAwareness();
     const lastObservedAt = source.useRuntimeLastObservedAt();
-    const state = awareness ? presentSessionAwarenessV1(awareness).state : null;
+    const state = awareness ? readSessionAwarenessPresentationV1(awareness) : null;
     const newestTurn = state === 'thinking' ? 'working'
         : state === 'permission_required' || state === 'action_required' ? 'waiting' : null;
     const offline = state === 'disconnected';

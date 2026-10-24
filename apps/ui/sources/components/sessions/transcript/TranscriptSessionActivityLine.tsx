@@ -30,7 +30,7 @@ export const TranscriptSessionActivityLine = React.memo(function TranscriptSessi
     const { theme } = useUnistyles();
     const { session, awareness, turnStartedAtMs } = useSessionAwareness(props.sessionId, props.serverId);
     if (!session || !awareness) return null;
-    const status = presentSessionAwarenessV1(awareness);
+    const status = presentSessionAwarenessV1({ ...awareness, viewer: session.viewer });
     if (!RUNNING_STATES.has(status.state)) return null;
     return (
         <View

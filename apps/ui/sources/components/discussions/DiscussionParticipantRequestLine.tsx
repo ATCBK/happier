@@ -32,7 +32,7 @@ export const DiscussionParticipantRequestLine = React.memo(
     }>,
   ) {
     const router = useRouter();
-    const { awareness, oldestPendingRequest, requestHref } =
+    const { session, awareness, oldestPendingRequest, requestHref } =
       useSessionAwareness(props.sessionId, props.serverId, undefined, {
         accountLifetime: props.accountLifetime,
         enabled: props.enabled,
@@ -56,7 +56,7 @@ export const DiscussionParticipantRequestLine = React.memo(
       router,
     ]);
     if (!oldestPendingRequest || !requestHref) return null;
-    const presented = awareness ? presentSessionAwarenessV1(awareness) : null;
+    const presented = awareness ? presentSessionAwarenessV1({ ...awareness, viewer: session?.viewer }) : null;
     const status =
       presented &&
       (presented.state === 'permission_required' ||
