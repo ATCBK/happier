@@ -26,10 +26,10 @@ vi.mock('socket.io-client', () => ({ io }));
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-describe('credentialed MCP worker Action composition', () => {
-  it('routes status, copy inspection and retirement to Machines while preferences stay Account-owned', async () => {
+describe('MCP worker Action composition', () => {
+  it.each(['account', 'session'] as const)('routes %s authority through the credentialed worker owner with identical operands and results', async authorityScope => {
     const serverId = 'home';
-    const serverHttpBaseUrl = 'https://worker-mcp.test';
+    const serverHttpBaseUrl = `https://${authorityScope}-worker-mcp.test`;
     const sessionId = 'worker-mcp-session';
     const credentials = { token: 'worker-mcp-fixture', encryption: null };
     const inspect = ProjectWorkerActionInputSchemasV1['projects.worker.copy.inspect'].parse(
@@ -41,12 +41,14 @@ describe('credentialed MCP worker Action composition', () => {
     const statusResult = { eligible: true, candidate: { serverId, machineId: 'worker' },
       load: { kind: 'unknown' }, explanation: 'load_unknown' };
     const machineRequests: unknown[] = [];
+    let machineDenied = false;
     io.mockImplementation(() => createApiSessionSocketStub({ emitWithAck(event, rawPayload) {
       expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
       if (!rawPayload || typeof rawPayload !== 'object' || !('method' in rawPayload)
         || typeof rawPayload.method !== 'string') throw new Error('Missing RPC method');
       const payload = rawPayload;
       machineRequests.push(payload);
+      if (machineDenied) return { ok: true, result: { ok: false, errorCode: 'permission_denied', error: 'permission_denied' } };
       if (payload.method === `worker:projects.worker.status`) return { ok: true, result: statusResult };
       if (payload.method === `${inspect.machineId}:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT}`) return { ok: true, result: preview };
       expect(payload.method).toBe(`${inspect.machineId}:projects.worker.copy.retire`);
@@ -66,7 +68,7 @@ describe('credentialed MCP worker Action composition', () => {
       return { status: 200, data: { status: 'absent' } };
     });
     const settings = { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
-      approvalWaivedSurfaces: { 'projects.worker.copy.retire': ['agent'] } }), getAccountSettings: () => null };
+      approvalWaivedSurfaces: { 'projects.worker.copy.retire': ['agent', 'cli'] } }), getAccountSettings: () => null };
     const account = createCliActionExecutor({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
       serverId, serverHttpBaseUrl, actionsSettingsProvider: settings, pluginActionExecutionOwner: 'current_process',
       accountServerActionDeps: createAccountServerActionDeps({ token: credentials.token, credentials, serverId, serverHttpBaseUrl }) });
@@ -85,10 +87,13 @@ describe('credentialed MCP worker Action composition', () => {
     await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31_001, capability: 'A'.repeat(43) });
     vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', path);
     const accountActions: string[] = [];
+    let witnessCurrent = true;
     vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
       const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
       if (request.operation.kind !== 'action.execute') throw new Error('Expected Account Action delegation');
       const { actionId, input, requestId } = request.operation;
+      expect(request.context).toEqual({ token: 'A'.repeat(43), sessionId });
+      expect(request.operation.witness).toMatchObject({ turnId: 'worker-turn', inputId: 'worker-input' });
       accountActions.push(actionId);
       const outcome = await account.execute(ActionIdSchema.parse(actionId), input, { surface: 'agent', authority: 'account_automation' });
       return new Response(JSON.stringify({ ok: true, result: { kind: 'action.execution', requestId, outcome } }), { status: 200 });
@@ -99,11 +104,12 @@ describe('credentialed MCP worker Action composition', () => {
       getCurrentSessionLocation: () => ({ machineId: 'source', path: '/source' }),
       getActiveTurnPermissionWitness: () => ({ turnId: 'worker-turn',
         causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
-      getActiveTurnAdmissionWitness: () => ({ inputId: 'worker-input', turnId: 'worker-turn', userMessageSeq: 1, userMessageSeqs: [1],
-        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+      getActiveTurnAdmissionWitness: () => witnessCurrent ? ({ inputId: 'worker-input', turnId: 'worker-turn', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }) : null,
       getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated',
         features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) }),
-    }, { credentials, actionsSettingsProvider: settings });
+    }, { authorityScope, ...(authorityScope === 'account' ? { credentials }
+      : { sessionCredentials: { token: 'session-only-fixture', encryption: null } }), actionsSettingsProvider: settings });
     const invoke = (actionId: string, input: unknown) => runtime.executeTool({ toolName: 'action_execute', args: { actionId, input } });
     try {
       expect(await invoke('projects.worker.status', status)).toEqual({ ok: true, result: statusResult });
@@ -112,12 +118,47 @@ describe('credentialed MCP worker Action composition', () => {
         expectedRelationship: inspect.expectedRelationship })).toMatchObject({ ok: true, result: { status: 'retired' } });
       expect(await invoke('projects.worker.preferences.get', { workspace: inspect.workspace }))
         .toMatchObject({ ok: true, result: { status: 'ready', revision: 'absent' } });
-      expect(accountActions).toEqual(['projects.worker.preferences.get']);
+      expect(accountActions).toEqual(authorityScope === 'account' ? ['projects.worker.preferences.get']
+        : ['projects.worker.status', 'projects.worker.copy.inspect', 'projects.worker.copy.retire', 'projects.worker.preferences.get']);
       expect(machineRequests).toEqual([
         expect.objectContaining({ method: 'worker:projects.worker.status', params: status }),
         expect.objectContaining({ method: `${inspect.machineId}:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT}`, params: inspect }),
         expect.objectContaining({ method: `${inspect.machineId}:projects.worker.copy.retire` }),
       ]);
+      const retire = { workspace: inspect.workspace, machineId: inspect.machineId, expectedRelationship: inspect.expectedRelationship };
+      // Compare surfaces under the same admitted Session authority. Unbound
+      // terminal enrollment is a separate Home admission, not runner custody.
+      const cliContext = { surface: 'cli' as const, authority: 'account_automation' as const,
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } };
+      for (const [actionId, input] of [
+        ['projects.worker.status', status], ['projects.worker.copy.inspect', inspect], ['projects.worker.copy.retire', retire],
+      ] as const) {
+        const cli = await account.execute(actionId, input, cliContext);
+        expect(await invoke(actionId, input)).toEqual(cli);
+      }
+      machineDenied = true;
+      const cliDenied = await account.execute('projects.worker.status', status, cliContext);
+      expect(cliDenied).toMatchObject({ ok: false, errorCode: 'permission_denied' });
+      expect(await invoke('projects.worker.status', status)).toEqual(cliDenied);
+      machineDenied = false;
+      if (authorityScope === 'session') {
+        const before = machineRequests.length;
+        witnessCurrent = false;
+        expect(await invoke('projects.worker.status', status)).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        witnessCurrent = true;
+        processIdentity.mockResolvedValue({ pid: process.pid, processStartTimeMs: runner.processStartTimeMs + 60_000, command });
+        expect(await invoke('projects.worker.status', status)).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        processIdentity.mockResolvedValue({ pid: process.pid, processStartTimeMs: runner.processStartTimeMs, command });
+        await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('A'.repeat(43)) });
+        expect(await invoke('projects.worker.status', status)).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        expect(machineRequests).toHaveLength(before);
+        expect(await account.execute('projects.worker.status', status, cliContext))
+          .toEqual({ ok: true, result: statusResult });
+      } else {
+        witnessCurrent = false;
+        await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('A'.repeat(43)) });
+        expect(await invoke('projects.worker.status', status)).toEqual({ ok: true, result: statusResult });
+      }
     } finally {
       await runtime.mcp.close();
       await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('A'.repeat(43)) });

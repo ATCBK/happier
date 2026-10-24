@@ -7845,7 +7845,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
     title: 'Pause workspace sync', description: 'Pause automatic syncing between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_disable' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Pause automatic syncing until it is resumed.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
       { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
@@ -7858,7 +7858,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
     title: 'Resume workspace sync', description: 'Resume automatic syncing between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_enable' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Resume automatic syncing between these linked folders.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
       { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
@@ -7871,7 +7871,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
     title: 'Sync workspace now', description: 'Run one synchronization cycle between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_flush' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: { description: 'Synchronize these linked folders now.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
       { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
@@ -7893,7 +7893,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       voice: false,
       agent: true,
       mcp: true,
-      cli: false,
+      cli: true,
       rpc: false,
     },
     inputHints: {
