@@ -48,7 +48,7 @@ import { CapturedComparisonFilesView } from '@/components/sessions/files/compari
 import { listFilesComparisonScopeOptions, resolveFilesComparisonLabel } from '@/components/sessions/files/comparison/filesComparison';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
-import type { SessionScmReviewComparison, SessionScmReviewView } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { SESSION_DETAILS_SCM_REVIEW_TAB_KEY, type SessionScmReviewComparison, type SessionScmReviewView } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { t } from '@/text';
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -107,9 +107,10 @@ function pendingComparisonBranch(comparison: Readonly<{ kind: string }>, snapsho
 }
 
 export const WorkspaceScmReviewDetailsView = React.memo((props: WorkspaceScmReviewDetailsViewProps) => {
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, scope => scope?.details.tabState[SESSION_DETAILS_SCM_REVIEW_TAB_KEY]);
     const hostKey = JSON.stringify([props.serverId, props.machineId, props.rootPath]);
-    const { persistedReviewTabState, setPersistedReviewTabState } = useScmReviewTabState(hostKey, pane);
+    const { persistedReviewTabState, setPersistedReviewTabState } = useScmReviewTabState(hostKey,
+        { patchDetailsTabState: pane.patchDetailsTabState }, SESSION_DETAILS_SCM_REVIEW_TAB_KEY, pane.scopeState);
     const routeKey = JSON.stringify([props.comparison, props.view, props.explain, props.evidenceSessionId]);
     const target = React.useMemo<WorkspaceReviewTarget>(() => {
         const saved = !props.onSelectTarget && persistedReviewTabState?.workspaceReviewHost === hostKey
@@ -153,9 +154,13 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     bound: ReturnType<typeof useWorkspaceScmDiffSummaryBinding>; host: ScmDiffSummaryHost;
 }>) => {
     const { theme } = useUnistyles();
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, scope => ({
+        reviewTabState: scope?.details.tabState[SESSION_DETAILS_SCM_REVIEW_TAB_KEY],
+        activeFileSelection: scope?.details.tabState[`${SESSION_DETAILS_SCM_REVIEW_TAB_KEY}:activeFile`],
+    }));
     const { persistedReviewTabState, setPersistedReviewTabState, mountedInitialReviewState, onScrollTopChange, onCollapsedPathsChange } = useScmReviewTabState(
-        JSON.stringify([props.serverId, props.machineId, props.rootPath]), pane);
+        JSON.stringify([props.serverId, props.machineId, props.rootPath]), { patchDetailsTabState: pane.patchDetailsTabState },
+        SESSION_DETAILS_SCM_REVIEW_TAB_KEY, pane.scopeState.reviewTabState);
     const scmReviewMaxFilesSetting = useSetting('scmReviewMaxFiles');
     const scmReviewMaxChangedLinesSetting = useSetting('scmReviewMaxChangedLines');
     const scmCommitStrategySetting = useSetting('scmCommitStrategy');
@@ -206,7 +211,8 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         props.onSelectTarget?.(next);
     };
     const bound = props.bound;
-    useScmReviewActiveFileSelection({ pane, hostKey: JSON.stringify([props.serverId, bound.scope?.accountId, props.machineId, props.rootPath, props.host.sessionId]),
+    useScmReviewActiveFileSelection({ pane: { setDetailsTabState: pane.setDetailsTabState }, persistedSelection: pane.scopeState.activeFileSelection,
+        hostKey: JSON.stringify([props.serverId, bound.scope?.accountId, props.machineId, props.rootPath, props.host.sessionId]),
         activeFileKey: activeReviewFileKey, comparison, view, presented: presented && Boolean(bound.scope), isCurrent: bound.isCurrent });
     const readingIdentity = JSON.stringify([bound.capturedComparison?.id, bound.viewModel?.resultId, bound.viewModel?.revision]);
     const currentReadingIdentity = React.useRef(readingIdentity);

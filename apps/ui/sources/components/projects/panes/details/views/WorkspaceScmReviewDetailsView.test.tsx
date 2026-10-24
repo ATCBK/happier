@@ -52,7 +52,7 @@ async function mountWithRows(kind: 'exact' | 'missing' | 'ambiguous') {
 }
 
 describe('WorkspaceScmReviewDetailsView', () => {
-    it('does not republish absent attribution in a 300-file review for 20 editor draft updates in the same pane', async () => {
+    it('does no Review render work for 20 unrelated File drafts and still publishes its own state in a 300-file review', async () => {
         const entries = Array.from({ length: 300 }, (_, index) => ({ ...CHANGED_ENTRIES[0]!, path: `src/file-${index}.ts` }));
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
             if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries }) };
@@ -62,20 +62,30 @@ describe('WorkspaceScmReviewDetailsView', () => {
         fixture.storage.setState({ sessions: {} });
         const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
         const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
+        const { WorkspaceScmReviewBody } = await import('@/components/projects/scm/WorkspaceScmReviewBody');
+        const { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
         let pane!: ReturnType<typeof useAppPaneScope>;
+        let reviewCommits = 0;
         function Control() { pane = useAppPaneScope('project:draft-cost'); return null; }
-        const screen = await fixture.render(<><Control /><WorkspaceScmReviewDetailsView scopeId="project:draft-cost"
-            machineId="m1" serverId={fixture.home.id} rootPath="/repo" /></>);
+        const screen = await fixture.render(<><Control /><React.Profiler id="review" onRender={() => { reviewCommits += 1; }}>
+            <WorkspaceScmReviewDetailsView scopeId="project:draft-cost"
+                machineId="m1" serverId={fixture.home.id} rootPath="/repo" />
+        </React.Profiler></>);
         await act(async () => pane.openDetailsTab({ key: 'file:a', kind: 'file', title: 'a.ts',
-            resource: { kind: 'file', path: 'src/a.ts' } }, { intent: 'pinned', present: false }));
+            resource: { kind: 'file', path: 'src/a.ts' } }, { intent: 'preview', present: false }));
         await flushHookEffects({ cycles: 20 });
         const model = () => screen.tree.root.findByType(ChangedFilesReview).props;
         expect(model().allRepositoryChangedFiles).toHaveLength(300);
         const initial = model();
+        reviewCommits = 0;
         let publications = 0;
         let previous = initial;
         for (let index = 0; index < 20; index += 1) {
-            await act(async () => pane.patchDetailsTabState('file:a', { editorText: `draft ${index}` }));
+            await act(async () => {
+                pane.patchDetailsTabState('file:a', { accountId: 'alice', isEditingFile: true,
+                    editorOriginalHash: 'base-hash', editorText: `draft ${index}` }, { persist: false });
+                if (index === 0) pane.pinDetailsTab('file:a', { persist: false });
+            });
             const next = model();
             if (next.turnAttributedFiles !== previous.turnAttributedFiles
                 || next.turnRepositoryOnlyFiles !== previous.turnRepositoryOnlyFiles
@@ -84,7 +94,15 @@ describe('WorkspaceScmReviewDetailsView', () => {
             previous = next;
         }
         expect(publications).toBe(0);
+        expect(reviewCommits).toBe(0);
         expect(model().allRepositoryChangedFiles).toBe(initial.allRepositoryChangedFiles);
+        await act(async () => pane.patchDetailsTabState(SESSION_DETAILS_SCM_REVIEW_TAB_KEY, {
+            workspaceReviewHost: JSON.stringify([fixture.home.id, 'm1', '/repo']),
+            workspaceReviewRouteKey: JSON.stringify([undefined, undefined, undefined, undefined]),
+            workspaceReviewTarget: { comparison: { kind: 'workingTree' }, view: 'files', explain: true },
+        }));
+        expect(reviewCommits).toBeGreaterThan(0);
+        expect(screen.findByType(WorkspaceScmReviewBody).props.explain).toBe(true);
     });
     it('offers Start review at the actual workspace comparison without opening a Session', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>

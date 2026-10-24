@@ -2,6 +2,9 @@ import * as React from 'react';
 import { useLocalSearchParams, usePathname } from '@/components/appShell/workspace/destinationRoute';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { AppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
+import { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import {
     resolveRightSidebarMobileSurface,
     resolveProjectRightSidebarTabs,
@@ -43,11 +46,18 @@ export function useProjectSurfaceController(params: Readonly<{
         const checkout = resolveProjectCheckoutWorkspaceRef(workspaceRefs, params.workspaceRef, params.activeRootPath);
         return checkout ? workspaceAddressFromRefV1(checkout) : null;
     }, [params.activeRootPath, params.workspaceRef, workspaceRefs]);
-    const pane = useAppPaneScope(params.scopeId);
-    const { setActiveGitSubTab } = useWorkspaceScmTabState(pane);
+    const paneContext = React.useContext(AppPaneContext);
+    const pane = useAppPaneScope(params.scopeId, scope => ({
+        activeTabId: scope?.right.activeTabId,
+        gitTabState: scope?.right.tabState.git,
+        reviewTabState: scope?.details.tabState[SESSION_DETAILS_SCM_REVIEW_TAB_KEY],
+    }));
+    const { setActiveGitSubTab } = useWorkspaceScmTabState({
+        scopeState: { right: { tabState: { git: pane.scopeState.gitTabState } } }, setRightTabState: pane.setRightTabState,
+    });
     const { setPersistedReviewTabState } = useScmReviewTabState(JSON.stringify([
         params.workspaceRef.serverId, params.workspaceRef.machineId, params.activeRootPath,
-    ]), pane);
+    ]), { patchDetailsTabState: pane.patchDetailsTabState }, SESSION_DETAILS_SCM_REVIEW_TAB_KEY, pane.scopeState.reviewTabState);
     const workspaceKey = tryBuildWorkspaceCacheKey({ serverId: params.workspaceRef.serverId,
         machineId: params.workspaceRef.machineId, rootPath: params.activeRootPath }) ?? '';
     const { setLocation } = useRepositoryTreeBrowserState(workspaceKey);
@@ -56,9 +66,10 @@ export function useProjectSurfaceController(params: Readonly<{
     React.useEffect(() => {
         if (page === 'code') setLocation(codeLocation);
     }, [codeLocation, page, setLocation]);
-    const activeTab = pane.scopeState?.right.activeTabId ?? resolveProjectRightTabId(null);
+    const activeTab = pane.scopeState.activeTabId ?? resolveProjectRightTabId(null);
 
     const navigate = React.useCallback((surface: ProjectMobileSurface, nextPage: ProjectPageV1, layoutId?: string | null) => {
+        const details = paneContext?.getSnapshot().state.scopes[params.scopeId]?.details;
         routerRef.current.replace(buildProjectRouteHref({
             workspaceRefId: params.workspaceRef.id,
             surface,
@@ -70,9 +81,9 @@ export function useProjectSurfaceController(params: Readonly<{
             activeRootPath: params.activeRootPath,
             activeWorktreeId: params.activeWorktreeId,
             defaultRootPath: params.workspaceRef.rootPath,
-            initialResource: readProjectSelectedRouteResource(pane.scopeState?.details) ?? null,
+            initialResource: readProjectSelectedRouteResource(details ? buildDetailsWorkspaceStateView(details) : null) ?? null,
         }));
-    }, [pane.scopeState?.details, params.activeRootPath, params.activeWorktreeId, params.workspaceRef.id, params.workspaceRef.rootPath, params.workspaceRef.serverId, routeParams, routerRef]);
+    }, [paneContext, params.scopeId, params.activeRootPath, params.activeWorktreeId, params.workspaceRef.id, params.workspaceRef.rootPath, params.workspaceRef.serverId, routeParams, routerRef]);
     const navigateToPage = React.useCallback((nextPage: ProjectPageV1) => navigate(nextPage, nextPage), [navigate]);
     const navigateCodeLocation = React.useCallback((location: WorkspaceCodeLocation) => {
         routerRef.current.push(buildProjectRouteHref({
@@ -127,10 +138,10 @@ export function useProjectSurfaceController(params: Readonly<{
         }
 
         pane.openRight({ tabId: targetRightTabId });
-        if (pane.scopeState?.right?.activeTabId !== targetRightTabId) {
+        if (pane.scopeState.activeTabId !== targetRightTabId) {
             pane.setRightTab(targetRightTabId);
         }
-    }, [page, pane, pane.scopeState?.right?.activeTabId]);
+    }, [page, pane, pane.scopeState.activeTabId]);
 
     return React.useMemo(() => ({
         activeTab,

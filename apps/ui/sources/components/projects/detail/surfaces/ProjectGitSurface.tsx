@@ -14,6 +14,7 @@ import { useProjectSessions, useSessionListRowRenderablesForItems, useWorkspaceR
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
 import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { projectReviewEvidenceSessions, type ProjectReviewEvidenceSession } from './projectReviewEvidenceSessions';
+import { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 /** Only the mounted review demands the canonical, separately admitted Project roster. */
 function ProjectReviewSurface(props: WorkspaceScmReviewDetailsViewProps) {
@@ -46,12 +47,18 @@ export const ProjectGitSurface = React.memo((props: Readonly<{
     onRequestCreateWorktreeFromAnotherBranch: () => void;
     onRevealInFilesTree: (fullPath: string) => void;
 }>) => {
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, scope => ({
+        gitTabState: scope?.right.tabState.git,
+        reviewTabState: scope?.details.tabState[SESSION_DETAILS_SCM_REVIEW_TAB_KEY],
+    }));
     const params = useDestinationParams<Record<string, string | string[] | undefined>>();
     const routeResource = parseSessionPaneUrlState(params)?.details;
-    const { activeGitSubTab, setActiveGitSubTab } = useWorkspaceScmTabState(pane);
+    const { activeGitSubTab, setActiveGitSubTab } = useWorkspaceScmTabState({
+        scopeState: { right: { tabState: { git: pane.scopeState.gitTabState } } }, setRightTabState: pane.setRightTabState,
+    });
     const { persistedReviewTabState, setPersistedReviewTabState } = useScmReviewTabState(
-        JSON.stringify([props.serverId, props.machineId, props.rootPath]), pane);
+        JSON.stringify([props.serverId, props.machineId, props.rootPath]), { patchDetailsTabState: pane.patchDetailsTabState },
+        SESSION_DETAILS_SCM_REVIEW_TAB_KEY, pane.scopeState.reviewTabState);
     const mode = persistedReviewTabState?.projectChangesMode === 'git' ? 'git' : 'review';
     // Review | Git leads the review's own comparison bar (one line of chrome); in Git it heads Git's pane.
     const modeSwitch = <SegmentedTabBar tabs={[{ id: 'review', label: t('files.toolbar.review') }, { id: 'git', label: t('session.rightPanel.tabs.git') }]}

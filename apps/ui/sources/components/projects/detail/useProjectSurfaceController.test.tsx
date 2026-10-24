@@ -42,12 +42,18 @@ describe('useProjectSurfaceController', () => {
             activeWorktreeId: null,
         }), pane: useAppPaneScope('project:wr_1') }), { wrapper: Wrapper });
 
-        await act(async () => hook.getCurrent().controller.setActiveTab('services'));
+        const setActiveTab = hook.getCurrent().controller.setActiveTab;
+        await act(async () => hook.getCurrent().pane.openDetailsTab({ key: 'file:src/current.ts', kind: 'file', title: 'current.ts',
+            resource: { kind: 'file', path: 'src/current.ts' } }, { intent: 'pinned', present: false }));
+        await act(async () => setActiveTab('services'));
         expect(hook.getCurrent().pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'services' });
 
-        expect(routerReplace).toHaveBeenCalledWith(
-            '/projects/wr_1/overview?activeRootPath=%2Frepo%2Fpackages%2Fui&serverId=server-1&mobileSurface=services',
-        );
+        const href = routerReplace.mock.lastCall?.[0];
+        expect(typeof href).toBe('string');
+        const route = new URL(href, 'https://project.test');
+        expect(route.pathname).toBe('/projects/wr_1/overview');
+        expect(Object.fromEntries(route.searchParams)).toMatchObject({ activeRootPath: '/repo/packages/ui', serverId: 'server-1',
+            mobileSurface: 'services', initialFile: 'src/current.ts' });
 
         await hook.unmount();
     });
