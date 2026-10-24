@@ -272,7 +272,7 @@ function PageFailureBanner({
       titleKey="plugins.github.ui.partial"
       description={failureDescription(
         state.failure,
-        text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'),
+        text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text,
       )}
     />
   );
@@ -437,7 +437,7 @@ function WriteOutcome({
             : text('plugins.github.ui.mutations.review.outcome.partial', 'Review partially published')}
         description={outcome.failure === null
           ? exact
-          : `${exact} ${failureDescription(outcome.failure, '')}`.trim()}
+          : `${exact} ${failureDescription(outcome.failure, '', text)}`.trim()}
       />
     );
   }
@@ -505,7 +505,7 @@ function WriteOutcome({
         titleKey="plugins.github.ui.mutations.uncertain"
         description={outcome.failure === null
           ? stated
-          : `${failureDescription(outcome.failure, stated)} ${stated}`}
+          : `${failureDescription(outcome.failure, stated, text)} ${stated}`}
       />
     );
   }
@@ -520,7 +520,7 @@ function WriteOutcome({
           text(
             'plugins.github.ui.mutations.writeFailed',
             'GitHub could not complete this change.',
-          ),
+          ), text,
         )}
       />
     );
@@ -1931,7 +1931,7 @@ function GithubOverviewReadFailure({
   if (controller.failure === null) return null;
   const description = failureDescription(
     controller.failure,
-    text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'),
+    text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text,
   );
   return controller.value === null
     ? (
@@ -2270,7 +2270,7 @@ function GithubActivityView({
       <ErrorState
         title={cold.title}
         titleKey={cold.titleKey}
-        description={failureDescription(cold.failure, readFailed)}
+        description={failureDescription(cold.failure, readFailed, text)}
       />
     );
   }
@@ -2304,7 +2304,7 @@ function GithubActivityView({
                     tone="warning"
                     title={stream.unavailable.title}
                     titleKey={stream.unavailable.titleKey}
-                    description={failureDescription(stream.unavailable.failure, readFailed)}
+                    description={failureDescription(stream.unavailable.failure, readFailed, text)}
                   />
                 )}
             </React.Fragment>
@@ -2458,7 +2458,7 @@ function FilesPanel({
         titleKey="plugins.github.ui.filesUnavailable"
         description={failureDescription(
           state.failure,
-          text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'),
+          text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text,
         )}
       />
     );
@@ -2590,7 +2590,7 @@ function GithubFileDiffBody({
       <Text
         variant="micro"
         tone="secondary"
-        value={failureDescription(state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'))}
+        value={failureDescription(state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text)}
       />
     );
   }
@@ -2856,7 +2856,7 @@ function ChecksPanel({
         titleKey="plugins.github.ui.checksUnavailable"
         description={failureDescription(
           checks.failure,
-          text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'),
+          text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text,
         )}
       />
     );
@@ -3482,7 +3482,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
                   'GitHub could not complete {connections}, so it is missing from what is'
                     + ' shown here.',
                   { connections: failedConnections.join(', ') },
-                ),
+                ), text,
               )}
             />
           )}
@@ -3727,7 +3727,7 @@ function GithubChangeStep({ input, overview }: Readonly<{
         <Text
           variant="micro"
           tone="warning"
-          value={failureDescription(files.state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'))}
+          value={failureDescription(files.state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text)}
         />
       )}
     </TriageDetailChangeSummary>
