@@ -156,6 +156,25 @@ sync, then runs the reader. Graph changes unwind admission before the existing
 single trailing pass recollects resources. This explicit validation command is
 not enabled in automatic public dispatch.
 
+In 0.3 development, `runTypeScriptCli.mjs` records each completed finite
+`noEmit` package invocation in the ignored package-local
+`node_modules/.cache/typecheck/diagnostics.json`. It prints `N new in touched
+paths` against the previous completed invocation with the same authored project
+set. Touched paths include staged and unstaged Git changes plus untracked files
+under the package. Diagnostic identity is the repository-relative path, line,
+column and TypeScript code; shared locations across project partitions count
+once. The first run or a changed project set reports `baseline unavailable`.
+Interrupted, partial or unrecognized compiler results retain the previous
+snapshot; build, watch and introspection commands do not replace it. Snapshot
+failures are reported and preserve the compiler verdict. The same diagnostic
+header parser serves this observation and the root compiler-baseline check.
+
+This delta supports lane attribution; the compiler exit status and the existing
+Systemic integration owner's responsibility for package green remain unchanged.
+It neither grants a diagnostic allowance nor changes the root compiler-baseline
+policy. Snapshots belong to the execution host and describe its moving source
+view; they do not establish freshness of consumed declarations.
+
 Automatic preparation stays off: in the shared checkout, producer inputs change
 while a preparation runs, so it cannot converge within the 228 s cold boundary.
 After a failed public typecheck, the reader checks producer records in dependency
