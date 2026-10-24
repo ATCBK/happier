@@ -448,7 +448,7 @@ export function createDiscussionClient(options: Readonly<{ scope: ServerAccountS
         setSettings: (discussionId: string, settings: DiscussionSettingsV1, signal?: AbortSignal) => run('discussion.settings.set', { discussionId, settings }, signal),
         read: (discussionId: string, input: Omit<DiscussionActionInputV1ById['discussion.read'], 'discussionId'> = {}, signal?: AbortSignal) => run('discussion.read', { discussionId, ...input }, signal),
         readAttachment: (input: DiscussionActionInputV1ById['discussion.attachment.read'], signal?: AbortSignal) => run('discussion.attachment.read', input, signal),
-        create: async (input: Omit<DiscussionActionInputV1ById['discussion.create'], 'firstMessage' | 'participants'> & {
+        create: async (input: Omit<DiscussionActionInputV1ById['discussion.create'], 'firstMessage' | 'participants' | 'attachmentSources'> & {
             messageLocalId: string; content: DiscussionActionInputV1ById['discussion.post']['content']; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[];
             participants?: readonly NonNullable<DiscussionActionInputV1ById['discussion.create']['participants']>[number][];
             attachmentSources?: readonly PreparedAttachmentSource[];

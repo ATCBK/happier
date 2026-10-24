@@ -110,7 +110,8 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
             const prepared = prepareAnchoredDiscussionCreateV1({ source: snapshot.source, title: snapshot.draft.title,
                 quote: snapshot.preview.sourceText, creationLocalId: snapshot.retry.creationLocalId,
                 quoteLocalId: snapshot.retry.quoteLocalId, participants: snapshot.draft.participants });
-            const { firstMessage, ...creation } = prepared;
+            // Machine-local attachment sources belong to Agent posts; this composer stages uploads itself.
+            const { firstMessage, attachmentSources: _machineSources, ...creation } = prepared;
             retainedDiscuss = { ...creation, messageLocalId: snapshot.retry.quoteLocalId, content: firstMessage.content,
                 replyTarget: prepared.firstMessage.replyTarget };
             publish({ submitted: true });
