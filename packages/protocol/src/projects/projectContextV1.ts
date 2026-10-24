@@ -9,7 +9,7 @@ import { resolveProjectContextSourceV1 } from './projectListProjectionV1.js';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../workspaces/workspaceRefV1.js';
 import { ProjectSourcesReadOutputV1Schema, ProjectSourcesUpdateOutputV1Schema,
   type ProjectSourcesReadInputV1, type ProjectSourcesUpdateInputV1 } from './sources/projectSourceV1.js';
-import { ActionExecuteFailureSchema } from '../actions/actionExecutionResult.js';
+import { ActionExecuteFailureSchema, isActionOutcomeUnknownErrorCodeV1 } from '../actions/actionExecutionResult.js';
 
 export const ProjectContextTargetV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: ProjectAccountOrganizationKeyV1Schema.shape.serverId,
@@ -105,8 +105,9 @@ export async function updatePersonalProjectContextV1(
       currentRevision: result.revision < 0 ? 'absent' : result.revision };
     return { ok: true, row: result.value, revision: result.revision };
   } catch (error) {
-    options?.signal?.throwIfAborted();
     const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+    if (isActionOutcomeUnknownErrorCodeV1(code)) throw error;
+    options?.signal?.throwIfAborted();
     if (code === 'entry_conflict' || code === 'entry_not_found' || code === 'invalid_parameters' || code === 'project_context_access_denied') {
       return { ok: false, errorCode: code };
     }

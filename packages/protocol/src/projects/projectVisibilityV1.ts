@@ -1,5 +1,6 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { isActionOutcomeUnknownErrorCodeV1 } from '../actions/actionExecutionResult.js';
 import { ProjectAccountOrganizationV1Schema, ProjectAccountRowExpectedRevisionV1Schema } from './projectAccountRowsV1.js';
 import { ProjectContextTargetV1Schema, type ProjectContextActionOwnerDepsV1 } from './projectContextV1.js';
 
@@ -43,8 +44,10 @@ export async function setProjectVisibilityV1(
       currentRevision: result.revision < 0 ? 'absent' : result.revision };
     return { ok: true, row: result.value, revision: result.revision };
   } catch (error) {
+    const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+    if (isActionOutcomeUnknownErrorCodeV1(code)) throw error;
     options?.signal?.throwIfAborted();
-    return { ok: false, errorCode: error instanceof Error && 'code' in error && error.code === 'project_visibility_access_denied'
+    return { ok: false, errorCode: code === 'project_visibility_access_denied'
       ? 'project_visibility_access_denied' : 'project_visibility_unavailable' };
   }
 }

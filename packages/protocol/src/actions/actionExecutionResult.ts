@@ -143,6 +143,14 @@ export type ActionExecuteResult = Readonly<{
 /** Failure of confirmation is not proof that an admitted effect did not happen. */
 export const UNEXPECTED_ACTION_FAILURE_CODES_V1 = ['action_not_admitted', 'action_outcome_unknown'] as const;
 
+/** A lost acknowledgement is not a definite failure, including approval replay. */
+export function isActionOutcomeUnknownErrorCodeV1(code: unknown): boolean {
+  return code === 'outcome_unknown' || code === UNEXPECTED_ACTION_FAILURE_CODES_V1[1]
+    || code === 'approval_execution_outcome_unknown'
+    // The Project row transport/receipt owner has already classified settlement.
+    || code === 'project_account_row_outcome_unknown' || code === 'project_account_row_acknowledgement_invalid';
+}
+
 export function projectUnexpectedActionFailureV1(admissionCommitted: boolean | null, requestId?: string): ActionExecuteFailure & Readonly<{
   errorCode: typeof UNEXPECTED_ACTION_FAILURE_CODES_V1[number];
 }> {
