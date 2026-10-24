@@ -417,6 +417,39 @@ describe('MemorySearchPanel corpus coverage', () => {
             });
         } finally { await hook.unmount(); }
     });
+    it('reads nothing for a switched-off document, says it is not in use even with no Machine chosen, and loads the counts once it is in use', async () => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Keep the saved fact readable.', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const ref = { kind: 'doc' as const, serverId, artifactId };
+        await clearMemoryMachineChoice(serverId);
+        machineRpc.mockResolvedValue({ ...status, documents: { state: 'ready', facts: [{
+            ref, revision: { headerVersion: 1, bodyVersion: 1 }, indexedFactCount: 2, loadedFactCount: 1,
+        }] } });
+        const hook = await renderHook(({ inUse }: { inUse: boolean }) => {
+            const source = useMemoryDocument({ ref, serverId });
+            return { source, summary: useMemoryDocumentSummary({ source, serverId, inUse }) };
+        }, { initialProps: { inUse: false }, wrapper: ({ children }) =>
+            <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+        try {
+            await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().source.status).toBe('ready'); });
+            expect(hook.getCurrent().summary).toEqual({ state: 'unavailable', cause: { reason: 'not_in_use' } });
+            expect(machineRpc).not.toHaveBeenCalled();
+            // Switching it on brings back the ordinary path: no Machine chosen asks for one, a chosen Machine loads the counts.
+            await hook.rerender({ inUse: true });
+            await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().summary).toEqual({ state: 'unavailable', cause: { reason: 'machine_not_chosen' } }); });
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: { 'memory.settings': administration.targets[0]! } } })));
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().summary).toEqual({ state: 'ready', indexedFactCount: 2, loadedFactCount: 1 });
+            });
+            await hook.rerender({ inUse: false });
+            expect(hook.getCurrent().summary).toEqual({ state: 'unavailable', cause: { reason: 'not_in_use' } });
+        } finally { await hook.unmount(); }
+    });
     it('offers the Memory Machine choice in search when none is chosen, and never queries', async () => {
         await clearMemoryMachineChoice(administration.serverIds[0]!);
         const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>

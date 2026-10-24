@@ -45,6 +45,9 @@ export type MemoryDocumentSummary = Readonly<{
     /** No Memory Machine is chosen for this Home: nothing was asked, and choosing one is the fix. */
     reason: 'machine_not_chosen';
   }> | Readonly<{
+    /** The entry carrying this document is switched off: nothing is indexed for it, so nothing is read. */
+    reason: 'not_in_use';
+  }> | Readonly<{
     reason: 'machine_unavailable' | 'status_pending' | 'coverage_pending' | 'status_failed';
     target: Readonly<{ serverId: string; machineId: string }>;
     errorCode?: string;

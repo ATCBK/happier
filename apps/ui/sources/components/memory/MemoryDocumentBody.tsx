@@ -156,6 +156,8 @@ export type MemoryDocumentBodyProps = Readonly<{
   /** A fresh admitted preparation, not the Session's last accepted turn. */
   preparationScope?: MemorySearchScope;
   preparationBasis?: string;
+  /** False when the entry carrying this document is switched off: nothing is indexed, so no counts are read. */
+  inUse?: boolean;
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
   /** The composition owner presents these candidates in the current save sheet, preserving its draft. */
   onDuplicateReview?: (review: NonNullable<ReturnType<typeof readMemoryDuplicateReview>>) => void;
@@ -202,7 +204,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const target = source.target;
   const topic = view?.topic ?? null;
   const readSummary = useMemoryDocumentSummary({ source, serverId,
-    scope: props.preparationScope, preparationBasis: props.preparationBasis,
+    scope: props.preparationScope, preparationBasis: props.preparationBasis, inUse: props.inUse,
     enabled: topic === null });
   // Counts being read again keep their last-known values for this document. Without known
   // counts, the caller-lived status read reports unavailability rather than reserving a spinner.
@@ -685,6 +687,16 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       {view && (fresh || topic || summary.state === 'ready') && !(review && !topic) ? (
         summary.state === 'unavailable' && fresh && !topic && summary.cause?.reason === 'machine_not_chosen' ? (
           <MemoryMachineChoice testID={`${testID}.machine`} invitation={t('memoryContext.memory.countsNeedMachine')} />
+        ) : summary.state === 'unavailable' && fresh && !topic && summary.cause?.reason === 'not_in_use' ? (
+          // Counts only mean something while the memory is in use; off, the slot says so and nothing looks broken.
+          <Item
+            testID={`${testID}.summaryOff`}
+            mode="info"
+            density="compact"
+            showChevron={false}
+            showDivider={false}
+            title={<Text style={styles.summary}>{t('memoryContext.memory.countsOff')}</Text>}
+          />
         ) : summary.state === 'unavailable' && fresh && !topic ? (
           <SurfaceStateCard
             testID={`${testID}.summaryUnavailable`}

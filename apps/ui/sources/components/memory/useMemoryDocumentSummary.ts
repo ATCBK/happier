@@ -10,6 +10,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import type { MemoryDocumentSource } from './useMemoryDocument';
 
 const UNAVAILABLE: MemoryDocumentSummary = { state: 'unavailable' };
+const NOT_IN_USE: MemoryDocumentSummary = { state: 'unavailable', cause: { reason: 'not_in_use' } };
 const NO_MACHINE_CHOSEN: MemoryDocumentSummary = { state: 'unavailable', cause: { reason: 'machine_not_chosen' } };
 const DOCUMENTS = ['documents'] as const;
 const GLOBAL_SCOPE = { type: 'global' } as const;
@@ -22,6 +23,11 @@ export function useMemoryDocumentSummary(params: Readonly<{
   /** Existing context rows changing invalidate the read even when the document revision does not. */
   preparationBasis?: string;
   enabled?: boolean;
+  /**
+   * False when this document's context entry is switched off. The daemon indexes only documents in use, so
+   * there are no counts to read: nothing is asked of any Machine and the summary says so.
+   */
+  inUse?: boolean;
 }>): MemoryDocumentSummary {
   const { source, serverId } = params;
   const view = source.view;
@@ -34,7 +40,9 @@ export function useMemoryDocumentSummary(params: Readonly<{
   // A Session id belongs to its origin Home, even when its prepared document is foreign.
   // A document page instead uses the Account admitted by its qualified read.
   const account = sessionId ? originAccount : custody?.scope;
-  const enabled = params.enabled !== false && source.status === 'ready' && !source.stale && view !== null;
+  const readable = params.enabled !== false && source.status === 'ready' && !source.stale && view !== null;
+  const inUse = params.inUse !== false;
+  const enabled = readable && inUse;
   const provider = useMemorySearchProvider({ kind: 'exact', serverId: account?.serverId ?? serverId },
     { enabled, corpora: DOCUMENTS, scope: stableScope });
   const target = provider.daemonTarget;
@@ -74,7 +82,8 @@ export function useMemoryDocumentSummary(params: Readonly<{
     });
     return () => controller.abort();
   }, [account, awaitingStatus, custody, enabled, key, params.preparationBasis, stableScope, target, view]);
-  if (!enabled || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
+  if (!readable || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
+  if (!inUse) return NOT_IN_USE;
   if (!target) return unavailableMachine;
   return loaded?.key === key ? loaded.summary : awaitingStatus;
 }

@@ -168,13 +168,14 @@ function Host(props: Readonly<{
     onCreatedMemory?: Parameters<typeof MemoryDocumentBody>[0]['onCreatedMemory'];
     onDuplicateReview?: Parameters<typeof MemoryDocumentBody>[0]['onDuplicateReview'];
     preparationBasis?: string;
+    inUse?: boolean;
 }>) {
     const [composing, setComposing] = React.useState(props.composing ?? false);
     const source = useMemoryDocument({ ref: props.documentRef ?? null, serverId, topic: props.topic });
     return <MemoryDocumentBody testID="memory" source={source} serverId={serverId}
         collapsedFactCount={props.collapsed} composing={composing} onComposingChange={setComposing}
         sessionTarget={props.sessionTarget} scopeTarget={props.scopeTarget} onCreatedMemory={props.onCreatedMemory}
-        onDuplicateReview={props.onDuplicateReview} preparationBasis={props.preparationBasis} emptyText="empty" />;
+        onDuplicateReview={props.onDuplicateReview} preparationBasis={props.preparationBasis} inUse={props.inUse} emptyText="empty" />;
 }
 
 function boundaryDiagnostic() {
@@ -414,6 +415,22 @@ it('keeps an honest error with Retry when the chosen Memory Machine fails to ans
     await settled(() => expect(screen.findByTestId('memory.summaryUnavailable')).toBeTruthy());
     expect(screen.getTextContent()).toContain('memoryContext.memory.countsUnavailable');
     expect(screen.findByTestId('memory.machine.state')).toBeNull();
+    await screen.unmount();
+});
+
+it('says a switched-off memory has no counts, instead of an error with Retry, a Machine choice or invented counts', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One'), fact('two', 'Two')], topics: [] });
+    const screen = await renderDocument(ref, { inUse: false });
+    await settled(() => expect(screen.findByTestId('memory.summaryOff')).toBeTruthy());
+    const rendered = screen.getTextContent();
+    expect(rendered).toContain('memoryContext.memory.countsOff');
+    expect(screen.findByTestId('memory.summaryUnavailable')).toBeNull();
+    expect(screen.findByTestId('memory.machine.state')).toBeNull();
+    expect(rendered).not.toContain('common.retry');
+    expect(rendered).not.toContain('memoryContext.memory.countsNeedMachine');
+    expect(rendered).not.toContain('memoryContext.memory.alwaysRemembered');
+    expect(rendered).not.toContain('0 facts');
+    expect(machineRpc).not.toHaveBeenCalled();
     await screen.unmount();
 });
 
