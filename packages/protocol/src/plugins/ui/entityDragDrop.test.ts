@@ -37,6 +37,13 @@ describe('transient entity identity', () => {
         expect(EntityDragItemV1Schema.safeParse({ kind: 'artifact', scope, artifactId: '' }).success).toBe(false);
         expect(EntityDragItemV1Schema.safeParse({ kind: 'artifact-folder', scope, folderId: '' }).success).toBe(false);
     });
+    it('carries a saved space within its own entity list', () => {
+        const item = { kind: 'collection-space', scope, entityKind: 'workflow', spaceId: 'all-workflows' };
+        expect(EntityDragItemV1Schema.safeParse(item).success).toBe(true);
+        expect(isEntityDragKindV1('collection-space')).toBe(true);
+        expect(EntityDragItemV1Schema.safeParse({ ...item, entityKind: 'board' }).success).toBe(false);
+        expect(EntityDragItemV1Schema.safeParse({ ...item, spaceId: '' }).success).toBe(false);
+    });
     it('isolates navigation placement carries by surface and item instead of accepting them as destinations', () => {
         const item = { kind: 'navigation-item', scope, surfaceId: 'appRail', itemId: 'plugin:example:review' };
         expect(EntityDragItemV1Schema.safeParse(item).success).toBe(true);

@@ -12,6 +12,7 @@ import { QualifiedConnectedAccountRefSchema } from '../../connect/qualifiedConne
 import { PluginContributionIdentityV1Schema, parseQualifiedPluginContributionKey } from '../contributionIdentity.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
+import { CollectionEntityKindV1Schema } from '../../collections/spaces/collectionSpacesV1.js';
 import { WidgetInstanceRefV1Schema } from '../../widgets/widgetInstanceV1.js';
 import { supportsWidgetGroupsV1 } from '../../widgets/widgetPresentationV1.js';
 
@@ -40,6 +41,8 @@ export const EntityDragItemV1Schema = lazyZodSchema(() => z.discriminatedUnion('
     z.strictObject({ kind: z.literal('destination'), scope, href: Id.check(z.refine(href => href.startsWith('/') && !href.startsWith('//'))) }),
     // A local navigation preference is carried only within its own customization list.
     z.strictObject({ kind: z.literal('navigation-item'), scope, surfaceId: Id, itemId: Id }),
+    // A saved space is carried only within its own entity's strip or Manage spaces list.
+    z.strictObject({ kind: z.literal('collection-space'), scope, entityKind: CollectionEntityKindV1Schema, spaceId: Id }),
     z.strictObject({ kind: z.literal('repository-file'), scope, machineId: Id, workspaceId: z.optional(Id), path: Id, entryKind: z.optional(z.enum(['file', 'directory'])) }),
     z.strictObject({ kind: z.literal('workflow'), scope, workflowId: Id }),
     z.strictObject({ kind: z.literal('session-board-item'), scope, address, viewId: Id, itemId: Id }),
