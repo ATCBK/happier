@@ -2,9 +2,9 @@ import type { Tx } from '@/storage/inTx';
 import { publishTeamCredentialBrokerConsumersChangedInTx } from '@/app/teams/teamChanges';
 import { portableQueryChunks } from '@/storage/portableQueryChunks';
 
-/** Personal sources stay opaque to Home; their only possible custodian is the
- * Session owner. Team source custody comes from the accepted brokered binding,
- * never Session readers or Team membership. This census also feeds admission. */
+/** Home can identify custody only from an accepted brokered Team binding, never
+ * Session ownership, readers or Team membership. Personal sources stay opaque
+ * and retain their stream-close currentness check. This census also feeds admission. */
 export async function readSessionProviderBrokerCustodianAccountIdsInTx(tx: Tx, sessionIds: readonly string[]): Promise<readonly string[]> {
     const accountIds = new Set<string>();
     // The nested binding read also binds the slot kind and Prisma OFFSET.
@@ -17,7 +17,6 @@ export async function readSessionProviderBrokerCustodianAccountIdsInTx(tx: Tx, s
             } },
         });
         for (const session of sessions) {
-            accountIds.add(session.accountId);
             for (const binding of session.teamCredentialBindings) accountIds.add(binding.resource.custodianAccountId);
         }
     }

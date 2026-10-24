@@ -47,14 +47,14 @@ describe('Home broker consumer retirement wakes', () => {
         const read = () => db.accountChange.findMany({ where: { accountId: { in: [owner.id, custodian.id, directCustodian.id, stranger.id] },
             kind: 'account', entityId: TEAM_CHANGE_ENTITY_ID }, orderBy: { accountId: 'asc' },
             select: { accountId: true, entityId: true, kind: true, hint: true } });
-        const expected = [owner.id, custodian.id].sort().map(accountId => ({
+        const expected = [custodian.id].map(accountId => ({
             accountId, entityId: TEAM_CHANGE_ENTITY_ID, kind: 'account', hint: null,
         }));
         return { owner, custodian, directCustodian, stranger, team, session, machine, read, expected };
     }
 
     it.each(['publisher close', 'publisher expiry', 'released stop', 'archive', 'delete'] as const)(
-        'publishes one identity-free wake only to personal and bound broker custodians on %s', async transition => {
+        'publishes one identity-free wake only to the bound broker custodian on %s', async transition => {
             const f = await fixture();
             const presence = createSessionPublisherPresence();
             const socket = {};
@@ -103,6 +103,18 @@ describe('Home broker consumer retirement wakes', () => {
         expect(await f.read()).toEqual([]);
         expect(await db.session.findUniqueOrThrow({ where: { id: f.session.id }, select: { archivedAt: true } }))
             .toEqual({ archivedAt: null });
+    });
+
+    it('archives plain Sessions without publishing any teams changes', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        for (let index = 0; index < 5; index++) {
+            const session = await db.session.create({ data: { accountId: owner.id,
+                tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+            await inTx(tx => transitionSessionArchiveStateInTx({ tx, sessionId: session.id,
+                wasArchived: false, archivedAt: new Date() }));
+        }
+        expect(await db.accountChange.count({ where: { accountId: owner.id,
+            kind: 'account', entityId: TEAM_CHANGE_ENTITY_ID } })).toBe(0);
     });
 
     it('admits lifecycle custodian publications through the same census used by enclosing archive and erasure transactions', async () => {
