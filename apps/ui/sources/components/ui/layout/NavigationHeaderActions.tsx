@@ -161,6 +161,11 @@ export function useNavigationHeaderActions(input: Readonly<{
     primary: NavigationHeaderAction | null | undefined;
     cancel?: NavigationHeaderAction | null;
     actions?: React.ReactNode;
+    /**
+     * A page's own menu trigger (a list's "+" that opens its add menu), kept as it is at the bar's
+     * trailing edge after the folded menu. Pass a stable element: a new one re-publishes the bar.
+     */
+    trailing?: React.ReactNode;
 }>) {
     const routeContextActions = React.useContext(PageNavigationContextActions);
     const navigation = useNavigation() as unknown as
@@ -174,6 +179,7 @@ export function useNavigationHeaderActions(input: Readonly<{
     const primary = input.enabled ? input.primary ?? null : null;
     const cancel = input.enabled ? input.cancel ?? null : null;
     const actions = input.enabled ? input.actions : null;
+    const trailing = input.enabled ? input.trailing ?? null : null;
     const foldedActions = React.useMemo(() => foldContextActions(actions), [actions]);
     const primaryKey = primary ? [primary.title, primary.disabled === true, primary.loading === true, primary.testID ?? ''] : null;
     const cancelKey = cancel ? [cancel.title, cancel.disabled === true, cancel.testID ?? ''] : null;
@@ -181,9 +187,9 @@ export function useNavigationHeaderActions(input: Readonly<{
     React.useEffect(() => {
         // Outside a navigator (a harness, a detached preview) there is no native header to fill.
         const screen = navigation;
-        if ((!primary && !cancel && !actions) || !screen || typeof screen.setOptions !== 'function') return undefined;
+        if ((!primary && !cancel && !actions && !trailing) || !screen || typeof screen.setOptions !== 'function') return undefined;
         const options: Record<string, unknown> = {};
-        if (primary || actions) {
+        if (primary || actions || trailing) {
             options.headerRight = () => (
                 <View style={stylesheet.actions}>
                     {routeContextActions?.actions}
@@ -200,6 +206,7 @@ export function useNavigationHeaderActions(input: Readonly<{
                             action={() => Promise.resolve(primaryRef.current?.onPress())}
                         />
                     ) : null}
+                    {trailing}
                 </View>
             );
         }
@@ -223,7 +230,7 @@ export function useNavigationHeaderActions(input: Readonly<{
         for (const target of targets) target.setOptions(options);
         return () => {
             const cleared: Record<string, unknown> = {};
-            if (primary || actions) {
+            if (primary || actions || trailing) {
                 const retainedActions = routeContextActions?.readCurrentActions();
                 cleared.headerRight = retainedActions ? () => retainedActions : undefined;
             }
@@ -232,7 +239,7 @@ export function useNavigationHeaderActions(input: Readonly<{
         };
         // `key` carries the structured actions' rendered fields; context nodes keep their own props.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [navigation, key, actions, foldedActions, routeContextActions]);
+    }, [navigation, key, actions, foldedActions, routeContextActions, trailing]);
 }
 
 /**
@@ -246,12 +253,14 @@ export const NavigationHeaderActions = React.memo(function NavigationHeaderActio
     primary: NavigationHeaderAction | null;
     cancel?: NavigationHeaderAction | null;
     actions?: React.ReactNode;
+    /** A menu trigger kept at the bar's trailing edge (see `useNavigationHeaderActions`). */
+    trailing?: React.ReactNode;
 }>) {
     const chromeShowsTitle = useNavigationTitleChromeShowsTitle();
     // Navigation is read only while there is something to hand over, so a page (or a harness) with
     // nothing for the native header never touches the navigator.
-    return chromeShowsTitle && (props.primary || props.cancel || props.actions)
-        ? <NavigationHeaderActionsPublisher primary={props.primary} cancel={props.cancel ?? null} actions={props.actions} />
+    return chromeShowsTitle && (props.primary || props.cancel || props.actions || props.trailing)
+        ? <NavigationHeaderActionsPublisher primary={props.primary} cancel={props.cancel ?? null} actions={props.actions} trailing={props.trailing} />
         : null;
 });
 
@@ -259,8 +268,9 @@ const NavigationHeaderActionsPublisher = React.memo(function NavigationHeaderAct
     primary: NavigationHeaderAction | null;
     cancel: NavigationHeaderAction | null;
     actions?: React.ReactNode;
+    trailing?: React.ReactNode;
 }>) {
-    useNavigationHeaderActions({ enabled: true, primary: props.primary, cancel: props.cancel, actions: props.actions });
+    useNavigationHeaderActions({ enabled: true, primary: props.primary, cancel: props.cancel, actions: props.actions, trailing: props.trailing });
     return null;
 });
 

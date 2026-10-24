@@ -64,3 +64,24 @@ it('folds a page\'s header operations into rows of the one phone menu, in their 
         await act(async () => root.unmount());
     }
 });
+
+it('keeps a page\'s own menu trigger at the bar\'s trailing edge, after the folded menu, never inside it', async () => {
+    const trailing = <View testID="add-menu-trigger" />;
+    const actions = <ToolbarButton testID="hide" label="Hide account emails and IDs" active={false} onPress={vi.fn()} />;
+    function Publisher() {
+        useNavigationHeaderActions({ enabled: true, primary: null, actions, trailing });
+        return null;
+    }
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(<Publisher />));
+        const options = navigation.setOptions.mock.calls.at(-1)?.[0] as { headerRight: () => React.ReactElement<{ children: React.ReactNode }> };
+        const children = React.Children.toArray(options.headerRight().props.children).filter(React.isValidElement);
+        const menu = children.find((child): child is React.ReactElement<React.ComponentProps<typeof PageHeaderMenu>> => child.type === PageHeaderMenu);
+        expect(menu!.props.actions.map(action => action.title)).toEqual(['Hide account emails and IDs']);
+        expect((children.at(-1) as React.ReactElement<{ testID?: string }>).props.testID).toBe('add-menu-trigger');
+    } finally {
+        await act(async () => root.unmount());
+    }
+});
