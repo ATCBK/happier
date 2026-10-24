@@ -9,6 +9,12 @@ registry, UI, polling loop, persistence, or credential materialization.
 
 ## Provider setup guidance (unreleased 0.3)
 
+The provider descriptor's optional `setupGuidance` exposes static instructions
+before setup invocation or Connected Account selection. Telegram declares its
+BotFather links and `/newbot` copy value here. It contains no verified account,
+bot identity, credential or connection facts. Rendering this pre-credential
+guide in the Channels setup surface remains a separate UI integration.
+
 The setup result's optional `setupGuidance` is projected unchanged by
 `connection/prepare-v1`, including for independently installed providers.
 Alongside `externalUrl` and `requiredPermissionsLabel`, providers may supply
@@ -17,7 +23,7 @@ Alongside `externalUrl` and `requiredPermissionsLabel`, providers may supply
 values are public configuration such as scopes, commands or ports; never
 include credentials. Credential entry remains in Connected Accounts.
 
-Setup and preparation derive their strict readers and manifest JSON Schema
+The descriptor, setup result and preparation derive their strict guidance readers and manifest JSON Schema
 from the same guidance schema. Steps, copyable values and guidance reject
 unknown fields. Providers author their own instructions and official links;
 Channels needs no built-in provider identifier branch to consume them.
@@ -43,6 +49,15 @@ Package versions and the serialized Channels protocol epoch evolve
 independently. Compatible separately installed copies interoperate by
 serialized protocol id/version and runtime validation, never by JavaScript
 object identity.
+
+### Shared CI evidence (development, unreleased)
+
+`/v1` also owns `ForgeCiFailureSummaryV1Schema` and its minimal native
+identity, lifecycle-state and annotation closure. The hosted-CI entry point
+`@happier-dev/triage-protocol/ci/v1` re-exports these same schemas; Channels PR
+updates embed the canonical summary directly. All definitions use public
+Plugin SDK builders. Neither feature protocol package imports private
+`@happier-dev/protocol`, and there is no reverse Channels-to-Triage dependency.
 
 ### Outbound text formatting (development, unreleased)
 
@@ -343,6 +358,21 @@ are integrated separately from this protocol boundary.
 
 ## Pairing proof and router bootstrap (unreleased development contract)
 
+`connection/pairing-read-v1` reads one challenge using
+`{ connectionId, generationId, challengeId }` on the authenticated `agent`,
+`mcp`, `ui` and `cli` surfaces. It returns `ready` with `pairing` in the same
+shape as `pairing-v1`: challenge handoff or proposal id, immutable proved
+principal, exact proof location, state and expiry. The current Account must
+own the connection; absent, expired or superseded challenges are
+`unavailable`, and a retired generation is `restarted`. This safe read needs
+no confirmation. Create and finalize retain their existing confirmations,
+and finalize still creates a paused binding for owner review before enablement.
+
+The Action and watched UI Resource share the pairing manager's projection;
+neither creates another store or proof flow. Requester failure accounting
+lasts only for its ten-minute challenge, with five valid failures per requester
+and no separate requester-count cutoff.
+
 The development pairing extension adds optional
 `proofEndpointSelection: ConversationBindingEndpointSelectionV1` to
 `ConversationPairingCreateInputV1`. Its existing fields remain `connectionId`,
@@ -522,13 +552,27 @@ retained in the connection's readiness record.
 
 Development-source poll `bindings` also includes retained ordinary thread
 endpoints, alongside the existing linked PR and scoped-trigger context. A
-thread entry may carry `excludedMessageIds`: occurrences first observed before
-that endpoint was held. Providers exclude those messages from known-thread
-shaping so replay keeps the accepted content. The core derives these IDs from
-the same ingress census, including compacted censuses, and the Session owner's
-inbound birth identity retained in the existing child binding. The birth fact
-also preserves first-message shaping if the first census write fails after
-child creation. No separate thread or shaping store exists.
+thread entry may carry `excludedMessageIds` for its inbound birth message.
+That binding-owned fact preserves first-message shaping if the first census
+write fails after child creation.
+
+Providers whose shaping depends on retained thread context can decode the
+actual batch's identities, then call the existing
+`provider/connection-read-v1` Action with optional
+`pollOccurrences: [occurrenceId, ...]`. The caller-filtered connection snapshot
+then includes `pollShaping: [{ occurrenceId, endpointWasRetainedAtPoll }]` for
+the requested occurrences that have a census. A requested read that cannot
+supply its shaping projection is unavailable, not permission to guess. An
+occurrence without a retained entry uses the original poll's binding context.
+The bound is the existing provider batch bound; an empty poll needs no census
+read. Ordinary callers omitting the selector retain the original read result.
+
+The census owner performs exact keyed reads, including compacted censuses;
+polling does not enumerate retained history to construct an exception list.
+Decode MIME once, resolve this batch's context once, then shape the retained
+decoded messages without polling or fetching them again. No separate thread,
+shaping store, cache or checkpoint exists. This is an in-place, one-way 0.3
+development contract extension, not support for older 0.3 core binaries.
 
 In current 0.3 development source, setup may return
 `recommendedMaximumObservationAgeMs`. Preparation preserves it and the setup

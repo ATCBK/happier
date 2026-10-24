@@ -6,6 +6,11 @@ contribution declarations, and conformance fixtures. Keep host runtime,
 provider implementation, registry, UI, credential materialization, polling, and
 persistence outside this package.
 
+`src/v1/ci` owns the shared CI identity, state, annotation and failure-summary
+schemas used by bound PR updates. Triage re-exports these exact public V1
+values. Build them with the public SDK protocol algebra, without private
+Protocol imports or another CI parser.
+
 The only public exports are the explicit root V1 barrel, `/v1`, and
 `/testing/v1`; do not add default, current, latest, legacy, or compatibility
 aliases. Apply the repository [SDK protocol-evolution doctrine](../../docs/compatibility.md#sdk-protocol-evolution)
