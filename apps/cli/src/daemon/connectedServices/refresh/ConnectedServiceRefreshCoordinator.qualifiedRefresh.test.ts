@@ -228,6 +228,10 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
     ['happier.agent.codex', 'openai-codex', 'quota', 200],
     ['happier.agent.codex', 'openai-codex', 'scheduled_metadata_retry', 503],
     ['happier.agent.codex', 'openai-codex', 'scheduled_bound_metadata_retry', 503],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_lease_failure', 200],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_bound_lease_failure', 200],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_credential_read_failure', 200],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_revoked_lease_failure', 200],
     ['happier.agent.claude', 'claude-subscription', 'scheduled', 200],
     ['happier.agent.claude', 'claude-subscription', 'enrich_known_private', 200],
     ['happier.agent.claude', 'claude-subscription', 'enrich_unknown_public', 200],
@@ -263,6 +267,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
     let foregroundStarted = false;
     let clock = now;
     let profileStatus: QualifiedConnectedAccountProfileV4['status'] = entryPoint.endsWith('metadata_retry')
+      || entryPoint.startsWith('scheduled_') && entryPoint.endsWith('_failure')
       ? 'connected' : 'refresh_failed_retryable';
     let accountRuntimeCurrent = true;
     const effectAdmissions: boolean[] = [];
@@ -411,6 +416,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       updateConnectedServiceCredentialHealth: vi.fn(async () => undefined),
     } as unknown as ApiClient;
     const acquireRefreshLease = vi.fn(async () => {
+      if (entryPoint === 'scheduled_revoked_lease_failure') accountRuntimeCurrent = false;
+      if (entryPoint.endsWith('lease_failure')) throw new Error('refresh_lease_transport_unavailable');
       effectAdmissions.push(accountRuntimeCurrent);
       return {
         acquired: true,
@@ -501,6 +508,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         resolvePeerClass: () => 'advertised_v4',
         establishedRuntimeOwner,
         readCredential: async () => {
+          if (entryPoint.endsWith('credential_read_failure')) throw new Error('credential_transport_unavailable');
           const snapshot = await readCredential();
           if (foregroundStarted) foregroundCredentialRead();
           return snapshot;
@@ -526,6 +534,27 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       },
     });
 
+    if (entryPoint.startsWith('scheduled_') && entryPoint.endsWith('_failure')) {
+      if (entryPoint.startsWith('scheduled_bound_')) coordinator.registerSpawnTarget({
+        pid: 123, agentId: 'codex', materializationKey: 'interrupted-refresh',
+        connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {
+          'openai-codex': { source: 'connected', profileId: 'work' },
+        } },
+      });
+      // The real plugin observed expiry, but the Home transport fails before
+      // any provider exchange. That observation must still reach the row.
+      await coordinator.tickOnce().catch(() => undefined);
+      expect(tokenExchangeRequests()).toHaveLength(0);
+      if (entryPoint === 'scheduled_revoked_lease_failure') {
+        expect(mutateCredentialHealth).not.toHaveBeenCalled();
+        expect(effectAdmissions).not.toContain(false);
+        return;
+      }
+      expect(mutateCredentialHealth).toHaveBeenCalledOnce();
+      expect(profileStatus).toBe('refresh_failed_retryable');
+      return;
+    }
+
     if (entryPoint.endsWith('metadata_retry')) {
       const bound = entryPoint === 'scheduled_bound_metadata_retry';
       if (bound) coordinator.registerSpawnTarget({
@@ -543,6 +572,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       await failedRefresh();
       expect(profileStatus).toBe('refresh_failed_retryable');
       expect(tokenExchangeRequests()).toHaveLength(1);
+      expect(mutateCredentialHealth).toHaveBeenCalledOnce();
       clock += 1;
       // The failed refresh's own health write changes listing metadata, not
       // credential authority, and cannot shorten the existing recovery delay.
@@ -554,6 +584,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       clock += 59_999;
       await failedRefresh();
       expect(tokenExchangeRequests()).toHaveLength(2);
+      expect(mutateCredentialHealth).toHaveBeenCalledTimes(2);
       // Reconnection replaces the admitted credential rather than inheriting
       // the old credential's health failure suppression.
       qualifiedRevision = secondRevision;
@@ -761,14 +792,10 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       });
     }
 
+    expect(mutateCredentialHealth).toHaveBeenCalledOnce();
     expect(mutateCredentialHealth.mock.calls[0]?.[0].patch).toMatchObject({
-      health: { status: 'refresh_failed_retryable', reconnectRequired: false },
+      health: { status: 'connected', reconnectRequired: false },
     });
-    if (entryPoint === 'quota') {
-      expect(mutateCredentialHealth.mock.calls.at(-1)?.[0].patch).toMatchObject({
-        health: { status: 'connected', reconnectRequired: false },
-      });
-    }
     expect(acquireRefreshLease).toHaveBeenCalled();
     expect(mutateCredential).toHaveBeenCalledOnce();
     expect(mutateCredential.mock.calls[0]![0]).toMatchObject({

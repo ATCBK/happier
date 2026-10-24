@@ -442,6 +442,7 @@ export type SessionAccessResetNotification = Readonly<{
 export type ManagedProviderRetainedCurrentnessInvalidation = Readonly<{
     source: 'connect' | 'reconnect' | 'changes' | 'page-limit' | 'cursor-gone';
     signal: AbortSignal;
+    directMaterialChanged: boolean;
 }>;
 
 export type ConnectedServicesProjectionNotification = Readonly<{
@@ -451,6 +452,7 @@ export type ConnectedServicesProjectionNotification = Readonly<{
     connectedServicesV2: unknown;
     connectedServiceCredentialRevisionsV1: unknown;
     quotaRefreshRecordIds?: readonly string[];
+    quotaRefreshOnly?: boolean;
 }>;
 
 export type ApiMachineClientLifecycleDependencies = Readonly<{
@@ -2665,14 +2667,16 @@ export class ApiMachineClient {
         if (!this.connectedServicesProjectionListener) {
             throw new Error('connected_services_projection_reconciler_unavailable');
         }
-        const profile = await fetchAccountProfile({ token: this.token, signal });
+        // Exact quota Refresh demand has no credential projection to reconcile.
+        const profile = notification.quotaRefreshOnly === true
+            ? null : await fetchAccountProfile({ token: this.token, signal });
         signal.throwIfAborted();
         try {
             await this.connectedServicesProjectionListener({
                 ...notification,
                 signal,
-                connectedServicesV2: profile.connectedServicesV2,
-                connectedServiceCredentialRevisionsV1: profile.connectedServiceCredentialRevisionsV1,
+                connectedServicesV2: profile?.connectedServicesV2,
+                connectedServiceCredentialRevisionsV1: profile?.connectedServiceCredentialRevisionsV1,
             });
         } catch (error) {
             if (!isConnectedServiceGenerationReconciliationNotAcknowledgeableError(error)) throw error;
@@ -5169,6 +5173,7 @@ export class ApiMachineClient {
                 await this.notifyManagedProviderRetainedCurrentnessInvalidation({
                     source: 'cursor-gone',
                     signal,
+                    directMaterialChanged: true,
                 });
                 await this.notifyAutomationEventSourcesInvalidated(signal);
                 await this.notifyPluginWebhookInvalidated(signal);
@@ -5422,6 +5427,7 @@ export class ApiMachineClient {
                     source: 'changes',
                     executionAuthority,
                     ...(quotaRefreshRecordIds.length > 0 ? { quotaRefreshRecordIds } : {}),
+                    quotaRefreshOnly: !hasConnectedServicesChange && !hasConnectedAccountCatalogChange,
                 }, signal);
             }
             if (reason !== 'live' || hasSavedSecretCatalogChange) {
@@ -5479,17 +5485,17 @@ export class ApiMachineClient {
                 });
             }
 
-            if (
-                reason !== 'live'
+            const directMaterialChanged = reason !== 'live'
                 || hasTeamChange
                 || hasConnectedServicesChange
                 || hasSavedSecretCatalogChange
-                || hasProviderConnectionsChange
-            ) {
+                || hasProviderConnectionsChange;
+            if (directMaterialChanged) {
                 signal.throwIfAborted();
                 await this.notifyManagedProviderRetainedCurrentnessInvalidation({
                     source: reason === 'live' ? 'changes' : reason,
                     signal,
+                    directMaterialChanged,
                 });
             }
 

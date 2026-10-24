@@ -498,7 +498,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         }
     });
 
-    it.each(['single', 'paged', 'failed-tail'] as const)('delivers exact quota Refresh before acknowledging the Account cursor (%s)', async mode => {
+    it.each(['single', 'paged', 'failed-tail', 'mixed', 'mixed-catalog', 'mixed-team'] as const)('delivers exact quota Refresh before acknowledging the Account cursor (%s)', async mode => {
         const machine: Machine = { id: 'quota-observer-machine', encryptionMode: 'plain', metadata: null,
             metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
         const recordId = buildProviderAccountUsageRecordId({ providerId: 'quota-provider', accountSubjectId: 'work',
@@ -506,6 +506,14 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const { buildProviderAccountUsageRefreshChangeV1 } = await import('@happier-dev/protocol/changes');
         const changes: ChangeEntry[] = [{ cursor: mode === 'single' ? 1 : 201, changedAt: 1,
             ...buildProviderAccountUsageRefreshChangeV1(recordId) }];
+        if (mode === 'mixed') changes.push({ cursor: 202, changedAt: 1, kind: 'account', entityId: 'self',
+            hint: { connectedServices: true } });
+        if (mode === 'mixed-catalog') {
+            const { buildConnectedAccountCatalogPhysicalKeyV1 } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+            changes.push({ cursor: 202, changedAt: 1, kind: 'account', entityId: buildConnectedAccountCatalogPhysicalKeyV1('purposes') });
+        }
+        if (mode === 'mixed-team') changes.push({ cursor: 202, changedAt: 1, kind: 'account', entityId: 'teams', hint: null });
+        const mixed = mode === 'mixed' || mode === 'mixed-catalog';
         let savedCursor = 0;
         let refuseTail = mode === 'failed-tail';
         readAccountChangesCursor.mockImplementation(async () => savedCursor);
@@ -526,10 +534,13 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         bindApiSessionSocketMock(mockIo, socket);
         const client = new ApiMachineClient('token', machine);
         const events: unknown[] = [];
+        const directMaterialWakes: unknown[] = [];
+        client.onManagedProviderRetainedCurrentnessInvalidation(change => { directMaterialWakes.push(change); });
         const detach = client.onConnectedServicesProjection(async notification => {
             if (!notification.quotaRefreshRecordIds) return;
             if (refuseTail) throw new Error('quota-refresh-consumer-unavailable');
-            events.push(notification.quotaRefreshRecordIds);
+            events.push({ recordIds: notification.quotaRefreshRecordIds,
+                quotaRefreshOnly: 'quotaRefreshOnly' in notification && notification.quotaRefreshOnly });
         });
         writeAccountChangesCursor.mockImplementation(async (_accountId, cursor) => { savedCursor = cursor; events.push('cursor'); });
         try {
@@ -542,8 +553,17 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 events.length = 0;
             }
             await sync();
-            expect(events).toEqual(mode === 'paged' ? ['cursor', [recordId], 'cursor'] : [[recordId], 'cursor']);
-            expect(savedCursor).toBe(mode === 'single' ? 1 : 201);
+            const refresh = { recordIds: [recordId], quotaRefreshOnly: !mixed };
+            // Quota-only scopes the Connected Services projection. A Team
+            // change on the same page still wakes direct-material admission.
+            expect(events).toEqual(mode === 'paged' || mixed || mode === 'mixed-team' ? ['cursor', refresh, 'cursor'] : [refresh, 'cursor']);
+            expect(directMaterialWakes).toEqual(mode === 'mixed' || mode === 'mixed-team' ? [{ source: 'changes',
+                signal: expect.any(AbortSignal), directMaterialChanged: true }] : []);
+            expect(axiosGet.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/profile')))
+                // The first catch-up authenticates the opaque token's Account;
+                // only a mixed credential change needs a projection read too.
+                .toHaveLength(mixed ? 2 : 1);
+            expect(savedCursor).toBe(mode === 'single' ? 1 : mixed || mode === 'mixed-team' ? 202 : 201);
         } finally { detach(); await client.shutdown(); }
     });
 
@@ -1367,6 +1387,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             expect(revalidate).toHaveBeenCalledWith({
                 source: 'changes',
                 signal: expect.any(AbortSignal),
+                directMaterialChanged: true,
             });
             expect(writeAccountChangesCursor).not.toHaveBeenCalled();
         } finally {

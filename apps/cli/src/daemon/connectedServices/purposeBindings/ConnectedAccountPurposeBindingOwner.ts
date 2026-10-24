@@ -121,6 +121,7 @@ export type ConnectedAccountPurposeBindingOwnerDependencies = Readonly<{
   resolveTarget(
     target: QualifiedConnectedAccountPurposeBindingTargetV1,
     signal: AbortSignal,
+    observationOnly?: true,
   ): Promise<ConnectedAccountPurposeResolvedTarget | null>;
   /** Producer-owned materializer boundary for the exact resolved current account. */
   materializeAccount(input: Readonly<{
@@ -1181,6 +1182,7 @@ export function createConnectedAccountPurposeBindingOwner(
     requireSelected?: true;
     sessionId?: string;
     signal: AbortSignal;
+    observationOnly?: true;
   }>): Promise<Readonly<{
     target: QualifiedConnectedAccountPurposeBindingTargetV1;
     resolved: ConnectedAccountPurposeResolvedTarget;
@@ -1217,7 +1219,7 @@ export function createConnectedAccountPurposeBindingOwner(
           directMaterialOrigin: sessionBinding.directMaterialOrigin,
         };
       }
-      const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal));
+      const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal, input.observationOnly));
       input.signal.throwIfAborted();
       if (!resolved) return unavailableBinding(input, 'target_unavailable');
       assertResolvedTargetMatchesIntent(target, resolved);
@@ -1240,7 +1242,7 @@ export function createConnectedAccountPurposeBindingOwner(
       // would let a later request silently substitute a native credential.
       return unavailableBinding(input, 'scope_unauthorized');
     }
-    const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal));
+    const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal, input.observationOnly));
     input.signal.throwIfAborted();
     if (!resolved) {
       const revalidatedTarget = readPurposeBinding(
@@ -1254,6 +1256,7 @@ export function createConnectedAccountPurposeBindingOwner(
       const revalidatedResolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(
         revalidatedTarget,
         input.signal,
+        input.observationOnly,
       ));
       input.signal.throwIfAborted();
       if (revalidatedResolved) {
@@ -1273,6 +1276,7 @@ export function createConnectedAccountPurposeBindingOwner(
     requireSelected?: true;
     sessionId?: string;
     signal: AbortSignal;
+    observationOnly?: true;
   }>): Promise<Readonly<{
     target: QualifiedConnectedAccountPurposeBindingTargetV1;
     resolved: ConnectedAccountPurposeResolvedTarget;
@@ -2009,7 +2013,7 @@ export function createConnectedAccountPurposeBindingOwner(
         pluginId: input.purpose.consumer.pluginId, localId: input.purpose.consumer.localId, purpose: input.purpose.purpose,
       }, async () => {
         try {
-          const resolved = await readAuthorizedResolved({ ...input, signal: controller.signal });
+          const resolved = await readAuthorizedResolved({ ...input, signal: controller.signal, observationOnly: true });
           const profile = resolved?.resolved.observation?.profiles.find(profile => (
             sameQualifiedConnectedAccountRef(profile.ref, resolved.resolved.account)
           ));

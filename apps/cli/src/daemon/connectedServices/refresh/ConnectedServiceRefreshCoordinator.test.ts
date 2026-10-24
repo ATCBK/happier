@@ -3064,7 +3064,12 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(JSON.stringify(onCredentialHealthNotification.mock.calls)).not.toContain('secret-refresh-token');
   });
 
-  it('revision-guards expired qualified credential health against a superseding credential', async () => {
+  it('revision-guards final rejected refresh health against a superseding credential', async () => {
+    installGlobalFetchMock(vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'invalid_grant' }),
+    })));
     const now = 1_000_000;
     const leasedRevision = 'csr_abcdefghijklmnopqrstuv';
     const credentials: Credentials = {
@@ -3130,13 +3135,14 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       profileId: 'work',
     });
 
-    expect(result.status).toBe('blocked_by_credential_health');
+    expect(result.status).toBe('lease_not_acquired');
+    expect(updateConnectedServiceCredentialHealth).toHaveBeenCalledOnce();
     expect(updateConnectedServiceCredentialHealth).toHaveBeenCalledWith(expect.objectContaining({
       expectedCredentialRevision: leasedRevision,
       health: expect.objectContaining({
-        status: 'refresh_failed_retryable',
-        reconnectRequired: false,
-        providerErrorCode: 'openai_codex_access_token_expired',
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        providerErrorCode: 'openai_codex_oauth_rejected',
       }),
     }));
     expect(onCredentialHealthNotification).not.toHaveBeenCalled();
@@ -3248,8 +3254,9 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     await coordinator.tickOnce();
 
     expect(api.listConnectedServiceProfiles).not.toHaveBeenCalled();
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledOnce();
     expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith(expect.objectContaining({
-      expectedCredentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+      expectedCredentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
       health: expect.objectContaining({ status: 'connected', reconnectRequired: false }),
     }));
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
@@ -3291,8 +3298,9 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     }));
 
     expect(api.listConnectedServiceProfiles).not.toHaveBeenCalled();
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledOnce();
     expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith(expect.objectContaining({
-      expectedCredentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+      expectedCredentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
       health: expect.objectContaining({ status: 'connected', reconnectRequired: false }),
     }));
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
@@ -3348,8 +3356,9 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     });
     expect(result.diagnostic.category).toBeUndefined();
     expect(api.listConnectedServiceProfiles).not.toHaveBeenCalled();
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledOnce();
     expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith(expect.objectContaining({
-      expectedCredentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+      expectedCredentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
       health: expect.objectContaining({ status: 'connected', reconnectRequired: false }),
     }));
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);

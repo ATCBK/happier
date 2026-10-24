@@ -2955,6 +2955,7 @@ export async function startDaemon(
         },
         invalidateConnectedAccounts: () => {
           connectedAccountPurposeBindingRuntime.invalidate({
+            ...(notification.quotaRefreshOnly ? { quotaRefreshOnly: true } : {}),
             ...(notification.quotaRefreshRecordIds
               ? { quotaRefreshRecordIds: notification.quotaRefreshRecordIds } : {}),
             ...(['startup', 'reconnect', 'cursor-gone'].includes(notification.source)
@@ -3050,8 +3051,8 @@ export async function startDaemon(
       },
       activatePurposeBindings:
         connectedAccountPurposeBindingRuntime.activatePurposeBindings,
-      onQualifiedConnectedAccountCredentialUpdated: () => {
-        connectedAccountPurposeBindingRuntime.invalidate();
+      onQualifiedConnectedAccountCredentialUpdated: (account) => {
+        connectedAccountPurposeBindingRuntime.invalidate({ services: [account.service] });
       },
       resolveQualifiedConnectedAccountV4Support: () =>
         resolveQualifiedConnectedAccountAtomicV4Negotiation(
@@ -4131,7 +4132,11 @@ export async function startDaemon(
           teamCredentialDirectMaterialAccountChangeCleanup?.();
           teamCredentialDirectMaterialAccountChangeCleanup = attemptedApiMachine
             ? attemptedApiMachine.onManagedProviderRetainedCurrentnessInvalidation(
-                change => reconcileTeamCredentialDirectMaterialAfterSourceChange(`account-${change.source}`),
+                change => {
+                  if (change.directMaterialChanged) {
+                    reconcileTeamCredentialDirectMaterialAfterSourceChange(`account-${change.source}`);
+                  }
+                },
               )
             : null;
           pluginWebhookWakeCleanup?.();

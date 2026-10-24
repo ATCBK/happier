@@ -19,6 +19,8 @@ export type RequesterAccountSettingsObservation = Readonly<
 >;
 export type RequesterConnectedAccountObservation = Readonly<{
     quotaRefreshRecordIds?: readonly string[];
+    quotaRefreshOnly?: boolean;
+    services?: readonly import('@happier-dev/protocol').QualifiedConnectedAccountRef['service'][];
     resetQuotaSchedule?: boolean;
 }>;
 type Observation = Readonly<{
@@ -188,7 +190,9 @@ function createObservation(scope: Scope): SharedObservation {
     const sourceListeners = new Set<(sourceSessionId: string | null) => void>();
     const connectedAccountListeners = new Set<(event: RequesterConnectedAccountObservation) => void>();
     let followCursor = 0;
+    let followCursorAcknowledged = false;
     let followSyncRequested = false;
+    let followRequestedCursor: number | undefined;
     let followSyncPending: Promise<void> | null = null;
     const publishFollow = () => { for (const listener of followListeners) listener(); };
     const publishSource = (sourceSessionId: string | null) => { for (const listener of sourceListeners) listener(sourceSessionId); };
@@ -200,11 +204,18 @@ function createObservation(scope: Scope): SharedObservation {
         settingsEvent = event;
         for (const listener of settingsListeners) listener(event);
     };
-    const invalidate = () => { lifetime.abort(); lifetime = new AbortController(); currentness.invalidate(); };
+    const invalidate = () => { lifetime.abort(); lifetime = new AbortController(); followCursorAcknowledged = false; currentness.invalidate(); };
     // Classify the incumbent Account feed before invalidating private rules:
     // ordinary Session updates must not reload the rule corpus per occurrence.
-    const syncFollowChanges = () => {
+    const syncFollowChanges = (requestedCursor?: number) => {
         if (disposed || !connected || !hasFollowDemand()) return;
+        // The wake seq is the durable Account cursor, as in the Machine feed.
+        // Unknown/lower cursors retain a full catch-up (including Home restores).
+        const cursor = requestedCursor !== undefined && requestedCursor >= followCursor ? requestedCursor : undefined;
+        if (followCursorAcknowledged && cursor === followCursor) return;
+        followRequestedCursor = !followSyncRequested ? cursor
+            : followRequestedCursor !== undefined && cursor !== undefined
+                ? Math.max(followRequestedCursor, cursor) : undefined;
         followSyncRequested = true;
         if (followSyncPending) return;
         const captured = lifetime;
@@ -213,9 +224,18 @@ function createObservation(scope: Scope): SharedObservation {
             && references.has(token) && hasFollowDemand();
         const work = (async () => {
             while (followSyncRequested && current()) {
+                // The in-flight response may have consumed every queued wake.
+                // Keep the existing cursor as acknowledgment, not another read/cache.
+                if (followCursorAcknowledged && followRequestedCursor !== undefined && followRequestedCursor <= followCursor) {
+                    followSyncRequested = false;
+                    followRequestedCursor = undefined;
+                    break;
+                }
                 followSyncRequested = false;
+                followRequestedCursor = undefined;
                 let more = false;
                 do {
+                    followCursorAcknowledged = false;
                     const result = await runWithServerHttpBaseUrl(scope.serverBaseUrl, () => fetchChanges({
                         token, after: followCursor, signal: captured.signal,
                     }));
@@ -228,13 +248,16 @@ function createObservation(scope: Scope): SharedObservation {
                             const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
                             return recordId ? [recordId] : [];
                         });
-                        if (quotaRefreshRecordIds.length || result.response.changes.some(change => change.kind === 'account'
+                        const hasConnectedAccountChange = result.response.changes.some(change => change.kind === 'account'
                             && (parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null
                                 || change.entityId === 'self' && typeof change.hint === 'object' && change.hint !== null
-                                    && 'connectedServices' in change.hint && change.hint.connectedServices === true))) {
-                            publishConnectedAccounts(quotaRefreshRecordIds.length ? { quotaRefreshRecordIds } : {});
+                                    && 'connectedServices' in change.hint && change.hint.connectedServices === true));
+                        if (quotaRefreshRecordIds.length || hasConnectedAccountChange) {
+                            publishConnectedAccounts(quotaRefreshRecordIds.length ? { quotaRefreshRecordIds,
+                                ...(!hasConnectedAccountChange ? { quotaRefreshOnly: true } : {}) } : {});
                         }
                         followCursor = result.response.nextCursor;
+                        followCursorAcknowledged = true;
                         more = result.response.changes.length === DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT;
                     } else {
                         // A gap/failed classification cannot preserve a trusted cached rule set.
@@ -249,7 +272,7 @@ function createObservation(scope: Scope): SharedObservation {
             }
         })().finally(() => {
             if (followSyncPending === work) followSyncPending = null;
-            if (followSyncRequested && !disposed && connected && hasFollowDemand()) syncFollowChanges();
+            if (followSyncRequested && !disposed && connected && hasFollowDemand()) syncFollowChanges(followRequestedCursor);
         });
         followSyncPending = work;
         // Transport failures are normalized by fetchChanges; keep listener failures observed, too.
@@ -290,7 +313,9 @@ function createObservation(scope: Scope): SharedObservation {
                 const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
                 if (body && typeof body === 'object' && 't' in body) {
                     if (body.t === 'account-change') {
-                        if (UpdateContainerSchema.safeParse(raw).success) syncFollowChanges();
+                        const parsed = UpdateContainerSchema.safeParse(raw);
+                        if (parsed.success) syncFollowChanges(Number.isSafeInteger(parsed.data.seq) && parsed.data.seq >= 0
+                            ? parsed.data.seq : undefined);
                     } else if (body.t === 'update-account' && 'id' in body && body.id === scope.accountId && 'settingsV2' in body) {
                         publishSettings({ kind: 'settings', update: UpdateContainerSchema.safeParse(raw).success ? body.settingsV2 : undefined });
                     } else if (body.t === 'account-settings-changed') {
@@ -300,6 +325,7 @@ function createObservation(scope: Scope): SharedObservation {
                 if (currentness.update(raw)) {
                     lifetime.abort();
                     lifetime = new AbortController();
+                    followCursorAcknowledged = false;
                 }
             });
             transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); currentness.connected(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); publishConnectedAccounts({ resetQuotaSchedule: true }); syncFollowChanges(); } });

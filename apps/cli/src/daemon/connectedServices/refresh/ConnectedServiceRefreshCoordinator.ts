@@ -173,7 +173,7 @@ export type QualifiedConnectedAccountConfigurationConsequence = Readonly<{
 type QualifiedConnectedAccountStatusProbeOutcome =
   | Readonly<{ status: 'not_configured' | 'not_eligible' }>
   | Readonly<{ status: 'deferred' | 'unavailable' }>
-  | Readonly<{ status: 'settled'; reconnectRequired: boolean }>;
+  | Readonly<{ status: 'settled'; reconnectRequired: boolean; settleDeferredHealth?: () => Promise<void> }>;
 
 type RuntimeAuthRefreshSelection<TServiceId extends ConnectedServiceId> = Readonly<
   | { kind: 'profile'; serviceId: TServiceId; profileId: string }
@@ -1265,6 +1265,7 @@ export class ConnectedServiceRefreshCoordinator {
     const armBackoff = (): void => {
       this.armQualifiedConnectedAccountHealthBackoff(profile.ref);
     };
+    let settleDeferredHealth: (() => Promise<void>) | undefined;
     try {
       // Reconnecting replaces the credential revision and clears this status.
       // An expiry-only status probe cannot rehabilitate a rejected refresh grant.
@@ -1278,12 +1279,17 @@ export class ConnectedServiceRefreshCoordinator {
         statusInvocation.result,
       );
       const expired = statusInvocation.result.status === 'expired';
-      await this.settleQualifiedConnectedAccountHealth({
-        account: profile.ref,
-        basis: statusInvocation.basis,
-        health,
-      });
+      const settleStatus = () => {
+        settleDeferredHealth = undefined;
+        return this.settleQualifiedConnectedAccountHealth({
+          account: profile.ref,
+          basis: statusInvocation.basis,
+          health,
+        });
+      };
+      settleDeferredHealth = settleStatus;
       if (health.status !== 'connected' && !expired) {
+        await settleStatus();
         armBackoff();
         return;
       }
@@ -1301,24 +1307,32 @@ export class ConnectedServiceRefreshCoordinator {
             )
           )
         );
-      if (!shouldRefresh) return;
+      if (!shouldRefresh) {
+        await settleStatus();
+        return;
+      }
       if (
         !this.shouldRunQualifiedOperation(
           profile.ref,
           'credential_read',
         )
       ) {
+        await settleStatus();
         return;
       }
       const expectedCredential = await runtime.readCredential({
         token: this.params.credentials.token,
         ref: profile.ref,
       });
-      if (!expectedCredential) return;
+      if (!expectedCredential) {
+        await settleStatus();
+        return;
+      }
       const ownerId =
         this.params.ownerIdProvider?.()?.trim()
         || this.params.machineIdProvider().trim();
       if (!ownerId) {
+        await settleStatus();
         armBackoff();
         return;
       }
@@ -1336,9 +1350,12 @@ export class ConnectedServiceRefreshCoordinator {
           'credential_write',
         )
       ) {
+        await settleStatus();
         armBackoff();
         return;
       }
+      // Expiry is an input to this attempt. Publish only its final outcome,
+      // rather than an intermediate health that the same attempt supersedes.
       const settlement = await this.refreshQualifiedAccount({
         account: profile.ref,
         token: this.params.credentials.token,
@@ -1352,12 +1369,23 @@ export class ConnectedServiceRefreshCoordinator {
         acquireRefreshLease: runtime.acquireRefreshLease,
         mutateCredential: runtime.mutateCredential,
       });
+      settleDeferredHealth = undefined;
       if (settlement.status === 'refreshed') {
+        await this.settleQualifiedConnectedAccountHealth({
+          account: profile.ref,
+          basis: settlement.basis,
+          settledCredentialRevision: settlement.credentialRevision,
+          health: buildCredentialHealthFromPluginStatus(settlement.result),
+        });
         this.credentialHealthReprobeState.delete(key);
         await runtime.onCredentialUpdated?.(profile.ref);
         return;
       }
       if (settlement.status === 'unchanged') {
+        await this.settleQualifiedConnectedAccountHealth({
+          account: profile.ref, basis: settlement.basis,
+          health: buildCredentialHealthFromPluginStatus(settlement.result),
+        });
         this.credentialHealthReprobeState.delete(key);
         return;
       }
@@ -1388,6 +1416,10 @@ export class ConnectedServiceRefreshCoordinator {
         },
       );
       throw error;
+    } finally {
+      // A failed read or lease never superseded the status observation. Publish
+      // it once, through the same revision/currentness-fenced settlement.
+      await settleDeferredHealth?.();
     }
   }
 
@@ -2426,6 +2458,7 @@ export class ConnectedServiceRefreshCoordinator {
       reason: ConnectedServiceCredentialRefreshReason;
       expectedCredentialRevision?: ConnectedServiceCredentialRevisionV1;
       scheduledStatus?: ScheduledStatusInvocation;
+      refreshPending?: boolean;
     }>,
   ): Promise<QualifiedConnectedAccountStatusProbeOutcome> {
     const runtime = this.params.qualifiedConnectedAccountRuntime;
@@ -2486,23 +2519,25 @@ export class ConnectedServiceRefreshCoordinator {
           'Qualified Connected Account status generation is no longer current',
         );
       }
-      const mutation = await runtime.mutateCredentialHealth({
-        token: this.params.credentials.token,
-        patch: Object.freeze({
-          ref: account,
-          expectedCredentialRevision: invocation.basis.credentialRevision,
-          expectedConfigurationRevision,
-          health,
-        }),
-      });
-      if (
-        mutation.credentialRevision !== invocation.basis.credentialRevision
-        || mutation.configurationRevision !== expectedConfigurationRevision
-        || !invocation.basis.isCurrent()
-      ) {
-        throw new Error(
-          'Qualified Connected Account health mutation settled against a different invocation basis',
-        );
+      if (!options.refreshPending || health.reconnectRequired) {
+        const mutation = await runtime.mutateCredentialHealth({
+          token: this.params.credentials.token,
+          patch: Object.freeze({
+            ref: account,
+            expectedCredentialRevision: invocation.basis.credentialRevision,
+            expectedConfigurationRevision,
+            health,
+          }),
+        });
+        if (
+          mutation.credentialRevision !== invocation.basis.credentialRevision
+          || mutation.configurationRevision !== expectedConfigurationRevision
+          || !invocation.basis.isCurrent()
+        ) {
+          throw new Error(
+            'Qualified Connected Account health mutation settled against a different invocation basis',
+          );
+        }
       }
       if (health.reconnectRequired) {
         this.armCredentialHealthReprobeBackoff(binding);
@@ -2514,6 +2549,11 @@ export class ConnectedServiceRefreshCoordinator {
       return {
         status: 'settled',
         reconnectRequired: health.reconnectRequired,
+        ...(options.refreshPending && !health.reconnectRequired ? {
+          settleDeferredHealth: () => this.settleQualifiedConnectedAccountHealth({
+            account, basis: invocation.basis, health,
+          }),
+        } : {}),
       };
     } catch (error) {
       if (
@@ -2628,10 +2668,14 @@ export class ConnectedServiceRefreshCoordinator {
         }),
       };
     }
+    const refreshNeeded = options.force === true || (
+      typeof source.expiresAt === 'number' && Number.isFinite(source.expiresAt)
+      && source.expiresAt - now <= this.params.refreshWindowMs
+    );
     const qualifiedStatus = await this.probeQualifiedConnectedAccountStatus(
       binding,
       now,
-      options,
+      { ...options, refreshPending: refreshNeeded },
     );
     if (
       (qualifiedStatus.status !== 'settled' && qualifiedStatus.status !== 'not_eligible')
@@ -2650,248 +2694,252 @@ export class ConnectedServiceRefreshCoordinator {
         }),
       };
     }
-    if (options.force !== true) {
-      if (
-        typeof source.expiresAt !== 'number'
-        || !Number.isFinite(source.expiresAt)
-        || source.expiresAt - now > this.params.refreshWindowMs
-      ) {
-        return {
+    if (!refreshNeeded) {
+      return {
+        status: 'not_needed',
+        credential: null,
+        credentialRevision: source.credentialRevision,
+        diagnostic: buildRefreshDiagnostic({
+          binding,
+          reason: options.reason,
           status: 'not_needed',
+          expiresAt: source.expiresAt,
+          now,
+          refreshWindowMs: this.params.refreshWindowMs,
+        }),
+      };
+    }
+    let settleDeferredHealth = qualifiedStatus.status === 'settled'
+      ? qualifiedStatus.settleDeferredHealth : undefined;
+    try {
+      const compatibility =
+        BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[
+          binding.serviceId
+        ];
+      const account = Object.freeze({
+        service: compatibility.service,
+        accountId: binding.profileId,
+      });
+      const expectedCredential = await runtime.readCredential({
+        token: this.params.credentials.token,
+        ref: account,
+      });
+      if (!expectedCredential) {
+        return {
+          status: 'credential_missing',
           credential: null,
-          credentialRevision: source.credentialRevision,
           diagnostic: buildRefreshDiagnostic({
             binding,
             reason: options.reason,
-            status: 'not_needed',
+            status: 'credential_missing',
             expiresAt: source.expiresAt,
             now,
             refreshWindowMs: this.params.refreshWindowMs,
           }),
         };
       }
-    }
-    const compatibility =
-      BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[
-        binding.serviceId
-      ];
-    const account = Object.freeze({
-      service: compatibility.service,
-      accountId: binding.profileId,
-    });
-    const expectedCredential = await runtime.readCredential({
-      token: this.params.credentials.token,
-      ref: account,
-    });
-    if (!expectedCredential) {
-      return {
-        status: 'credential_missing',
-        credential: null,
-        diagnostic: buildRefreshDiagnostic({
-          binding,
-          reason: options.reason,
-          status: 'credential_missing',
-          expiresAt: source.expiresAt,
-          now,
-          refreshWindowMs: this.params.refreshWindowMs,
-        }),
-      };
-    }
-    if (
-      options.expectedCredentialRevision
-      && expectedCredential.credentialRevision
-        !== options.expectedCredentialRevision
-    ) {
-      throw new Error('connected_service_credential_revision_mismatch');
-    }
-    const ownerId =
-      this.params.ownerIdProvider?.()?.trim()
-      || this.params.machineIdProvider().trim();
-    if (!ownerId) {
-      return {
-        status: 'lease_not_acquired',
-        credential: null,
-        ...(expectedCredential.revisionSemantics === 'revisioned'
-          ? { credentialRevision: expectedCredential.credentialRevision }
-          : {}),
-        diagnostic: buildRefreshDiagnostic({
-          binding,
-          reason: options.reason,
-          status: 'lease_not_acquired',
-          expiresAt: source.expiresAt,
-          now,
-          refreshWindowMs: this.params.refreshWindowMs,
-        }),
-      };
-    }
-    try {
-      const settlement = await this.refreshQualifiedAccount({
-        account,
-        token: this.params.credentials.token,
-        ownerId,
-        leaseMs: this.params.refreshLeaseMs,
-        operationId: randomBytes(16).toString('hex'),
-        expectedCredential,
-        establishedRuntimeOwner: runtime.establishedRuntimeOwner,
-        resolveV4Support: () =>
-          peerClassV4Support(runtime.resolvePeerClass()),
-        acquireRefreshLease: runtime.acquireRefreshLease,
-        mutateCredential: runtime.mutateCredential,
-      });
       if (
         options.expectedCredentialRevision
-        && settlement.basis.credentialRevision
+        && expectedCredential.credentialRevision
           !== options.expectedCredentialRevision
       ) {
         throw new Error('connected_service_credential_revision_mismatch');
       }
-      if (settlement.status === 'refreshed') {
-    const persisted = await this.readCredentialForRefresh({
-          api: this.params.api,
-          credentials: this.params.credentials,
-          binding,
-        });
-        if (
-          !persisted
-          || persisted.revisionSemantics !== 'revisioned'
-          || persisted.credentialRevision
-            !== settlement.credentialRevision
-        ) {
-          throw new Error(
-            'Qualified Connected Account refreshed credential is unavailable through the compatibility reader',
-          );
-        }
-        this.resetCredentialHealthReprobe(binding);
+      const ownerId =
+        this.params.ownerIdProvider?.()?.trim()
+        || this.params.machineIdProvider().trim();
+      if (!ownerId) {
         return {
-          status: 'refreshed',
-          credential: persisted.record,
-          credentialRevision: persisted.credentialRevision,
-          diagnostic: buildRefreshDiagnostic({
-            binding,
-            reason: options.reason,
-            status: 'refreshed',
-            expiresAt: persisted.expiresAt,
-            now,
-            refreshWindowMs: this.params.refreshWindowMs,
-          }),
-        };
-      }
-      if (settlement.status === 'unchanged') {
-        this.resetCredentialHealthReprobe(binding);
-        return {
-          status: 'not_needed',
+          status: 'lease_not_acquired',
           credential: null,
-          credentialRevision: source.credentialRevision,
+          ...(expectedCredential.revisionSemantics === 'revisioned'
+            ? { credentialRevision: expectedCredential.credentialRevision }
+            : {}),
           diagnostic: buildRefreshDiagnostic({
             binding,
             reason: options.reason,
-            status: 'not_needed',
+            status: 'lease_not_acquired',
             expiresAt: source.expiresAt,
             now,
             refreshWindowMs: this.params.refreshWindowMs,
           }),
         };
       }
-      const health = settlement.status === 'outcome_unknown'
-        ? {
-            v: 1 as const,
-            status: 'refresh_failed_retryable' as const,
-            reconnectRequired: false,
-            providerErrorCode:
-              settlement.result.diagnostic.code.trim().slice(0, 128),
+      try {
+        const settlement = await this.refreshQualifiedAccount({
+          account,
+          token: this.params.credentials.token,
+          ownerId,
+          leaseMs: this.params.refreshLeaseMs,
+          operationId: randomBytes(16).toString('hex'),
+          expectedCredential,
+          establishedRuntimeOwner: runtime.establishedRuntimeOwner,
+          resolveV4Support: () =>
+            peerClassV4Support(runtime.resolvePeerClass()),
+          acquireRefreshLease: runtime.acquireRefreshLease,
+          mutateCredential: runtime.mutateCredential,
+        });
+        settleDeferredHealth = undefined;
+        if (
+          options.expectedCredentialRevision
+          && settlement.basis.credentialRevision
+            !== options.expectedCredentialRevision
+        ) {
+          throw new Error('connected_service_credential_revision_mismatch');
+        }
+        if (settlement.status === 'refreshed') {
+          const persisted = await this.readCredentialForRefresh({
+            api: this.params.api,
+            credentials: this.params.credentials,
+            binding,
+          });
+          if (
+            !persisted
+            || persisted.revisionSemantics !== 'revisioned'
+            || persisted.credentialRevision
+              !== settlement.credentialRevision
+          ) {
+            throw new Error(
+              'Qualified Connected Account refreshed credential is unavailable through the compatibility reader',
+            );
           }
-        : buildCredentialHealthFromPluginStatus(settlement.result);
-      await this.settleQualifiedConnectedAccountHealth({
-        account,
-        basis: settlement.basis,
-        health,
-      });
-      if (health.reconnectRequired) this.armCredentialHealthReprobeBackoff(binding);
-      const result: ConnectedServiceCredentialRefreshResult = {
-        status: health.reconnectRequired
-          ? 'blocked_by_credential_health'
-          : 'refresh_failed',
-        credential: null,
-        credentialRevision: source.credentialRevision,
-        diagnostic: buildRefreshDiagnostic({
-          binding,
-          reason: options.reason,
+          this.resetCredentialHealthReprobe(binding);
+          return {
+            status: 'refreshed',
+            credential: persisted.record,
+            credentialRevision: persisted.credentialRevision,
+            diagnostic: buildRefreshDiagnostic({
+              binding,
+              reason: options.reason,
+              status: 'refreshed',
+              expiresAt: persisted.expiresAt,
+              now,
+              refreshWindowMs: this.params.refreshWindowMs,
+            }),
+          };
+        }
+        if (settlement.status === 'unchanged') {
+          await this.settleQualifiedConnectedAccountHealth({
+            account, basis: settlement.basis,
+            health: buildCredentialHealthFromPluginStatus(settlement.result),
+          });
+          this.resetCredentialHealthReprobe(binding);
+          return {
+            status: 'not_needed',
+            credential: null,
+            credentialRevision: source.credentialRevision,
+            diagnostic: buildRefreshDiagnostic({
+              binding,
+              reason: options.reason,
+              status: 'not_needed',
+              expiresAt: source.expiresAt,
+              now,
+              refreshWindowMs: this.params.refreshWindowMs,
+            }),
+          };
+        }
+        const health = settlement.status === 'outcome_unknown'
+          ? {
+              v: 1 as const,
+              status: 'refresh_failed_retryable' as const,
+              reconnectRequired: false,
+              providerErrorCode:
+                settlement.result.diagnostic.code.trim().slice(0, 128),
+            }
+          : buildCredentialHealthFromPluginStatus(settlement.result);
+        if (health.reconnectRequired) {
+          await this.settleQualifiedConnectedAccountHealth({ account, basis: settlement.basis, health });
+          this.armCredentialHealthReprobeBackoff(binding);
+        }
+        const result: ConnectedServiceCredentialRefreshResult = {
           status: health.reconnectRequired
             ? 'blocked_by_credential_health'
             : 'refresh_failed',
-          category: 'unknown',
-          providerErrorCode: health.providerErrorCode,
-          expiresAt: source.expiresAt,
-          now,
-          refreshWindowMs: this.params.refreshWindowMs,
-        }),
-      };
-      if (health.reconnectRequired) {
-        // The actual refresh attempt settled reconnect health against its exact
-        // invocation basis. A preliminary status probe never emits this notice.
-        await this.notifyCredentialHealthForRefreshResult(result, 'reconnect_required');
-      }
-      return result;
-    } catch (error) {
-      if (
-        error instanceof Error
-        && error.message === 'connected_service_credential_revision_mismatch'
-      ) {
-        throw error;
-      }
-      // Another controller may have consumed the lease basis. Adopt its exact
-      // current credential only when this caller did not supply a revision
-      // fence and the actual usable access token changed; never replay the
-      // predecessor or treat revision-only ABA as a successful refresh.
-      if (!options.expectedCredentialRevision && source.record.kind === 'oauth') {
-        try {
-          const current = await this.readCredentialForRefresh({
-            api: this.params.api, credentials: this.params.credentials, binding,
-          });
-          if (current?.revisionSemantics === 'revisioned'
-            && current.credentialRevision !== source.credentialRevision
-            && current.record.kind === 'oauth'
-            && resolveForcedRefreshFreshnessDecision({
-              force: true,
-              currentTokenAdoptable: this.isOauthRecordAdoptableForForcedBridgeRefresh(current.record),
-              currentDiffersFromFailingToken: current.record.oauth.accessToken !== source.record.oauth.accessToken,
-            }).kind === 'adopt_current') {
-            this.resetCredentialHealthReprobe(binding);
-            return {
-              status: 'refreshed', credential: current.record, credentialRevision: current.credentialRevision,
-              diagnostic: buildRefreshDiagnostic({
-                binding, reason: options.reason, status: 'refreshed', expiresAt: current.expiresAt,
-                now, refreshWindowMs: this.params.refreshWindowMs,
-              }),
-            };
-          }
-        } catch {
-          // Secondary adoption is best-effort; original settlement stays failed.
-        }
-      }
-      logger.warn(
-        '[DAEMON RUN] Qualified Connected Account refresh did not settle',
-        {
-          serviceId: binding.serviceId,
-          reason: options.reason,
-          error: sanitizeConnectedServiceDiagnosticError(error, {
-            redactedValues: [binding.profileId],
+          credential: null,
+          credentialRevision: source.credentialRevision,
+          diagnostic: buildRefreshDiagnostic({
+            binding,
+            reason: options.reason,
+            status: health.reconnectRequired
+              ? 'blocked_by_credential_health'
+              : 'refresh_failed',
+            category: 'unknown',
+            providerErrorCode: health.providerErrorCode,
+            expiresAt: source.expiresAt,
+            now,
+            refreshWindowMs: this.params.refreshWindowMs,
           }),
-        },
-      );
-      return {
-        status: 'lease_not_acquired',
-        credential: null,
-        credentialRevision: source.credentialRevision,
-        diagnostic: buildRefreshDiagnostic({
-          binding,
-          reason: options.reason,
+        };
+        if (health.reconnectRequired) {
+          // The actual refresh attempt settled reconnect health against its exact
+          // invocation basis. A preliminary status probe never emits this notice.
+          await this.notifyCredentialHealthForRefreshResult(result, 'reconnect_required');
+        }
+        return result;
+      } catch (error) {
+        if (
+          error instanceof Error
+          && error.message === 'connected_service_credential_revision_mismatch'
+        ) {
+          throw error;
+        }
+        // Another controller may have consumed the lease basis. Adopt its exact
+        // current credential only when this caller did not supply a revision
+        // fence and the actual usable access token changed; never replay the
+        // predecessor or treat revision-only ABA as a successful refresh.
+        if (!options.expectedCredentialRevision && source.record.kind === 'oauth') {
+          try {
+            const current = await this.readCredentialForRefresh({
+              api: this.params.api, credentials: this.params.credentials, binding,
+            });
+            if (current?.revisionSemantics === 'revisioned'
+              && current.credentialRevision !== source.credentialRevision
+              && current.record.kind === 'oauth'
+              && resolveForcedRefreshFreshnessDecision({
+                force: true,
+                currentTokenAdoptable: this.isOauthRecordAdoptableForForcedBridgeRefresh(current.record),
+                currentDiffersFromFailingToken: current.record.oauth.accessToken !== source.record.oauth.accessToken,
+              }).kind === 'adopt_current') {
+              settleDeferredHealth = undefined;
+              this.resetCredentialHealthReprobe(binding);
+              return {
+                status: 'refreshed', credential: current.record, credentialRevision: current.credentialRevision,
+                diagnostic: buildRefreshDiagnostic({
+                  binding, reason: options.reason, status: 'refreshed', expiresAt: current.expiresAt,
+                  now, refreshWindowMs: this.params.refreshWindowMs,
+                }),
+              };
+            }
+          } catch {
+            // Secondary adoption is best-effort; original settlement stays failed.
+          }
+        }
+        logger.warn(
+          '[DAEMON RUN] Qualified Connected Account refresh did not settle',
+          {
+            serviceId: binding.serviceId,
+            reason: options.reason,
+            error: sanitizeConnectedServiceDiagnosticError(error, {
+              redactedValues: [binding.profileId],
+            }),
+          },
+        );
+        return {
           status: 'lease_not_acquired',
-          expiresAt: source.expiresAt,
-          now,
-          refreshWindowMs: this.params.refreshWindowMs,
-        }),
-      };
+          credential: null,
+          credentialRevision: source.credentialRevision,
+          diagnostic: buildRefreshDiagnostic({
+            binding,
+            reason: options.reason,
+            status: 'lease_not_acquired',
+            expiresAt: source.expiresAt,
+            now,
+            refreshWindowMs: this.params.refreshWindowMs,
+          }),
+        };
+      }
+    } finally {
+      await settleDeferredHealth?.();
     }
   }
 

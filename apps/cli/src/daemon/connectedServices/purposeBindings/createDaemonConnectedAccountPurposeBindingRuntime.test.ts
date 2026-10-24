@@ -521,7 +521,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
   });
 
   async function coordinatorFixture(observed = true, serviceRef: QualifiedConnectedAccountProfileV4['ref']['service'] = openAiService,
-    additionalPluginIds: readonly string[] = []) {
+    additionalPluginIds: readonly string[] = [], store: ConnectedAccountPurposeBindingStore = emptyStore()) {
     const qualifiedApi = testQualifiedApi();
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-coordinator-inventory-'));
     const resolveRegistry = () => resolveExecutablePluginRuntimeRegistry({
@@ -551,7 +551,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
         ...qualifiedApi,
         listAccounts: inventoryReads,
       },
-      store: emptyStore(),
+      store,
       reloadController,
     });
     return { runtime, qualifiedApi, inventoryReads, setObserved: (value: boolean) => { observed = value; }, replaceRegistry: async () => {
@@ -563,6 +563,98 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       expect(result.ok).toBe(true);
     } };
   }
+
+  it.each([false, true])('keeps quota refreshes out of settled binding watches for 25 minutes (configured=%s)', async configured => {
+    const store = selectedStore();
+    const selected = store.current();
+    if (!configured) await store.update(() => ({ v: 1, bindings: [] }));
+    const { runtime, inventoryReads } = await coordinatorFixture(true, openAiService, [], store);
+    const reads = vi.spyOn(store, 'read'); // The persisted purpose row is the system boundary.
+    const changed = vi.fn();
+    const quotaEvents: unknown[] = [];
+    const unsubscribe = runtime.subscribeInvalidations(event => { quotaEvents.push(event); });
+    const watch = runtime.owner.watch({ purpose, serviceRefs: [openAiService], listener: changed });
+    const signal = new AbortController().signal;
+    try {
+      // Join initial admission at the same consumer lock before measuring idle.
+      await runtime.owner.getBinding({ purpose, serviceRefs: [openAiService], signal });
+      await runtime.listCoordinatorAccounts();
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(0);
+      reads.mockClear();
+      inventoryReads.mockClear();
+      for (let arrival = 0; arrival < 375; arrival += 1) {
+        runtime.invalidate({ quotaRefreshRecordIds: ['usage-record'], quotaRefreshOnly: true });
+        await runtime.listCoordinatorAccounts();
+        await vi.advanceTimersByTimeAsync(4_000);
+      }
+      expect(reads).not.toHaveBeenCalled();
+      expect(inventoryReads).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
+      expect(quotaEvents).toHaveLength(375);
+      expect(quotaEvents.at(-1)).toMatchObject({ quotaRefreshRecordIds: ['usage-record'] });
+
+      await store.update(() => configured ? { v: 1, bindings: [] } : selected);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toHaveBeenCalled();
+      expect(changed).toHaveBeenCalledOnce();
+
+      reads.mockClear();
+      // Mixed/unknown invalidations still recheck credential authority.
+      runtime.invalidate({ quotaRefreshRecordIds: ['usage-record'] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toHaveBeenCalled();
+    } finally {
+      watch.dispose();
+      unsubscribe();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shares one current list per service across binding watches and scoped/full coordinator demand', async () => {
+    const { runtime, inventoryReads, qualifiedApi } = await coordinatorFixture(true, openAiService, ['happier.agent.codex'], selectedStore());
+    const signal = new AbortController().signal;
+    await runtime.listCoordinatorAccounts();
+    const services = inventoryReads.mock.calls.map(([service]) => service);
+    expect(services.length).toBeGreaterThan(1);
+    const changed = vi.fn();
+    const watches = Array.from({ length: 24 }, () => runtime.owner.watch({ purpose, serviceRefs: [openAiService], listener: changed }));
+    try {
+      // The explicit read joins the same consumer lock after all initial watches.
+      await runtime.owner.getBinding({ purpose, serviceRefs: [openAiService], signal });
+      inventoryReads.mockClear();
+      qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+      runtime.invalidate();
+      await Promise.all([
+        runtime.listCoordinatorAccounts(),
+        ...services.map(service => runtime.listCoordinatorAccounts(undefined, service)),
+      ]);
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(watches.length));
+      expect(inventoryReads).toHaveBeenCalledTimes(services.length);
+      expect(new Set(inventoryReads.mock.calls.map(([service]) => JSON.stringify(service))).size).toBe(services.length);
+
+      inventoryReads.mockClear();
+      qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [testQualifiedProfile()] });
+      runtime.invalidate({ services: [openAiService] });
+      expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
+      expect(inventoryReads.mock.calls.map(([service]) => service)).toEqual([openAiService]);
+    } finally {
+      watches.forEach(watch => watch.dispose());
+    }
+
+    // Explicit authority reads must not reuse settled scheduling/watch facts.
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+    expect(await runtime.owner.getBinding({ purpose, serviceRefs: [openAiService], signal })).toBeNull();
+
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [testQualifiedProfile()] });
+    runtime.invalidate({ services: [openAiService] });
+    expect(await runtime.owner.getBinding({ purpose, serviceRefs: [openAiService], signal })).not.toBeNull();
+    inventoryReads.mockClear();
+    runtime.invalidate({ resetQuotaSchedule: true });
+    await runtime.listCoordinatorAccounts();
+    expect(inventoryReads).toHaveBeenCalledTimes(services.length);
+  });
 
   it('offers the real saved Email profile after a retryable refresh failure through the declared service inventory', async () => {
     const service = { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' };
@@ -592,10 +684,15 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
     const [quotas, refresh] = await Promise.all([runtime.listCoordinatorAccounts(), runtime.listCoordinatorAccounts()]);
     expect(quotas).toEqual([]);
-    expect(refresh).toBe(quotas);
+    expect(refresh).toEqual(quotas);
     const services = inventoryReads.mock.calls.map(([service]) => JSON.stringify(service));
     expect(new Set(services).size).toBe(services.length);
-    await runtime.listCoordinatorAccounts();
+    // K scheduler/health consumers with unchanged observed authority reuse even
+    // an empty census; demand alone must not become K * M network reads.
+    for (let tick = 0; tick < 25; tick++) {
+      await runtime.listCoordinatorAccounts();
+      await runtime.listCoordinatorAccounts(undefined, openAiService);
+    }
     expect(inventoryReads).toHaveBeenCalledTimes(services.length);
     expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(1);
     qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [testQualifiedProfile()] });

@@ -3,7 +3,7 @@ import type { RequesterConnectedAccountObservation } from '@/api/client/accountE
 import { ConnectedAccountHttpHeadersRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import { MAX_INTERACTION_TRANSIENT_CHOICES_V1 } from '@happier-dev/protocol/plugins/interactions/transientV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { isQualifiedConnectedAccountProfileActiveV4, isQualifiedConnectedAccountProfileUsableV4, resolveQualifiedConnectedAccountGroupActiveAccountV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { isQualifiedConnectedAccountProfileActiveV4, isQualifiedConnectedAccountProfileUsableV4, resolveQualifiedConnectedAccountGroupActiveAccountV4 } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { ConnectedAccountServiceIdentityV1Schema, sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { ConnectedServiceCredentialRevisionV1, PluginConnectedAccountAuthenticationV2, QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountPurposeV1, QualifiedConnectedAccountPurposeBindingTargetV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
@@ -476,6 +476,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const runtimeRegistry = params.runtimeRegistry
     ?? createRuntimeRegistryAccess(params.reloadController!);
   const invalidationListeners = new Set<(event?: RequesterConnectedAccountObservation) => void>();
+  const bindingInvalidationListeners = new Set<() => void>();
   type CoordinatorInventoryRead = {
     valid: boolean;
     pending: boolean;
@@ -487,7 +488,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
 
   const readCoordinatorInventory = async (
     setCurrentness: (isCurrent: () => boolean) => void,
-    demandedService?: QualifiedConnectedAccountRef['service'],
+    demandedService: QualifiedConnectedAccountRef['service'],
   ): Promise<readonly QualifiedConnectedAccountProfileV4[]> => {
     // A coordinator's cancellation must not cancel the other coordinator's read.
     // The HTTP boundary retains its existing request timeout.
@@ -496,20 +497,15 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     try {
       setCurrentness(lease.isCurrent);
       assertCurrentRegistry(lease, signal);
-      const services = (lease.listServices?.() ?? [])
-        .filter((service) => service.availability === 'available'
-          && (!demandedService || service.service.pluginId === demandedService.pluginId
-            && service.service.localId === demandedService.localId));
-      const accounts = (await Promise.all(services.map(async (service) => {
-        const result = await params.qualifiedApi!.listAccounts(service.service, signal);
-        if (result.service.pluginId !== service.service.pluginId
-          || result.service.localId !== service.service.localId) {
-          throw new Error('Qualified Connected Account inventory returned a different service');
-        }
-        return result.accounts;
-      }))).flat();
+      const service = lease.resolveService(demandedService);
+      if (service?.availability !== 'available') return Object.freeze([]);
+      const result = await params.qualifiedApi!.listAccounts(service.service, signal);
+      if (result.service.pluginId !== service.service.pluginId
+        || result.service.localId !== service.service.localId) {
+        throw new Error('Qualified Connected Account inventory returned a different service');
+      }
       assertCurrentRegistry(lease, signal);
-      return Object.freeze(accounts);
+      return Object.freeze(result.accounts);
     } finally {
       await lease.release();
     }
@@ -517,7 +513,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
 
   const startCoordinatorInventoryRead = (
     key: string,
-    demandedService?: QualifiedConnectedAccountRef['service'],
+    demandedService: QualifiedConnectedAccountRef['service'],
   ): CoordinatorInventoryRead => {
     const read: CoordinatorInventoryRead = {
       valid: true,
@@ -534,6 +530,35 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       if (params.coordinatorInventoryIsObserved?.() !== true) discard();
     }, discard);
     return read;
+  };
+
+  // One observed metadata projection per service serves scheduler and binding
+  // demand. It never contains credential material or replaces invocation-time
+  // credential/configuration/currentness admission. Without an Account observer
+  // only overlapping reads share a result; settled reads are always discarded.
+  const listServiceAccounts = async (
+    service: QualifiedConnectedAccountRef['service'],
+    signal: AbortSignal,
+    observationOnly = false,
+  ): Promise<readonly QualifiedConnectedAccountProfileV4[]> => {
+    const key = buildQualifiedPluginContributionKey(service);
+    for (;;) {
+      signal.throwIfAborted();
+      const existing = coordinatorInventories.get(key);
+      const read = existing?.valid && existing.isCurrent()
+        && (existing.pending || observationOnly && params.coordinatorInventoryIsObserved?.() === true)
+        ? existing : startCoordinatorInventoryRead(key, service);
+      try {
+        await waitForChangeOrDeadline({ signal, waitForChange: async () => { await read.promise; } });
+        signal.throwIfAborted();
+        if (!read.valid || !read.isCurrent()) continue;
+        return await read.promise;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (!read.valid || !read.isCurrent()) continue;
+        throw error;
+      }
+    }
   };
 
   const resolveService = async (
@@ -555,22 +580,14 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const resolveAccount = async (
     account: QualifiedConnectedAccountRef,
     signal: AbortSignal,
+    observationOnly = false,
   ): Promise<ConnectedAccountPurposeResolvedTarget | null> => {
     const service = await resolveService(account.service, signal);
     if (!service) return null;
     if (!params.qualifiedApi) return null;
-    const result = await params.qualifiedApi.listAccounts(
-      service.service,
-      signal,
-    );
+    const accounts = await listServiceAccounts(service.service, signal, observationOnly);
     signal.throwIfAborted();
-    if (
-      result.service.pluginId !== service.service.pluginId
-      || result.service.localId !== service.service.localId
-    ) {
-      return null;
-    }
-    const profile = result.accounts.find((candidate) =>
+    const profile = accounts.find((candidate) =>
       sameQualifiedConnectedAccountRef(candidate.ref, account),
     );
     if (!profile || !isQualifiedConnectedAccountProfileUsableV4({
@@ -593,8 +610,9 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const resolveTarget = async (
     target: QualifiedConnectedAccountPurposeBindingTargetV1,
     signal: AbortSignal,
+    observationOnly?: true,
   ): Promise<ConnectedAccountPurposeResolvedTarget | null> => {
-    if (target.kind === 'account') return await resolveAccount(target.account, signal);
+    if (target.kind === 'account') return await resolveAccount(target.account, signal, observationOnly);
     const service = await resolveService(target.service, signal);
     if (!service) return null;
     if (!params.qualifiedApi) return null;
@@ -604,15 +622,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     }, signal);
     signal.throwIfAborted();
     if (!group) return null;
-    const accountResult = await params.qualifiedApi.listAccounts(service.service, signal);
+    const accounts = await listServiceAccounts(service.service, signal, observationOnly);
     signal.throwIfAborted();
-    if (
-      accountResult.service.pluginId !== service.service.pluginId
-      || accountResult.service.localId !== service.service.localId
-    ) return null;
     const activeAccount = resolveQualifiedConnectedAccountGroupActiveAccountV4({
       group,
-      accounts: accountResult.accounts,
+      accounts,
       authentication: service.authentication,
       now: Date.now(),
     });
@@ -630,7 +644,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       }),
       observation: Object.freeze({
         group,
-        profiles: Object.freeze(accountResult.accounts.filter(profile => (
+        profiles: Object.freeze(accounts.filter(profile => (
           memberIds.has(profile.ref.accountId)
           && profile.ref.service.pluginId === target.service.pluginId
           && profile.ref.service.localId === target.service.localId
@@ -1210,11 +1224,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       return revision;
     },
     subscribeInvalidations(listener) {
-      invalidationListeners.add(listener);
+      bindingInvalidationListeners.add(listener);
       const unsubscribeReload = runtimeRegistry.subscribe(listener);
       return {
         dispose() {
-          invalidationListeners.delete(listener);
+          bindingInvalidationListeners.delete(listener);
           unsubscribeReload();
         },
       };
@@ -1286,35 +1300,16 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       ) {
         return Object.freeze([]);
       }
-      // The refresh preflight needs one service; background coordinators still
-      // demand all services. Both share this inventory's freshness/invalidation
-      // owner, without making one service wait for unrelated network reads.
-      const key = demandedService ? buildQualifiedPluginContributionKey(demandedService) : 'all-services';
-      for (;;) {
-        signal.throwIfAborted();
-        // Reuse a settled observed census, but do not queue one service behind
-        // an unfinished census of unrelated services.
-        const complete = demandedService ? coordinatorInventories.get('all-services') : undefined;
-        const existing = complete?.valid && !complete.pending && complete.isCurrent()
-          && params.coordinatorInventoryIsObserved?.() === true ? complete : coordinatorInventories.get(key);
-        const read = existing?.valid && existing.isCurrent()
-          && (existing.pending || params.coordinatorInventoryIsObserved?.() === true)
-          ? existing : startCoordinatorInventoryRead(key, demandedService);
-        try {
-          await waitForChangeOrDeadline({ signal, waitForChange: async () => {
-            await read.promise;
-          } });
-          signal.throwIfAborted();
-          const accounts = await read.promise;
-          if (!read.valid || !read.isCurrent()) continue;
-          return demandedService ? Object.freeze(accounts.filter(profile =>
-            profile.ref.service.pluginId === demandedService.pluginId
-            && profile.ref.service.localId === demandedService.localId)) : accounts;
-        } catch (error) {
-          signal.throwIfAborted();
-          if (!read.valid || !read.isCurrent()) continue;
-          throw error;
-        }
+      if (demandedService) return await listServiceAccounts(demandedService, signal, true);
+      const lease = await runtimeRegistry.acquire();
+      try {
+        assertCurrentRegistry(lease, signal);
+        const services = (lease.listServices?.() ?? []).filter(service => service.availability === 'available');
+        const accounts = await Promise.all(services.map(service => listServiceAccounts(service.service, signal, true)));
+        assertCurrentRegistry(lease, signal);
+        return Object.freeze(accounts.flat());
+      } finally {
+        await lease.release();
       }
     },
     async listGroupQuotaTargets(input) {
@@ -1377,8 +1372,15 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       };
     },
     invalidate(event) {
-      for (const read of coordinatorInventories.values()) read.valid = false;
-      coordinatorInventories.clear();
+      if (event?.quotaRefreshOnly !== true) {
+        const keys = event?.services ? new Set(event.services.map(buildQualifiedPluginContributionKey)) : null;
+        for (const [key, read] of coordinatorInventories) {
+          if (keys && !keys.has(key)) continue;
+          read.valid = false;
+          coordinatorInventories.delete(key);
+        }
+        for (const listener of bindingInvalidationListeners) listener();
+      }
       for (const listener of invalidationListeners) listener(event);
     },
   });

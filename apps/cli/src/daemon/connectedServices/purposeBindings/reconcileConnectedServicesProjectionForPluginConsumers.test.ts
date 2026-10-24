@@ -3,6 +3,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { reconcileConnectedServicesProjectionForPluginConsumers } from './reconcileConnectedServicesProjectionForPluginConsumers';
 
 describe('reconcileConnectedServicesProjectionForPluginConsumers', () => {
+  it('delivers quota-only refresh demand without reconciling or invalidating external credential sources', async () => {
+    let reconciliations = 0;
+    let externalInvalidations = 0;
+    let quotaNotifications = 0;
+    for (let arrival = 0; arrival < 375; arrival++) {
+      await reconcileConnectedServicesProjectionForPluginConsumers({
+        notification: { quotaRefreshOnly: true, quotaRefreshRecordIds: ['usage-record'] },
+        reconcile: async () => { reconciliations++; },
+        invalidateConfiguredExternalSessionSources: () => { externalInvalidations++; },
+        invalidateConnectedAccounts: () => { quotaNotifications++; },
+      });
+    }
+    expect(reconciliations).toBe(0);
+    expect(externalInvalidations).toBe(0);
+    expect(quotaNotifications).toBe(375);
+  });
+
   it('invalidates public Connected Accounts after successful sibling reconciliation', async () => {
     const reconcile = vi.fn(async () => undefined);
     const invalidateConfiguredExternalSessionSources = vi.fn();

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import {
   AccountSettingsSchema,
   FeaturesResponseSchema,
@@ -113,7 +114,21 @@ describe('Account Settings publication consumers', () => {
   });
 
   it('keeps an unbound Session watch unchanged across unrelated catalog refreshes and revocation', async () => {
-    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [sharedRow] } });
+    let resources = [sharedRow];
+    // Purpose watches use the real fresh-read owner. The HTTP boundary must
+    // answer its admitted catalog and Account mode, not a Saved Secret payload.
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null,
+        contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (path === '/v1/account/entity-rows/connected-accounts/purposes') return { status: 200, data: {
+        status: 'present', revision: 1, content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
+      } };
+      if (path === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources } };
+      throw new Error(`Unexpected publication consumer request: ${path}`);
+    });
     await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
 
     const runtime = createRuntime();
@@ -140,7 +155,7 @@ describe('Account Settings publication consumers', () => {
       expect(resync).not.toHaveBeenCalled();
       expect(requestSessionRestart).not.toHaveBeenCalled();
 
-      vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [] } });
+      resources = [];
       await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
 
       await new Promise<void>(resolve => setImmediate(resolve));
