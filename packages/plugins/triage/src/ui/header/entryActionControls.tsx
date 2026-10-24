@@ -12,6 +12,7 @@ import type {
   TriageSourceInstanceIdV1,
   TriageSourceWorkflowSubjectV1,
 } from '@happier-dev/triage-protocol/v1';
+import type { TriageDetailPrimaryWriteV1 } from '@happier-dev/triage-sources/ui';
 
 import {
   planTriageOfferedActionsV1,
@@ -85,6 +86,13 @@ export type TriageEntryActionControlsPropsV1 = Readonly<{
    * entry's other actions (a walkthrough, orchestration). Rows of the shared menu, never controls or a form.
    */
   overflowItems?: readonly TriageEntryOverflowItemV1[];
+  /**
+   * The source's own main write for this entry (Merge, Mark ready), offered by the source. It leads the source's
+   * controls after the agent's, where the lab puts the entry's source action (its Approve). Quiet (secondary): the
+   * view's one filled action stays the agent's.
+   * The source keeps custody of the write and its confirmation; this control only calls `execute`.
+   */
+  sourceWrite?: TriageDetailPrimaryWriteV1;
   /** A quiet control beside Ask that stays in sight (the source's own changes, which open `section`). */
   beside?: React.ReactNode;
   /** An inline section under the action row (the source's write form); forms never ride inside a menu. */
@@ -102,6 +110,15 @@ export type TriageEntryActionControlsPropsV1 = Readonly<{
  * the primary one; one that only waits on this entry's read keeps its place.
  */
 type TriageActionIntentV1 = 'review' | 'fix' | 'ask' | 'other';
+
+/** Source support and the selected entry's readiness are separate facts. */
+export function resolveTriageReviewPreparationV1(input: Readonly<{
+  sourceCanPrepare: boolean;
+  workspaceReady: boolean;
+}>): TriageReviewPreparationV1 {
+  return input.workspaceReady ? 'ready'
+    : input.sourceCanPrepare ? 'pending' : 'unsupported';
+}
 
 /** What an action does to the entry, read from its own declared target and workspace, never from its label. */
 function readTriageActionIntentV1(action: TriageActionV1): TriageActionIntentV1 {
@@ -141,6 +158,46 @@ const ACTION_ITEM_PREFIX = 'triage-action:';
 const EXTRA_ITEM_PREFIX = 'triage-more:';
 const NO_PREPARATION_COPY =
   'This source cannot prepare a review workspace, so actions that need one cannot start here.';
+
+/**
+ * The source's offered write, as the header shows it. A write with methods asks for one through the shared menu
+ * (there is no implicit default); one method is named on the button itself; none runs the write directly. Pending
+ * or unavailable, the control stays in place, disabled, and an unavailable one says why under the row.
+ */
+function TriageSourceWriteControl(props: Readonly<{ write: TriageDetailPrimaryWriteV1 }>): React.ReactElement {
+  const { write } = props;
+  const [open, setOpen] = React.useState(false);
+  const methods = write.methods;
+  const blocked = write.pending || write.disabledReason !== null || (methods !== undefined && methods.length === 0);
+  if (methods !== undefined && methods.length > 1 && !blocked) {
+    return (
+      <Menu
+        open={open}
+        onOpenChange={setOpen}
+        trigger={write.title}
+        triggerAppearance="control"
+        triggerAccessibilityLabel={write.title}
+        items={methods.map((method) => ({ id: method.id, label: method.title }))}
+        onSelect={(id) => {
+          setOpen(false);
+          void write.execute(id);
+        }}
+      />
+    );
+  }
+  const only = methods?.length === 1 ? methods[0] : undefined;
+  return (
+    <Button
+      // One method is still an explicit choice: the menu row it would have been is the button's name.
+      title={only === undefined || blocked ? write.title : only.title}
+      variant="secondary"
+      size="small"
+      disabled={blocked}
+      busy={write.pending}
+      onPress={() => (only === undefined ? write.execute() : write.execute(only.id))}
+    />
+  );
+}
 
 function TriageEntryActionButton(props: Readonly<{
   action: TriageActionV1;
@@ -276,7 +333,6 @@ export function TriageEntryActionControls(
       <Row gap="small" align="center" wrap>
         {primary === null ? null : button(primary, press)}
         {beside === null ? null : button(beside, press)}
-        {props.beside ?? null}
         {hasOverflow ? (
           <Menu
             open={moreOpen}
@@ -288,6 +344,16 @@ export function TriageEntryActionControls(
             onSelect={selectMenuItem}
           />
         ) : null}
+        {/* The source's own controls follow the agent's (More lists only agent actions), so a source write that lands
+            after the entry's read appends to the row and nothing already in it moves. */}
+        {props.sourceWrite === undefined && props.beside == null ? null : (
+          // One group, so a narrow row (a phone's pinned footer) moves the source's controls to their own line
+          // together rather than splitting them.
+          <Row gap="small" align="center">
+            {props.sourceWrite === undefined ? null : <TriageSourceWriteControl write={props.sourceWrite} />}
+            {props.beside ?? null}
+          </Row>
+        )}
         {props.trailing === undefined || props.trailing === null ? null : (
           <Stack style={TRAILING_STYLE_V1}>{props.trailing}</Stack>
         )}
@@ -306,6 +372,11 @@ export function TriageEntryActionControls(
         />
       )}
       {blockedInRow ? preparationReason : null}
+      {/* Why the source's write cannot run, said quietly beside the disabled control's row, never a dead button. */}
+      {props.sourceWrite?.disabledReason == null ? null : (
+        <Status tone="muted" label={props.sourceWrite.disabledReason} />
+      )}
+      {props.sourceWrite?.feedback == null ? null : props.sourceWrite.feedback}
       {props.section ?? null}
     </Stack>
   );

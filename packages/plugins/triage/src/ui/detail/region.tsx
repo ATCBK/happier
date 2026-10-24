@@ -42,6 +42,7 @@ import {
   TriageEvidenceDisclosureProvider,
   TriagePostMutationCompletionProvider,
   type TriageSourcePanelActionsV1,
+  type TriageDetailPrimaryWriteV1,
 } from '@happier-dev/triage-sources/ui';
 
 import {
@@ -61,6 +62,7 @@ import {
 import type { TriageListDisplayRowV1 } from '../marks/pinnedRows.js';
 import {
   TriageEntryActionControls,
+  resolveTriageReviewPreparationV1,
   type TriageEntryActionRequestV1,
   type TriageReviewPreparationV1,
 } from '../header/entryActionControls.js';
@@ -277,6 +279,8 @@ function TriageEntryScopedActionRegion(props: Readonly<{
    * as an inline section under the action row: a form never rides inside a menu.
    */
   sourceActions?: React.ReactNode;
+  /** Source-owned offer for the header composer; the source retains write/confirmation custody. */
+  sourcePrimaryWrite?: TriageDetailPrimaryWriteV1;
   /** What the source calls itself ("GitHub"), naming that control. */
   sourceLabel?: string | null;
   /** The entry's attention reason, at the far end of the action row. */
@@ -428,6 +432,7 @@ function TriageEntryScopedActionRegion(props: Readonly<{
         reviewPreparation={props.reviewPreparation}
         onAction={onAction}
         trailing={props.attention}
+        {...(props.sourcePrimaryWrite === undefined ? {} : { sourceWrite: props.sourcePrimaryWrite })}
         overflowItems={[
           ...(props.workflowSubject === 'issue' && props.snapshot !== undefined ? [{
             id: 'orchestrate',
@@ -616,7 +621,6 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   // as this detail is: it binds the retained origin address and owns the single
   // revision-checked transaction the disclosed candidate becomes.
   const insertion = useTriageTierBEvidenceInsertion(props.originComposer);
-  const evidenceDisclosure = React.useMemo(() => ({ ...insertion, panelActions: props.sourcePanelActions }), [insertion, props.sourcePanelActions]);
   const row = props.row;
   const sessionSelection = props.sessionSelection;
   const selectedSessionId = sessionSelection.value;
@@ -640,6 +644,18 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       : { entryRef: row.entryRef, sourceInstanceId: selected.sourceInstanceId }
   ), [row.entryRef, selected]);
   const observation = selected?.observation ?? null;
+  const primaryWriteKey = selected === null ? null : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId);
+  const [primaryWriteRecord, setPrimaryWriteRecord] = React.useState<Readonly<{
+    key: string | null; value: TriageDetailPrimaryWriteV1 | null;
+  }> | null>(null);
+  const sourcePrimaryWrite = primaryWriteRecord?.key === primaryWriteKey ? primaryWriteRecord.value : null;
+  const offerPrimaryWrite = React.useCallback((value: TriageDetailPrimaryWriteV1 | null) => {
+    setPrimaryWriteRecord((current) => value === null && current?.key !== primaryWriteKey
+      ? current : { key: primaryWriteKey, value });
+  }, [primaryWriteKey]);
+  const evidenceDisclosure = React.useMemo(() => ({ ...insertion, panelActions: props.sourcePanelActions,
+    primaryWrite: { value: sourcePrimaryWrite, offer: offerPrimaryWrite },
+  }), [insertion, offerPrimaryWrite, props.sourcePanelActions, sourcePrimaryWrite]);
 
   const observedDetail = useTriageEntryDetail(
     props.lastKnown === true || selection === null || observation === null ? null : { selection, observation },
@@ -776,9 +792,10 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   }, [detail, locator, observation, prepareReviewWorkspaceOperation, row.entryRef, snapshot]);
   // The source's capability and this entry's read are separate facts: a read still missing leaves Review in its
   // place, disabled, rather than handing the entry the issue verb.
-  const reviewPreparation: TriageReviewPreparationV1 = reviewWorkspace !== undefined
-    ? 'ready'
-    : prepareReviewWorkspaceOperation !== undefined && detail?.kind !== 'ready' ? 'pending' : 'unsupported';
+  const reviewPreparation = resolveTriageReviewPreparationV1({
+    sourceCanPrepare: prepareReviewWorkspaceOperation !== undefined,
+    workspaceReady: reviewWorkspace !== undefined,
+  });
   const getOperation = readTriageSourceGetOperationV1(context, row.entryRef.source);
   const comparisonRead = React.useMemo(() => getOperation !== undefined && detail?.kind === 'ready'
     ? { operation: getOperation, instance: detail.input.instance } : undefined, [detail, getOperation]);
@@ -793,6 +810,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   // Ask ("Change on GitHub"), opening as an inline section under the action row. Never inside the More menu.
   const sourceActions = composition.kind === 'tabs' && declaredKind?.detailActions === true && entryMount !== null ? (
     <TriagePostMutationCompletionProvider onComplete={completePostMutation}>
+    <TriageEvidenceDisclosureProvider disclosure={evidenceDisclosure}>
       <TriageDetailPanelMount
         mount={{
           ...entryMount,
@@ -805,6 +823,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
         panel={TRIAGE_DETAIL_ACTIONS_PANEL_V1}
         fallback={null}
       />
+    </TriageEvidenceDisclosureProvider>
     </TriagePostMutationCompletionProvider>
   ) : undefined;
   // Source re-admission can withdraw its descriptor while a comparison read is pending.
@@ -1041,6 +1060,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       {...(repository === undefined ? {} : { repository })}
       {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
       reviewPreparation={reviewPreparation}
+      {...(sourcePrimaryWrite === null ? {} : { sourcePrimaryWrite })}
       viewerIsAuthor={viewerIsAuthor}
       {...(sourceActions === undefined ? {} : { sourceActions, sourceLabel: header.sourceLabel })}
       {...(attention === undefined ? {} : { attention })}

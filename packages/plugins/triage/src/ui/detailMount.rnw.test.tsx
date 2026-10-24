@@ -20,7 +20,7 @@ import { readTriageSavedViewsForSurface } from '../actions/savedViews.js';
 import { TriageReadActionsInputV1Schema } from '../actions/actionsCatalogProtocol.js';
 import { TriageReadSavedViewsInputV1Schema } from '../actions/savedViewsProtocol.js';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
-import { useTriagePostMutationCompletion } from '@happier-dev/triage-sources/ui';
+import { useTriagePostMutationCompletion, useTriageEvidenceDisclosure, type TriageDetailPrimaryWriteV1 } from '@happier-dev/triage-sources/ui';
 import { PLUGIN_UI_SUB_PATH_MAX_UTF8_BYTES_V1 } from '@happier-dev/plugin-sdk/ui';
 import {
     formatTriageTimestampV1,
@@ -774,6 +774,18 @@ function createHarness(options: Readonly<{
 }
 
 const mounted: PluginUiTestkit[] = [];
+const FIXTURE_PRIMARY_WRITE: TriageDetailPrimaryWriteV1 = {
+    title: 'Fixture primary write', pending: false, disabledReason: null, execute: async () => {},
+};
+function PrimaryWriteProbe(): React.ReactElement {
+    const host = useTriageEvidenceDisclosure().primaryWrite;
+    const offer = host?.offer;
+    React.useLayoutEffect(() => {
+        offer?.(FIXTURE_PRIMARY_WRITE);
+        return () => { offer?.(null); };
+    }, [offer]);
+    return <Text value={host?.value?.title ?? 'No primary write host'} />;
+}
 let currentHarness: ReturnType<typeof createHarness> | null = null;
 /**
  * The last same-page replacement this mount asked the host for.
@@ -797,6 +809,7 @@ async function mountShell(
         linkedSessionCount?: number;
         sessionTitle?: string;
         hostedDetail?: boolean;
+        offerPrimaryWrite?: boolean;
         tabbedDetail?: boolean;
         sourceSessionTab?: boolean;
         activeSurface?: boolean;
@@ -864,7 +877,7 @@ async function mountShell(
                             : CONTRIBUTOR_MANIFEST
                     ),
                     renderAdmittedContent: ({ content }) => (
-                        <>{content}<PostMutationProbe /></>
+                        <>{content}<PostMutationProbe />{options.offerPrimaryWrite ? <PrimaryWriteProbe /> : null}</>
                     ),
                 },
             }),
@@ -1045,6 +1058,21 @@ function openedFixtureEntry(): string {
 }
 
 describe('opening a row into the source detail', () => {
+    it('round-trips an external source primary write through the real detail bridge without another detail read', async () => {
+        const subPath = buildTriageRouteSubPathV1({ ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: {
+            source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17',
+        } });
+        const shell = await mountShell({ subPath, tabbedDetail: true, offerPrimaryWrite: true, activeSurface: true });
+        await act(async () => { await vi.waitFor(async () => {
+            await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+            // The header places the source's offer as its own control; the probe still reads the same offer back.
+            await expect(shell.getByRole('button', { name: 'Fixture primary write' })).resolves.toBeDefined();
+        }); });
+        const reads = currentHarness?.readDetailInstanceIds.length;
+        await act(async () => { await shell.updateSurface(surfaceContext({ tabbedDetail: true })); });
+        await expect(shell.getByRole('button', { name: 'Fixture primary write' })).resolves.toBeDefined();
+        expect(currentHarness?.readDetailInstanceIds.length).toBe(reads);
+    });
     it('defers Account detail, fix links and personal task acquisition until requester admission', async () => {
         const harness = createHarness();
         const calls: string[] = [];
