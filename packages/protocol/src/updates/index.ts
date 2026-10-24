@@ -8,6 +8,7 @@ import { AutomationRunStateChangedHostEventV1Schema } from '../plugins/events/ho
 import { ExternalSessionTranscriptInvalidationV1Schema } from '../sessions/external/secureRefreshV1.js';
 import { ExternalSessionStorageStateV1Schema } from '../sessions/external/operationV1.js';
 import { ExecutionRunPublicStateSchema } from '../execution/runs/responseSchemas.js';
+import { ExecutionRunMachineActivityEphemeralV1Schema } from '../execution/runs/activityV1.js';
 import { SessionMessageAttentionImpactSchema } from '../sessions/messages/transcriptRawRecordV1.js';
 import { SessionMessageRoleSchema } from '../sessions/messages/sessionMessageRole.js';
 import { SessionMessageAccountActorV1Schema } from '../sessions/messages/sessionMessageAccountActorV1.js';
@@ -470,7 +471,7 @@ export const SessionPersonalEventEphemeralV1Schema = lazyZodSchema(() => z.discr
 
 export type SessionPersonalEventEphemeralV1 = z.infer<typeof SessionPersonalEventEphemeralV1Schema>;
 
-export const EphemeralUpdateSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
+export const EphemeralUpdateSchema = lazyZodSchema(() => z.union([z.discriminatedUnion('type', [
   SessionMessageReplyPendingHintV1Schema,
   PendingActivationRequestedEphemeralV1Schema,
   // Hottest live event first: delta ticks stream at the live cadence (~25Hz per active segment).
@@ -490,7 +491,7 @@ export const EphemeralUpdateSchema = lazyZodSchema(() => z.discriminatedUnion('t
     type: z.literal('execution-run-updated'),
     sessionId: z.string(),
     run: ExecutionRunPublicStateSchema,
-  }),
+  }).check(z.refine(value => value.machineId === undefined && value.runId === undefined)),
   z.looseObject({
     type: z.literal('transcript-stream-segment'),
     sessionId: z.string(),
@@ -532,7 +533,7 @@ export const EphemeralUpdateSchema = lazyZodSchema(() => z.discriminatedUnion('t
   ActionOperationSnapshotEphemeralV1Schema,
   ActionOperationRevisionEphemeralV1Schema,
   SessionPersonalEventEphemeralV1Schema,
-]));
+]), ExecutionRunMachineActivityEphemeralV1Schema]));
 
 export type EphemeralUpdate = z.infer<typeof EphemeralUpdateSchema>;
 

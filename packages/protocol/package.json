@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./execution/runs/activityV1": {
+      "happier-source": "./src/execution/runs/activityV1.ts",
+      "types": "./dist/execution/runs/activityV1.d.ts",
+      "default": "./dist/execution/runs/activityV1.js"
+    },
     "./collections/filter/entityListFilterV1": {
       "happier-source": "./src/collections/filter/entityListFilterV1.ts",
       "types": "./dist/collections/filter/entityListFilterV1.d.ts",
