@@ -1,4 +1,5 @@
 import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
+import { useRunSessionModels } from '@/components/sessions/runs/useRunSessionModels';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
@@ -94,7 +95,7 @@ import { useAgentModelChoices } from '@/components/settings/pickers/useAgentMode
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
-import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { readExecutionRunModelId, resolveRunAnsweringEngine, resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { createScmDiffSummaryResultOperations } from '@/sync/ops/scmDiffSummary/results';
 import { hasBrowserContextComposerAttachments } from '@/sync/domains/session/input/browserContext';
@@ -681,6 +682,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         ? encodeScmDiffSummaryModelOverride({ backendTargetKey: buildBackendTargetKeyV2(nativeModelTarget), modelId: nativeModelId }) : '';
     // The visible header needs its selected model's title. Reuse the picker catalog's exact host
     // and checkout observation; cards and rows never start discovery for display on their own.
+    // The Session's own model list names the Run's model before (or without) the Machine catalog.
+    const sessionModels = useRunSessionModels(props.sessionId, explicitServerId);
     const nativeModelChoices = useAgentModelChoices({ value: nativeModelValue, purpose: 'runner',
         defaultBackendTarget: nativeModelTarget, serverId: pendingScopeServerId,
         machineId: props.sessionId === null ? props.workspace?.machineId : sessionMachine?.machineId,
@@ -883,6 +886,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         serverId={explicitServerId}
                         acpCatalogSnapshot={acpCatalogSnapshot}
                         nativeModelCatalog={nativeModelChoices.catalogProfiles}
+                        sessionModels={sessionModels}
                         hostSessionId={props.sessionId}
                         daemonProcessLine={daemonProcessLine}
                         originTitle={discussionOriginTitle}

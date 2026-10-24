@@ -15,7 +15,7 @@ import {
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
-import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel, type RunNativeModelCatalog } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { readExecutionRunModelId, resolveExecutionRunSelectionLabel, resolveRunAnsweringEngine, resolveRunNativeModelLabel, type RunNativeModelCatalog, type RunSessionModels } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import { ExecutionRunActionsMenu, type ExecutionRunMenuFact } from '@/components/sessions/runs/details/ExecutionRunActionsMenu';
@@ -116,6 +116,8 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
     run: ExecutionRunPublicState;
     serverId?: string | null;
     nativeModelCatalog?: RunNativeModelCatalog;
+    /** The host Session's own Agent and model list, which names the model before the catalog arrives. */
+    sessionModels?: RunSessionModels;
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
     hostSessionId?: string | null;
     daemonProcessLine?: string | null;
@@ -145,12 +147,9 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
     const statusPresentation = attention ?? resolveAgentActivityStatusPresentation(status, running);
     const agentId = resolveAgentId(props.run);
     const originLabel = resolveLaunchOriginLabel(props.run, props.hostSessionId ?? null, props.originTitle ?? null);
-    const modelId = (props.run.resolvedSelection?.modelSelection?.modelId
-        ?? props.run.resolvedSelection?.teamCredentialModel?.modelId
-        ?? props.run.resolvedSelection?.modelId
-        ?? props.run.requestedConfiguration?.modelId)?.trim() || null;
+    const modelId = readExecutionRunModelId(props.run);
     const agentLabel = resolveExecutionRunBackendLabel(props.run.backendTarget, props.acpCatalogSnapshot);
-    const nativeModelLabel = resolveRunNativeModelLabel(props.run.backendTarget, props.nativeModelCatalog, props.run.resolvedSelection);
+    const nativeModelLabel = resolveRunNativeModelLabel(props.run.backendTarget, props.nativeModelCatalog, props.run.resolvedSelection, props.sessionModels);
     const providerConnections = useProviderSettingsForServer(props.serverId ?? undefined).connections;
     const resolvedSourceLabel = useExecutionRunSourceLabel(props.run.resolvedSelection, props.serverId);
     // D9: "Inherit session · <route> · <model>" or "Chosen for this run · …" when the host recorded it.
@@ -195,7 +194,8 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
     // A walkthrough conversation is a talk with what wrote the walkthrough (lab WT3-D3): its own mark, then the
     // model and the machine. The route, permissions and origin stay in ⋯ with the Run's other facts.
     const walkthroughConversation = props.run.intent === 'scm_diff_summary';
-    const modelLabel = (modelId && nativeModelLabel(modelId)) ?? modelId;
+    const modelLabel = resolveRunAnsweringEngine({ backendTarget: props.run.backendTarget, selection: props.run.resolvedSelection,
+        modelId, catalogProfiles: props.nativeModelCatalog, sessionModels: props.sessionModels })?.label ?? null;
     const meta: DetailsTabHeaderMetaFact[] = [];
     if (walkthroughConversation) {
         if (modelLabel) meta.push({ key: 'model', text: modelLabel });

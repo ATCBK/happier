@@ -10,6 +10,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId, resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { useRunSessionModels } from '@/components/sessions/runs/useRunSessionModels';
 import { selectScmDiffSummaryProducerModel } from '@/sync/domains/scm/diffSummary/state';
 import { getPreferredLanguage, t } from '@/text';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
@@ -224,10 +225,12 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const markAgentId = resolveExecutionRunAgentMarkId(producerTarget, theme);
     // Who wrote the reading, by name ("Opus 5.5 read all 14"): the model when the result records it, else the
     // Agent beside its mark ("Codex read all 2"), and only then the generic "The model".
+    // The Session's own model list names the model on a cold load, before the picker catalog arrives.
+    const sessionModels = useRunSessionModels(props.sessionId, props.serverId);
     const producerLabel = React.useMemo(() => {
-        if (producerModelId) return resolveRunNativeModelLabel(producerTarget, modelChoices.catalogProfiles, producerSelection)(producerModelId) ?? producerModelId;
+        if (producerModelId) return resolveRunNativeModelLabel(producerTarget, modelChoices.catalogProfiles, producerSelection, sessionModels)(producerModelId) ?? producerModelId;
         try { return resolveExecutionRunBackendLabel(producerTarget); } catch { return null; }
-    }, [producerModelId, producerTarget, producerSelection, modelChoices.catalogProfiles]);
+    }, [producerModelId, producerTarget, producerSelection, modelChoices.catalogProfiles, sessionModels]);
     const marksAvailable = capturedComparison !== null && marks.record !== null && marks.unavailableReason === null;
     const setReviewed = marks.setReviewed;
     const onToggleReviewed = React.useMemo(() => (marksAvailable

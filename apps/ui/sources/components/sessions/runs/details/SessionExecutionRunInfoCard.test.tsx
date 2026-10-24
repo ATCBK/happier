@@ -121,6 +121,18 @@ describe('SessionExecutionRunInfoCard', () => {
         }
     });
 
+    it('names a walkthrough conversation\'s model from the host Session\'s model list before any catalog', async () => {
+        const run = { runId: 'run_walkthrough', intent: 'scm_diff_summary',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, resolvedSelection: { source: 'inherited', modelId: 'gpt-6-luna' },
+            runClass: 'long_lived', status: 'running', startedAtMs: Date.now() } as any;
+        const sessionModels = { agentId: 'codex', metadata: { sessionModelsV1: { v: 1 as const, agentId: 'codex', updatedAt: 1,
+            currentModelId: 'gpt-6-luna', availableModels: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna' }] } } };
+        const screen = await renderScreen(<SessionExecutionRunInfoCard run={run} hostSessionId="session_1" sessionModels={sessionModels} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('GPT-6-Luna');
+        expect(text).not.toContain('gpt-6-luna');
+    });
+
     it('says the conversation is waiting on you, in the roster words, instead of Running', async () => {
         const screen = await renderScreen(<SessionExecutionRunInfoCard
             run={{

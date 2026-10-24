@@ -5,6 +5,7 @@ import type { ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions
 
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
+import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { t } from '@/text';
 
 const PROVENANCE_KEY = {
@@ -54,10 +55,50 @@ export function resolveExecutionRunSelectionLabel(
  * admitted for that Run's Home and Machine; only its exact Agent target may name the model.
  * Without an observed title, keep the shared Session static-catalog fallback.
  */
+/** The model a Run records, from its resolved launch selection, else what was requested. */
+export function readExecutionRunModelId(run: Readonly<{
+  resolvedSelection?: ExecutionRunResolvedSelection | null;
+  requestedConfiguration?: Readonly<{ modelId?: string | null }> | null;
+}>): string | null {
+  return (run.resolvedSelection?.modelSelection?.modelId
+    ?? run.resolvedSelection?.teamCredentialModel?.modelId
+    ?? run.resolvedSelection?.modelId
+    ?? run.requestedConfiguration?.modelId)?.trim() || null;
+}
+
+/** Who answers a Run conversation, as its header and its composer's fixed engine chip name it. */
+export type RunAnsweringEngine = Readonly<{ label: string; agentId: string | undefined }>;
+
+/** A Session's own model list: it may name a Run's model only when the Run runs that same Agent. */
+export type RunSessionModels = Readonly<{ agentId: string; metadata: ComposerOptionsInputV1 | null | undefined }>;
+
+export function resolveRunAnsweringEngine(params: Readonly<{
+  backendTarget: BackendTargetRefV2Input | null | undefined;
+  selection?: Pick<ExecutionRunResolvedSelection, 'modelSelection' | 'teamCredentialModel'>;
+  modelId: string | null | undefined;
+  catalogProfiles?: RunNativeModelCatalog;
+  sessionModels?: RunSessionModels;
+}>): RunAnsweringEngine | null {
+  const modelId = params.modelId?.trim();
+  if (!modelId) return null;
+  let agentId: string | undefined;
+  try {
+    const target = params.backendTarget ? readBackendTargetRefV2(params.backendTarget) : null;
+    agentId = target && !target.configuredBackendId ? target.backendId : undefined;
+  } catch {
+    agentId = undefined;
+  }
+  return {
+    label: resolveRunNativeModelLabel(params.backendTarget, params.catalogProfiles, params.selection, params.sessionModels)(modelId) ?? modelId,
+    agentId,
+  };
+}
+
 export function resolveRunNativeModelLabel(
   backendTarget: BackendTargetRefV2Input | null | undefined,
   catalogProfiles?: RunNativeModelCatalog,
   selection?: Pick<ExecutionRunResolvedSelection, 'modelSelection' | 'teamCredentialModel'>,
+  sessionModels?: RunSessionModels,
 ) {
   let agentId: string | null = null;
   let targetKey: string | null = null;
@@ -73,6 +114,8 @@ export function resolveRunNativeModelLabel(
     const observed = targetKey ? catalogProfiles?.find(profile => profile.modelSelector?.backendTargetKey === targetKey
       && profile.modelSelector.modelId === modelId) : null;
     return observed?.title.trim()
-      || (agentId && isBundledAgentId(agentId) ? resolveSessionModelLabel(agentId, null, modelId) : null);
+      || (agentId && isBundledAgentId(agentId)
+        ? resolveSessionModelLabel(agentId, sessionModels?.agentId === agentId ? sessionModels.metadata : null, modelId)
+        : null);
   };
 }

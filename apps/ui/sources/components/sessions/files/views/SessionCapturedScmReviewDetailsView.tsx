@@ -13,6 +13,7 @@ import { useScmWalkthroughState } from '@/components/sessions/files/walkthrough/
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
+import { useRunSessionModels } from '@/components/sessions/runs/useRunSessionModels';
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
@@ -42,6 +43,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const reviewDisabledReason = machineReachable ? null : t('walkthrough.notice.offlineA11y');
     const view = props.target?.view === 'walkthrough' ? 'walkthrough' : 'files';
     const { viewModel: walkthrough, ...restoration } = useScmWalkthroughState({ sessionId: props.sessionId }, props.comparison, 'walkthrough', props.serverId);
+    const sessionModels = useRunSessionModels(props.sessionId, props.serverId);
     const captured = useSessionCapturedScmComparison({ sessionId: props.sessionId, serverId: props.serverId,
         comparison: props.comparison, active: props.active !== false,
         knownComparison: view === 'walkthrough' || props.comparison.comparisonId ? walkthrough?.comparison : null });
@@ -90,7 +92,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         changeCount={captured.comparison?.inventory.files.reduce((sum, file) => sum + file.occurrences.length, 0)}
         reading={reading} modelLabel={walkthrough?.producer?.modelId ? resolveRunNativeModelLabel(
             walkthrough.latestRun?.backendTarget ?? walkthrough.savedResult?.generator?.backendTarget,
-            undefined, walkthrough.latestRun?.resolvedSelection ?? walkthrough.savedResult?.generator,
+            undefined, walkthrough.latestRun?.resolvedSelection ?? walkthrough.savedResult?.generator, sessionModels,
         )(walkthrough.producer.modelId) ?? walkthrough.producer.modelId : undefined} marksAvailable={marksAvailable}
         explain={explain} onExplainChange={setExplain}
         onStartReview={openReview} reviewDisabled={!captured.comparison || !machineReachable} reviewDisabledReason={reviewDisabledReason}
