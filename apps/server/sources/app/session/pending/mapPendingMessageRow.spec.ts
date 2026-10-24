@@ -50,6 +50,7 @@ describe("mapPendingMessageRow", () => {
             discardedAt: null,
             discardedReason: null,
             authorAccountId: "account-1",
+            replyProgress: null,
         });
         expect(mapped).toMatchObject({
             status: "queued",
@@ -81,6 +82,7 @@ describe("mapPendingMessageRow", () => {
             discardedAt: null,
             discardedReason: null,
             authorAccountId: "account-1",
+            replyProgress: null,
         });
 
         expect(mapped).toMatchObject({
@@ -107,6 +109,7 @@ describe("mapPendingMessageRow", () => {
             discardedAt: null,
             discardedReason: null,
             authorAccountId: "account-1",
+            replyProgress: null,
         })).toMatchObject({
             deliveryState: "delivering",
             deliveryStatus: { status: "delivering", detail: "awaiting_acceptance" },

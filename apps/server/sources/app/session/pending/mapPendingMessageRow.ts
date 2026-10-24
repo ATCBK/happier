@@ -31,7 +31,7 @@ export type PendingMessageRowRaw = {
     autonomousExchangeRootLocalId?: string | null;
     inputAdmissionReceipt?: unknown;
     providerAction?: unknown;
-    replyProgress?: unknown;
+    replyProgress: unknown;
     localId: string;
     targetExecutionRunId?: string | null;
     messageRole?: unknown;
