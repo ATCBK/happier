@@ -50,6 +50,7 @@ import { AutomationSessionLifecycleConfigurationSchema } from './automationSessi
 export * from './automationRunLifecycle.js';
 import type { AutomationTriggerDetail, AutomationTriggerListItem } from './automationTriggerProjectionV1.js';
 import { WorkflowDefinitionRefV1StringSchema } from '../workflows/workflowDefinitionRefV1.js';
+import { ARTIFACT_LIST_PAGE_MAX_ITEMS_V1 } from '../artifacts/artifactListSelectionV1.js';
 
 export {
   AutomationEncryptedTriggerDefinitionEnvelopeV1Schema,
@@ -385,10 +386,15 @@ export const AutomationDefinitionListRequestSchema = lazyZodSchema(() => z.stric
   limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(AUTOMATION_V3_DEFINITION_LIST_MAX_ITEMS)), AUTOMATION_V3_DEFINITION_LIST_MAX_ITEMS),
   cursor: zMini.optional(OPAQUE_CURSOR_SCHEMA),
   workflowDefinitionId: zMini.optional(WorkflowDefinitionRefV1StringSchema),
+  /** Body-bearing list selection for the definitions in one demanded library page. */
+  workflowDefinitionIds: z.optional(z.array(WorkflowDefinitionRefV1StringSchema).check(z.maxLength(ARTIFACT_LIST_PAGE_MAX_ITEMS_V1))),
   scopeSessionId: z.optional(IDENTIFIER_SCHEMA),
   scope: z.optional(z.literal('account_inline')),
 }).check(z.superRefine((value, context) => {
-  if (value.scope !== undefined && (value.workflowDefinitionId !== undefined || value.scopeSessionId !== undefined)) {
+  if (value.workflowDefinitionId !== undefined && value.workflowDefinitionIds !== undefined) {
+    context.addIssue({ code: 'custom', path: ['workflowDefinitionIds'], message: 'Choose one workflow selection' });
+  }
+  if (value.scope !== undefined && (value.workflowDefinitionId !== undefined || value.workflowDefinitionIds !== undefined || value.scopeSessionId !== undefined)) {
     context.addIssue({ code: 'custom', path: ['scope'], message: 'Account inline scope cannot be combined with a workflow or Session filter' });
   }
 })));

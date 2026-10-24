@@ -4522,6 +4522,7 @@ export async function listAutomationDefinitionsPage(params: Readonly<{
     limit?: number;
     cursor?: string | null;
     workflowDefinitionId?: string;
+    workflowDefinitionIds?: readonly string[];
     scopeSessionId?: string;
     scope?: "account_inline";
 }>): Promise<Readonly<{
@@ -4538,6 +4539,7 @@ export async function listAutomationDefinitionsPage(params: Readonly<{
             accountId: params.accountId,
             deletedAt: null,
             ...(params.workflowDefinitionId !== undefined ? { workflowDefinitionId: params.workflowDefinitionId } : {}),
+            ...(params.workflowDefinitionIds !== undefined ? { workflowDefinitionId: { in: [...new Set(params.workflowDefinitionIds)] } } : {}),
             ...(params.scopeSessionId !== undefined ? { scopeSessionId: params.scopeSessionId } : {}),
             ...(params.scope === "account_inline" ? { workflowDefinitionId: null, scopeSessionId: null } : {}),
             ...(cursor ? {

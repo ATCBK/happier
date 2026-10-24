@@ -1,4 +1,5 @@
 import { z } from "zod/mini";
+import type { FastifyReply } from "fastify";
 
 import { AUTOMATION_V3_RUN_LIST_MAX_ITEMS, AutomationAssignmentUpdateRequestSchema, AutomationV3SettingsSchema, AutomationV3SettingsUpdateRequestSchema, AutomationV3WorkerClaimRequestSchema, AutomationV3WorkerAssignmentsResponseSchema, AutomationV3WorkerExecutionDispatchSettlementRequestSchema, AutomationV3WorkerFailRequestSchema, AutomationV3WorkerHeartbeatRequestSchema, AutomationV3WorkerHeartbeatResponseSchema, AutomationV3WorkerStartRequestSchema, AutomationV3WorkerStartResponseSchema, AutomationV3WorkerSucceedRequestSchema, AutomationV3ClearRunHistoryResponseSchema, AutomationDeleteResponseSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDefinitionPatchRequestSchema, AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationTriggerCreateRequestSchema, AutomationTriggerDeleteRequestSchema, AutomationTriggerPatchRequestSchema, AutomationV3RunMutationResponseSchema, AutomationV3RunReplyHandoffRedeliverRequestSchema, AutomationV3RunListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { AutomationExecutionRunLifecycleReportRequestSchema, AutomationExecutionRunLifecycleSourcesResponseSchema } from '@happier-dev/protocol/automations/automationRunLifecycle';
@@ -137,17 +138,15 @@ export function registerAutomationV3Routes(
     app: Fastify,
     workerPublisherDependencies: AutomationWorkerPublisherDependencies = DEFAULT_AUTOMATION_WORKER_PUBLISHER_DEPENDENCIES,
 ): void {
-    app.get("/v3/automations", {
-        preHandler: [app.authenticate, requirePresentUser],
-        schema: { querystring: AutomationDefinitionListRequestSchema },
-    }, async (request, reply) => {
+    const readDefinitions = async (accountId: string, input: unknown, reply: FastifyReply) => {
         try {
-            const query = AutomationDefinitionListRequestSchema.parse(request.query);
+            const query = AutomationDefinitionListRequestSchema.parse(input);
             const page = await listAutomationDefinitionsPage({
-                accountId: request.userId,
+                accountId,
                 limit: query.limit,
                 ...(query.cursor ? { cursor: query.cursor } : {}),
                 ...(query.workflowDefinitionId !== undefined ? { workflowDefinitionId: query.workflowDefinitionId } : {}),
+                ...(query.workflowDefinitionIds !== undefined ? { workflowDefinitionIds: query.workflowDefinitionIds } : {}),
                 ...(query.scopeSessionId !== undefined ? { scopeSessionId: query.scopeSessionId } : {}),
                 ...(query.scope !== undefined ? { scope: query.scope } : {}),
             });
@@ -168,7 +167,17 @@ export function registerAutomationV3Routes(
             if (!isAutomationDefinitionValidationError(error)) throw error;
             return reply.code(400).send({ error: automationDefinitionValidationMessage(error) });
         }
-    });
+    };
+    app.get("/v3/automations", {
+        preHandler: [app.authenticate, requirePresentUser],
+        schema: { querystring: AutomationDefinitionListRequestSchema },
+    }, async (request, reply) => readDefinitions(request.userId, request.query, reply));
+    // One structural Artifact page can exceed URL/header limits. The body read
+    // retains the same list policy, projection and keyset owner as GET.
+    app.post("/v3/automations/query", {
+        preHandler: [app.authenticate, requirePresentUser],
+        schema: { body: AutomationDefinitionListRequestSchema },
+    }, async (request, reply) => readDefinitions(request.userId, request.body, reply));
 
     app.get("/v3/automations/settings", {
         preHandler: [app.authenticate, requirePresentUser],

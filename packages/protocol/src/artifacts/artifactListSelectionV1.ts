@@ -1,6 +1,9 @@
 import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1, type ArtifactKindCoverageV1 } from './artifactKindV1.js';
 import { throwIfAborted } from '../abortSignal.js';
 
+/** Existing structural /v1/artifacts transport page, shared by dependent page reads. */
+export const ARTIFACT_LIST_PAGE_MAX_ITEMS_V1 = 500;
+
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
   kinds?: readonly string[];

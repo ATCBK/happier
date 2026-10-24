@@ -1,4 +1,5 @@
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
+import { ARTIFACT_LIST_PAGE_MAX_ITEMS_V1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { registerArtifactUploadRoutes } from './registerArtifactUploadRoutes';
 import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
     ArtifactKindWriteBatchResponseV1Schema, ArtifactKindCoverageV1Schema, type ArtifactKindWriteBatchResponseV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
@@ -42,7 +43,7 @@ import { ArtifactAccountEncryptionMigrationInventoryV1Schema } from '@happier-de
 import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 
-const DEFAULT_ARTIFACT_LIST_LIMIT = 500;
+const DEFAULT_ARTIFACT_LIST_LIMIT = ARTIFACT_LIST_PAGE_MAX_ITEMS_V1;
 
 const artifactListItemSchema = z.object({
     id: z.string(), kind: z.nullable(ArtifactCoarseKindV1Schema), header: z.string(), headerVersion: z.number(),
@@ -246,7 +247,7 @@ export function artifactsRoutes(app: Fastify) {
         },
         schema: {
             querystring: z.object({
-                limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))),
+                limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(ARTIFACT_LIST_PAGE_MAX_ITEMS_V1))),
                 cursor: z.optional(z.string().check(z.minLength(1))),
                 includeBody: z.optional(z.literal('true')),
                 ownerAccountId: z.optional(z.string()),
