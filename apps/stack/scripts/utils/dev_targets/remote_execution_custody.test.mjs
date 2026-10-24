@@ -22,14 +22,19 @@ test('unrelated nondumpable process does not veto abandoned scratch while a live
   const token = spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(process.pid)], { encoding: 'utf8' }).stdout.trim();
   const directories = Array.from({ length: 8 }, (_, index) => join(root, `happier-stack-unit-abandoned-${index}`));
   const held = join(root, 'happier-stack-unit-held');
-  for (const directory of [...directories, held]) {
+  const opaqueHeld = join(root, 'happier-stack-unit-opaque-held');
+  for (const directory of [...directories, held, opaqueHeld]) {
     await mkdir(directory);
     await writeFile(join(directory, '.happier-test-temp-owner'), `happier-test-temp-v1\n${bootId}\n2147483647\n${token}\n2147483647\n`);
   }
   const heldChild = join(held, 'child');
+  const opaqueChild = join(opaqueHeld, 'child');
   await mkdir(heldChild);
+  await mkdir(opaqueChild);
   const fixtures = [
-    spawn('python3', ['-u', '-c', 'import ctypes,sys\nassert ctypes.CDLL(None).prctl(4,0,0,0,0)==0\nprint("ready",flush=True)\nsys.stdin.read()'], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    spawn('python3', ['-u', '-c', 'import ctypes,sys\nassert ctypes.CDLL(None).prctl(4,0,0,0,0)==0\nprint("ready",flush=True)\nsys.stdin.read()'], {
+      env: { ...process.env, TMPDIR: opaqueChild }, stdio: ['pipe', 'pipe', 'pipe'],
+    }),
     spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0));console.log("ready")'], {
       env: { ...process.env, TMPDIR: heldChild }, stdio: ['pipe', 'pipe', 'pipe'],
     }),
@@ -37,10 +42,14 @@ test('unrelated nondumpable process does not veto abandoned scratch while a live
   await Promise.all(fixtures.map(async child => {
     const closed = once(child, 'close');
     t.after(async () => { child.stdin.end(); await closed; });
-    await once(child.stdout, 'data');
+    await Promise.race([
+      once(child.stdout, 'data'),
+      closed.then(() => { throw new Error('native custody fixture exited before readiness'); }),
+    ]);
   }));
+  const fixtureEnv = await processCensusEnv(root, fixtures.map(child => child.pid));
   const result = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], {
-    env: { ...process.env, TMPDIR: root }, encoding: 'utf8',
+    env: { ...fixtureEnv, TMPDIR: root }, encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
   let reclaimed = 0;
@@ -49,17 +58,20 @@ test('unrelated nondumpable process does not veto abandoned scratch while a live
   }
   assert.equal(reclaimed, directories.length, 'one unrelated nondumpable process must not veto the abandoned-root batch');
   await access(held);
+  await access(opaqueHeld); // Ignoring unreadable processes would lose this live root.
   // A readable holder must protect the same ancestor as the denied-read
   // collector. Scope only the OS census, keeping real procfs binding reads.
   const readableEnv = await processCensusEnv(root, [fixtures[1].pid]);
-  const readable = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], {
+  const readable = spawnSync('/bin/bash', [custody, 'test-temp-users', held, 'readable'], {
     env: { ...readableEnv, TMPDIR: root }, encoding: 'utf8',
   });
   assert.equal(readable.status, 0, readable.stderr);
+  assert.ok(new Set(readable.stdout.split('\n')).has(held));
   await access(held);
+  await access(opaqueHeld);
   // The fallback observer inherits its caller's environment unless custody
   // removes those bindings. It must not retain its own finished command root.
-  const commandEnv = { ...process.env };
+  const commandEnv = await processCensusEnv(root, fixtures.map(child => child.pid));
   delete commandEnv.TMPDIR;
   const command = spawnSync('/bin/bash', [custody, 'run', join(root, 'worker-home/remote-exec/completed.pid'), 'completed',
     process.execPath, '-e', 'console.log(process.env.TMPDIR)'], { env: commandEnv, encoding: 'utf8' });
