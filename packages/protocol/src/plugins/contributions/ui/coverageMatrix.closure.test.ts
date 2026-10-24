@@ -529,7 +529,7 @@ const DESTINATION_REACHABILITY_SOURCE_PROOFS_V1 = [
     stage: 'productionShell',
     ref: 'PluginDetailsDestination',
     sourcePath: 'apps/ui/sources/components/appShell/panes/details/surfaces/pluginDetailsDestination.tsx',
-    codeIdentifier: 'placement={props.resolution.placement}',
+    codeIdentifier: 'placement={resolution.placement}',
     supportedSlotKeys: ['detailsTab:session', 'detailsTab:project'],
   },
   {

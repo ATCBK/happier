@@ -610,7 +610,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
       ok: false,
       errorCode: 'action_failed',
       error: 'server lookup failed',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'Error' } },
     });
     expect(executionRunStart).not.toHaveBeenCalled();
   });

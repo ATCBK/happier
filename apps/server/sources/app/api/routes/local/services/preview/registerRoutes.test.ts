@@ -42,7 +42,8 @@ const machineFindUnique = vi.hoisted(() => vi.fn(async (_query: unknown): Promis
 const homeSettingsFindUnique = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 vi.mock('@/storage/db', async () => {
     const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import('@/app/api/testkit/dbMocks');
-    const boundary = { ...inTxPostgresControlStatementMock,
+    const { homeConfigSnapshotPostgresQueryMock } = await import('@/app/home/settings/homeConfigSnapshot.testkit');
+    const boundary = { ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock,
         machine: { findFirst: machineFindFirst, findUnique: machineFindUnique,
             findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
                 (await Promise.all(where.id.in.map(id => machineFindUnique({ where: { id } })))).filter(row => row !== null),

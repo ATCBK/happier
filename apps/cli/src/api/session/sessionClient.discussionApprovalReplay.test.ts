@@ -27,6 +27,7 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { logger } from '@/ui/logger';
+import { artifactListResponse, artifactReadResponse } from '@/testkit/http/artifactHome';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
@@ -193,7 +194,11 @@ it.each([
     if (path.startsWith('/v1/artifacts')) {
       if (inactivePost && request.headers.authorization !== `Bearer ${token}`)
         return reply({ error: 'artifact_access_denied' }, 403);
-      if (path === '/v1/artifacts' && request.method === 'GET') return reply([...artifacts.values()]);
+      if (path === '/v1/artifacts' && request.method === 'GET') return reply(artifactListResponse(`http://localhost${request.url}`, [...artifacts.values()]));
+      if (path === '/v1/artifacts/read' && request.method === 'POST') {
+        let raw = ''; for await (const chunk of request) raw += chunk.toString();
+        return reply(artifactReadResponse(JSON.parse(raw), artifactId => (artifacts.get(artifactId) as { id: string } | undefined) ?? null).data);
+      }
       if (path.endsWith('/access/recipients')) {
         const artifactId = decodeURIComponent(path.split('/')[3] ?? '');
         const row = artifacts.get(artifactId);

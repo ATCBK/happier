@@ -7,7 +7,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import tweetnacl from 'tweetnacl';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, createActionExecutor, encodePlainArtifactStoredContent, ExecutionRunGetResponseSchema, materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, validateWorkflowDefinition, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema, WorkflowRunSummaryV1Schema, type ActionId } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, createActionExecutor, encodePlainArtifactStoredContent, ExecutionRunGetResponseSchema, materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, validateWorkflowDefinition, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema, WorkflowRunSummaryV1Schema, type ActionId } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
   verifyExternalActionMachineRequestV1, type ActionExecutorContext } from '@happier-dev/protocol';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationManifestPublisherHeaderV1Schema,
@@ -960,6 +960,7 @@ describe('createCliActionDeps workflow boundary', () => {
   it.each(['detached_run', 'session'] as const)('offers %s recovery from the exact current native turn and capability, never a recorded recovery choice', async (targetKind) => {
     const runId = '11111111-1111-4111-8111-111111111111';
     const recordId = '33333333-3333-4333-8333-333333333333';
+    const rootId = '44444444-4444-4444-8444-444444444444';
     const timestamp = '2026-01-01T00:00:00.000Z';
     const sessionId = 'c' + 'a'.repeat(24);
     const run = { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null, id: runId, origin: { kind: 'direct' }, state: 'interrupted', revision: 2,
@@ -978,11 +979,11 @@ describe('createCliActionDeps workflow boundary', () => {
         executionTarget: { kind: targetKind }, workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
         origin: { kind: 'direct' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } } },
     }));
-    const index = { id: recordId, runId, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0', contentRevision: '0',
+    const index = { id: recordId, runId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0', contentRevision: '0',
       lifecycle: 'failed', createdAt: timestamp, updatedAt: timestamp };
     const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
       mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId,
-        sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+        sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: definition.blocks[0]!.id, scope: [] },
         attempt: '0', logicalInvocationRecordId: recordId,
         workspace: { descriptor: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
@@ -990,16 +991,34 @@ describe('createCliActionDeps workflow boundary', () => {
           : { kind: 'session', sessionId, localInputId: 'input-1' },
         recovery: { conversation: 'same_conversation', input: { kind: 'original' } } },
     }));
+    const rootIndex = { ...index, id: rootId, sequence: '0', parentRecordId: null, lifecycle: 'needs_attention' };
+    const rootContentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: rootId,
+        sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: 'root', invocationPath: { blockId: '$root', scope: [] },
+        attempt: '0', logicalInvocationRecordId: rootId },
+    }));
+    const checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'checkpoint', accountId: 'account-1', runId },
+      checkpoint: { kind: 'happier.workflow-checkpoint.v1', rootRecordId: rootId,
+        nextSequence: '2', frontier: { nextBlockOrdinal: 0, paused: false } },
+    }));
+    let checkpointAvailable = true;
     const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({
       runId, ownerAccountId: 'account-1', encryptionMode: 'plain', access: 'owner',
       dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
       ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
     });
     http.post.mockImplementation(async (_url: string, body: Readonly<Record<string, unknown>>) => {
-      if (body.operation === 'get') return { data: { run, acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null, keyCensus } };
+      if (body.operation === 'get') return { data: { run, acceptedEnvelope,
+        checkpointEnvelope: checkpointAvailable ? checkpointEnvelope : null, resultEnvelope: null, keyCensus } };
       if (body.operation === 'run-key.census') return { data: keyCensus };
-      if (body.operation === 'invocations.get') return { data: { invocation: { index, contentEnvelope, parentRevision: 2 } } };
-      if (body.operation === 'invocations.list') return { data: { invocations: [index], parentRevision: 2, keyCensus } };
+      if (body.operation === 'invocations.get') return { data: { invocation: body.invocationId === recordId
+        ? { index, contentEnvelope, parentRevision: 2 }
+        : body.invocationId === rootId
+          ? { index: rootIndex, contentEnvelope: rootContentEnvelope, parentRevision: 2 } : null } };
+      if (body.operation === 'invocations.list') return { data: {
+        invocations: [rootIndex, index], parentRevision: 2, keyCensus } };
       throw new Error(`unexpected_effect:${String(body.operation)}`);
     });
     let replyCustodyUnavailable = false;
@@ -1056,7 +1075,7 @@ describe('createCliActionDeps workflow boundary', () => {
     }
     expect(machineRpc.mock.calls.every(([input]) => input.machineId === 'machine-1')).toBe(true);
     expect(await deps.workflowAction!({ actionId: 'workflow.run.invocations.list', input: { runId }, context: {} }))
-      .toEqual({ invocations: [index], parentRevision: 2 });
+      .toEqual({ invocations: [rootIndex, index], parentRevision: 2 });
     if (targetKind === 'detached_run') {
       index.lifecycle = 'running';
       machineRpc.mockResolvedValue({ run: { runId: 'native-run', callId: 'call', sidechainId: 'sidechain', intent: 'delegate',
@@ -1075,8 +1094,9 @@ describe('createCliActionDeps workflow boundary', () => {
         inputTurns: { occurrenceId: 'occurrence', current: { turnId: 'turn', inputIds: ['input-1'], state: 'completed',
           result: { kind: 'text', value: 'Done' } } },
       } });
-      // This index-only fixture has no structural root. A settled native result
+      // Separate negative: without a checkpoint, reconciliation has no authoritative structural root. A settled native result
       // must not claim reconciliation when the frozen lexical binding is absent.
+      checkpointAvailable = false;
       await expect(deps.workflowAction!({ actionId: 'workflow.run.resume', input: { mode: 'recover', runId, expectedRevision: 2,
         invocations: [{ kind: 'reattach', invocation: { recordId } }] }, context: {} }))
         .resolves.toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });

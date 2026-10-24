@@ -579,7 +579,9 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
                 },
             });
             const io = { to: emitToRoom, local: { to: emitToRoom }, on: () => {}, off: () => {},
-                sockets: { sockets: new Map([[machineServerSocket.id, machineServerSocket]]) } };
+                // The relay coordinator reads only the target Machine's socket room.
+                sockets: { sockets: new Map([[machineServerSocket.id, machineServerSocket]]),
+                    adapter: { rooms: new Map([['machine:machine_1:user_1', new Set([machineServerSocket.id])]]) } } };
             // Only the Socket.IO transport is replaced. Database admission, grant
             // consumption, exact-machine attachment and relay settlement stay real.
             const coordinator = createPeerTcpTunnelRelayCoordinator({ io: io as unknown as Server, config: { mode: 'memory' } });

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
+import { ArtifactReadHeadersBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { artifactReadResponse, artifactListResponse } from '@/testkit/http/artifactHome';
 import { BUILT_IN_ROLES_V1, accountSettingsParse } from '@happier-dev/protocol';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
 
 import { createSessionPromptPlanResolver } from './sessionPromptPlan';
@@ -49,14 +50,8 @@ function installPromptDocumentHeaderHttpBoundary(readDocument: (artifactId: stri
   if (!projectRowsPost) throw new Error('Missing Project Account rows HTTP boundary');
   vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
     if (new URL(String(url)).pathname !== '/v1/artifacts/read') return projectRowsPost(url, body, options);
-    const { artifactIds } = ArtifactReadHeadersBatchInputV1Schema.parse(body);
-    expect(artifactIds).toHaveLength(1);
-    return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({
-      projection: 'headers', items: artifactIds.map(artifactId => {
-        const { body: _body, ...header } = readDocument(artifactId);
-        return { artifactId, ok: true, artifact: { ...header, publicAudience: 'none' } };
-      }),
-    }) };
+    expect(ArtifactReadHeadersBatchInputV1Schema.parse(body).artifactIds).toHaveLength(1);
+    return artifactReadResponse(body, artifactId => readDocument(artifactId));
   });
 }
 
@@ -409,7 +404,7 @@ describe('session prompt-plan producer', () => {
       },
     });
     vi.spyOn(axios, 'get').mockImplementation(async (url) => new URL(String(url)).pathname === '/v1/account/encryption'
-      ? { status: 200, data: { mode: 'plain', updatedAt: 1 } } : { status: 200, data: [] });
+      ? { status: 200, data: { mode: 'plain', updatedAt: 1 } } : { status: 200, data: artifactListResponse(String(url), []) });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
@@ -513,7 +508,7 @@ describe('session prompt-plan producer', () => {
         } }) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
       if (path === '/v1/artifacts') return listFailed ? { status: 503, data: { error: 'unavailable' } }
-        : { status: 200, data: available ? [row] : [] };
+        : { status: 200, data: artifactListResponse(String(url), available ? [row] : []) };
       if (path === '/v1/artifacts/published-profile') return available
         ? { status: 200, data: row } : { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected HTTP path: ${path}`);
@@ -593,15 +588,12 @@ describe('session prompt-plan producer', () => {
   it('re-reads selected stack documents on each preparation and revises the full plan after an edit', async () => {
     let markdown = 'Initial stack document';
     // Artifact HTTP is the boundary; document opening, stack rendering and plan revision stay real.
+    installPromptDocumentHeaderHttpBoundary(artifactId => plainPromptDocument(artifactId, markdown));
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      const row = { id: 'stack-doc', ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
-        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Stack' }),
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-        body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown, createdAtMs: 1, updatedAtMs: 1 }) }),
-      };
-      return { status: 200, data: path === '/v1/artifacts' ? [row] : row };
+      if (path === '/v1/artifacts/stack-doc') return { status: 200, data: plainPromptDocument('stack-doc', markdown) };
+      throw new Error(`Unexpected stack HTTP path: ${path}`);
     });
     const credentials = { token: 'test-token', encryption: null };
     const rawSettings = { promptStacksV1: {
@@ -617,7 +609,7 @@ describe('session prompt-plan producer', () => {
       opts: { credentials,
         accountSettingsContext: { source: 'network', scopeKey, settingsVersion: 1, loadedAtMs: 1,
           settingsSecretsReadKeys: [], whenRefreshed: null, settings } },
-      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => null }),
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native-conversation',
       daemonBridge,
@@ -742,7 +734,7 @@ describe('session prompt-plan producer', () => {
           v: 1, id: 'voice.caller', revision: 9, instructions: 'Caller startup guidance',
         },
       },
-      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => null }),
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native-conversation',

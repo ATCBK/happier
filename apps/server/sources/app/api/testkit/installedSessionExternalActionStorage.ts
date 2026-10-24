@@ -1,4 +1,5 @@
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { homeConfigSnapshotPostgresQueryMock } from '../../home/settings/homeConfigSnapshot.testkit';
 import { createDbMocks, inTxPostgresControlStatementMock, matchesDbMockWhere } from './dbMocks';
 
 /** Database I/O boundary for the real Home issuer and installed-Session MCP journey. */
@@ -35,6 +36,7 @@ export function createInstalledSessionExternalActionStorage() {
         return row ? [row] : [];
     });
     const reader = {
+        ...homeConfigSnapshotPostgresQueryMock,
         // The real transaction owner now establishes a PostgreSQL read snapshot.
         // Replace only that database command, leaving currentness/policy real.
         ...inTxPostgresControlStatementMock,

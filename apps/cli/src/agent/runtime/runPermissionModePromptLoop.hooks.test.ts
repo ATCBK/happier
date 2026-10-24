@@ -96,6 +96,7 @@ async function runSingleSpecialCommand(params: Readonly<{
   registerProviderAcceptedEffect?: (localId: string, onAccepted: ((pendingSettlement?: Promise<void>) => void) | null) => void;
   hostContextOnly?: PreparedHostContextOnly;
   onHostEventCommitted?: (localId: string) => void;
+  onPromptFailure?: (error: unknown) => void | Promise<void>;
   checkpointLifecycle?: Parameters<typeof runPermissionModePromptLoop>[0]['checkpointLifecycle'];
   exitWhen?: () => boolean;
   resolveFreshSessionSystemPrompt?: Parameters<typeof runPermissionModePromptLoop>[0]['resolveFreshSessionSystemPrompt'];
@@ -168,6 +169,7 @@ async function runSingleSpecialCommand(params: Readonly<{
     setCurrentPermissionModeUpdatedAt: () => undefined,
     formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
     registerProviderAcceptedEffect: params.registerProviderAcceptedEffect ?? (() => undefined),
+    ...(params.onPromptFailure ? { onPromptFailure: params.onPromptFailure } : {}),
     ...(params.resolveFreshSessionSystemPrompt ? { resolveFreshSessionSystemPrompt: params.resolveFreshSessionSystemPrompt } : {}),
     ...(params.checkpointLifecycle ? { checkpointLifecycle: params.checkpointLifecycle } : {}),
   } as Parameters<typeof runPermissionModePromptLoop>[0]);
@@ -748,9 +750,10 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
       throw new Error('provider_input_size_refused');
     });
     const acknowledgeAccepted = vi.fn();
+    const onPromptFailure = vi.fn();
     const withdrawal = createWorkflowStepWithdrawal({ reportWithdrawn: async () => undefined });
     const result = await runSingleSpecialCommand({
-      text, localId: localInputId, runtime,
+      text, localId: localInputId, runtime, onPromptFailure,
       onHostEventCommitted: () => { dispatchOrder.push('host-event'); },
       hostContextOnly: {
         kind: 'workflow_step', localInputId, text,
@@ -764,12 +767,10 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(text, expect.objectContaining({ localId: localInputId }));
     expect(dispatchOrder).toEqual(['host-event', 'provider-send']);
     expect(result.hostEvents).toEqual([localInputId]);
-    expect(result.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
-      'qwen', expect.objectContaining({ type: 'message', message: expect.stringContaining('provider_input_size_refused') }), expect.anything(),
-    );
-    expect(result.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
-      'qwen', expect.objectContaining({ type: 'turn_failed', id: localInputId }), expect.anything(),
-    );
+    // The Session lifecycle owns the single failed-turn publication through onPromptFailure.
+    expect(onPromptFailure).toHaveBeenCalledOnce();
+    expect(onPromptFailure).toHaveBeenCalledWith(expect.objectContaining({ message: 'provider_input_size_refused' }));
+    expect(result.enqueueAgentMessageCommitted).not.toHaveBeenCalled();
     expect(withdrawal.withdrawWorkflowStepInput({ localInputId })).toBe('dispatched');
     expect(result.readSendReadyCount()).toBe(1);
     expect(acknowledgeAccepted).not.toHaveBeenCalled();

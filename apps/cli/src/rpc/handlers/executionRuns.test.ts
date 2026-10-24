@@ -3089,7 +3089,7 @@ describe('executionRuns session RPC handlers', () => {
     }
   });
 
-  it('returns ok:false VOICE_AGENT_UNSUPPORTED when starting a voice_agent run with an unsupported backend', async () => {
+  it('settles the created Run as failed VOICE_AGENT_UNSUPPORTED when starting a voice_agent run with an unsupported backend', async () => {
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
       registerHandlers: (rpc) => {
@@ -3121,12 +3121,14 @@ describe('executionRuns session RPC handlers', () => {
       ioMode: 'streaming',
     });
 
-    expect(started?.ok).toBe(false);
-    expect(started?.errorCode).toBe('VOICE_AGENT_UNSUPPORTED');
-    expect(String(started?.error ?? '')).toContain('codex');
+    // Start acknowledges the created Run; its failed initialization settles on the Run.
+    expect(started?.runId).toMatch(/^run_/);
+    const got = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId: started.runId });
+    expect(got?.run).toMatchObject({ status: 'failed', error: { code: 'VOICE_AGENT_UNSUPPORTED' } });
+    expect(String(got?.run?.error?.message ?? '')).toContain('codex');
   });
 
-  it('returns ok:false VOICE_AGENT_UNSUPPORTED when starting a voice_agent run and backend initialization fails (claude)', async () => {
+  it('settles the created Run as failed VOICE_AGENT_UNSUPPORTED when voice_agent backend initialization fails (claude)', async () => {
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
       registerHandlers: (rpc) => {
@@ -3158,9 +3160,10 @@ describe('executionRuns session RPC handlers', () => {
       ioMode: 'streaming',
     });
 
-    expect(started?.ok).toBe(false);
-    expect(started?.errorCode).toBe('VOICE_AGENT_UNSUPPORTED');
-    expect(String(started?.error ?? '')).toContain('claude');
+    expect(started?.runId).toMatch(/^run_/);
+    const got = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId: started.runId });
+    expect(got?.run).toMatchObject({ status: 'failed', error: { code: 'VOICE_AGENT_UNSUPPORTED' } });
+    expect(String(got?.run?.error?.message ?? '')).toContain('claude');
   });
 
   it('passes configured ACP backend targets through to the execution-run backend factory', async () => {
@@ -3342,7 +3345,7 @@ describe('executionRuns session RPC handlers', () => {
     expect(sent.some((m) => (m.body as any)?.type === 'tool-call')).toBe(false);
   });
 
-  it('releases execution budgets when voice_agent start fails', async () => {
+  it('releases execution budgets when a created voice_agent Run fails to initialize', async () => {
     const budgetRegistry = new ExecutionBudgetRegistry({
       maxConcurrentExecutionRuns: 1,
       maxConcurrentOneShotTasks: 1,
@@ -3377,8 +3380,9 @@ describe('executionRuns session RPC handlers', () => {
       runClass: 'long_lived',
       ioMode: 'streaming',
     });
-    expect(first?.ok).toBe(false);
-    expect(first?.errorCode).toBe('VOICE_AGENT_UNSUPPORTED');
+    expect(first?.runId).toMatch(/^run_/);
+    const failed = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId: first.runId });
+    expect(failed?.run).toMatchObject({ status: 'failed', error: { code: 'VOICE_AGENT_UNSUPPORTED' } });
 
     const second = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
       intent: 'voice_agent',

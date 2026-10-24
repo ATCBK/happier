@@ -1439,7 +1439,7 @@ describe('target action invocation registry', () => {
                 handler: async (input, context) => {
                     captured = context;
                     expect(Object.keys(context.services).sort()).toEqual([
-                        'actions', 'availability', 'composerContent', 'connectedAccounts', 'events', 'exec', 'fs', 'http',
+                        'actions', 'availability', 'backgroundServices', 'composerContent', 'connectedAccounts', 'events', 'exec', 'fs', 'http',
                         'interactions', 'logger', 'machineProvisioners', 'managedServices', 'mcp', 'notifications', 'providers', 'resources', 'secrets', 'sessions',
                         'settings', 'storage',
                         'targetedContributions',
@@ -1463,6 +1463,7 @@ describe('target action invocation registry', () => {
                     });
                     const serviceShape = {
                         logger: ['debug', 'diagnostic', 'error', 'info', 'warn'],
+                        backgroundServices: ['demand'],
                         storage: ['ephemeral', 'daemonSession', 'daemon'],
                         settings: ['forScope'],
                         secrets: ['delete', 'get', 'set', 'status'],

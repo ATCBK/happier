@@ -40,6 +40,7 @@ import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 
@@ -101,7 +102,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         if (retireOnList) credentialCurrent = false;
         // The real header inventory omits exact-read exposure facts.
         const headers = [row, ordinary].map(({ body: _body, publicAudience: _audience, ...entry }) => entry);
-        return { status: 200, data: address.searchParams.has('kind') ? { items: headers, hasUnclassified: false } : headers };
+        return { status: 200, data: artifactListResponse(address.toString(), headers) };
       }
       if (address.pathname === `/v1/artifacts/${artifactId}`) return { status: 200, data: row };
       throw new Error(`Unexpected notice read ${address.pathname}`);
@@ -763,7 +764,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     let row: unknown;
     http.get.mockImplementation(async (url: string) => ({ status: 200,
       data: url.endsWith('/v1/account/encryption') ? { mode: 'plain', updatedAt: 1 }
-        : new URL(url).pathname === '/v1/artifacts' ? [row] : row }));
+        : new URL(url).pathname === '/v1/artifacts' ? artifactListResponse(url, [row]) : row }));
     http.post.mockImplementation(async (_url: string, value: Record<string, unknown>) => {
       row = { ...value, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
         headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };

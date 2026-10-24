@@ -37,6 +37,7 @@ import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerpr
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 const { mockGet, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
@@ -66,7 +67,9 @@ vi.mock('axios', () => ({
           dataEncryptionKey: artifact.dataEncryptionKey, callerDataEncryptionKey: artifact.dataEncryptionKey, recipients: [] } };
       }
       const response = await mockGet(url, config);
-      const rows: unknown[] = Array.isArray(response?.data) ? response.data : [response?.data];
+      const payload: unknown = response?.data;
+      const envelopeItems: unknown = payload && typeof payload === 'object' ? Reflect.get(payload, 'items') : undefined;
+      const rows: unknown[] = Array.isArray(payload) ? payload : Array.isArray(envelopeItems) ? envelopeItems : [payload];
       for (const row of rows) {
         if (row && typeof row === 'object' && typeof Reflect.get(row, 'id') === 'string') {
           fixtureArtifacts.set(Reflect.get(row, 'id'), row as Record<string, unknown>);
@@ -707,7 +710,7 @@ describe('createCliApprovalsArtifactStore', () => {
         rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: key === 'folders' ? folderRevision : 0,
           content: key === 'folders' ? sealPromptLibraryContentV1({ mode, material, record: folders }) : null })) } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: settingsContent } };
-      if (path === '/v1/artifacts') return { status: 200, data: record ? [record] : [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(url, record ? [record] : []) };
       if (path.startsWith('/v1/artifacts/')) return { status: 200, data: record };
       return { status: 503, data: {} };
     });

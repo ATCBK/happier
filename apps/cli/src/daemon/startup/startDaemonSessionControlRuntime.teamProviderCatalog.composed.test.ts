@@ -539,6 +539,11 @@ it.each(['ready', 'requester Home', 'admission refused', 'binding not current', 
     publicReleaseRing: configuration.publicReleaseRing });
   // The bundled development Agent belongs to this real source runner root.
   h.runner.snapshotIdentity = `path:${resolve(__dirname, '../../..')}`;
+  // The runner source admits only the exact live process; the OS identity read is the boundary.
+  const runnerCommand = `${process.execPath} ${resolve(__dirname, '../../..', 'src/index.ts')} codex --started-by daemon`;
+  h.runner.processCommandHash = hashProcessCommand(runnerCommand);
+  vi.spyOn(processIdentity, 'readProcessIdentityByPid').mockResolvedValue({ pid: process.pid,
+    processStartTimeMs: h.runner.processStartTimeMs, command: runnerCommand });
   const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
     path, sessionId: h.sessionId, runner: h.runner, retainedAgent: h.retainedAgent };
   const published = await publishAgentRuntimeDaemonServiceAuthority({ ...authority,

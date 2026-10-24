@@ -1009,13 +1009,8 @@ describe('daemon contribution registry projection rpc handler', () => {
         expect(handler).toEqual(expect.any(Function));
         const raw = await handler!({ machineId: 'machine-1' });
 
-        expect(activateContributionsOnDemand).toHaveBeenNthCalledWith(1, [
-            { pluginId: 'acme.scm', family: 'scmHostingProviders', localId: 'forge-cloud' },
-            { pluginId: 'acme.scm', family: 'scmHostingProviders', localId: 'forge-enterprise' },
-        ]);
-        expect(activateContributionsOnDemand).toHaveBeenNthCalledWith(2, [
-            { pluginId: 'acme.scm', family: 'scmBackends', localId: 'stacked' },
-        ]);
+        // SCM registrations project from admitted release facts; describing never activates a plugin.
+        expect(activateContributionsOnDemand).not.toHaveBeenCalled();
         expect(raw).toMatchObject({
             protocolVersion: 1,
             projection: {

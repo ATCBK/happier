@@ -617,12 +617,7 @@ describe('Codex external transcript cursor generations', () => {
         cursor: first.nextCursor,
         maxBytes: 64 * 1024,
         maxItems: 1,
-      })).resolves.toMatchObject({
-        items: [],
-        nextCursor: null,
-        hasMore: false,
-        truncated: true,
-      });
+      })).rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
       if (!first.tailCursor) throw new Error('Expected a tail watermark');
       await expect(readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: first.tailCursor,
         maxBytes: 64 * 1024, maxItems: 1 })).resolves.toMatchObject({ items: [], readAfterOutcome: 'already_current' });
@@ -630,7 +625,7 @@ describe('Codex external transcript cursor generations', () => {
         type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'after oversized native row' }],
       } }));
       await expect(readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: first.tailCursor,
-        maxBytes: 64 * 1024, maxItems: 1 })).rejects.toThrow('oversized native record');
+        maxBytes: 64 * 1024, maxItems: 1 })).rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

@@ -129,8 +129,12 @@ function harness(fixtures: Fixtures = {}) {
           .map(row => store.readInvocationBindingRow(row.recordId)));
         const root = await store.readInvocationBindingRow(workflowInvocationKey({ runId: operation.runId, blockId: '$root', scope: [], attempt: 0 }));
         if (root && !rows.some(row => row?.index.id === root.index.id)) rows.unshift(root);
-        const selected = rows.flatMap(row => row && (operation.parentRecordId === undefined
-          || row.index.parentRecordId === operation.parentRecordId) ? [row] : []);
+        const parentRecordIds = Array.isArray(operation.parentRecordIds) ? new Set(operation.parentRecordIds.map(String)) : undefined;
+        // The storage selection contract: one exact record, one parent's members, one member slot or a batch of parents.
+        const selected = rows.flatMap(row => row && (operation.invocationId === undefined || row.index.id === operation.invocationId)
+          && (operation.parentRecordId === undefined || row.index.parentRecordId === operation.parentRecordId)
+          && (operation.memberOrdinal === undefined || row.index.memberOrdinal === operation.memberOrdinal)
+          && (!parentRecordIds || row.index.parentRecordId !== null && parentRecordIds.has(row.index.parentRecordId)) ? [row] : []);
         return { invocations: selected.map(row => row.index), parentRevision: 1,
           ...(operation.progressEnvelopes === true ? { keyCensus: keyCensus(operation.runId), progressEnvelopesByInvocationId: Object.fromEntries(selected.map(row => [
             row.index.id, serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',

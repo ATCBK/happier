@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { projectAccountRowReadResponse } from '@/testkit/http/projectAccountRows';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import tweetnacl from 'tweetnacl';
 import axios from 'axios';
@@ -519,6 +520,7 @@ describe('executeExternalAction', () => {
       expect(config?.headers?.[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe(authorization.token);
       expect(config?.headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]).toEqual(expect.any(String));
       if (path === '/v1/account/project-rows/list') return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [row] } };
+      if (path === '/v1/account/project-rows/read') return projectAccountRowReadResponse([row], body);
       if (path === '/v1/account/project-rows/mutate') {
         const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
         const mutation = request.mutations[0]!;

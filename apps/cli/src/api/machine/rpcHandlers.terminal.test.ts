@@ -45,6 +45,7 @@ import nacl from 'tweetnacl';
 import { updateSettings } from '@/persistence';
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { readDaemonTerminalPtyConfig } from '@/terminal/pty/config';
@@ -456,10 +457,10 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: runtime.credentials, serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo });
     if (reviewed.kind !== 'reviewed') throw new Error('Native review must resolve');
-    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
-    h.post.mockImplementation(async url => String(url).endsWith('/project-trust/read')
+    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, {});
+    h.post.mockImplementation(async (url, body) => String(url).endsWith('/project-trust/read')
       ? { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { project: reviewed.plan.project, reviewedEffectDigest: reviewed.plan.reviewedEffectDigest, approvedAtMs: 1 } } } }
-      : rows);
+      : projectAccountRowsReadHttpResponse(rows.data.rows, String(url), body));
     await createProjectSetupSuccessStore({ homeDir: runtime.successHomeDir! }).recordCompletion({ serverId: 'home', machineId: 'machine', workspaceRefId: 'accepted' },
       { v: 1, workspaceRefId: 'accepted', ...reviewed.plan.successBasis, completedAtMs: 1 });
     const handlers = new Map<string, RpcHandler>();
@@ -488,10 +489,10 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo: h.runtime.nativeIo });
     if (reviewed.kind !== 'reviewed') throw new Error('Setup review must resolve');
-    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
-    h.post.mockImplementation(async url => String(url).endsWith('/project-trust/read')
+    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, {});
+    h.post.mockImplementation(async (url, body) => String(url).endsWith('/project-trust/read')
       ? { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { project: reviewed.plan.project, reviewedEffectDigest: reviewed.plan.reviewedEffectDigest, approvedAtMs: 1 } } } }
-      : rows);
+      : projectAccountRowsReadHttpResponse(rows.data.rows, String(url), body));
     const started = new Promise<void>(resolve => { h.provider.onSpawn = () => resolve(); });
     try {
       const opened = h.handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!({ terminalKey: 'after-setup',
@@ -542,7 +543,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
       const key = { kind: 'workspace-ref', serverId: 'home', id: ref.id };
       return { key, revision: 1, content: { t: 'plain', v: { key, value: { ...ref, serverId: 'home', machineId: 'machine', rootPath: h.root, createdAtMs: 1 } } } };
     });
-    h.post.mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows } });
+    h.post.mockImplementation(async (url, body) => String(url).includes(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/`)
+      ? projectAccountRowsReadHttpResponse(rows, String(url), body)
+      : { status: 200, data: { status: 'listed', coverage: 'complete', rows } });
     const handlers = new Map<string, RpcHandler>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: manager,
@@ -815,11 +818,12 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const workspace = { id: 'accepted', serverId: options.homeServerId ?? 'home', machineId: 'machine', rootPath: options.acceptedRoot ?? (options.acceptedRootTrailingSlash ? `${root}/` : root), createdAtMs: 1,
       ...(options.unenriched ? {} : { projectKey: 'project' }) };
     const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
-    const post = vi.spyOn(axios, 'post').mockImplementation(async url => {
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (String(url).endsWith('/project-trust/read')) return { status: 200, data: { status: 'absent' } };
-      if (!String(url).endsWith(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`)) throw new Error('unexpected network request');
+      if (!String(url).includes(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/`)) throw new Error('unexpected network request');
       const key = { kind: 'workspace-ref', serverId: workspace.serverId, id: workspace.id };
-      return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }] } };
+      // Exact checkout reads use /read and census reads use /list; both answer from the same accepted row.
+      return projectAccountRowsReadHttpResponse([{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }], String(url), body);
     });
     const provider = new FakeInteractivePtyProvider();
     const probeProcessGroup = (groupId: number) => {

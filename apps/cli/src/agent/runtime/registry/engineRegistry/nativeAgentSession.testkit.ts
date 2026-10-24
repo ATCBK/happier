@@ -113,6 +113,7 @@ export function createNativeSessionClientTestPort(sessionId: string, overrides: 
         sessionId,
         rpcHandlerManager,
         updateAgentState: async (updater: (state: Record<string, unknown>) => Record<string, unknown>) => { agentState = updater(agentState); },
+        updateAgentStateRequestSettlement: async (updater: (state: Record<string, unknown>) => Record<string, unknown>) => { agentState = updater(agentState); },
         updateMetadata, updateMetadataAsCurrentPublisher: updateMetadata,
         getMetadataSnapshot: () => metadata, getAgentStateSnapshot: () => agentState,
         readSessionTurnsProjection: async () => null,

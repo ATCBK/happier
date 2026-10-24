@@ -25,6 +25,8 @@ import {
     txSessionFindFirst,
     txSessionFindMany,
     txSessionPinFindMany,
+    txSessionTurnFindMany,
+    sessionTurnFindMany,
 } from "./sessionRoutes.testkit";
 import {
     mapV2SessionListRow as mapV2SessionListRowWithAccountMode,
@@ -1445,7 +1447,8 @@ describe("sessionRoutes v2 sessions snapshot", () => {
         const activeReadFailure = {
             ...pagedSessionRow("s_failed_active_read", { active: true, meaningfulActivityAt: new Date(2_500) }),
             seq: 10,
-            lastViewedSessionSeq: 10,
+            lastViewedSessionSeq: 9,
+            latestTurnId: "turn-failed",
             latestTurnStatus: "failed",
             latestTurnStatusObservedAt: BigInt(1_000),
             lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
@@ -1454,6 +1457,7 @@ describe("sessionRoutes v2 sessions snapshot", () => {
             ...pagedSessionRow("s_failed_inactive_unread", { active: false, meaningfulActivityAt: new Date(2_600) }),
             seq: 11,
             lastViewedSessionSeq: 10,
+            latestTurnId: "turn-failed",
             latestTurnStatus: "failed",
             latestTurnStatusObservedAt: BigInt(1_000),
             lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
@@ -1461,11 +1465,25 @@ describe("sessionRoutes v2 sessions snapshot", () => {
         const inactiveReadFailure = {
             ...pagedSessionRow("s_failed_inactive_read", { active: false, meaningfulActivityAt: new Date(1_000) }),
             seq: 10,
-            lastViewedSessionSeq: 10,
+            lastViewedSessionSeq: 9,
+            latestTurnId: "turn-failed",
             latestTurnStatus: "failed",
             latestTurnStatusObservedAt: BigInt(1_000),
             lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
         };
+        const failureAnchors = new Map([
+            ["s_failed_active_read", 10],
+            ["s_failed_inactive_unread", 11],
+            ["s_failed_inactive_read", 10],
+        ]);
+        // Persistence boundary: each current failed turn commits its transcript anchor; a failure
+        // stays attention only while that anchor is beyond the viewer cursor.
+        const readFailureAnchors = async (query: { where: { OR: Array<{ sessionId: string; turnId: string }> } }) =>
+            query.where.OR.flatMap(({ sessionId }) => failureAnchors.has(sessionId)
+                ? [{ sessionId, transcriptAnchorsJson: JSON.stringify({ endSeqInclusive: failureAnchors.get(sessionId) }) }]
+                : []);
+        txSessionTurnFindMany.mockImplementation(readFailureAnchors as never);
+        sessionTurnFindMany.mockImplementation(readFailureAnchors as never);
         const inactivePublishedReadFailureWithStagedTail = {
             ...pagedSessionRow("s_failed_inactive_staged_tail", { active: false, meaningfulActivityAt: new Date(1_100) }),
             seq: 9,

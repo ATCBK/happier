@@ -38,6 +38,7 @@ import { reloadConfiguration } from '@/configuration';
 import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
 import { finishExecutionRun } from './finishExecutionRun';
 import axios from 'axios';
+import { artifactReadResponse, artifactKindListResponse } from '@/testkit/http/artifactHome';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
@@ -311,6 +312,8 @@ describe('startExecutionRun', () => {
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
     // Only Account HTTP and native Agent execution are synthetic; catalog admission,
     // Profile/Artifact opening, prompt composition and Voice preparation remain real.
+    const readHeader = vi.spyOn(axios, 'post').mockImplementation(async (_url, body) =>
+      artifactReadResponse(body, artifactId => artifactId === document.id ? document : null));
     const read = vi.spyOn(axios, 'get').mockImplementation(async input => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
@@ -322,7 +325,7 @@ describe('startExecutionRun', () => {
       if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: 1 } };
       if (path.endsWith('/transfer')) return { status: 200, data: { status: 'absent' } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
-      if (path === '/v1/artifacts') return { status: 200, data: [{ ...document, body: null }] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactKindListResponse([]) };
       if (path === '/v1/artifacts/persona-doc') return { status: 200, data: document };
       throw new Error(`Unexpected Launch Profile read: ${path}`);
     });
@@ -350,7 +353,7 @@ describe('startExecutionRun', () => {
         expect(nativePrompts.join('\n')).toContain('PERSONA_RUN_TASK');
       }
     } finally {
-      read.mockRestore();
+      read.mockRestore(); readHeader.mockRestore();
       if (previousSnapshot) setActiveAccountSettingsSnapshot(previousSnapshot);
       else clearActiveAccountSettingsSnapshot();
       await Promise.all([...controllers.values()].flatMap(controller => controller.kind === 'backend' ? [controller.backend.dispose()] : []));

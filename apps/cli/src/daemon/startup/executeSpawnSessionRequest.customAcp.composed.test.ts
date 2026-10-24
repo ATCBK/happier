@@ -7,6 +7,7 @@ import { ChildProcess } from 'node:child_process';
 import { accountSettingsParse, FeaturesResponseSchema, CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, ExecutionRunListResponseSchema,
   verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { AgentExecutionTargetV1Schema, CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -538,7 +539,10 @@ describe('Custom ACP fresh daemon launch composition', () => {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-daemon-token': daemon.controlToken },
           body: JSON.stringify({ sessionId }),
         });
-        expect(response.status).not.toBe(200);
+        expect(response.status).toBe(200);
+        expect(StopSessionResultSchema.parse(await response.json())).toEqual({
+          status: 'incomplete', reason: 'explicit_stop_failed',
+        });
         expect(metadataWrites, 'Local control may not claim Stop custody for a Session owned by another Machine').not.toHaveBeenCalled();
         return;
       }
@@ -1599,8 +1603,12 @@ describe('Custom ACP fresh daemon launch composition', () => {
         if (payload && typeof payload === 'object'
           && Reflect.get(payload, 'method') === `${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`) {
           const request: unknown = Reflect.get(payload, 'params');
-          expect(request).toMatchObject({ expectedPid: tracked.pid });
           if (!request || typeof request !== 'object') throw new Error('Expected restart admission request');
+          // The planned-restart gate reads the live host's settled activity before it signals.
+          if (Reflect.get(request, 'action') === 'activity_read') {
+            return { ok: true, result: { nativeRuntimeActivity: 'settled', session: 'settled', input: 'settled' } };
+          }
+          expect(request).toMatchObject({ expectedPid: tracked.pid });
           if (Reflect.get(request, 'action') === 'restart_hold') return new Promise(() => {});
           return { ok: true, result: { status: 'ready' } };
         }
@@ -1629,7 +1637,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
     try {
       daemon = await startDaemonSessionControlRuntime({ machineId: 'df38-machine', serverId: 'df38-home',
         serverBaseUrl: configuration.serverUrl, credentials: storage.credentials, api,
-        daemonSessionMutationCustody: daemonMutationCustody,
+        daemonSessionMutationCustody: daemonMutationCustody, externalActionAccountId: 'df38-owner',
         connectedServicesMaterializationBaseDir: join(storage.home, 'connected-services'),
         getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
         pidToTrackedSession: trackedSessions, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),

@@ -18,6 +18,7 @@ import {
   writeCliBundledHostPackage,
   writeRuntimeDependencyStub,
   writeWorkspacePackageFixture,
+  FIXTURE_PNPM_WORKSPACE_YAML,
 } from './testkit/packageLayoutSandbox';
 import { writeSandboxTextFile } from './testkit/cliBinPreflightSandbox';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture, installWorkspaceAdmissionProcessAdapter } from '../../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
@@ -42,7 +43,7 @@ describe('bundleWorkspaceDeps', () => {
       mkdirSync(happyCliDir, { recursive: true });
       writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
       writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-      writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       for (const app of ['ui', 'server']) {
         mkdirSync(join(repoRoot, 'apps', app), { recursive: true });
         writeFileSync(join(repoRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));

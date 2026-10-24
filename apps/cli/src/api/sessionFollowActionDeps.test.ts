@@ -374,7 +374,7 @@ describe('Follow HTTP family adapter', () => {
       facts: { serverId: 'home', kind: 'session' as const } };
     const evaluation = evaluateSessionFollowRuleOccurrenceV1({ accountId: 'personal-account', evaluator: 'source', production: 'source',
       sourceSessionId: source.id, evidence, currentFacts: { serverId: 'home', kind: 'session', startedBy: 'you',
-        scopeMatches: { my_work: true }, metadata: { projectId: 'payments' } }, rules: rules ?? [] });
+        scopeMatches: { my_work: true }, projectKey: 'payments' }, rules: rules ?? [] });
     if (evaluation.status !== 'evaluated') throw new Error('Source must own its own-Account evaluation');
     const route = evaluation.routes.find(item => item.receiver.kind === 'account');
     expect(route).toBeDefined();

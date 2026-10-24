@@ -193,7 +193,12 @@ function createHarness(detached = false, reviewerRole = false, sendAcp: Executio
     { localId: 'blocked-1', status: 'blocked' as const, deliveryStatus: { status: 'blocked' as const, reason: 'session_input_target_unavailable' as const } },
   ]);
   const blockExecutionRunPendingDelivery = vi.fn(async () => true);
-  const enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true, delivered: false }));
+  // This online Session boundary acknowledges the publication before the host
+  // admits another input; use the same publisher for held-publication scenarios.
+  const enqueueAgentMessageCommitted = vi.fn(async (...args: Parameters<ExecutionRunTranscriptPublisher>) => {
+    await sendAcp(...args);
+    return { persisted: true, delivered: true };
+  });
   const manager = new ExecutionRunHostBridge({
     // External Account preference input for this recovery fixture.
     resolveRunReportPolicy: async () => ({ preset: 'important' }),
@@ -1103,7 +1108,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
     expect(acted).toMatchObject({ result: { comparison: captured.comparison } });
   });
 
-  it.each(['succeeded', 'failed'] as const)('continues a finished %s bounded review on its same retained provider session with a structured walkthrough turn', async (reviewStatus) => {
+  it.each(['succeeded', 'failed'] as const)('continues a finished %s bounded review with an explicitly requested walkthrough and keeps later chat from rewriting it', async (reviewStatus) => {
     let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
     const sent = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' as const }));
     nativeOpen.mockImplementation(async () => ({
@@ -1183,14 +1188,17 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       emit!({ kind: 'turn-complete', sessionId: 'session-parent', sequence: 9, emittedAtMs: 9, turnId: request.delivery.turnId });
       return { status: 'admitted' };
     });
-    expect(harness.consume({ role: 'user', content: { type: 'text', text: 'Continue the walkthrough' }, localId: 'next-narration',
+    expect(harness.consume({ role: 'user', content: { type: 'text', text: 'Why keep these findings?' }, localId: 'next-narration',
       authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' })).toBe(true);
     await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(publicationBeforeNextDelivery).toMatchObject({ success: true,
       result: { output: { outputs: { walkthrough: { value: { title: 'Saved narration' } } } } } }));
     await controller.pendingHostBarrier;
-    await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: directory, sessionId: 'session-1', resultId: input.resultId })).toMatchObject({ success: true,
-      result: { output: { runId: 'run-1', outputs: { walkthrough: { value: { title: 'Next narration' } } } } } }));
+    await vi.waitFor(() => expect(harness.manager.getPublic('run-1')).toMatchObject({ turnInFlight: false }));
+    // Chat has no admitted output scope. Even unsolicited structured model output
+    // cannot grant itself permission to replace the saved walkthrough.
+    expect(await scmDiffSummaryResultStore.read({ cwd: directory, sessionId: 'session-1', resultId: input.resultId }))
+      .toEqual(publicationBeforeNextDelivery);
     expect(harness.manager.get('run-1')).toMatchObject({ status: 'running' });
     const again = await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
       reviewRunIds: ['run-1'], comparisonId: captured.comparison.id } });

@@ -799,7 +799,8 @@ describe('createExternalSessionFollowHostOperation', () => {
                 });
                 try {
                     if (kind === 'oversized_native_row') {
-                        expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_resync_required' });
+                        // A record beyond the read allowance fails explicitly (JSONL_RECORD_TOO_LARGE) instead of looping a no-progress resync.
+                        expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_acquisition_failed' });
                         expect(observed).toEqual([]);
                         return;
                     }

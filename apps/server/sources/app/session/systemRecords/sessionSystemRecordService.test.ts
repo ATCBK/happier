@@ -45,9 +45,11 @@ type ProtocolActivationDatabase = Parameters<typeof initializeSessionSystemRecor
 
 type TxMock = {
     teamMembership: { findMany: ReturnType<typeof vi.fn> };
+    sessionFollowEdge: { findMany: ReturnType<typeof vi.fn> };
     session: {
         findUnique: ReturnType<typeof vi.fn>;
         findFirst: ReturnType<typeof vi.fn>;
+        findMany: ReturnType<typeof vi.fn>;
     };
     sessionSystemRecord: {
         count: ReturnType<typeof vi.fn>;
@@ -83,6 +85,9 @@ vi.mock("@/storage/db", async () => {
                 const tx = testState.currentTx as TxMock;
                 const reader = {
                     ...inTxPostgresControlStatementMock,
+                    // Account admission locks the Account rows it is given; the fixture has no contention.
+                    $queryRawUnsafe: async (_query: string, accountIds: unknown) =>
+                        (Array.isArray(accountIds) ? accountIds : [accountIds]).map(id => ({ id })),
                     ...tx,
                     session: {
                         ...tx.session,
@@ -246,9 +251,12 @@ describe("sessionSystemRecordService account scoping", () => {
         );
         testState.currentTx = {
             teamMembership: { findMany: vi.fn().mockResolvedValue([]) },
+            // Standalone mutations run behind Account admission; these fixtures have no Follow edges.
+            sessionFollowEdge: { findMany: vi.fn().mockResolvedValue([]) },
             session: {
                 findUnique: vi.fn(),
                 findFirst: vi.fn().mockResolvedValue({ id: "s1" }),
+                findMany: vi.fn().mockResolvedValue([]),
             },
             sessionSystemRecord: {
                 findUnique: vi.fn(),
@@ -1017,9 +1025,11 @@ describe("sessionSystemRecordService account scoping", () => {
         const currentTx = testState.currentTx as TxMock;
         const row = activityRecord();
         currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "plain", accountId: "owner-account" });
-        currentTx.session.findFirst
-            .mockResolvedValueOnce({ id: "s1" })
-            .mockResolvedValueOnce(null);
+        // The share is current for the entry check and the delete attempt, then gone for the settlement's admission.
+        testState.readAccessSession
+            .mockResolvedValueOnce(accessSessionRow("edit"))
+            .mockResolvedValueOnce(accessSessionRow("edit"))
+            .mockResolvedValueOnce(accessSessionRow("owner"));
         currentTx.sessionSystemRecord.findFirst
             .mockResolvedValueOnce(row)
             .mockResolvedValueOnce(null);
@@ -1035,7 +1045,7 @@ describe("sessionSystemRecordService account scoping", () => {
             actorUserId: "shared-editor",
             sessionId: "s1",
             address,
-        })).resolves.toEqual({ ok: false, code: "plugin_session_record_forbidden" });
+        })).resolves.toEqual({ ok: false, code: "plugin_session_not_found" });
         expect(currentTx.sessionSystemRecord.deleteMany).toHaveBeenCalledTimes(1);
     });
 

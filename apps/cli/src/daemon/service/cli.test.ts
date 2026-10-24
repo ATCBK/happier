@@ -235,7 +235,12 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '40',
       });
       vi.resetModules();
-      doMockChildProcessSpawnSync(() => ({ status: 1, stdout: Buffer.from(''), stderr: Buffer.from('systemctl enable failed') }));
+      // The manager is reachable (install proves that first); enabling the unit is what fails.
+      doMockChildProcessSpawnSync((command: string, args: readonly string[] = []) => (
+        command === 'systemctl' && args.includes('show-environment')
+          ? { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+          : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('systemctl enable failed') }
+      ));
       vi.doMock('./commandExistsInPath', () => ({
         commandExistsInPath: vi.fn(() => true),
       }));

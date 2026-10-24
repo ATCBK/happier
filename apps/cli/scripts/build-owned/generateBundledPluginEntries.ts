@@ -4340,6 +4340,9 @@ async function generateBundledPluginEntries(
     });
     const selectedPluginPackages = selectedResult.pluginPackages;
     dependencies = await dependencies;
+    // Ordinary scoped publication rejects an invalid selected declaration; only a
+    // package-artifact build records it so healthy packages continue.
+    if (!options.packageArtifacts && selectedResult.failures.length > 0) throwBundledPluginPackageFailures(selectedResult.failures);
     const failures = mergeBundledPluginFailures(inheritedFailures, selectedResult.failures);
     assertNoBundledPluginPublicationFailures(failures, options.mode);
     if (selectedPluginPackages.length > 0 || failures.length > 0) {

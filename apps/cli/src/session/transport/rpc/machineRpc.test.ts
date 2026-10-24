@@ -1668,6 +1668,8 @@ describe('callMachineRpc', () => {
       externalActionTarget: { kind: 'machine', machineId: 'compose-machine' },
     }).then(value => { result = value; });
     try {
+      // Action families load on first use; settle that real module boundary before the fake clock owns time.
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(20_001);
       expect(acknowledge).toBeTypeOf('function');
       expect(result).toBeUndefined();
@@ -1954,6 +1956,8 @@ describe('callMachineRpc', () => {
           : deps.daemonMemoryEnsureUpToDate({ machineId: 'machine-plain', sessionId: 'stopped-session' })
     ).then(value => ({ ok: true, value }), error => ({ ok: false, error }));
     try {
+      // Action families load on first use; settle that real module boundary before the fake clock owns time.
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(28_120);
       expect(await pending).toEqual({ ok: true, value: receipt });
       const calls = socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL);

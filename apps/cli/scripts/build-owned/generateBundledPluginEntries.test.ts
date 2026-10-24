@@ -1821,7 +1821,7 @@ describe('bundled Voice UI declaration projection', () => {
       'function readCommittedBundledPluginManifest(',
     );
 
-    expect(manifestLoader).toContain('await importTypescriptModule(manifestPath)');
+    expect(manifestLoader).toContain('importTypescriptModule(manifestPath');
     // A second, package-specific manifest reader is a split-brain owner: voice
     // packages are authored exactly like every other first-party plugin.
     expect(manifestLoader).not.toContain('isBundledFirstPartyVoicePackageId(pluginPackageId)');

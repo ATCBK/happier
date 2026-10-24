@@ -45,6 +45,15 @@ export const WORKFLOW_EFFECT_ACTION_SPECS_V1 = [
     bindings: { mcpToolName: 'workflow_discussion_round_project', rpcMethod: 'workflow.discussion.round.project' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     inputSchema: WorkflowDiscussionRoundProjectInputV1Schema, outputSchema: WorkflowDiscussionRoundProjectResultV1Schema,
+    inputHints: { fields: [
+      { path: 'collections', title: 'Round blocks', widget: 'json', required: true },
+      { path: 'phase', title: 'Phase', widget: 'select', options: [
+        { value: 'prepare', label: 'Prepare' }, { value: 'complete', label: 'Complete' },
+      ] },
+      { path: 'rosterInput', title: 'Roster input', widget: 'text' },
+      { path: 'previousProjectionBlockId', title: 'Previous projection block', widget: 'text' },
+      { path: 'preparationBlockId', title: 'Preparation block', widget: 'text' },
+    ] },
   },
   {
     id: 'webhooks.call', approval: {result: 'required'}, title: 'Call a webhook',

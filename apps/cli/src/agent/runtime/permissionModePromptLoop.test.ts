@@ -2739,7 +2739,7 @@ describe('runPermissionModePromptLoop', () => {
     );
   });
 
-  it('formats object-shaped prompt errors without leaking [object Object] into the transcript', async () => {
+  it('hands an object-shaped prompt error to the Session lifecycle without publishing its own transcript text', async () => {
     const session = createPromptLoopSession();
     const enqueueAgentMessageCommittedSpy = vi.spyOn(session, 'enqueueAgentMessageCommitted');
     const queue = createModeQueue();
@@ -2751,6 +2751,7 @@ describe('runPermissionModePromptLoop', () => {
         data: 'Prompt already in progress',
       };
     }) as any;
+    const onPromptFailure = vi.fn();
     const messageBuffer = new MessageBuffer();
     const permissionHandler = {
       setPermissionMode: vi.fn(),
@@ -2782,23 +2783,15 @@ describe('runPermissionModePromptLoop', () => {
       setCurrentPermissionModeUpdatedAt: () => {},
       formatPromptErrorMessage: formatProviderPromptErrorMessage,
       registerProviderAcceptedEffect: () => undefined,
+      onPromptFailure,
     });
 
-    expect(enqueueAgentMessageCommittedSpy).toHaveBeenCalledWith('qwen', {
-      type: 'message',
-      message: expect.stringContaining('"message": "Internal error"'),
-    }, expect.objectContaining({ provenance: { kind: 'non_dependent', source: 'external' } }));
-    expect(enqueueAgentMessageCommittedSpy).toHaveBeenCalledWith('qwen', {
-      type: 'turn_failed',
-      id: 'local-object-error',
-    }, expect.objectContaining({ provenance: { kind: 'non_dependent', source: 'external' } }));
-    const sentMessages = enqueueAgentMessageCommittedSpy.mock.calls.map((call) =>
-      'message' in call[1] ? call[1].message ?? '' : '',
-    );
-    expect(sentMessages.join('\n')).not.toContain('[object Object]');
+    // The Session lifecycle classifies the raw error and owns the single failed-turn publication.
+    expect(onPromptFailure).toHaveBeenCalledWith(expect.objectContaining({ code: -32603, data: 'Prompt already in progress' }));
+    expect(enqueueAgentMessageCommittedSpy).not.toHaveBeenCalled();
   });
 
-  it('marks the queued turn failed when runtime startup fails before prompt dispatch', async () => {
+  it('hands a runtime startup failure before prompt dispatch to the Session lifecycle for the queued turn', async () => {
     const session = createPromptLoopSession();
     const enqueueAgentMessageCommittedSpy = vi.spyOn(session, 'enqueueAgentMessageCommitted');
     const queue = createModeQueue();
@@ -2806,6 +2799,7 @@ describe('runPermissionModePromptLoop', () => {
     runtime.sendTurnPrompt = vi.fn(async () => {
       throw new ReferenceError('Qwen CLI (qwen) is not available from any configured source.');
     });
+    const onPromptFailure = vi.fn();
     const messageBuffer = new MessageBuffer();
     const permissionHandler = {
       setPermissionMode: vi.fn(),
@@ -2837,16 +2831,12 @@ describe('runPermissionModePromptLoop', () => {
       setCurrentPermissionModeUpdatedAt: () => {},
       formatPromptErrorMessage: formatProviderPromptErrorMessage,
       registerProviderAcceptedEffect: () => undefined,
+      onPromptFailure,
     });
 
-    expect(enqueueAgentMessageCommittedSpy).toHaveBeenCalledWith('qwen', {
-      type: 'message',
-      message: expect.stringContaining('Qwen CLI (qwen) is not available'),
-    }, expect.objectContaining({ provenance: { kind: 'non_dependent', source: 'external' } }));
-    expect(enqueueAgentMessageCommittedSpy).toHaveBeenCalledWith('qwen', {
-      type: 'turn_failed',
-      id: 'local-start-error',
-    }, expect.objectContaining({ provenance: { kind: 'non_dependent', source: 'external' } }));
+    // The Session lifecycle owns the single message and failed-turn marker for this input.
+    expect(onPromptFailure).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Qwen CLI (qwen) is not available') }));
+    expect(enqueueAgentMessageCommittedSpy).not.toHaveBeenCalled();
   });
 
   it('does not surface abort-like prompt failures as agent messages', async () => {

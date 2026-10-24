@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import fastify from 'fastify';
 import Ajv from 'ajv';
 import { z } from 'zod/mini';
@@ -31,7 +32,6 @@ import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
-import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import * as daemonControlClient from '@/daemon/controlClient';
@@ -86,7 +86,7 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
   app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode }));
   if (params.serveAccountCatalog) {
     app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
-    app.get('/v1/artifacts', async () => []);
+    app.get('/v1/artifacts', async request => artifactListResponse(`http://localhost${request.url}`, []));
     app.get(ACP_CATALOG_ROWS_ROUTE_V1, async () => ({ status: 'absent' }));
   }
   app.get('/v2/sessions/:sessionId', async (_request, reply) => {
@@ -238,6 +238,8 @@ async function withTitleHost(
   });
   // Home persistence and the daemon are external boundaries. The actual Action
   // policy, title mutation, envelope projection and HTTP CAS remain real.
+  // Imported after the describe's module reset so the harness, Home base-URL scope and Session HTTP owner share one module graph.
+  const { createCliActionExecutorHarness } = await import('@/session/actions/createCliActionExecutorHarness');
   const { executor } = createCliActionExecutorHarness({ token: credentials.token, credentials, sessionId,
     mode: 'plain', ctx: null, serverId: getTestServerBinding().serverId, serverHttpBaseUrl: getTestServerBinding().serverUrl,
     actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(getAccountSettings().actionsSettingsV1) },
@@ -306,7 +308,7 @@ describe('createHappierMcpServer real host admission', () => {
     }));
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
-    app.get('/v1/artifacts', async () => []);
+    app.get('/v1/artifacts', async request => artifactListResponse(`http://localhost${request.url}`, []));
     app.get('/v1/artifacts/:artifactId', async (_request, reply) => reply.code(404).send({ error: 'Artifact not found' }));
     const captured: ReturnType<typeof ApprovalRequestV2Schema.parse>[] = [];
     app.post('/v1/artifacts', async request => {

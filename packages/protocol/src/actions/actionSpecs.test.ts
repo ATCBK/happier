@@ -408,6 +408,7 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
   'workflow.definition.get',
   'workflow.definition.import',
   'workflow.definition.export',
+  'workflow.definition.capture',
   'workflow.run.list',
   'workflow.run.summaries',
   'workflow.run.get',

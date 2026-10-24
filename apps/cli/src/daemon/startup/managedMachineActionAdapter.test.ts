@@ -1245,7 +1245,7 @@ describe('daemon managed Machine Action factory', () => {
                 if (path === '/v1/account/entity-rows/acp') return { status: 200,
                     data: AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
                         content: { t: 'plain', v: { v: 1, definitions: [] } } }) };
-                if (path === '/v1/artifacts') return { status: 200, data: [] };
+                if (path === '/v1/artifacts') return { status: 200, data: { items: [], hasUnclassified: false } };
                 if (path.startsWith('/v1/artifacts/')) {
                     expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
                     return { status: artifact && path === `/v1/artifacts/${artifact.id}` ? 200 : 404,

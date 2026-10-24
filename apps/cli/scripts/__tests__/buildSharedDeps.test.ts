@@ -44,6 +44,7 @@ import {
   writeCliBundledHostPackage,
   writeRuntimeDependencyStub,
   writeWorkspacePackageFixture,
+  FIXTURE_PNPM_WORKSPACE_YAML,
 } from './testkit/packageLayoutSandbox';
 
 describe('post-sync bundled plugin diagnostics', () => {
@@ -696,7 +697,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(cliDir, { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-inspector'],
@@ -880,7 +881,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: [],
@@ -1006,7 +1007,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1110,7 +1111,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1161,7 +1162,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1251,7 +1252,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: [
@@ -1325,7 +1326,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/protocol', '@happier-dev/plugins-pi'],
@@ -1389,7 +1390,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1466,7 +1467,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1546,7 +1547,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1624,7 +1625,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -1686,7 +1687,7 @@ describe('buildSharedDeps', () => {
     mkdirSync(resolve(repoRoot, 'packages', 'protocol', 'dist'), { recursive: true });
     writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
     writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
     writeFileSync(resolve(repoRoot, 'packages', 'protocol', 'dist', 'index.js'), 'export {};\n', 'utf8');
     writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
       name: '@happier-dev/cli',
@@ -1743,7 +1744,7 @@ describe('buildSharedDeps', () => {
     mkdirSync(resolve(repoRoot, 'packages', 'protocol', 'dist'), { recursive: true });
     writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
     writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
     writeFileSync(resolve(repoRoot, 'packages', 'protocol', 'dist', 'index.js'), 'export {};\n', 'utf8');
     writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
       name: '@happier-dev/cli',
@@ -1949,7 +1950,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'apps', 'cli'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'packages', 'protocol', 'dist', 'index.js'), 'export {};\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
@@ -2090,7 +2091,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'apps', 'cli'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'packages', 'protocol', 'dist', 'index.js'), 'export {};\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
@@ -2174,7 +2175,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'packages', 'plugins', 'kept', 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'packages', 'plugins', 'kept', 'tsconfig.json'), '{}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'packages', 'plugins', 'kept', 'package.json'), JSON.stringify({
         name: '@happier-dev/plugins-kept',
@@ -2280,6 +2281,7 @@ describe('buildSharedDeps', () => {
     const publishedSelections: string[][] = [];
     const publishedFailureSelections: string[][] = [];
     try {
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       mkdirSync(resolve(repoRoot, 'apps', 'cli'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
@@ -2340,7 +2342,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'packages', 'plugins', 'pi'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -2393,7 +2395,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(pluginDir, 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -2448,7 +2450,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'packages', 'plugins', 'pi'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -2492,7 +2494,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(repoRoot, 'packages', 'protocol', 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/plugins-pi'],
@@ -2573,7 +2575,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/protocol', '@happier-dev/plugins-pi'],
@@ -2647,7 +2649,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/protocol', '@happier-dev/plugins-pi'],
@@ -2753,7 +2755,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true,"type":"module"}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), JSON.stringify({
@@ -2838,7 +2840,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(destPackageDir, 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), JSON.stringify(packageJson), 'utf8');
@@ -2918,7 +2920,7 @@ describe('buildSharedDeps', () => {
       ), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         dependencies: { [packageName]: '0.0.0' },
@@ -3014,7 +3016,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(destPackageDir, 'dist', 'happier-plugin-ui'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), JSON.stringify(packageJson), 'utf8');
@@ -3108,7 +3110,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true,"type":"module"}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(
         resolve(cliDir, 'package.json'),
         JSON.stringify({
@@ -3224,7 +3226,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(
         resolve(cliDir, 'package.json'),
         JSON.stringify({
@@ -3344,7 +3346,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/cli-common","type":"module"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'src', 'index.ts'), 'export const source = true;\n', 'utf8');
@@ -3647,7 +3649,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(cliDir, 'node_modules', 'tweetnacl'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(
         resolve(sourcePackageDir, 'package.json'),
@@ -3784,7 +3786,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/plugins/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: [
@@ -3881,7 +3883,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(opencodePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -3935,7 +3937,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(packageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -3989,7 +3991,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(packageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -4062,7 +4064,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(pluginSdkDir, 'package.json'), JSON.stringify({
@@ -4153,7 +4155,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(pluginSdkDir, 'package.json'), JSON.stringify({
@@ -4227,7 +4229,7 @@ describe('buildSharedDeps', () => {
       });
       expect(syncDist).toHaveBeenCalledOnce();
       expect(syncDist).toHaveBeenCalledWith(expect.objectContaining({
-        workspaceNames: ['plugins-opencode', 'plugin-sdk'],
+        workspaceNames: ['plugins-opencode'],
       }));
     } finally {
       removeTempDirSync(repoRoot);
@@ -4246,7 +4248,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -4359,7 +4361,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -4429,7 +4431,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(sourcePackageDir, 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(
@@ -4512,7 +4514,7 @@ describe('buildSharedDeps', () => {
       }
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
 
@@ -4581,7 +4583,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/protocol', '@happier-dev/cli-common'],
@@ -4656,7 +4658,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(pluginSdkDir, 'package.json'), JSON.stringify({
@@ -4727,7 +4729,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(pluginSdkDir, 'package.json'), JSON.stringify({
@@ -4794,7 +4796,7 @@ describe('buildSharedDeps', () => {
         workspaces: ['apps/*', 'packages/*'],
       }), 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: ['@happier-dev/protocol', '@happier-dev/plugin-sdk'],
@@ -4883,7 +4885,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
 
@@ -4987,7 +4989,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -5062,7 +5064,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -5131,7 +5133,7 @@ describe('buildSharedDeps', () => {
 
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(resolve(sourcePackageDir, 'package.json'), '{"name":"@happier-dev/plugins-opencode","type":"module","exports":{".":{"default":"./dist/index.js"}}}\n', 'utf8');
@@ -5183,7 +5185,7 @@ describe('buildSharedDeps', () => {
       mkdirSync(resolve(sourcePackageDir, 'dist'), { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
       writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
       writeFileSync(resolve(cliDir, 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf8');
       writeFileSync(resolve(cliDir, 'node_modules', 'tweetnacl', 'package.json'), '{"name":"tweetnacl"}\n', 'utf8');
       writeFileSync(

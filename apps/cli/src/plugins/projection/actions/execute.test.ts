@@ -39,6 +39,7 @@ import { executeContributedAction } from '@/plugins/runtime/invocation/actions/e
 import { createDaemonPluginActionExecutor } from '@/session/actions/createDaemonPluginActionExecutor';
 import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocation/actions/clientActionMachineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -844,8 +845,9 @@ describe('executeContributedAction', () => {
       }],
       runtimeOptions: {
       executeClientAction: createClientActionMachineRpcExecutor(() => ({
-        hasConnectedClientRpcHandler: (method) => method === advertisedMethod,
-        callConnectedClientRpc: async (_method, request, options) => {
+        // The live RPC registry answers only the method the connected UI registered.
+        callConnectedClientRpc: async (method, request, options) => {
+          if (method !== advertisedMethod) return { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
           requests.push(UiContributedActionExecuteRequestV1Schema.parse(request));
           options.onIssued();
           return { ok: true, result: { ok: true, result: { handledBy: 'client' } } };
@@ -875,7 +877,7 @@ describe('executeContributedAction', () => {
       expectedContributorOccurrenceId: fixture.registry.readPluginOccurrenceId('acme.action.plugin'),
       defaultSessionId: 'session-current', requiredDangerLevel: 'safe',
     }]);
-    // Advertising only the built-in client method must not stand in for the
+    // A UI registered only for the built-in client method must not stand in for the
     // contributed-Action receiver. No handler is entered on a mis-bound route.
     advertisedMethod = RPC_METHODS.UI_ACTION_EXECUTE;
     await expect(executor.execute('action.invoke', {
@@ -2433,7 +2435,9 @@ describe('executeContributedAction', () => {
       result: {
         ok: false,
         errorCode: 'plugin_action_input_schema_invalid',
-        error: 'Plugin action input does not match its manifest inputSchema',
+        error: 'plugin_action_input_schema_invalid',
+        // Content-free repair facts name the field and expectation, never the rejected value.
+        details: { issues: [{ code: 'type', expected: 'string', path: ['scope'] }] },
         actionHandlerInvocation: 'notStarted',
       },
     });

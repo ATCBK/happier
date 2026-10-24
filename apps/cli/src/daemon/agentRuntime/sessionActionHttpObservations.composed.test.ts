@@ -904,6 +904,13 @@ it('admits cont6 inherited spawn through MCP, daemon custody and signed Home min
   vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
     const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
     expect(request.context).toEqual({ token: 'B'.repeat(43), sessionId });
+    if (request.operation.kind === 'agent_start.policy.read') {
+      // The runner-hosted MCP reads the requester's Account start policy from the daemon.
+      const settings = accountSettingsParse({});
+      return Response.json({ ok: true, result: { kind: 'agent_start.policy', policy: { workDepthLimit: settings.workDepthLimit,
+        sessionAgentStartAllowListsV1: settings.sessionAgentStartAllowListsV1,
+        sessionAgentSpawnPolicyV1: settings.sessionAgentSpawnPolicyV1 } } });
+    }
     if (request.operation.kind !== 'action.execute') throw new Error('Expected Action envelope');
     const outcome = await execute(request.operation, { sessionId, isCurrent: async () => true });
     return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });

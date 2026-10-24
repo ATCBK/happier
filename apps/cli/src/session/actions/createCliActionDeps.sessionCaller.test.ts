@@ -1,4 +1,5 @@
 import axios, { AxiosHeaders } from 'axios';
+import { artifactKindListResponse } from '@/testkit/http/artifactHome';
 import { describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, createActionExecutor, createRoleSourceReaderV1, readLegacyRolesV1, encodeV2SessionListCursorV2,
   SessionListQueryV1Schema, SessionListQueryResponseV1Schema,
@@ -579,7 +580,7 @@ describe('daemon Account Action Session caller context', () => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
         mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
-      if (path === '/v1/artifacts') { artifactReads.push(path); return { status: 200, data: [] }; }
+      if (path === '/v1/artifacts') { artifactReads.push(path); return { status: 200, data: artifactKindListResponse([]) }; }
       // A Settings recapture is a distinct external operation and may be slow or
       // unavailable while this invocation's admitted snapshot remains readable.
       throw new Error(`Unavailable unrelated Settings read: ${path}`);
@@ -695,7 +696,7 @@ describe('daemon Account Action Session caller context', () => {
       if (path === '/v1/artifacts') {
         privateReads.push(path);
         const { body: _body, ...header } = stored;
-        return { status: 200, data: [header] };
+        return { status: 200, data: artifactKindListResponse([header]) };
       }
       if (path === `/v1/artifacts/${roleId}`) { privateReads.push(path); return { status: 200, data: stored }; }
       throw new Error(`Unexpected private Role HTTP boundary: ${path}`);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -239,7 +240,7 @@ function setAccountSettingsBoundary(input: Readonly<{ settings: Readonly<Record<
           ? { key, value: ConnectedPurposeCatalogV1Schema.parse(input.purposes) }
           : emptyConnectedAccountCatalogRecordV1(key) } } };
     }
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(url, []) };
     if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: ProfileRowsListResponseV1Schema.parse({ status: 'listed',
       rows: (input.profileIds ?? []).map(id => ({ id, revision: 1, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
         v: 1, id, enabled: true, promptStack: [], secretBindings: {},
@@ -910,7 +911,7 @@ describe('createCliActionExecutor', () => {
       input: { scope: 'diff' },
       surface: 'cli',
       defaultSessionId: 'sess-1',
-    });
+    }, undefined);
   });
 
   it('forwards daemon-owned catalog meta Actions exactly once from a standalone executor', async () => {
@@ -931,7 +932,7 @@ describe('createCliActionExecutor', () => {
       actionId: 'action.spec.search',
       input: { limit: 10 },
       surface: 'cli',
-    });
+    }, undefined);
   });
 
   it('keeps daemon-owned catalog meta Actions in-process for the daemon executor', async () => {

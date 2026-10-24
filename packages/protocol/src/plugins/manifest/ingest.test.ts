@@ -74,7 +74,7 @@ function serializedManifestWithMetadataDepth(depth: number): string {
 
 it('admits only declared same-plugin dynamic JSON sidebar counts in a compatible Resource scope', () => {
   const declaration = (target: string, resource: Record<string, unknown> | null, countResourceId = 'count') => manifest({ contributes: {
-    resources: resource ? [{ id: 'count', kind: 'config', title: 'Count', ...resource }] : [],
+    resources: resource ? [{ id: 'count', kind: 'config', ...resource }] : [],
     ui: { renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Issues' } }],
       views: [{ id: 'issues', renderer: 'native', container: 'rightSidebarTab', target: { kind: target }, defaultPlacement: 'auto', countResourceId }] },
   } });
@@ -86,7 +86,7 @@ it('admits only declared same-plugin dynamic JSON sidebar counts in a compatible
     ['project', { source: 'dynamic', contentType: 'application/json', scope: 'session' }],
     ['app', { source: 'dynamic', contentType: 'application/json', scope: 'session' }],
     ['session', { source: 'dynamic', contentType: 'text/plain', scope: 'session' }],
-    ['session', { source: 'file', path: './count.json', contentType: 'application/json', scope: 'global' }],
+    ['session', { source: 'packaged', path: './count.json', contentType: 'application/json' }],
   ] as const) {
     expect(ingestPluginManifestV2(declaration(target, resource)).ok).toBe(false);
   }

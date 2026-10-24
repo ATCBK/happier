@@ -5065,11 +5065,12 @@ export function createCliActionDeps(params: Readonly<{
       if (!result.ok) return result;
 
       const visibleThroughSeqBySessionId = new Map<string, number>();
-      await Promise.all([...new Set(result.hits.flatMap((hit) =>
+      const sessionIds = [...new Set(result.hits.flatMap((hit) =>
         isMemorySessionSearchHitV1(hit) ? [hit.sessionId] : [],
-      ))].map(async (sessionId) => {
+      ))];
+      const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
+      await Promise.all(sessionIds.map(async (sessionId) => {
         try {
-          const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
           const session = await fetchSessionById({
             token: credentials.token,
             sessionId,

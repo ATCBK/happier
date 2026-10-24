@@ -6,6 +6,9 @@ import { ensureDirectorySync } from '../../../src/testkit/fs/fileHelpers';
 import { PLUGIN_PACKAGE_PREFIX } from '../../build-owned/bundledPluginMembership.ts';
 import { writeSandboxJsonFile, writeSandboxPackage, writeSandboxTextFile } from './cliBinPreflightSandbox';
 
+/** The block-sequence workspace set the dependency-free pnpm reader accepts; fixtures own the layouts these globs select. */
+export const FIXTURE_PNPM_WORKSPACE_YAML = 'packages:\n  - apps/*\n  - packages/*\n  - packages/plugins/*\n';
+
 function resolvePackageDir(baseDir: string, packageName: string): string {
     return resolve(baseDir, ...packageName.split('/'));
 }
@@ -21,7 +24,7 @@ export function createPackageLayoutSandbox(prefix: string): {
     ensureDirectorySync(happyCliDir);
     writeSandboxJsonFile(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
     writeSandboxTextFile(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n');
-    writeSandboxTextFile(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+    writeSandboxTextFile(resolve(repoRoot, 'pnpm-workspace.yaml'), FIXTURE_PNPM_WORKSPACE_YAML);
 
     return {
         repoRoot,

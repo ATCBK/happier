@@ -362,7 +362,7 @@ describe('automationWorker', () => {
       if (!url.endsWith('/v3/automations/runs/claim')) return { data: { ok: true } };
       if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
       claimed = true;
-      return { data: { run: { id: runId, automationId: 'automation-park', attempt: 1, revision: 0,
+      return { data: { run: { id: runId, automationId: 'automation-park', leaseExpiresAt: now + 30_000, attempt: 1, revision: 0,
         recipeKind: 'workflow-v2', triggerId: null, triggerRetired: false, cause: { kind: 'manual', invokedAt: now },
         executionInputEnvelope: '{}', automationEvidenceEnvelope: null, workflowAcceptedSnapshotEnvelope: acceptedEnvelope },
         automation: { id: 'automation-park', name: 'Park', enabled: true }, accountCurrentness: V3_CLAIM_CURRENTNESS } };
@@ -1296,7 +1296,7 @@ describe('automationWorker', () => {
       claims.push(body.scope);
       const index = ordinal++;
       return { data: index >= ids.length ? { run: null, automation: null, accountCurrentness: null } : {
-        run: { id: ids[index], automationId: `automation-${index}`, attempt: 1, revision: 0, recipeKind: 'workflow-v2',
+        run: { id: ids[index], automationId: `automation-${index}`, leaseExpiresAt: now + 30_000, attempt: 1, revision: 0, recipeKind: 'workflow-v2',
           triggerId: null, triggerRetired: false, cause: { kind: 'manual', invokedAt: now },
           executionInputEnvelope: '{}', automationEvidenceEnvelope: null, workflowAcceptedSnapshotEnvelope: accepted[index] },
         automation: { id: `automation-${index}`, name: 'Capacity', enabled: true,

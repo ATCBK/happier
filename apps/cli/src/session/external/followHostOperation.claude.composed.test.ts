@@ -822,7 +822,8 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
         return;
       }
       if (kind === 'oversized_native_row') {
-        expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_resync_required' });
+        // A record beyond the read allowance fails explicitly (JSONL_RECORD_TOO_LARGE) instead of looping a no-progress resync.
+        expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_acquisition_failed' });
         expect(events.filter(event => event.kind === 'data')).toEqual([]);
         expect(manager.countActiveLeases(sessionId)).toBe(0);
         return;

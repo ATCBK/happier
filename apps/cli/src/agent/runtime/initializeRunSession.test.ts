@@ -828,7 +828,8 @@ describe('initialize run session', () => {
       permissionModeUpdatedAt: 100,
       lifecycleState: 'running',
     })
-    expect((reportedMetadata as Record<string, unknown> | null)?.workspaceId).toBeUndefined()
+    // The retained Session keeps its accepted workspace identity; the runner's local ids never replace it.
+    expect((reportedMetadata as Record<string, unknown> | null)?.workspaceId).toBe('ws_authoritative')
     expect((reportedMetadata as Record<string, unknown> | null)?.workspaceLocationId).toBeUndefined()
     expect((reportedMetadata as Record<string, unknown> | null)?.workspaceCheckoutId).toBeUndefined()
     expect((reportedMetadata as any)?.acpSessionModesV1).toBeUndefined()

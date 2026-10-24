@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { artifactReadResponse } from '@/testkit/http/artifactHome';
+import { projectAccountRowReadResponse } from '@/testkit/http/projectAccountRows';
 import { createActionExecutor, SessionEffectiveAccessV1Schema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import axios from 'axios';
@@ -453,22 +455,27 @@ describe('createCliActionDeps memory bindings', () => {
     let value = ProjectAccountOrganizationV1Schema.parse({ hidden: true, pinned: true, promptStack: [neighbor] });
     let revision = 4;
     const writes: unknown[] = [];
+    const created = {
+      id: 'created', ownerAccountId: 'scope-account', access: 'owner', encryptionMode: 'plain',
+      header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [], topics: [] }) }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+    };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (path === '/v1/artifacts/created') return { status: 200, data: {
-        id: 'created', ownerAccountId: 'scope-account', access: 'owner', encryptionMode: 'plain',
-        header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
-        body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [], topics: [] }) }),
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-      } };
+      if (path === '/v1/artifacts/created') return { status: 200, data: created };
       throw new Error(`Unexpected read ${url}`);
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       expect(String(url).startsWith(serverHttpBaseUrl)).toBe(true);
+      if (new URL(String(url)).pathname === '/v1/artifacts/read') return artifactReadResponse(body, id => id === created.id ? created : null);
       if (String(url).endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [
         { key, revision, content: { t: 'plain', v: { key, value } } },
       ] } };
+      // The organization CAS reads exactly its row, not the whole census.
+      if (String(url).endsWith('/read')) return projectAccountRowReadResponse(
+        [{ key, revision, content: { t: 'plain', v: { key, value } } }], body);
       const mutation = ProjectAccountRowMutationRequestV1Schema.parse(body);
       writes.push(mutation);
       expect(mutation.mutations[0]?.expectedRevision).toBe(4);

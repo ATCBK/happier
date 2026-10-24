@@ -341,6 +341,8 @@ it.each(['session_close', 'planned_refresh_then_stop'] as const)('admits Session
     overrides: { getBackendTarget: () => readBackendTargetRefV2(backendTarget),
       ...createSnapshotSessionPendingTransport(),
       enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
+      // Host structured completions are committed replies; the online Session acknowledges delivery.
+      enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: true }),
       setExecutionRunWorkerUpdateSource: source => { composition.manager = source; } } });
   const controls: Partial<SessionRuntimeControls> = {};
   const permissions = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Snapshot Parent]' });

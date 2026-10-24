@@ -32,6 +32,7 @@ import type { PluginContributionActivationDemand } from './activation/targets';
 import { resolveProjectNativeAdapter, type ProjectNativeAdapterProductionV1 } from './contributions/targetProjectNativeAdapters';
 import { createProjectDefinitionAction } from '@/rpc/handlers/projectDefinitions';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
 import { executeProjectFiniteProcess } from '@/workspaces/projectSetup/projectSetupExecution';
 import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { prepareProjectSetup } from '@/workspaces/projectSetup/projectSetupPreparation';
@@ -719,10 +720,10 @@ describe('target activation publication', () => {
                 trust = mutation.content;
                 return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
             }
-            expect(url).toBe(`${httpBaseUrl}${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
-            expect(body).toEqual({});
+            // The exact accepted checkout is read by key; the shared Account HTTP adapter answers that route.
+            expect(String(url).startsWith(`${httpBaseUrl}${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/`)).toBe(true);
             const key = { kind: 'workspace-ref', serverId: workspace.serverId, id: workspace.id };
-            return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }] } };
+            return projectAccountRowsReadHttpResponse([{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }], String(url), body);
         });
         cleanups.push(() => { httpPost.mockRestore(); });
         const spawned: Array<{ params: PtySpawnParams; exit(event: PtyExitEvent): void }> = [];

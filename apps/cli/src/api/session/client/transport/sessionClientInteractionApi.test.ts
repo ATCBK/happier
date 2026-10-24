@@ -1190,6 +1190,8 @@ describe('createSessionClientInteractionApi diagnostics', () => {
           onUserMessage: handler => { receiveUserMessage = handler; },
           observeProviderInputSettlement,
           confirmUserMessageLocallyConsumed,
+          // The original Discussion carries no attachment sources; hydration of its cutoff resolves to nothing.
+          materializeDiscussionAttachmentsForDispatch: async () => null,
           enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
           enqueueAgentMessageCommitted: async (_provider, body) => {
             published.push(body);
@@ -1217,7 +1219,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
             applyConfigDeltaInFlight: async () => ({ status: 'applied' }),
             rejectPromptBeforeProvider: rejectSteerBeforeProvider,
             registerProviderAcceptedEffect() {}, prepareHostContext: async () => { checkpointFinished = true; return null; },
-            readStructuredInputDispatchServices: () => ({ sessionId: 's1', ...(state === 'missing-service' ? {} : {
+            readStructuredInputDispatchServices: () => ({ sessionId: 's1', materializeDiscussionAttachmentsForDispatch: async () => null, ...(state === 'missing-service' ? {} : {
               reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input),
             }) }),
           },

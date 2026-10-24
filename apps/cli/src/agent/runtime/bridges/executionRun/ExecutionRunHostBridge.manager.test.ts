@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
+import { ArtifactReadHeadersBatchInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import tweetnacl from 'tweetnacl';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1052,7 +1053,7 @@ describe('ExecutionRunManager (review intent)', () => {
       createSessionOwnedRunScope: (runId: string) => ExecutionRunHostRunScopeBinding | null;
     };
     internals.runs.set('run-a', {
-      sessionId: 'parent-session', sidechainId: 'sidechain-a',
+      sessionId: 'parent-session', sidechainId: 'sidechain-a', intent: 'review',
     } as unknown as ExecutionRunState);
     internals.controllers.set('run-a', {
       kind: 'backend', cancelled: false, pendingInputAcceptance: Promise.resolve('accepted'),
@@ -3648,6 +3649,19 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       if (path !== '/execution-run/admission') throw new Error(`Unexpected daemon effect: ${path}`);
       return { admitted: true };
     });
+    const artifactHeader = (id: string) => ({
+      id, ownerAccountId: accountId, access: 'owner' as const, encryptionMode: 'plain' as const, publicAudience: 'none' as const,
+      header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Instructions' }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
+      seq: 1, createdAt: 1, updatedAt: 1,
+    });
+    // Selected Artifact headers use the narrow batch read; bodies are still ordinary GETs.
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (new URL(String(url)).pathname !== '/v1/artifacts/read') throw new Error(`Unexpected Account write: ${String(url)}`);
+      const input = ArtifactReadHeadersBatchInputV1Schema.parse(body);
+      return { status: 200, data: ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers',
+        items: input.artifactIds.map(artifactId => ({ artifactId, ok: true, artifact: artifactHeader(artifactId) })) }) };
+    });
     const http = vi.spyOn(axios, 'get').mockImplementation(async url => {
       const address = new URL(String(url));
       expect(new URL(normalizeServerHttpBaseUrl(String(url))).origin).toBe(new URL(normalizeServerHttpBaseUrl(serverUrl)).origin);
@@ -3655,12 +3669,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 0,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
-      if (path === '/v1/artifacts') return { status: 200, data: ['rpc-account-doc', 'rpc-profile-doc', 'rpc-session-doc'].map(id => ({
-        id, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
-        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Instructions' }),
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
-        seq: 1, createdAt: 1, updatedAt: 1,
-      })) };
+      if (path === '/v1/artifacts') return { status: 200, data: ['rpc-account-doc', 'rpc-profile-doc', 'rpc-session-doc'].map(id => artifactHeader(id)) };
       if (path.startsWith('/v2/sessions/')) {
         const id = path.slice('/v2/sessions/'.length);
         const metadata = id === 'rpc-history' ? { ...hidden, profileId: 'misleading-history-profile',
@@ -3965,8 +3974,11 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         } } }).then(value => { result = value; });
       await vi.waitFor(() => expect(entered, JSON.stringify(result)).toBe(true));
       rpc.cancelTransportRequests();
-      await vi.waitFor(() => expect(result).toMatchObject({ ok: false, errorCode: 'VOICE_AGENT_START_FAILED' }));
+      // Start acknowledges the created Run; the closed carrier settles it as failed.
+      await vi.waitFor(() => expect(result).toMatchObject({ ok: true, runId: expect.any(String) }));
       await pending;
+      expect(captured.manager?.get((result as { runId: string }).runId))
+        .toMatchObject({ status: 'failed', error: { code: 'VOICE_AGENT_START_FAILED' } });
       expect(disposed).toBe(true);
       expect(rpc.getInFlightRequestCount()).toBe(0);
       expect(captured.manager?.listPublicForRequest({}, sessionId).some(run => run.status === 'running')).toBe(false);

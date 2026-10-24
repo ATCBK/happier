@@ -109,7 +109,8 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
     } else if (roleCatalog && request.method === 'GET' && request.url === '/v2/account/settings/history') {
       response.end(JSON.stringify({ snapshots: [] }));
     } else if (roleCatalog && request.method === 'GET' && request.url?.startsWith('/v1/artifacts?')) {
-      const filtered = new URL(request.url, 'http://fixture.local').searchParams.has('kind');
+      const params = new URL(request.url, 'http://fixture.local').searchParams;
+      const filtered = params.has('kind') || params.has('kinds');
       response.end(JSON.stringify(filtered ? { items: [], hasUnclassified: false } : []));
     } else { response.statusCode = 404; response.end('{}'); }
   });

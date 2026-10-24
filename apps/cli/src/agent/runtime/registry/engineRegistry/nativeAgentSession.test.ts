@@ -1146,6 +1146,8 @@ describe('native Agent session host adapter', () => {
                                 await emitSdk({ type: 'control_response', response: { subtype: 'success', request_id: record.request_id, response: {} } });
                             } else if (record.type === 'user') {
                                 sdkUserPrompts.push(record);
+                                // The query accepts input only on Claude's native replayed user acknowledgment.
+                                await emitSdk({ ...record, isReplay: true, parent_tool_use_id: null });
                                 const hook = sdkHook.current;
                                 if (!hook) throw new Error('The real SDK Session hook server was not started');
                                 const response = await fetch(`http://127.0.0.1:${hook.port}/hook/session-start`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-hook-secret': hook.secret },
@@ -2161,6 +2163,8 @@ describe('native Agent session host adapter', () => {
 
         const loopSession = createMutableApiSessionClientFixture({ sessionId: 'session-startup-instructions',
             metadata: createTestMetadata({ path: '/tmp/acme-startup-instructions', permissionMode: 'default', permissionModeUpdatedAt: 0 }) });
+        // The Session persistence/transport boundary admits this protected input.
+        loopSession.reconcileSessionInputForProviderDispatch = async () => 'admitted';
         const permission = new ProviderEnforcedPermissionHandler(loopSession, { logPrefix: '[PERF4 native seam]' });
         const created = await plan.config.createSessionRuntime({
             directory: '/tmp/acme-startup-instructions',
@@ -9557,11 +9561,14 @@ describe('native Agent session host adapter', () => {
             for (const listener of listeners) listener({ sequence: 3, sessionId: 'session-1', emittedAtMs: 3,
                 kind: 'turn-complete', turnId: 'turn-1' });
             await vi.waitFor(() => expect(boundResult).toMatchObject({ kind: 'questions', status: 'unavailable' }));
-            await vi.waitFor(() => expect(Object.keys(sessionClient.getAgentStateSnapshot().requests ?? {})).toHaveLength(1));
-            const outstanding = Object.values(sessionClient.getAgentStateSnapshot().requests as Record<string, { turnId?: string }>)[0];
-            expect(outstanding?.turnId).toBe('turn-1');
+            // The bound waiter ends with its turn, but structured questions are retained
+            // independently of turn cleanup: both rows stay answerable after completion.
+            const readRequests = () => Object.values((sessionClient.getAgentStateSnapshot().requests ?? {}) as Record<string, { turnId?: string; lifetime?: string }>);
+            await vi.waitFor(() => expect(readRequests().map(request => request.lifetime).sort()).toEqual(['occurrence', 'turn']));
+            expect(readRequests().every(request => request.turnId === 'turn-1')).toBe(true);
             retirement.abort();
-            await vi.waitFor(() => expect(Object.keys(sessionClient.getAgentStateSnapshot().requests ?? {})).toHaveLength(0));
+            // Session retirement ends the native-owned occurrence question; the durable one remains answerable.
+            await vi.waitFor(() => expect(readRequests().map(request => request.lifetime)).toEqual(['turn']));
             expect(sendUserMessage).not.toHaveBeenCalled();
         } finally {
             retirement.abort();

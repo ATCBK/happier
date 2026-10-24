@@ -1069,7 +1069,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     expect(publishGeneratedMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('attributes only actual request auth and drops combined evidence after an in-turn account switch', async () => {
+  it('attributes only actual request auth and reports unknown native attribution after an in-turn account switch', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-request-attribution-'));
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const runtime = createRuntime({ processEnv: { CODEX_HOME: codexHome }, connectedAccountService: service });
@@ -1088,10 +1088,14 @@ describe('Codex app-server temporary recoverable turn failures', () => {
         v: 1, turnId: 'host-first', source: { kind: 'native', connectedAccount: { service, accountId: 'account-a' } } } });
       expect(await apply('account-b')).toMatchObject({ ok: true });
       usage('turn-1');
-      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).not.toHaveProperty('attribution');
+      // A contradicted response identity publishes an explicit unknown native witness, never a launch-credential fallback.
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).toMatchObject({ attribution: {
+        v: 1, turnId: 'host-first', source: { kind: 'native', connectedAccount: null } } });
       expect(await apply('account-a')).toMatchObject({ ok: true });
       usage('turn-1');
-      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).not.toHaveProperty('attribution');
+      // A contradicted response identity publishes an explicit unknown native witness, never a launch-credential fallback.
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).toMatchObject({ attribution: {
+        v: 1, turnId: 'host-first', source: { kind: 'native', connectedAccount: null } } });
       const completion = waitForCodexAppServerRuntimeTurnCompletion(runtime);
       emitNotification('turn/completed', completedTurn('turn-1'));
       await completion;

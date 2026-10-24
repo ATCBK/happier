@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { projectAccountRowReadResponse } from '@/testkit/http/projectAccountRows';
 import { readProjectAccountRows, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
@@ -216,6 +217,7 @@ describe('Project Open RPC', () => {
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (url.endsWith('/machines/managed/actions/list')) return { status: 200, data: { machines: [] } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key, revision: 0, content: mutation.content }));
       rows.push(...changed);
@@ -302,6 +304,7 @@ describe('Project Open RPC', () => {
     vi.spyOn(axios, 'get').mockImplementation(plainMachineRead);
     const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key,
         revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content }));
@@ -479,6 +482,7 @@ describe('Project Open RPC', () => {
       expect(config?.headers).not.toHaveProperty('Authorization');
       if (url.endsWith('/project-trust/read')) return { status: 200, data: { status: 'absent' } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key,
         revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content }));
@@ -517,6 +521,7 @@ describe('Project Open RPC', () => {
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (url.endsWith('/list') && url.includes('/machines/managed/')) return { status: 200, data: { machines: [] } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [] } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse([], body);
       writes.push(body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       return { status: 200, data: { status: 'updated', rows: request.mutations.map(mutation => ({ key: mutation.key,
@@ -597,6 +602,7 @@ describe('Project Open RPC', () => {
       if (url.endsWith('/machines/managed/actions/get')) return { status: 200, data: machine };
       if (url.endsWith('/project-trust/read')) return { status: 200, data: { status: 'absent' } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key,
         revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content }));
@@ -688,6 +694,7 @@ describe('Project Open RPC', () => {
     const writes: unknown[] = [];
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       writes.push(request);
       const changed = request.mutations.map(mutation => ({ key: mutation.key,
@@ -729,6 +736,7 @@ describe('Project Open RPC', () => {
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       if (url.endsWith('/project-trust/read')) return { status: 200, data: { status: 'absent' } };
       if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/read')) return projectAccountRowReadResponse(rows, body);
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key,
         revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content }));

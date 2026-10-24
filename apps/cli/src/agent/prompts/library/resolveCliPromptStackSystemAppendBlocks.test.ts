@@ -378,7 +378,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       diagnostic: expect.objectContaining({ code: 'attachment_unavailable' }),
     }));
     expect(absent.failures).toHaveLength(1);
-    expect(absent.publications).toContainEqual(expect.objectContaining({ type: 'message' }));
+    // The Session lifecycle (onPromptFailure) owns the failure message; the prompt loop publishes nothing itself.
+    expect(absent.publications).toEqual([]);
   });
 
   it('retains unavailable Account prompt inventory until cancellation without publishing a failed turn', async () => {

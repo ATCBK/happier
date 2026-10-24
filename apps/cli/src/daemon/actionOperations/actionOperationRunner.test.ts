@@ -83,11 +83,13 @@ describe('action operation canonical execution observer', () => {
       requestId: 'approved-project-request',
       input: { workspaceRefId: 'workspace', cwd: '/project' },
       execute: async (context: Parameters<Parameters<typeof runner.observe>[0]['execute']>[0]) => {
+        // The outer Action executor requests approval before the finite command
+        // owner can publish acceptance of the approved execution.
+        if (++executionCount === 1) return { ok: true as const,
+          result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'projects.script.run' } };
         context.publishOwnerUpdate({ domainRef: { kind: 'projectCommand', purpose: 'script', serverId: 'home',
           machineId: scope.machineId, workspaceRefId: 'workspace', cwd: '/project' } });
-        return ++executionCount === 1
-          ? { ok: true as const, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'projects.script.run' } }
-          : { ok: true as const, result: terminalResult };
+        return { ok: true as const, result: terminalResult };
       },
     };
 
@@ -95,7 +97,10 @@ describe('action operation canonical execution observer', () => {
       ok: true,
       result: { kind: 'approval_request_created', actionId: 'projects.script.run' },
     });
-    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+    await expect(runner.observe(request)).resolves.toMatchObject({ ok: true, result: {
+      operation: { operationId: 'project-approval-1', domainRef: { kind: 'projectCommand' } },
+    } });
+    await expect(runner.waitForTerminal(scope, 'project-approval-1')).resolves.toMatchObject({ state: 'succeeded', result: terminalResult });
     await expect(runner.observe(request)).resolves.toMatchObject({
       ok: true,
       result: { operation: { state: 'succeeded', result: terminalResult } },
