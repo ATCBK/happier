@@ -800,6 +800,30 @@ Run-observation refusal preserves the last saved projection and does not establi
 generation failure. Typed admission failures remain visible over retained content;
 only model-related failures offer model selection as recovery.
 
+In unreleased 0.3, restoration sends the checkout, optional Session and requested
+comparison/output selectors to `scm.diffSummary.result.list`. The machine result
+owner selects references from its protected `selection.json` metadata projection;
+opening a comparison does not decode unrelated saved results or read Run usage.
+Only the chosen result bodies are read. Known result identities go directly to
+the canonical body reader, which admits the stored repository and Session scope
+before returning contents. Selectors never grant access, and inventory counts and
+bytes include only admitted results.
+
+The projection contains selection metadata, not captured diffs, generated output
+bodies or Undo. Every result writer invalidates its row before committing the
+canonical body, then republishes metadata under the existing filesystem exclusion
+primitive. Missing or malformed projection data rebuilds from canonical files;
+one malformed result cannot hide unrelated valid records. Interrupted metadata
+publication does not turn an already committed edit into a reported failure.
+Normal restart reads the retained projection without reopening result bodies;
+cold repair must decode records whose metadata is missing. Deletion removes the
+row before its body, so an interrupted deletion with a retained body can recover.
+This unreleased replacement requires reloading existing result writers; it does
+not promise freshness for arbitrary external file edits or older loaded writers
+that do not maintain the projection.
+Settings explicitly requests `includeUsage: true` for the separate seven-day
+retained-Run cost projection; normal inventory/selection omits that optional field.
+
 `scm.diffSummary.result.*`, `refine` and `addOutputs` use the existing authenticated
 machine/Session transport. Writes bind `resultId` and `expectedRevision`; the
 machine uses protected atomic local state under the existing runtime directory
@@ -807,12 +831,14 @@ and serializes writers with its owner-file lock. Successful changes increment
 revision. A stale write returns `revision_conflict` and the latest revision;
 clients keep their draft for reconciliation. A refinement binds its output scope
 and base before dispatch, so late model output cannot erase intervening edits.
-Discussion admits an empty structured-output scope, including the initial turn
-of a seeded replacement conversation. The shared prompt requests a prose answer;
-the saved-result publisher rejects edits from that input even if the model
-returns result-shaped JSON. Selected stops are context, not review verify/fix
-instructions. Only an explicit structured request binds outputs for publication;
-its existing revision check still applies. Binding the replacement Run changes
+Retained discussion carries the full current saved outputs and comparison, even
+when a question names one stop. The shared prompt requests prose for ordinary
+questions and structured output when the person asks to change the saved result.
+The Run composer uses that same discussion Action with a freshly read revision.
+An ordinary prose answer publishes no edit. Selected stops identify the requested
+context; they do not replace the rest of the saved walkthrough. The initial turn
+of a seeded replacement conversation still admits no structured outputs. Every
+structured publication retains the existing revision check. Binding the replacement Run changes
 linkage and provenance while preserving the saved story and unrelated outputs.
 
 Rename, prose edit, reorder, merge, output addition and immediate Undo preserve
@@ -905,11 +931,27 @@ visible. A changed saved output publishes one host notice with the existing
 `happier.kind: 'scm_diff_summary.v1'` saved-result payload and a typed
 `scmResultUpdate` publication receipt. The receipt identifies changed output kinds,
 whether each value was created or updated relative to the saved value, and the
-saved result's Undo availability. It is derived from successful saved publication,
+saved result's Undo availability. Update receipts also carry the result owner's
+update notice and whether a manually edited title was retained. The receipt
+reader rejects an update notice for a different result revision. It is derived from successful saved publication,
 not a revision guess or a separate status store. Baseline metadata, prose-only
 discussion, unchanged values and refused/conflicted writes do not carry a success
 receipt. The UI receipt adapter validates this metadata alongside the saved
 result identity, revision and comparison without interpreting transcript JSON.
+Metadata-only baseline and progress completions update Run state without writing
+an empty assistant transcript record. Committed person questions belong to the
+Run's sidechain and pass through the same reducer projection with or without a
+parent tool marker. The shared Run visibility projection uses the existing
+host-input provenance classifier to omit host setup prompts at both Run entrances
+and in parent previews and Find. Person-facing previews use the canonical display
+text rather than the expanded generator context. A receipt with Undo permission
+exposes the existing Undo intent without loading SCM data on mount. A known newer
+admitted revision disables that intent immediately. Otherwise, the intent reads
+the exact saved result through the existing Action and requires the receipt
+revision, Undo availability and unlocked application before invoking
+revision-guarded Undo. Stale reads return a typed conflict without mutating a newer
+result. Reads and successful Undo responses enter the canonical saved-result
+store; the receipt creates no inventory, revision cache or guessed request key.
 For a Session-owned retained Run, the host notice reaches the existing durable
 sidechain writer before native terminal settlement. Its actual committed message
 is the input's reply result; the hidden consumed structured-source record is not.
