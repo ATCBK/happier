@@ -43,6 +43,8 @@ const OptionRowPressable = Pressable as React.ComponentType<
 export type HappierOptionRowProps = Readonly<{
     title: React.ReactNode;
     subtitle?: React.ReactNode;
+    /** Visible subtitle lines (default 2). A menu row keeps its purpose to one line; its accessible name carries the whole text. */
+    subtitleLines?: number;
     titleLeading?: React.ReactNode;
     titleAccessory?: React.ReactNode;
     subtitleLeading?: React.ReactNode;
@@ -77,7 +79,7 @@ export const HappierOptionRow = React.forwardRef<HappierFocusable, HappierOption
                 <Text style={styles.titleWithAccessories} numberOfLines={1}>{props.title}</Text>
                 {props.titleAccessory}
             </View> : <Text style={styles.title} numberOfLines={1}>{props.title}</Text>}
-            {props.subtitle ? <View style={styles.subtitleRow}>{props.subtitleLeading}<Text style={styles.subtitle} numberOfLines={2}>{props.subtitle}</Text></View> : null}
+            {props.subtitle ? <View style={styles.subtitleRow}>{props.subtitleLeading}<Text style={styles.subtitle} numberOfLines={props.subtitleLines ?? 2}>{props.subtitle}</Text></View> : null}
         </View>
         {includeRight && props.right ? <View style={[styles.right, aligned]}>{props.right}</View> : null}
     </>;
