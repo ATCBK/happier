@@ -4,7 +4,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 
 const OUTPUT_MARKER = '__HAPPIER_GENERATOR_MODULE_JSON__';
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+// Retain recent stderr only for failure diagnostics; this does not bound responses.
+const STDERR_DIAGNOSTIC_TAIL_CHARS = 4 * 1024 * 1024;
 
 type InspectionPayload = Readonly<{
   exportNames: readonly string[];
@@ -17,8 +18,11 @@ type PendingInspection = Readonly<{
   reject: (error: Error) => void;
 }>;
 
+/** Exports whose values the caller reads; export names are always reported. Omit to answer every export. */
+export type TypescriptModuleInspectionOptions = Readonly<{ exports?: readonly string[] }>;
+
 export type TypescriptModuleInspectionSession = Readonly<{
-  inspect(path: string): Promise<unknown>;
+  inspect(path: string, options?: TypescriptModuleInspectionOptions): Promise<unknown>;
   close(): Promise<void>;
 }>;
 
@@ -61,6 +65,7 @@ export function createTypescriptModuleInspectionSession({
   let stderr = '';
   let closed = false;
   let closeError: Error | undefined;
+  let terminalError: Error | undefined;
 
   /**
    * The worker answers over pipes, and a pipe chunk ends wherever the kernel
@@ -85,7 +90,7 @@ export function createTypescriptModuleInspectionSession({
     pending.clear();
   };
   child.stderr.on('data', (chunk: Buffer) => {
-    stderr = `${stderr}${stderrDecoder.write(chunk)}`.slice(-MAX_RESPONSE_BYTES);
+    stderr = `${stderr}${stderrDecoder.write(chunk)}`.slice(-STDERR_DIAGNOSTIC_TAIL_CHARS);
   });
   child.stdin.on('error', (error) => {
     closeError ??= error;
@@ -93,11 +98,6 @@ export function createTypescriptModuleInspectionSession({
   });
   child.stdout.on('data', (chunk: Buffer) => {
     stdoutBuffer += stdoutDecoder.write(chunk);
-    if (Buffer.byteLength(stdoutBuffer, 'utf8') > MAX_RESPONSE_BYTES) {
-      closeError = new Error('TypeScript inspection worker output exceeded its bounded buffer');
-      child.kill('SIGKILL');
-      return;
-    }
     for (;;) {
       const newline = stdoutBuffer.indexOf('\n');
       if (newline < 0) break;
@@ -149,15 +149,21 @@ export function createTypescriptModuleInspectionSession({
         : new Error(
           `TypeScript inspection worker exited${signal ? ` with ${signal}` : ` with status ${String(status)}`}${stderr.trim() ? `: ${stderr.trim()}` : ''}`,
         ));
+      terminalError = error;
       if (error) rejectPending(error);
       resolveClosed();
     });
   });
 
   return Object.freeze({
-    inspect(path: string): Promise<unknown> {
+    inspect(path: string, options?: TypescriptModuleInspectionOptions): Promise<unknown> {
       if (closed || child.stdin.destroyed) {
-        return Promise.reject(new Error(`Failed to inspect TypeScript module ${path}: inspection worker is closed`));
+        // Name the worker's terminal cause; "closed" alone hides why a build failed.
+        const cause = terminalError ?? closeError;
+        return Promise.reject(new Error(
+          `Failed to inspect TypeScript module ${path}: inspection worker is closed${cause ? ` (${cause.message})` : ''}`,
+          ...(cause ? [{ cause }] : []),
+        ));
       }
       const id = nextId;
       nextId += 1;
@@ -171,7 +177,7 @@ export function createTypescriptModuleInspectionSession({
           resolve: resolveInspection,
           reject: rejectInspection,
         });
-        child.stdin.write(`${JSON.stringify({ id, path })}\n`);
+        child.stdin.write(`${JSON.stringify({ id, path, ...(options?.exports ? { exports: options.exports } : {}) })}\n`);
       });
     },
     async close(): Promise<void> {
@@ -183,12 +189,12 @@ export function createTypescriptModuleInspectionSession({
 
 const activeInspectionSession = new AsyncLocalStorage<TypescriptModuleInspectionSession>();
 
-export async function inspectTypescriptModule(path: string): Promise<unknown> {
+export async function inspectTypescriptModule(path: string, options?: TypescriptModuleInspectionOptions): Promise<unknown> {
   const active = activeInspectionSession.getStore();
-  if (active) return await active.inspect(path);
+  if (active) return await active.inspect(path, options);
   const session = createTypescriptModuleInspectionSession();
   try {
-    return await session.inspect(path);
+    return await session.inspect(path, options);
   } finally {
     await session.close();
   }

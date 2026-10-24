@@ -193,6 +193,45 @@ describe('per-Plugin TypeScript inspection worker', () => {
     const session = createTypescriptModuleInspectionSession();
     try {
       await expect(session.inspect(terminating)).rejects.toThrow(/worker exited/u);
+      // A later request in the same session names the terminal cause, not only "closed".
+      await expect(session.inspect(join(root, 'plug#in', 'later.ts'))).rejects.toThrow(/exited with status 23/u);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it('inspects an answer larger than 4 MiB and keeps the session usable', async () => {
+    const root = await createFixture();
+    const oversized = join(root, 'plug#in', 'oversized.ts');
+    await writeFile(oversized, "export const VALUE = 'x'.repeat(5 * 1024 * 1024);\n", 'utf8');
+    const session = createTypescriptModuleInspectionSession();
+    try {
+      const inspected = await session.inspect(oversized) as Readonly<{ VALUE: string }>;
+      expect(inspected.VALUE).toBe('x'.repeat(5 * 1024 * 1024));
+      // A large answer must not take down the shared session for every other plugin.
+      const small = join(root, 'plug#in', 'small.ts');
+      await writeFile(small, "export const SMALL = 1;\n", 'utf8');
+      await expect(session.inspect(small)).resolves.toEqual({ SMALL: 1 });
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it('answers only the exports the caller reads', async () => {
+    const root = await createFixture();
+    const manifest = join(root, 'plug#in', 'manifest.ts');
+    // An authored plugin object that embeds its manifest must not double the answer.
+    await writeFile(manifest, [
+      "export const PLUGIN_MANIFEST = { id: 'fixture', text: 'x'.repeat(3 * 1024 * 1024) };",
+      'export const FIXTURE_PLUGIN = { manifest: PLUGIN_MANIFEST };',
+      '',
+    ].join('\n'), 'utf8');
+    const session = createTypescriptModuleInspectionSession();
+    try {
+      const inspected = await session.inspect(manifest, { exports: ['PLUGIN_MANIFEST'] }) as Record<string, unknown>;
+      expect(Object.keys(inspected).sort()).toEqual(['FIXTURE_PLUGIN', 'PLUGIN_MANIFEST']);
+      expect(inspected.PLUGIN_MANIFEST).toMatchObject({ id: 'fixture' });
+      expect(inspected.FIXTURE_PLUGIN).toBeUndefined();
     } finally {
       await session.close();
     }

@@ -9,7 +9,7 @@ const runtimeTsconfigPath = fileURLToPath(new URL('../tsconfig.generator-runtime
 // namespace per request and re-evaluates shared source dependencies each time.
 const sourceLoader = register({ namespace: 'happier-typescript-inspection', tsconfig: runtimeTsconfigPath });
 
-function serializeModule(imported) {
+function serializeModule(imported, requestedExports) {
   const selected = imported && typeof imported === 'object'
     && imported.default && typeof imported.default === 'object'
     && !Array.isArray(imported.default)
@@ -17,7 +17,9 @@ function serializeModule(imported) {
     : imported;
   const exportNames = selected && typeof selected === 'object' ? Object.keys(selected) : [];
   const values = Object.create(null);
+  const wanted = Array.isArray(requestedExports) ? new Set(requestedExports) : null;
   for (const exportName of exportNames) {
+    if (wanted && !wanted.has(exportName)) continue;
     try {
       const serialized = JSON.stringify(selected[exportName]);
       if (serialized !== undefined) values[exportName] = JSON.parse(serialized);
@@ -39,11 +41,9 @@ for await (const line of lines) {
       throw new Error('invalid inspection request');
     }
     const imported = await sourceLoader.import(pathToFileURL(request.path).href, import.meta.url);
-    process.stdout.write(`${OUTPUT_MARKER}${JSON.stringify({
-      id: request.id,
-      ok: true,
-      payload: serializeModule(imported),
-    })}\n`);
+    const payload = serializeModule(imported, request.exports);
+    const response = JSON.stringify({ id: request.id, ok: true, payload });
+    process.stdout.write(`${OUTPUT_MARKER}${response}\n`);
   } catch (error) {
     process.stdout.write(`${OUTPUT_MARKER}${JSON.stringify({
       id: Number.isSafeInteger(request?.id) ? request.id : -1,
