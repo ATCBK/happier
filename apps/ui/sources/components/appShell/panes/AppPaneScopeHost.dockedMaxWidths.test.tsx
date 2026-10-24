@@ -65,6 +65,9 @@ vi.mock('./AppPaneProvider', () => {
     return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
 });
 
+// Cold runtime-graph loading is collection work, outside the mounted behavior budget.
+await import('./AppPaneScopeHost');
+
 describe('AppPaneScopeHost (docked max widths)', () => {
     it('caps docked right pane max width to preserve main min width', async () => {
         const { AppPaneScopeHost } = await import('./AppPaneScopeHost');
