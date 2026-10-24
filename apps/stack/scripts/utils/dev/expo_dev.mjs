@@ -295,7 +295,7 @@ export async function ensureDevExpoServer({
   env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY = join(paths.stateDir, 'plugin-ui', 'inventory.js');
   // Refresh may replace an owned incumbent. Prepare before observing its PID
   // and before acquiring spawn read custody, so both observations stay valid.
-  await ensureDepsInstalled(uiDir, 'happier-ui', { env, quiet });
+  await ensureDepsInstalled(uiDir, 'happier-ui', { env, quiet, waitForPendingStart: true });
   const running = await isStateProcessRunning(paths.statePath);
   const alreadyRunning = Boolean(running.running);
   let metroConfigInspection = null;

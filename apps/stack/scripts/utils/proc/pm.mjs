@@ -7,7 +7,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, unlink
 import { pathExists } from '../fs/fs.mjs';
 import { appendBoundedTail, formatFailureDiagnostic, run, spawnProc } from './proc.mjs';
 import { resolveCommandPath } from './commands.mjs';
-import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
+import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStacksHomeDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
 import { applyStackInfraProcessKind } from './stack_process_kind.mjs';
@@ -645,9 +645,17 @@ export async function ensureDepsInstalled(dir, label, options = {}) {
     return await ensureComponentDependenciesInstalled(dir, label, options);
   } catch (error) {
     const env = options.env ?? process.env;
-    if (String(env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS ?? '').trim() !== '1'
-      || error?.code !== 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED') throw error;
-    console.warn(`[local] ${label} dependency refresh is blocked by a serving Expo consumer; continuing with installed bytes. Will retry on the next dependency input change or startup.\n${error.message}`);
+    if (String(env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS ?? '').trim() !== '1') throw error;
+    const callerEnvFile = resolveExplicitStackEnvFilePath(env);
+    const foreignPreparation = error?.code === 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS'
+      && typeof error.pendingStackBaseDir === 'string'
+      && callerEnvFile
+      && resolve(dirname(callerEnvFile)) !== resolve(error.pendingStackBaseDir)
+      && await pathExists(join(resolveDependencyInstallRoot(dir), 'node_modules'));
+    if (error?.code !== 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED' && !foreignPreparation) throw error;
+    // Only defer mutation: component preflight still verifies installed bytes.
+    // Cold trees and the caller's own source preparation must remain fail-closed.
+    console.warn(`[local] ${label} dependency refresh is temporarily blocked; continuing with installed bytes. Will retry on the next dependency input change or startup.\n${error.message}`);
     return { admitted: false, required: true, reason: error.code };
   }
 }
@@ -659,6 +667,7 @@ async function ensureComponentDependenciesInstalled(
     quiet = false,
     env: envIn = process.env,
     refreshExisting = true,
+    waitForPendingStart = false,
     prepareComponentOutputs = true,
     onDependenciesReady = null,
   } = {},
@@ -719,7 +728,7 @@ async function ensureComponentDependenciesInstalled(
     if (pm.name !== 'pnpm' || onDependenciesReady || needsSharedUiRepair) return false;
     const readiness = await inspectDependencyRefresh({ installDir, componentDir, env });
     if (readiness.required || (await inspectUiPostinstallOutputs(componentDir, installDir, { env })).length > 0) return false;
-    await withDependencyRefresh({ installDir, componentDir, env, refreshExisting }, refreshDependencies);
+    await withDependencyRefresh({ installDir, componentDir, env, refreshExisting, waitForPendingStart }, refreshDependencies);
     if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
     return true;
   };
@@ -728,7 +737,7 @@ async function ensureComponentDependenciesInstalled(
     if (await admitCurrentTree({ refreshExisting: false })) return;
     if (pm.name === 'pnpm') {
       await withDependencyRefresh({ installDir, componentDir, env,
-        refreshExisting: false, onDependenciesReady: guardedDependencyReadyAction }, async () => {});
+        refreshExisting: false, waitForPendingStart, onDependenciesReady: guardedDependencyReadyAction }, async () => {});
     } else {
       await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
     }
@@ -790,6 +799,7 @@ async function ensureComponentDependenciesInstalled(
         installDir,
         componentDir,
         env,
+        waitForPendingStart,
         onDependenciesReady: guardedDependencyReadyAction,
       }, refreshDependencies);
     }
@@ -814,6 +824,7 @@ async function ensureComponentDependenciesInstalled(
         installDir,
         componentDir,
         env,
+        waitForPendingStart,
         onDependenciesReady: guardedDependencyReadyAction,
       },
       installFirstRun,

@@ -169,3 +169,57 @@ for (const [mode, options, env] of [
   release();
   await Promise.all([reader, stale]);
 });
+
+
+for (const installed of [false, true]) test(`dev dependency admission defers a foreign pending refresh only with installed bytes (installed=${installed})`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-dependency-pending-start-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { uiDir } = await ensureMinimalMonorepoLayout(root);
+  const storage = join(root, 'stacks');
+  const foreign = join(storage, 'foreign');
+  await Promise.all([
+    mkdir(foreign, { recursive: true }),
+    mkdir(join(storage, 'dev'), { recursive: true }),
+    writeFile(join(root, 'package.json'), '{"private":true,"workspaces":["apps/*"]}\n'),
+    writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n'),
+    writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n'),
+    writeFile(join(uiDir, 'package.json'), '{"name":"@happier-dev/app"}\n'),
+    writePnpmInstallStub(join(root, 'bin')),
+  ]);
+  await writeFile(join(foreign, 'env'), `HAPPIER_STACK_REPO_DIR=${root}\n`);
+  const env = { ...process.env, PATH: [join(root, 'bin'), process.env.PATH || ''].join(delimiter),
+    CI: '1', HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_STORAGE_DIR: storage,
+    HAPPIER_STACK_ENV_FILE: join(storage, 'dev', 'env'),
+    HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'cache'),
+    HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '0' };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  if (installed) {
+    await ensureDepsInstalled(uiDir, 'fixture', { env, quiet: true });
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# changed\n');
+  }
+  const { beginPendingSourceStart } = await import('../../runtime/shared/pending_source_start.mjs');
+  const pending = await beginPendingSourceStart({ stackBaseDir: foreign, repoDir: root, env });
+  t.after(() => pending.dispose());
+  const refusal = { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' };
+  await assert.rejects(ensureDepsInstalled(uiDir, 'fixture', { env, quiet: true }), refusal);
+  let readyActions = 0;
+  const devEnv = { ...env, HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
+  const options = { env: devEnv, quiet: true, onDependenciesReady: async () => { readyActions++; } };
+  if (installed) {
+    assert.deepEqual(await ensureDepsInstalled(uiDir, 'fixture', options),
+      { admitted: false, required: true, reason: refusal.code });
+    assert.equal(readyActions, 0, 'a deferred refresh cannot publish new dependency readiness');
+    await assert.rejects(withDependencyRefresh({ installDir: root, env: devEnv }, async () => {
+      assert.fail('a pending source start still protects the installed tree from mutation');
+    }), refusal);
+  } else {
+    await assert.rejects(ensureDepsInstalled(uiDir, 'fixture', options), refusal,
+      'a cold startup cannot continue without an installed tree');
+  }
+  await assert.rejects(ensureDepsInstalled(uiDir, 'fixture', {
+    ...options, env: { ...devEnv, HAPPIER_STACK_ENV_FILE: join(foreign, 'env') },
+  }), refusal, 'a source start cannot defer its own required preparation');
+  await pending.dispose();
+  await ensureDepsInstalled(uiDir, 'fixture', options);
+  assert.equal(readyActions, 1, 'a later refresh completes after the foreign preparation ends');
+});

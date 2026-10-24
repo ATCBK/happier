@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile, chmod, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ensureDevExpoServer } from './expo_dev.mjs';
 import { getExpoStatePaths, writePidState } from '../expo/expo.mjs';
-import { withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { inspectDependencyRefresh, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { beginPendingSourceStart } from '../../runtime/shared/pending_source_start.mjs';
+import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
@@ -140,6 +142,82 @@ test('ensureDevExpoServer rejects a fresh workspace build failure before startin
     await assert.rejects(startFixtureExpo({ ...fixture, baseEnv: env }), /fixture workspace build failed/);
     await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
   } finally {
+    await rm(fixture.tmp, { recursive: true, force: true });
+  }
+});
+
+for (const ownStart of [false, true]) test(`Expo dependency refresh waits only for a foreign pending start (ownStart=${ownStart})`, { timeout: 20_000 }, async t => {
+  const fixture = await createExpoWorkspaceFixture();
+  let pending;
+  let startup;
+  try {
+    const { env: admittedEnv } = await installWorkspaceAdmissionProcessFixture(t, fixture.tmp, { env: createExpoBaseEnv(fixture.tmp) });
+    const installMarker = join(fixture.tmp, 'dependency-install-ran');
+    // Replace only the external package-manager executable. The real Expo
+    // startup, PM adapter, refresh admission, pending lifecycle and spawn run.
+    const { binDir } = writeFakeBin({ root: fixture.tmp, name: 'pnpm', content: [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "if (process.argv[2] === '--version') { console.log('12.14.0'); process.exit(0); }",
+      "if (process.argv[2] === 'run' && process.argv.includes('build')) {",
+      "  const result = require('node:child_process').spawnSync(process.execPath, ['build.mjs'], { stdio: 'inherit', env: process.env });",
+      '  process.exit(result.status ?? 1);',
+      '}',
+      "if (process.argv[2] !== 'install') process.exit(97);",
+      "fs.mkdirSync('node_modules', { recursive: true });",
+      "fs.writeFileSync('node_modules/.modules.yaml', 'packageManager: pnpm@12.14.0\\nlayoutVersion: 5\\nnodeLinker: hoisted\\n');",
+      `fs.writeFileSync(${JSON.stringify(installMarker)}, 'installed\\n');`,
+    ].join('\n') + '\n' });
+    const callerBaseDir = join(fixture.tmp, 'stacks', 'expo-owner');
+    await mkdir(callerBaseDir, { recursive: true });
+    await writeFile(join(callerBaseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.tmp}\n`);
+    const stackBaseDir = ownStart ? callerBaseDir : join(fixture.tmp, 'stacks', 'qa-starting');
+    await mkdir(stackBaseDir, { recursive: true });
+    await writeFile(join(stackBaseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.tmp}\n`);
+    const env = { ...admittedEnv,
+      PATH: [binDir, admittedEnv.PATH].join(delimiter),
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: '0',
+      HAPPIER_STACK_REPO_DIR: fixture.tmp,
+      HAPPIER_STACK_ENV_FILE: join(callerBaseDir, 'env'),
+      HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0',
+    };
+    pending = await beginPendingSourceStart({ stackBaseDir, repoDir: fixture.tmp, env });
+    await writeFile(join(fixture.tmp, 'pnpm-lock.yaml'), '# changed dependency inputs\n');
+    const admissionPath = join(fixture.tmp, 'node_modules', '.happier-stack-dependencies-ready');
+    const before = await readFile(admissionPath, 'utf8');
+    let notice;
+    const waiting = new Promise(resolve => { notice = resolve; });
+    const stderr = t.mock.method(process.stderr, 'write', chunk => {
+      if (String(chunk).includes('Stack qa-starting readiness before dependency refresh')) notice();
+      return true;
+    });
+    startup = startFixtureExpo({ ...fixture, baseEnv: env });
+    void startup.catch(() => {});
+    if (ownStart) {
+      await assert.rejects(startup, { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+      assert.equal(await readFile(admissionPath, 'utf8'), before);
+      await assert.rejects(readFile(installMarker), { code: 'ENOENT' });
+      await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
+      return;
+    }
+    await Promise.race([waiting, startup.then(() => assert.fail('Expo started before foreign readiness'))]);
+    stderr.mock.restore();
+    assert.equal(await readFile(admissionPath, 'utf8'), before, 'waiting must preserve admitted bytes');
+    await assert.rejects(readFile(installMarker), { code: 'ENOENT' });
+    await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
+    // A non-waiting reader proves both custody and writer priority were
+    // released. That start can still read its tree to reach readiness.
+    await withDependencyConsumption({ installDir: fixture.tmp, env, wait: false, signal: t.signal }, async () => {
+      await pending.publish(async () => {});
+    });
+    const result = await startup;
+    assert.equal(result.ok, true);
+    assert.equal(await readFile(installMarker, 'utf8'), 'installed\n');
+    assert.equal(await readFile(fixture.expoStartedMarker, 'utf8'), 'started\n');
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.tmp, componentDir: fixture.uiDir, env })).required, false);
+  } finally {
+    await pending?.dispose();
+    await startup?.catch(() => {});
     await rm(fixture.tmp, { recursive: true, force: true });
   }
 });
