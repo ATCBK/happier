@@ -30,6 +30,13 @@ type AwarenessBinding<TSession extends Session | null, TAwareness extends Sessio
     requestHref: string | null;
 }>;
 
+/** When the turn in progress started; null while no turn runs. Every elapsed clock reads this one fact. */
+export function readSessionTurnStartedAtMs(session: Pick<Session, 'latestTurnStatus' | 'latestTurnStatusObservedAt'>): number | null {
+    return session.latestTurnStatus === 'in_progress'
+        && typeof session.latestTurnStatusObservedAt === 'number'
+        && Number.isFinite(session.latestTurnStatusObservedAt) ? session.latestTurnStatusObservedAt : null;
+}
+
 /** Incumbent app awareness subscription, shared without importing the transcript host. */
 export function useSessionAwareness(sessionId: string, serverId: string | null, fallbackSession: Session): AwarenessBinding<Session, SessionAwarenessProjectionV1>;
 export function useSessionAwareness(sessionId: string, serverId: string | null): AwarenessBinding<Session | null, SessionAwarenessProjectionV1 | null>;
@@ -81,9 +88,7 @@ export function useSessionAwareness(sessionId: string, serverId: string | null, 
     }, [localNow, serverNow, session]);
     useSessionListRuntimeWake(wakeAt, session !== null);
     const awareness = React.useMemo(() => session ? projectUiSessionAwareness(session, serverNow) : null, [serverNow, session]);
-    const turnStartedAtMs = session?.latestTurnStatus === 'in_progress'
-        && typeof session.latestTurnStatusObservedAt === 'number'
-        && Number.isFinite(session.latestTurnStatusObservedAt) ? session.latestTurnStatusObservedAt : null;
+    const turnStartedAtMs = session ? readSessionTurnStartedAtMs(session) : null;
     const pendingRequests = React.useMemo(() => session && isSessionContentReadable(readSessionContentAvailability(session))
         // Explicit empty transcript prevents a same-id ambient transcript from another Home entering this scoped row.
         ? listPendingSessionRequests(session, []) : NO_PENDING_REQUESTS, [session]);
