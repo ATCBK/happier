@@ -3,6 +3,7 @@ import type { PluginUiToneV1 } from '@happier-dev/protocol/plugins/ui';
 
 import type { CompactAppDestination } from './compactAppDestinationCatalog';
 import { StatusPill, type StatusPillVariant } from '@/components/ui/status/StatusPill';
+import type { PluginSurfaceDestinationBadge } from '@/components/plugins/surfaces/pluginSurfaceDestinations';
 
 const STATUS_VARIANT_BY_PLUGIN_TONE: Readonly<Record<PluginUiToneV1, StatusPillVariant>> = {
     neutral: 'neutral',
@@ -19,6 +20,15 @@ export function CompactAppDestinationBadge(props: Readonly<{
     testID?: string;
 }>): React.ReactElement | null {
     const badge = props.destination.kind === 'plugin' ? props.destination.badge : undefined;
+    return <PluginDestinationBadge badge={badge} testID={props.testID} />;
+}
+
+/** Static destination metadata has the same presentation in app and sidebar navigation. */
+export function PluginDestinationBadge(props: Readonly<{
+    badge?: PluginSurfaceDestinationBadge;
+    testID?: string;
+}>): React.ReactElement | null {
+    const badge = props.badge;
     if (!badge) {
         return null;
     }
