@@ -5,7 +5,7 @@ import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } fr
 import { resumeActionExecutionResult, type ActionApprovalContinuation } from './actionApprovalContinuation';
 import { useActionApprovalContinuation } from './useActionApprovalContinuation';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { createFrontDoorActionExecute, requireActionSuccess, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
@@ -13,6 +13,7 @@ import type { SystemTaskRunner } from '@/components/systemTasks/types';
 const onExecuted = () => {};
 const retired = (): ActionExecuteResult => ({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' });
 type MountedExecutorOptions = Omit<NonNullable<Parameters<typeof createFrontDoorActionExecute>[1]>, 'onBlockingApprovalPending'>;
+type MountedOperation = UiActionOperation & Readonly<{ retainInvocation?: true; executorOptions?: MountedExecutorOptions }>;
 
 /** Reconnect a mounted author's original public Action to its typed approval result. */
 export function useMountedActionExecution(scopeOrHome: ServerAccountScope | string | null | undefined,
@@ -41,42 +42,58 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
     const scopeKey = binding ? `${serverAccountScopeKeySuffix(binding.scope)}:${binding.revision}` : JSON.stringify(['unbound', scopeOrHome]);
     const approval = useActionApprovalContinuation({ scopeKey, serverId: scope?.serverId ?? '', onExecuted,
         openOnRequest: options?.openOnRequest });
-    const frontDoorOptions = React.useMemo(() => ({
+    const presentBlockingApproval = React.useCallback((capturedBinding: ServerCredentialAccountScopeBinding,
+        current: () => boolean, fallbackSignal: AbortSignal,
+        pending: Readonly<{ artifactId: string; signal?: AbortSignal }>) => {
+        if (!current()) return;
+        // The executor retains its live input/result; this registration presents that same Artifact.
+        const registration: ActionApprovalContinuation = {
+            artifactId: pending.artifactId, scope: capturedBinding.scope, refreshAfterExecution: false,
+            signal: pending.signal ?? fallbackSignal, onExecuted: async () => 'ignored',
+        };
+        approval.requestApproval(registration);
+        options?.onApprovalPending?.(registration);
+    }, [approval.requestApproval, options?.onApprovalPending]);
+    // Preserve the existing default port's lazy executor reuse for ordinary single-Home controls.
+    const frontDoor = React.useMemo(() => createFrontDoorActionExecute(undefined, {
         ...options?.executorOptions,
         homeRuntimeRunner: options?.runner ?? options?.executorOptions?.homeRuntimeRunner,
-        onBlockingApprovalPending: ({ artifactId, signal }: Readonly<{ artifactId: string; signal?: AbortSignal }>) => {
-            if (!binding || !isCurrent()) return;
-            // Blocking Actions retain their live input and result in the executor.
-            // This registration only presents that same Artifact while it waits;
-            // it never replays the effect or consumes a second result continuation.
-            const registration: ActionApprovalContinuation = {
-                artifactId, scope: binding.scope, refreshAfterExecution: false,
-                signal: signal ?? lifetime.controller.signal,
-                onExecuted: async () => 'ignored',
-            };
-            approval.requestApproval(registration);
-            options?.onApprovalPending?.(registration);
+        onBlockingApprovalPending: pending => {
+            if (binding) presentBlockingApproval(binding, isCurrent, lifetime.controller.signal, pending);
         },
-    }), [approval.requestApproval, binding, isCurrent, lifetime, options?.executorOptions, options?.onApprovalPending, options?.runner]);
-    const frontDoor = React.useMemo(() => createFrontDoorActionExecute(undefined, frontDoorOptions), [frontDoorOptions]);
-    const execute = React.useCallback(async (actionId: ActionId, input: unknown,
-        operation?: UiActionOperation & Readonly<{ retainInvocation?: true; executorOptions?: MountedExecutorOptions }>): Promise<ActionExecuteResult> => {
-        if (!binding || !scope || !isCurrent()) return retired();
-        const cancellation = mergeAbortSignals([lifetime.controller.signal, operation?.signal]);
+    }), [binding, isCurrent, lifetime, options?.executorOptions, options?.runner, presentBlockingApproval]);
+    // Multi-Home collections bind this hook to null and provide the source's existing credential
+    // lifetime. The same invocation engine owns admission, approval custody and retirement.
+    const executeCaptured = React.useCallback(async (capturedBinding: ServerCredentialAccountScopeBinding,
+        actionId: ActionId, input: unknown, operation?: MountedOperation): Promise<ActionExecuteResult> => {
+        const capturedScope = capturedBinding.scope;
+        const retirement = new AbortController();
+        const subscription = capturedBinding.onRetire(() => retirement.abort());
+        const cancellation = mergeAbortSignals([lifetime.controller.signal, retirement.signal, operation?.signal]);
+        const invocationCurrent = () => capturedBinding.isCurrent() && !cancellation.signal.aborted;
+        if (!invocationCurrent()) { subscription.dispose(); cancellation.dispose(); return retired(); }
+        const frontDoorOptions = {
+            ...options?.executorOptions,
+            ...operation?.executorOptions,
+            homeRuntimeRunner: operation?.executorOptions?.homeRuntimeRunner ?? options?.runner ?? options?.executorOptions?.homeRuntimeRunner,
+            onBlockingApprovalPending: ({ artifactId, signal }: Readonly<{ artifactId: string; signal?: AbortSignal }>) => {
+                presentBlockingApproval(capturedBinding, invocationCurrent, cancellation.signal, { artifactId, signal });
+            },
+        };
         try {
         // The admitted input includes the draft's original CAS. Never recapture it after approval.
         // Await the initial operation directly: later retirement cannot retract a durable ACK.
         // Per-invocation delivery ports cannot be reconstructed from a serialized approval input.
         const retainInvocation = Boolean(operation?.executorOptions) || (operation?.retainInvocation ?? options?.retainInvocation);
-        const invoke = retainInvocation
-            ? createFrontDoorActionExecute(undefined, { ...frontDoorOptions, ...operation?.executorOptions,
+        const invoke = !retainInvocation && capturedBinding === binding && areServerAccountScopesEqual(capturedScope, scope)
+            ? frontDoor : createFrontDoorActionExecute(undefined, { ...frontDoorOptions,
                 ...(retainInvocation ? {
                     hostActionApprovalLifetime: { actionId, signal: cancellation.signal, surface: 'ui' as const },
                 } : {}),
-            }) : frontDoor;
+            });
         const result = await invoke(actionId, input, {
             surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
-            serverId: scope.serverId, expectedAccountId: scope.accountId,
+            serverId: capturedScope.serverId, expectedAccountId: capturedScope.accountId,
             signal: cancellation.signal,
             ...(operation?.defaultSessionId ? { defaultSessionId: operation.defaultSessionId } : {}),
             ...(operation?.actionRequestId ? { actionRequestId: operation.actionRequestId } : {}),
@@ -92,8 +109,8 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
         if (!result.ok) return result;
         const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
         if (!pending.success) return result;
-        if (!isCurrent()) return retired();
-        return await resumeActionExecutionResult({ result, actionId, actionInput: input, scope: binding.scope,
+        if (!invocationCurrent()) return retired();
+        return await resumeActionExecutionResult({ result, actionId, actionInput: input, scope: capturedScope,
             signal: cancellation.signal, ...(operation?.actionRequestId ? { requestId: operation.actionRequestId } : {}),
             onApprovalPending: registration => {
                 approval.requestApproval(registration);
@@ -101,15 +118,20 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
             },
         });
         } catch (error) {
-            if (!isCurrent()) return retired();
+            if (!invocationCurrent()) return retired();
             throw error;
-        } finally { cancellation.dispose(); }
-    }, [approval.requestApproval, binding, frontDoor, frontDoorOptions, isCurrent, lifetime, options?.onApprovalPending, options?.retainInvocation, scope]);
+        } finally { subscription.dispose(); cancellation.dispose(); }
+    }, [approval.requestApproval, binding, frontDoor, lifetime, options?.executorOptions, options?.onApprovalPending,
+        options?.retainInvocation, options?.runner, presentBlockingApproval, scope]);
+    const execute = React.useCallback(async (actionId: ActionId, input: unknown, operation?: MountedOperation): Promise<ActionExecuteResult> => {
+        if (!binding || !scope || !isCurrent()) return retired();
+        return executeCaptured(binding, actionId, input, operation);
+    }, [binding, executeCaptured, isCurrent, scope]);
     /** Value-parsing clients unwrap only the terminal receipt delivered by this same mounted owner. */
     const executeValue = React.useCallback(async (actionId: ActionId, input: unknown, operation?: UiActionOperation): Promise<unknown> => {
         const result = await execute(actionId, input, operation);
         requireActionSuccess(result);
         return result.result;
     }, [execute]);
-    return { execute, executeValue, ready: isCurrent(), isCurrent, cancel, getSignal, approval, binding, resolution };
+    return { execute, executeCaptured, executeValue, ready: isCurrent(), isCurrent, cancel, getSignal, approval, binding, resolution };
 }
