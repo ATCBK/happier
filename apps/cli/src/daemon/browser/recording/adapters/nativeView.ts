@@ -28,12 +28,11 @@ export type BrowserRecordingNativeViewCaptureCommand = (
 
 export type BrowserRecordingNativeViewCaptureAdapterOptions = Readonly<{
   /**
-   * Read-only per-platform capture-support flag, sourced from the native producer's
-   * `DesktopBrowserSupport.capture` (today: macOS only; X11/Windows flip is owned by
-   * FP-DESKTOP-HARDEN-1). The adapter advertises a `nativeViewCapture` artifact ONLY when this
-   * returns true — no daemon-side over-claim.
+   * Optional known platform fact for directly bound producers. A remote producer
+   * validates its platform when captureCommand runs; absence of a local fact is
+   * not evidence that the answering platform cannot capture.
    */
-  isPlatformCaptureSupported: () => boolean;
+  isPlatformCaptureSupported?: () => boolean;
   /**
    * The native still-capture command bridge. The daemon->native IPC path IS wired now: the daemon
    * entrypoint binds this command to the cross-process reverse channel (W2C-BA-1) — the spawned cli
@@ -62,9 +61,9 @@ function unavailable(
 /**
  * Daemon-side `nativeViewCapture` recording adapter. Plugs into the SAME
  * `BrowserRecordingCaptureAdapter` seam as the PMS stream adapter — never a second capture
- * path, and never maps a PMS stream producer onto a desktop view. Capability-true: it is only
- * advertised where the native producer reports `capture:true`, and only produces an artifact
- * when a real native capture command is bound; otherwise it stays fail-closed.
+ * path, and never maps a PMS stream producer onto a desktop view. Only a successful
+ * producer result establishes capture support and produces an artifact; known
+ * unsupported platforms and missing or refusing producers stay fail-closed.
  */
 export function createBrowserRecordingNativeViewCaptureAdapter(
   options: BrowserRecordingNativeViewCaptureAdapterOptions,
@@ -76,7 +75,7 @@ export function createBrowserRecordingNativeViewCaptureAdapter(
     captureKind: 'nativeViewCapture',
 
     async start(input) {
-      if (!options.isPlatformCaptureSupported()) {
+      if (options.isPlatformCaptureSupported?.() === false) {
         return {
           status: 'unavailable',
           reason: unavailable(

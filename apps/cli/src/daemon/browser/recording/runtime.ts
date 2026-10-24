@@ -71,11 +71,11 @@ export type BrowserRecordingDaemonRuntimeOptions = Readonly<{
   resolveStartContext?: (input: Parameters<BrowserRecordingRoutes['startRecording']>[0]) =>
     | BrowserRecordingStartContext
     | Promise<BrowserRecordingStartContext>;
-  // Native still-capture (nativeViewCapture) producer. Registered only when BOTH the per-platform
-  // capture-support flag and a real native capture command are supplied — capability-true, no
-  // daemon-side over-claim. Absent today (no daemon->native IPC path); stays fail-closed.
+  // Native still-capture producer. A directly bound producer may supply a known
+  // platform fact; reverse capture resolves support at the answering UI/native
+  // command. Registering its transport alone cannot produce an artifact.
   nativeViewCapture?: Readonly<{
-    isPlatformCaptureSupported: () => boolean;
+    isPlatformCaptureSupported?: () => boolean;
     captureCommand: BrowserRecordingNativeViewCaptureCommand;
   }>;
   // Managed-Chromium agent-sidecar `cdpScreencast` producer (BA-4). Registered only when a real

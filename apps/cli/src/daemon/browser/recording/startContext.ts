@@ -38,8 +38,8 @@ const STREAM_FRAME_DISABLED_RECORDING_CAPABILITIES: BrowserRecordingCapabilities
  * Desktop Wry `nativeViewCapture` recording surface (BA-4). The native still-capture producer
  * proves DESKTOP WebView recording ONLY — it is a single PNG frame written reference-only by the
  * native `desktop_browser_capture_recording_frame` command, NEVER a PMS stream mapped onto a
- * desktop view. Capabilities flip ON only where a real native capture producer is bound AND the
- * platform reports capture support; otherwise the cell stays fail-closed.
+ * desktop view. Start admission requires a bound capture route; the producer
+ * validates actual platform support before a successful recording exists.
  */
 const NATIVE_VIEW_SUPPORTED_ADAPTER_KINDS = ['externalUrl'] as const;
 
@@ -76,7 +76,7 @@ export type BrowserRecordingStreamFrameStartContextOptions = Readonly<{
 export type BrowserRecordingStartContextOptions = Readonly<{
   /** A live-stream capture registry is wired → the `streamFrameCapture` producer exists. */
   hasLiveStreamCaptureRegistry: boolean;
-  /** A native desktop capture producer is bound + platform-supported → `nativeViewCapture` exists. */
+  /** A native capture command is bound and not known unsupported; the producer settles actual support. */
   hasNativeViewCapture: boolean;
   /** A managed-Chromium CDP screencast transport is bound → `cdpScreencast` exists. */
   hasCdpScreencast?: boolean;

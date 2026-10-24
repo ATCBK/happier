@@ -12666,24 +12666,10 @@ export async function startDaemonSessionControlRuntime(
   // reverse channel — the spawned cli daemon cannot `invokeTauri` the desktop Wry WebView directly
   // (separate OS process), so it asks the connected desktop UI to capture each reference-only frame
   // over the persistent machine socket (`RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME`). Transport
-  // construction is not source truth: native-view capture is advertised only when an injected
-  // handler-backed producer/invoke exists or the machine client can see the connected UI handler.
-  const nativeViewCaptureInjected =
-    params.browserRecordingNativeViewCapture !== undefined;
-  const desktopNativeViewCaptureInvokeInjected =
-    params.desktopBrowserRecordingNativeViewCaptureInvoke !== undefined;
-  const hasDesktopBrowserRecordingNativeViewCaptureSourceTruth =
-    (): boolean => {
-      if (nativeViewCaptureInjected || desktopNativeViewCaptureInvokeInjected)
-        return true;
-      return (
-        params
-          .getApiMachineForSessions()
-          ?.hasConnectedClientRpcHandler(
-            RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME,
-          ) === true
-      );
-    };
+  // construction is not proof of platform support. Start resolves the actual
+  // producer through the live RPC registry, then its UI/native command validates
+  // capture support before a frame or successful recording can exist. Positive
+  // registration hints cannot prove non-support after reconnect.
   const desktopBrowserRecordingNativeViewCaptureInvoke: DesktopBrowserRecordingFrameCaptureInvoke =
     params.desktopBrowserRecordingNativeViewCaptureInvoke ??
     createReverseDesktopBrowserRecordingNativeViewCaptureInvoke({
@@ -12691,10 +12677,8 @@ export async function startDaemonSessionControlRuntime(
         getMachineClient: () => params.getApiMachineForSessions() ?? null,
       }),
     });
-  const browserRecordingNativeViewCapture =
+  const browserRecordingNativeViewCapture: NonNullable<BrowserRecordingDaemonRuntimeOptions['nativeViewCapture']> =
     params.browserRecordingNativeViewCapture ?? {
-      isPlatformCaptureSupported:
-        hasDesktopBrowserRecordingNativeViewCaptureSourceTruth,
       captureCommand: createBrowserRecordingNativeViewCaptureCommand({
         transport: createDesktopBrowserRecordingNativeViewCaptureTransport({
           invokeRecordingFrameCapture:
@@ -12708,9 +12692,7 @@ export async function startDaemonSessionControlRuntime(
     ((startInput) =>
       resolveBrowserRecordingStartContextForProducers({
         hasLiveStreamCaptureRegistry: Boolean(params.liveStreamCaptureRegistry),
-        hasNativeViewCapture: Boolean(
-          browserRecordingNativeViewCapture?.isPlatformCaptureSupported(),
-        ),
+        hasNativeViewCapture: browserRecordingNativeViewCapture.isPlatformCaptureSupported?.() !== false,
         hasCdpScreencast: browserRecordingCdpScreencastAvailable,
       })(startInput));
   // BRW-6 privacy: daemon-side owner of on-disk browser profile/partition purge. Subscribed
