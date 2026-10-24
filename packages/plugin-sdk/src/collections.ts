@@ -186,7 +186,8 @@ export type PluginCollectionInvalidation = Readonly<{
 export type PluginCollectionWatchQuery<
     TIndexes extends readonly PluginCollectionIndexV1[],
 > = PluginCollectionQuery<PluginCollectionIndexId<TIndexes>>
-    | Readonly<{ kind: 'collection' }>;
+    | Readonly<{ kind: 'collection' }>
+    | Readonly<{ kind: 'row'; rowId: string }>;
 
 /**
  * The Account Collection limits in force for one bound collection: the
