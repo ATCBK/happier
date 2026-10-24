@@ -3866,7 +3866,6 @@ export async function startDaemon(
         isPublicationQuiescing: admissionDrain.isPublicationQuiescing,
         readSpawnFailureLimits: () => machineVitals?.latest()?.limits,
         ownerRemainder,
-        readMachineEffectiveCores: () => machineVitals?.host()?.effectiveCores,
         getServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.getSnapshot(),
         resolvePeerMediationTrustRoots,
         refreshServerFeaturesSnapshot,
