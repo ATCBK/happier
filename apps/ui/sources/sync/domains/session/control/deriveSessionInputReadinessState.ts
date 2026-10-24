@@ -1,4 +1,5 @@
 import type { PrimaryTurnStatusV1 } from '@happier-dev/protocol';
+import { readSessionRuntimeObservation } from '../sessionRuntimeObservation';
 
 import {
     hasProjectedActiveTurn,
@@ -22,6 +23,8 @@ export type SessionInputReadinessState = Readonly<{
 }>;
 
 export type DeriveSessionInputReadinessStateInput = Readonly<{
+    id?: string | null;
+    serverId?: string | null;
     active?: boolean | null;
     activeAt?: number | null;
     presence?: unknown;
@@ -42,6 +45,7 @@ export function deriveSessionInputReadinessState(
     input: DeriveSessionInputReadinessStateInput,
     nowMs: number,
 ): SessionInputReadinessState {
+    input = readSessionRuntimeObservation(input);
     const isOnline = input.active === true && input.presence === 'online';
     if (!isOnline) {
         return {

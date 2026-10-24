@@ -32,6 +32,8 @@ export function recordSessionMessageDeliveryDecision(params: Readonly<{
     const telemetry = params.telemetry ?? syncReliabilityTelemetry;
     const session = params.session;
     const runtimeStatus = projectUiSessionRuntimeAwareness({
+        id: session?.id,
+        serverId: session?.serverId,
         active: session?.active,
         activeAt: session?.activeAt,
         presence: session?.presence,

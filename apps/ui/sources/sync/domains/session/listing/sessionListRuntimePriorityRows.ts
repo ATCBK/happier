@@ -9,6 +9,7 @@ import { buildSessionListRowScopeKey } from './sessionListKeyNormalization';
 
 export type SessionListRuntimePriorityRow = Readonly<{
     id?: string | null;
+    serverId?: string | null;
     active?: boolean | null;
     archivedAt?: number | null;
     thinking?: boolean | null;
@@ -39,6 +40,8 @@ function buildSessionListRuntimePriorityPresentationInput(
     nowMs: number,
 ): SessionRuntimePresentationInput {
     return {
+        id: row.id,
+        serverId: row.serverId,
         active: row.active,
         activeAt: row.activeAt,
         archivedAt: row.archivedAt,

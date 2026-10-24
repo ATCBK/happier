@@ -51,6 +51,8 @@ export function getPendingQueueWakeResumeOptions(opts: {
     if (isSessionActive) {
         const pendingRequestFlags = derivePendingRequestFlagsFromSession(session);
         const inputReadiness = deriveSessionInputReadinessState({
+            id: session.id,
+            serverId: session.serverId,
             active: session.active,
             activeAt: session.activeAt,
             presence: session.presence,
