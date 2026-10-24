@@ -10,7 +10,7 @@ import { createVoiceSessionRuntimeThroughNativeFactory } from '@/agent/runtime/b
 import type { AgentRuntime, AgentSessionOpenRequest, AgentSessionRuntimeContext, AgentSessionRuntimeEvent, AgentSessionSendRequest, AgentSessionSendResult } from '@happier-dev/plugin-sdk/agents/runtime';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
-import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionNotificationContextFixture, createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
 import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
@@ -38,6 +38,8 @@ import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/exe
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { readSettings, updateSettings, writeSettings } from '@/persistence';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
+import { resolveCausalPermissionMode } from '@/agent/permissions/causalPermissionMode';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 
 type VoiceTestRuntime<T extends object = object> = ExecutionRunHostRuntime & T;
 
@@ -1598,6 +1600,46 @@ describe('VoiceAgentManager', () => {
 
     expect(chatBackend.getSeenPrompts().length).toBe(2);
     expect(commitBackend.getSeenPrompts().length).toBe(1);
+  });
+
+  it('admits every Voice input with its own permission ceiling through the native host', async () => {
+    const decisions: ReturnType<typeof resolveCausalPermissionMode>[] = [];
+    const toolDecisions: ReturnType<ProviderEnforcedPermissionHandler['getImmediateDecision']>[] = [];
+    const permissions = new ProviderEnforcedPermissionHandler(createMutableApiSessionClientFixture(), { logPrefix: '[Voice settings]' });
+    const backend = createDeterministicBackend('voice-settings-authority', { onSend: (request, publish) => {
+      const witness = backend.readActiveTurnAdmissionWitness?.();
+      const context = {
+        causalPermissionAuthority: witness?.causalPermissionAuthority ?? null,
+      };
+      decisions.push(resolveCausalPermissionMode({ currentPermissionMode: 'default', context }));
+      // Codex's native request must reach the Action approval owner in default
+      // mode, while the next input's explicit read-only ceiling still refuses it.
+      toolDecisions.push(permissions.getImmediateDecision('settings-call', 'mcp__happier__settings_set',
+        { anchor: 'voiceConversations.minSpeechMs', value: 1100 }, context));
+      publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant',
+        text: request.input.text.includes('reply with exactly READY') ? 'READY' : 'Done.' });
+      publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+    } });
+    const manager = new VoiceAgentManager({ createRuntime: () => backend });
+    try {
+      const started = await manager.start({ backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        chatModelId: 'chat-model', commitModelId: 'chat-model', permissionIntent: 'default',
+        idleTtlSeconds: 60, initialContext: '', bootstrapMode: 'ready_handshake' });
+      await manager.welcome({ voiceAgentId: started.voiceAgentId });
+      await manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'Read my settings' });
+      const stream = await manager.startTurnStream({ voiceAgentId: started.voiceAgentId,
+        userText: 'Change my setting', causalPermissionAuthority: {
+          kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only',
+        } });
+      await readVoiceAgentTurnStreamUntilDone({ manager, voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
+      expect(decisions).toEqual([
+        ...Array.from({ length: 3 }, () => ({ ok: true, authority: 'admittedSessionInputV1', effectiveMode: 'default' })),
+        { ok: true, authority: 'admittedSessionInputV1', effectiveMode: 'read-only' },
+      ]);
+      expect(toolDecisions).toEqual([
+        { decision: 'approved' }, { decision: 'approved' }, { decision: 'approved' }, { decision: 'denied' },
+      ]);
+    } finally { await manager.dispose(); }
   });
 
   it('surfaces the runtime refusal when the host declines the prompt instead of treating it as delivered', async () => {

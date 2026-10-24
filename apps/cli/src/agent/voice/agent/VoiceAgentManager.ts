@@ -44,6 +44,7 @@ import { VoiceAgentError } from './voiceAgentTypes';
 import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { SessionFollowPreparedContext } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { isSessionProviderInputOutcomeTerminal } from '@/agent/runtime/session/input/providerInputOutcome';
+import { resolveExecutionRunInputAuthority } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 
 export type {
   VoiceAgentCommitResult,
@@ -375,6 +376,7 @@ export class VoiceAgentManager {
    * it could when delivery failures always threw.
    */
   private async deliverPrompt(
+    voiceAgent: VoiceAgentInstance,
     backend: ExecutionRunHostRuntime,
     runtimeId: string,
     prompt: string,
@@ -382,6 +384,17 @@ export class VoiceAgentManager {
     followContext?: SessionFollowPreparedContext | null,
     durableUserTranscriptLocalId?: string,
   ): Promise<void> {
+    // Human Voice turns enter the same admitted-input boundary as other Runs.
+    // Preserve any narrower caller ceiling; never let missing prompt metadata
+    // become a null authority at the native tool/permission bridge.
+    const authority = resolveExecutionRunInputAuthority({
+      permissionMode: voiceAgent.permissionIntent,
+      ...(context && Object.hasOwn(context, 'causalPermissionAuthority')
+        ? { causalPermissionAuthority: context.causalPermissionAuthority } : {}),
+      ...(context?.effectiveCallerPermissionMode !== undefined
+        ? { effectiveCallerPermissionMode: context.effectiveCallerPermissionMode } : {}),
+    });
+    if (!authority.ok) throw Object.assign(new Error(authority.error), { code: authority.errorCode });
     const composedPrompt = renderSessionInputContextPromptV1({
       transformedUserText: prompt,
       ...(followContext ? { sessionFollowUpdates: followContext.updates } : {}),
@@ -413,7 +426,8 @@ export class VoiceAgentManager {
       result = await backend.deliverInput(
         runtimeId,
         { text: composedPrompt },
-        { ...context, localId: localInputId },
+        { ...context, localId: localInputId, causalPermissionAuthority: authority.causalPermissionAuthority,
+          effectiveCallerPermissionMode: authority.effectiveCallerPermissionMode },
       );
     } catch (error) {
       settled = true;
@@ -912,7 +926,7 @@ export class VoiceAgentManager {
           memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
           systemAppendBlocks: instance.systemAppendBlocks,
         });
-        await this.deliverPrompt(instance.chatBackend, instance.chatSessionId, prompt);
+        await this.deliverPrompt(instance, instance.chatBackend, instance.chatSessionId, prompt);
         ensureCurrentStart();
         if (instance.chatBackend.waitForTurnCompletion) {
           await instance.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
@@ -1026,7 +1040,7 @@ export class VoiceAgentManager {
             prompt,
           );
           ensureCurrent();
-		      await this.deliverPrompt(voiceAgent.chatBackend, voiceAgent.chatSessionId, prompt, undefined, followContext);
+		      await this.deliverPrompt(voiceAgent, voiceAgent.chatBackend, voiceAgent.chatSessionId, prompt, undefined, followContext);
 		      if (voiceAgent.chatBackend.waitForTurnCompletion) {
 		        await voiceAgent.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs());
 		      }
@@ -1076,6 +1090,7 @@ export class VoiceAgentManager {
       });
       ensureCurrent();
       await this.deliverPrompt(
+        voiceAgent,
         voiceAgent.chatBackend,
         voiceAgent.chatSessionId,
         prompt,
@@ -1188,6 +1203,7 @@ export class VoiceAgentManager {
         if (settleCancelled()) return;
         ensureCurrent();
         await this.deliverPrompt(
+          voiceAgent,
           voiceAgent.chatBackend,
           voiceAgent.chatSessionId,
           prompt,
@@ -1401,6 +1417,7 @@ export class VoiceAgentManager {
               maxChars: effectiveMaxChars,
             });
             await this.deliverPrompt(
+              voiceAgent,
               voiceAgent.chatBackend,
               voiceAgent.chatSessionId,
               prompt,
@@ -1427,6 +1444,7 @@ export class VoiceAgentManager {
 		        maxChars: effectiveMaxChars,
 		      });
 		      await this.deliverPrompt(
+            voiceAgent,
             voiceAgent.commitBackend!,
             voiceAgent.commitSessionId!,
             prompt,
