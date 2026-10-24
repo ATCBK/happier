@@ -159,7 +159,8 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     const failedIdleObservation = snapshot.state === 'failed' && snapshot.actionId === 'machines.managed.power.set'
         && snapshot.progress?.kind === 'phase'
         && ['managed.intent.waiting-idle', 'managed.intent.activity-unknown', 'managed.intent.busy'].includes(snapshot.progress.phase)
-        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable'].includes(snapshot.error?.errorCode ?? '');
+        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable',
+            'RPC_TRANSPORT_UNAVAILABLE', 'RPC_CLIENT_NOT_AVAILABLE'].includes(snapshot.error?.errorCode ?? '');
     // Confirmed removal supersedes an earlier failed request on this resource.
     // A superseded operation can fail after Delete observed absence. Compare
     // request admission, not settlement. A passive idle failure is obsolete
@@ -188,6 +189,12 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     const healthyEnrollment = machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
         && machine.archivedAt === undefined && machine.desired !== 'delete'
         && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged;
+    const failureDetails = snapshot.error?.details;
+    const controllerRequest = failureDetails && 'kind' in failureDetails && failureDetails.kind === 'managedControllerRequest'
+        ? failureDetails : undefined;
+    const failedAcquireConfirmation = snapshot.state === 'failed' && snapshot.actionId === 'machines.managed.acquire'
+        && snapshot.error?.errorCode === 'managed_controller_request_failed'
+        && controllerRequest?.path === '/v1/machines/managed/controller/current';
     // A failed inactivity read never admitted Stop/Delete. A newer connection
     // from this enrolled service supersedes that observation on the creation
     // card; Activity retains the actual failure. Explicit or submitted power
@@ -197,6 +204,11 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
         && machine.observation?.storage !== 'lost' && machine.observation?.power !== 'stopped' && machine.observation?.power !== 'suspended'
         && operation.observation === 'available' && !operation.isUnavailableProjection && failedIdleObservation
         && snapshot.settledAt !== undefined && guest.activeAt !== undefined && guest.activeAt > snapshot.settledAt) return null;
+    // Acquire owns initial enrollment. Once its exact bound service is online,
+    // that live fact supersedes only a late controller-current confirmation
+    // failure; bootstrap retries and genuine setup failures remain actionable.
+    if (healthyEnrollment && operation.observation === 'available' && !operation.isUnavailableProjection
+        && failedAcquireConfirmation) return null;
     // Existing 0.3 installation operations stored this CLI activation refusal as
     // action_failed. The enrolled guest's current connection resolves only that
     // readiness failure; unrelated bootstrap/setup failures remain actionable.

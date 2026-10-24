@@ -83,7 +83,9 @@ describe('managed creation presentation', () => {
     expect(describeManagedInstallationFailure({ errorCode: 'provider_unavailable', error: 'Native command failed: GITHUB_TOKEN unset' }, progress))
       .toBeNull();
   });
-  it('retires a failed pre-effect idle observation only after newer healthy guest presence', () => {
+  it.each(['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable',
+    'RPC_TRANSPORT_UNAVAILABLE', 'RPC_CLIENT_NOT_AVAILABLE'])
+  ('retires a failed pre-effect idle observation (%s) only after newer healthy guest presence', (errorCode) => {
     const enrolled = { ...machine, enrolledMachineId: 'guest' };
     const failed: ActionOperationProjection = {
       serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
@@ -92,14 +94,11 @@ describe('managed creation presentation', () => {
         title: 'Change power', createdAt: 10, startedAt: 10, settledAt: 20, cancellation: 'supported',
         progress: { kind: 'phase', phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' },
         domainRef: { kind: 'managedMachine', id: machine.id, controller: machine.controller, resource: machine.resource },
-        error: { errorCode: 'managed_controller_request_failed', error: 'managed_controller_request_failed' } },
+        error: { errorCode, error: errorCode } },
     };
     const connected = { enrolledMachine: { machineId: 'guest', installationId: 'guest-installation', online: true,
       serviceManaged: true, activeAt: 30 } };
-    for (const errorCode of ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable']) {
-      expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
-        error: { errorCode, error: errorCode } } }, connected)).toBeNull();
-    }
+    expect(currentManagedCreationOperation(enrolled, failed, connected)).toBeNull();
     expect(currentManagedCreationOperation(enrolled, failed)).toBe(failed);
     for (const guest of [
       { ...connected.enrolledMachine, activeAt: 15 },
@@ -114,8 +113,10 @@ describe('managed creation presentation', () => {
     expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
       progress: { kind: 'phase', phase: 'managed.intent.native-effect', label: 'Applying native machine intent' } } }, connected))
       .not.toBeNull();
-    expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
-      error: { errorCode: 'credential_unavailable', error: 'credential_unavailable' } } }, connected)).not.toBeNull();
+    for (const refusal of ['credential_unavailable', 'RPC_FORBIDDEN']) {
+      expect(currentManagedCreationOperation(enrolled, { ...failed, snapshot: { ...failed.snapshot,
+        error: { errorCode: refusal, error: refusal } } }, connected)).not.toBeNull();
+    }
     expect(currentManagedCreationOperation(enrolled, { ...failed, observation: 'unavailable', isUnavailableProjection: true }, connected))
       .not.toBeNull();
   });
@@ -300,6 +301,71 @@ describe('managed creation presentation', () => {
     expect(currentManagedCreationOperation(enrolled, setup, connected)).toBe(
       setup,
     );
+  });
+  it('retires a failed acquire confirmation after the exact managed service connects', () => {
+    const enrolled = { ...machine, enrolledMachineId: 'guest' };
+    const operation: ActionOperationProjection = {
+      serverId: machine.homeId,
+      observation: 'available',
+      isUnavailableProjection: false,
+      snapshot: {
+        version: 1,
+        operationId: 'late-controller-confirmation',
+        revision: 1,
+        actionId: 'machines.managed.acquire',
+        state: 'failed',
+        scope: { accountId: 'owner', machineId: machine.controller.machineId },
+        title: 'Create machine',
+        createdAt: 1,
+        settledAt: 2,
+        domainRef: {
+          kind: 'managedMachine',
+          id: machine.id,
+          resource: machine.resource,
+          controller: machine.controller,
+        },
+        cancellation: 'supported',
+        error: {
+          errorCode: 'managed_controller_request_failed',
+          error: 'The managing computer could not confirm the completed installation.',
+          details: {
+            kind: 'managedControllerRequest',
+            path: '/v1/machines/managed/controller/current',
+            category: 'schema',
+            status: 200,
+          },
+        },
+      },
+    };
+    const connected = {
+      enrolledMachine: {
+        machineId: 'guest',
+        installationId: 'guest-installation',
+        online: true,
+        serviceManaged: true,
+      },
+    };
+
+    expect(currentManagedCreationOperation(enrolled, operation, connected)).toBeNull();
+    expect(canRetryManagedInstallation(enrolled, operation, connected)).toBe(false);
+    expect(currentManagedCreationOperation(enrolled, operation)).toBe(operation);
+    expect(currentManagedCreationOperation(enrolled, operation, {
+      enrolledMachine: { ...connected.enrolledMachine, online: false },
+    })).toBe(operation);
+    expect(currentManagedCreationOperation(enrolled, {
+      ...operation,
+      snapshot: {
+        ...operation.snapshot,
+        actionId: 'machines.managed.bootstrap.retry',
+      },
+    }, connected)).not.toBeNull();
+    expect(currentManagedCreationOperation(enrolled, {
+      ...operation,
+      snapshot: {
+        ...operation.snapshot,
+        error: { errorCode: 'credential_unavailable', error: 'Credential unavailable' },
+      },
+    }, connected)).not.toBeNull();
   });
   it('recovers a retained unenrolled resource after controller operation history is lost', () => {
     const retained: ManagedMachineV1 = {
