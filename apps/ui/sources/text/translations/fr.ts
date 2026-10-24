@@ -4501,7 +4501,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       },
     },
     oauthPaste: {
-      invalidConfig: "Configuration de service connecté invalide.",
+      invalidConfig: "Ce n'est pas le code ou l'adresse qu'affiche la page de connexion. Copiez-le à nouveau et collez-le ici.",
       connectWebGroupTitle: "Connecter (web)",
       connectWebDescription:
         "Étape suivante : connecte-toi sur la page qui s’ouvre, copie l’URL finale du navigateur, puis colle-la ici.",

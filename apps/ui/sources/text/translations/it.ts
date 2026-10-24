@@ -4852,7 +4852,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       },
     },
     oauthPaste: {
-      invalidConfig: "Configurazione del servizio connesso non valida.",
+      invalidConfig: "Non è il codice o l'indirizzo mostrato dalla pagina di accesso. Copialo di nuovo e incollalo qui.",
       connectWebGroupTitle: "Connetti (web)",
       connectWebDescription:
         "Apri l’URL di autorizzazione, completa OAuth nel browser e poi copia/incolla l’URL finale reindirizzato di nuovo in Happier.",

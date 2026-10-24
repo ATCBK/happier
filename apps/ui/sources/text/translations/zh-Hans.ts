@@ -4420,7 +4420,7 @@ export const zhHans: TranslationStructure = {
       },
     },
     oauthPaste: {
-      invalidConfig: "已连接服务配置无效。",
+      invalidConfig: "这不是登录页面显示的代码或地址。请重新复制并粘贴到这里。",
       connectWebGroupTitle: "连接（网页）",
       connectWebDescription:
         "打开授权 URL，在浏览器中完成 OAuth，然后将最终重定向的 URL 复制并粘贴回 Happier。",

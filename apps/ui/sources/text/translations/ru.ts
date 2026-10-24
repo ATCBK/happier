@@ -4400,7 +4400,7 @@ export const ru: TranslationStructure = {
       },
     },
     oauthPaste: {
-      invalidConfig: "Неверная конфигурация подключённого сервиса.",
+      invalidConfig: "Это не код и не адрес со страницы входа. Скопируйте его ещё раз и вставьте сюда.",
       connectWebGroupTitle: "Подключить (web)",
       connectWebDescription:
         "Откройте URL авторизации, завершите OAuth в браузере, затем скопируйте и вставьте итоговый URL редиректа обратно в Happier.",

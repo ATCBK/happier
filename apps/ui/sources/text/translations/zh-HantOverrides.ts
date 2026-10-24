@@ -2757,7 +2757,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             },
         },
         oauthPaste: {
-            invalidConfig: '已連線服務設定無效。',
+            invalidConfig: "這不是登入頁面顯示的代碼或位址。請重新複製並貼上到這裡。",
             connectWebGroupTitle: '連線（網頁）',
             connectWebDescription:
                 '開啟授權 URL，在瀏覽器中完成 OAuth，然後將最終重新導向的 URL 複製並貼回 Happier。',

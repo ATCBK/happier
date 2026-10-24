@@ -5080,7 +5080,7 @@ const enConnectedServices = {
     },
   },
   oauthPaste: {
-    invalidConfig: 'Invalid connected service configuration.',
+    invalidConfig: "That isn't the code or address the sign-in page shows. Copy it again and paste it here.",
     connectWebGroupTitle: 'Connect (web)',
     connectWebDescription:
       'Next step: sign in on the page that opens, copy the final browser URL, then paste it back here.',

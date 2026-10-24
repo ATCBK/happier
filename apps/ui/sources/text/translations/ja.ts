@@ -4994,7 +4994,7 @@ localTailscale: {
       },
     },
     oauthPaste: {
-      invalidConfig: "接続済みサービスの設定が無効です。",
+      invalidConfig: "サインインページに表示されたコードまたはアドレスではありません。もう一度コピーしてここに貼り付けてください。",
       connectWebGroupTitle: "接続（Web）",
       connectWebDescription:
         "認可URLを開き、ブラウザでOAuthを完了したら、最終的にリダイレクトされたURLをコピーしてHappierに貼り付けてください。",

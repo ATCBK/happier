@@ -4294,7 +4294,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             },
         },
         oauthPaste: {
-            invalidConfig: 'Ungültige Konfiguration des verbundenen Dienstes.',
+            invalidConfig: "Das ist nicht der Code oder die Adresse, die die Anmeldeseite zeigt. Kopiere sie erneut und füge sie hier ein.",
             connectWebGroupTitle: 'Verbinden (Web)',
             connectWebDescription:
                 'Nächster Schritt: Melde dich auf der Seite an, die sich öffnet, kopier die finale Browser-URL und füg sie hier wieder ein.',

@@ -4359,7 +4359,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             },
         },
         oauthPaste: {
-            invalidConfig: 'Configuració del servei connectat no vàlida.',
+            invalidConfig: "Això no és el codi ni l'adreça que mostra la pàgina d'inici de sessió. Copia'l de nou i enganxa'l aquí.",
             connectWebGroupTitle: 'Connecta (web)',
             connectWebDescription:
                 'Obre l\'URL d\'autorització, completa OAuth al navegador i després copia/enganxa l\'URL final redirigida de tornada a Happier.',

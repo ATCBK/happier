@@ -4509,7 +4509,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       },
     },
     oauthPaste: {
-      invalidConfig: "Nieprawidłowa konfiguracja połączonej usługi.",
+      invalidConfig: "To nie jest kod ani adres pokazany na stronie logowania. Skopiuj go ponownie i wklej tutaj.",
       connectWebGroupTitle: "Połącz (web)",
       connectWebDescription:
         "Otwórz URL autoryzacji, dokończ OAuth w przeglądarce, a następnie skopiuj i wklej końcowy przekierowany URL z powrotem do Happier.",

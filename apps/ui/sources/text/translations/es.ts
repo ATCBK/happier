@@ -4665,7 +4665,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       },
     },
     oauthPaste: {
-      invalidConfig: "Configuración de servicio conectado no válida.",
+      invalidConfig: "Eso no es el código ni la dirección que muestra la página de inicio de sesión. Cópialo de nuevo y pégalo aquí.",
       connectWebGroupTitle: "Conectar (web)",
       connectWebDescription:
         "Abre la URL de autorización, completa OAuth en tu navegador y luego copia/pega la URL final redirigida de vuelta en Happier.",
