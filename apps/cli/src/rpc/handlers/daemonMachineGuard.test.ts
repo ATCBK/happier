@@ -49,6 +49,9 @@ import { reloadConfiguration } from '@/configuration';
 import { addServerProfile, adoptServerProfileHomeConnectionDescriptor } from '@/server/serverProfiles';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
+import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/socketRpc';
 
 const identity = { serverId: 'home', machineId: 'machine', installationId: 'install', custodianAccountId: 'owner' };
 const now = Date.UTC(2026, 9, 10, 12);
@@ -82,8 +85,12 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false,
     compareAndSwap: async () => ({ status: 'unavailable' }) } });
   await policy.reload(); cleanup.push(() => policy.stop());
   const inventory = createManagedActivityInventory({ now: () => now, producers: [] }); cleanup.push(() => inventory.dispose());
+  let beforeNativeRead: (() => void) | undefined;
+  const procfs = localServiceProcfsFixture([]);
   const ownership = createProcessOwnershipRuntime({ daemonScopeKey: '123456789abc', platform: 'linux', listRoots: () => [],
-    censusDependencies: { platform: 'linux', linuxBoundary: localServiceProcfsFixture([]) } });
+    censusDependencies: { platform: 'linux', linuxBoundary: { ...procfs, readdir: async path => {
+      beforeNativeRead?.(); return procfs.readdir(path);
+    } } } });
   const readFacts = async (owners?: GuardOwnership) => ({ ownership: owners ?? await ownership.readOwners({ freshness: 'fresh' }), inventory: await inventory.read(), targets: [] });
   const readPolicy = () => { const read = policy.read(); if (read.status !== 'ready') throw new Error('Policy unavailable'); return read.policy.guard; };
   const runtime = createGuardRuntime({ vitals: sampler, readPolicy, subscribePolicy: policy.subscribe, subscribe: inventory.subscribe,
@@ -188,12 +195,50 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false,
       localActionContext: { surface: args.context.surface, authority: args.context.authority } }),
   }) });
   return { activity, routes, handlers, opened, client, executor, settings, ceilingWrites, setOutput: (value: unknown) => { output = value; },
+    beforeNativeRead: (read: () => void) => { beforeNativeRead = read; },
     setCredentialCurrent: (value: boolean) => { credentialCurrent = value; },
     setBrowserFailed: (value: boolean) => { browserFailed = value; }, setClockFailed: (value: boolean) => { clockFailed = value; },
     setTarget: (target: typeof identity) => { currentTarget = target; } };
 }
 
 describe('Machine guard current admission and original Action restoration', () => {
+  it('verifies passive reads at dispatch and disclosure, refusing revocation during real native observation', async () => {
+    const f = await setup();
+    let current = true;
+    let verifications = 0;
+    const manager = new RpcHandlerManager({ scopePrefix: identity.machineId, localMachineId: identity.machineId,
+      encryptionMode: 'plain', logger: () => {},
+      authorizeRequest: request => authorizeMachineRpcRequest(request, {
+        machineId: identity.machineId, resolveCustodianAccountId: async () => identity.custodianAccountId,
+        resolveInstallationId: () => identity.installationId,
+        // Home verification is the network boundary; Guard, Activity and dispatcher remain real.
+        verifyMachineAdmission: async () => { verifications++; return current; },
+      }) });
+    registerDaemonMachineGuardRpcHandlers(manager, f.routes);
+    const request = (method: string, params = {}) => ({ method: `${identity.machineId}:${method}`,
+      params: { machineId: identity.machineId, ...params }, callerAuthority: 'present_user' as const,
+      machineAdmission: SocketRpcMachineAdmissionContextV1Schema.parse({ machineId: identity.machineId,
+        installationId: identity.installationId, custodianAccountId: identity.custodianAccountId,
+        actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' }) });
+    f.beforeNativeRead(() => { current = false; });
+    expect(await manager.handleRequest(request(RPC_METHODS.MACHINES_GUARD_GET))).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+    expect(verifications).toBe(2);
+    const beforeDenied = verifications;
+    expect(await manager.handleRequest(request(RPC_METHODS.MACHINES_GUARD_GET))).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+    expect(verifications - beforeDenied).toBe(1);
+    current = true;
+    f.beforeNativeRead(() => {});
+    for (const [method, params, expected] of [
+      [RPC_METHODS.MACHINES_GUARD_GET, {}, { policyRevision: 1, idle: [] }],
+      [RPC_METHODS.DAEMON_GUARD_WATCH, {}, { changed: true, view: { policyRevision: 1, idle: [] } }],
+      [RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST, { range: 'today' }, { entries: [] }],
+    ] as const) {
+      const before = verifications;
+      const response = await manager.handleRequest(request(method, params));
+      expect(response).toMatchObject(expected);
+      expect(verifications - before).toBe(2);
+    }
+  });
   it('reads the paired-owner Guard through a caller-local Home label with current admission', async () => {
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR']);
     try {
@@ -448,9 +493,8 @@ describe('Machine guard current admission and original Action restoration', () =
     cache.attachApiMachineForSessions(replacement as never);
     const get = f.handlers.get(RPC_METHODS.MACHINES_GUARD_GET)!;
     expect(await get({ machineId: 'machine' }, context())).toMatchObject({ recentActivity: [{ id: 'retained' }] });
-    let verified = false;
     const changing = { ...context(), verifyMachineAdmissionCurrent: async () => {
-      if (verified) f.setTarget({ ...identity, installationId: 'replacement' }); verified = true; return true;
+      f.setTarget({ ...identity, installationId: 'replacement' }); return true;
     } };
     await expect(get({ machineId: 'machine' }, changing)).rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
   });

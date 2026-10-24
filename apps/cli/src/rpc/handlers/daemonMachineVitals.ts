@@ -66,63 +66,70 @@ function fiveMinuteSeries(sampler: MachineVitalsSampler): MachineVitalsSnapshotV
 }
 
 export function registerDaemonMachineVitalsRpcHandlers(rpc: RpcHandlerRegistrar, options: DaemonMachineVitalsRoutes): void {
-    const assertAdmission = async (request: Readonly<{ serverId?: string; machineId: string }>, context?: RpcHandlerContext) => {
+    const bindAdmission = (request: Readonly<{ serverId?: string; machineId: string }>, context?: RpcHandlerContext) => {
         const target = options.target();
+        const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
+        const matches = () => {
+            const current = options.target();
+            const admission = context?.machineAdmission;
+            if (!target || !current || current.serverId !== target.serverId) return deny('machine_home');
+            if (!admission || admission.actorAccountId.length === 0) return deny('machine_actor');
+            if (context?.signal.aborted) return deny('request_cancelled');
+            if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
+            return doesMachineRpcTargetMatchAdmission(request, admission, current, context?.reportAdmissionDenial);
+        };
+        if (!matches()) throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
         const assertCurrent = async () => {
-            const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
-            const matches = () => {
-                const current = options.target();
-                const admission = context?.machineAdmission;
-                if (!target || !current || current.serverId !== target.serverId) return deny('machine_home');
-                if (!admission || admission.actorAccountId.length === 0) return deny('machine_actor');
-                if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
-                return doesMachineRpcTargetMatchAdmission(request, admission, current, context?.reportAdmissionDenial);
-            };
             const verified = async () => context?.verifyMachineAdmissionCurrent && await context.verifyMachineAdmissionCurrent()
                 || deny('machine_currentness');
             if (!matches() || !await verified() || !matches()) {
                 throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
             }
         };
-        await assertCurrent();
+        // The dispatcher owns initial Home admission. This passive owner keeps
+        // local binding checks and one fresh verification at disclosure.
         return assertCurrent;
     };
     rpc.registerHandler(RPC_METHODS.MACHINES_VITALS_GET, async (raw: unknown, context) => {
         const request = MachineVitalsGetInputV1Schema.parse(raw);
-        await assertAdmission(request, context);
-        const latest = options.sampler.latest();
-        const state = options.sampler.state();
-        const attention = options.readAttention?.();
-        return MachineVitalsSnapshotV1Schema.parse({
-            ...state, sample: latest ? sampleForView(latest, request.view ?? 'summary') : null,
-            series5m: latest || options.sampler.minutes(0).length ? fiveMinuteSeries(options.sampler)
-                : { cpu: [], memory: [], networkRx: [], networkTx: [] },
-            ...(attention ? { attention } : {}),
-        });
+        const assertCurrent = bindAdmission(request, context);
+        try {
+            const latest = options.sampler.latest();
+            const state = options.sampler.state();
+            const attention = options.readAttention?.();
+            return MachineVitalsSnapshotV1Schema.parse({
+                ...state, sample: latest ? sampleForView(latest, request.view ?? 'summary') : null,
+                series5m: latest || options.sampler.minutes(0).length ? fiveMinuteSeries(options.sampler)
+                    : { cpu: [], memory: [], networkRx: [], networkTx: [] },
+                ...(attention ? { attention } : {}),
+            });
+        } finally { await assertCurrent(); }
     });
     rpc.registerHandler(RPC_METHODS.MACHINES_VITALS_HISTORY_GET, async (raw: unknown, context) => {
         const request = MachineVitalsHistoryGetInputV1Schema.parse(raw);
-        await assertAdmission(request, context);
-        return MachineVitalsHistoryV1Schema.parse(options.sampler.history(request.range));
+        const assertCurrent = bindAdmission(request, context);
+        try { return MachineVitalsHistoryV1Schema.parse(options.sampler.history(request.range)); }
+        finally { await assertCurrent(); }
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_VITALS_WATCH, async (raw: unknown, context) => {
         const request = MachineVitalsWatchInputV1Schema.parse(raw);
-        const assertCurrent = await assertAdmission(request, context);
+        const assertCurrent = bindAdmission(request, context);
         const cursor = request.sinceSampledAt ?? options.sampler.latest()?.sampledAt ?? 0;
         const newer = () => options.sampler.samplesSince(cursor, request.view);
-        const parked = await parkWatch({
-            isNewer: () => newer().length > 0,
-            read: () => newer().map(sample => sampleForView(sample, request.view)),
-            subscribe(listener) {
-                const unsubscribe = options.sampler.subscribe(() => { if (newer().length) listener(); });
-                const release = request.view === 'overview' ? options.sampler.demandOverview() : options.sampler.demand('summary');
-                return () => { unsubscribe(); release(); };
-            },
-            signal: context?.signal,
-            windowMs: MACHINE_WATCH_WINDOW_MS,
-        });
-        await assertCurrent();
-        return MachineVitalsWatchResultV1Schema.parse(parked.changed
-            ? { changed: true, samples: parked.snapshot } : { changed: false });
+        try {
+            const parked = await parkWatch({
+                isNewer: () => newer().length > 0,
+                read: () => newer().map(sample => sampleForView(sample, request.view)),
+                subscribe(listener) {
+                    const unsubscribe = options.sampler.subscribe(() => { if (newer().length) listener(); });
+                    const release = request.view === 'overview' ? options.sampler.demandOverview() : options.sampler.demand('summary');
+                    return () => { unsubscribe(); release(); };
+                },
+                signal: context?.signal,
+                windowMs: MACHINE_WATCH_WINDOW_MS,
+            });
+            return MachineVitalsWatchResultV1Schema.parse(parked.changed
+                ? { changed: true, samples: parked.snapshot } : { changed: false });
+        } finally { await assertCurrent(); }
     });
 }

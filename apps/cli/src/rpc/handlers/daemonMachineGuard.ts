@@ -34,60 +34,65 @@ export type DaemonMachineGuardRoutes = Readonly<{
 type GuardRestorationExecute = NonNullable<Parameters<NonNullable<ActionExecutorDeps['machineGuardAction']>>[0]['executeCanonicalAction']>;
 
 export function registerDaemonMachineGuardRpcHandlers(rpc: RpcHandlerRegistrar, options: DaemonMachineGuardRoutes): NonNullable<ActionExecutorDeps['machineGuardAction']> {
-  const admit = async (request: Readonly<{ serverId?: string; machineId: string }>, context: RpcHandlerContext | undefined, manage: boolean) => {
+  const bindAdmission = (request: Readonly<{ serverId?: string; machineId: string }>, context: RpcHandlerContext | undefined, manage: boolean) => {
     const target = options.target();
     const admission = context?.machineAdmission;
+    const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
+    const matches = () => {
+      const current = options.target();
+      if (!target || !current || !admission) return deny('machine_admission');
+      if (!admission.actorAccountId.trim()) return deny('machine_actor');
+      if (current.serverId !== target.serverId) return deny('machine_home');
+      if (current.machineId !== target.machineId) return deny('machine_target');
+      if (current.installationId !== target.installationId) return deny('machine_installation');
+      if (current.custodianAccountId !== target.custodianAccountId) return deny('machine_custodian');
+      if (!doesMachineRpcTargetMatchAdmission(request, admission, target, context?.reportAdmissionDenial)) return false;
+      if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
+      if (manage && (admission.role !== 'manage' || admission.actorAccountId !== target.custodianAccountId)) return deny('machine_custodian');
+      if (context?.signal.aborted) return deny('request_cancelled');
+      return true;
+    };
     const verify = async () => {
-      const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
-      const matches = async () => {
-        const current = options.target();
-        if (!target || !current || !admission) return deny('machine_admission');
-        if (!admission.actorAccountId.trim()) return deny('machine_actor');
-        if (current.serverId !== target.serverId) return deny('machine_home');
-        if (current.machineId !== target.machineId) return deny('machine_target');
-        if (current.installationId !== target.installationId) return deny('machine_installation');
-        if (current.custodianAccountId !== target.custodianAccountId) return deny('machine_custodian');
-        if (!doesMachineRpcTargetMatchAdmission(request, admission, target, context?.reportAdmissionDenial)) return false;
-        if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
-        if (manage && (admission.role !== 'manage' || admission.actorAccountId !== target.custodianAccountId)) return deny('machine_custodian');
-        if (context?.signal.aborted) return deny('request_cancelled');
-        return true;
-      };
       const verified = async () => context?.verifyMachineAdmissionCurrent && await context.verifyMachineAdmissionCurrent()
         || deny('machine_currentness');
-      return Boolean(await matches() && await verified() && await matches());
+      return Boolean(matches() && await verified() && matches());
     };
     const assertCurrent = async () => {
       if (!await verify()) throw new RpcError('Current Machine admission is required', RPC_ERROR_CODES.FORBIDDEN);
     };
-    await assertCurrent();
+    if (!matches()) throw new RpcError('Current Machine admission is required', RPC_ERROR_CODES.FORBIDDEN);
     if (!target || !admission || !context) throw new RpcError('Machine admission is required', RPC_ERROR_CODES.FORBIDDEN);
     const requester: GuardViewRequester = { serverId: target.serverId, accountId: admission.actorAccountId,
       machineId: target.machineId, installationId: target.installationId,
       isCustodian: admission.actorAccountId === target.custodianAccountId };
     return { target, context, requester, verify, assertCurrent };
   };
-  rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_GET, async (raw: unknown, context?: RpcHandlerContext) => {
-    const admitted = await admit(MachineGuardGetInputV1Schema.parse(raw), context, false);
-    const view = await options.guard.readView(admitted.requester, context?.signal);
+  // Effects keep their entry/effect checks. Passive reads already have the
+  // dispatcher's Home admission and verify again only before disclosure.
+  const admit = async (request: Readonly<{ serverId?: string; machineId: string }>, context: RpcHandlerContext | undefined, manage: boolean) => {
+    const admitted = bindAdmission(request, context, manage);
     await admitted.assertCurrent();
-    return MachineGuardViewV1Schema.parse(view);
+    return admitted;
+  };
+  rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_GET, async (raw: unknown, context?: RpcHandlerContext) => {
+    const admitted = bindAdmission(MachineGuardGetInputV1Schema.parse(raw), context, false);
+    try { return MachineGuardViewV1Schema.parse(await options.guard.readView(admitted.requester, context?.signal)); }
+    finally { await admitted.assertCurrent(); }
   });
   rpc.registerHandler(RPC_METHODS.DAEMON_GUARD_WATCH, async (raw: unknown, context?: RpcHandlerContext) => {
     const request = MachineGuardWatchInputV1Schema.parse(raw);
-    const admitted = await admit(request, context, false);
-    const result = await options.guard.watch({ ...request, serverId: admitted.target.serverId }, admitted.requester, context?.signal);
-    await admitted.assertCurrent();
-    return MachineGuardWatchResultV1Schema.parse(result);
+    const admitted = bindAdmission(request, context, false);
+    try { return MachineGuardWatchResultV1Schema.parse(await options.guard.watch({ ...request, serverId: admitted.target.serverId }, admitted.requester, context?.signal)); }
+    finally { await admitted.assertCurrent(); }
   });
   rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST, async (raw: unknown, context?: RpcHandlerContext) => {
     const request = MachineGuardActivityListInputV1Schema.parse(raw);
-    const admitted = await admit(request, context, false);
-    const result = await options.activity.list({ range: request.range, ...(request.filter ? { filter: request.filter } : {}),
-      ...(!admitted.requester.isCustodian ? { requester: { serverId: admitted.target.serverId, accountId: admitted.requester.accountId,
-        machineId: admitted.target.machineId, installationId: admitted.target.installationId } } : {}) });
-    await admitted.assertCurrent();
-    return result;
+    const admitted = bindAdmission(request, context, false);
+    try {
+      return await options.activity.list({ range: request.range, ...(request.filter ? { filter: request.filter } : {}),
+        ...(!admitted.requester.isCustodian ? { requester: { serverId: admitted.target.serverId, accountId: admitted.requester.accountId,
+          machineId: admitted.target.machineId, installationId: admitted.target.installationId } } : {}) });
+    } finally { await admitted.assertCurrent(); }
   });
   rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_IDLE_STOP_KEEP_RUNNING, async (raw: unknown, context?: RpcHandlerContext) => {
     const request = MachineGuardKeepRunningInputV1Schema.parse(raw);

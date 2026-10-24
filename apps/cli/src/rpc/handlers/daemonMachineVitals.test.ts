@@ -109,6 +109,41 @@ describe('Machine vitals Machine admission', () => {
             expect(await manager.handleRequest(request)).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
         } finally { await sampler.stop(); await native.cleanup(); }
     });
+    it('verifies each parked watch only at dispatch and disclosure, including revocation between them', async () => {
+        const { sampler } = await sampledSetup();
+        let current = true;
+        let verifications = 0;
+        const manager = new RpcHandlerManager({ scopePrefix: 'm', localMachineId: 'm', encryptionMode: 'plain', logger: () => {},
+            authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                machineId: 'm', resolveCustodianAccountId: async () => 'owner', resolveInstallationId: () => 'i',
+                // Home verification is the network boundary; dispatcher, route and sampler are real.
+                verifyMachineAdmission: async () => { verifications++; return current; },
+            }) });
+        registerDaemonMachineVitalsRpcHandlers(manager, { sampler, target: () => identity });
+        const request = (sinceSampledAt: number) => ({ method: `m:${RPC_METHODS.DAEMON_VITALS_WATCH}`,
+            params: { machineId: 'm', view: 'summary', sinceSampledAt }, callerAuthority: 'present_user' as const,
+            machineAdmission: SocketRpcMachineAdmissionContextV1Schema.parse(context('recipient', 'use').machineAdmission) });
+        for (let sample = 0; sample < 3; sample++) {
+            const before = verifications;
+            const pending = manager.handleRequest(request(sampler.latest()!.sampledAt));
+            await advance(sampler, 0);
+            const parkedVerifications = verifications - before;
+            await advance(sampler, 15_000);
+            expect(MachineVitalsWatchResultV1Schema.parse(await pending)).toMatchObject({ changed: true });
+            expect(parkedVerifications).toBe(1);
+            expect(verifications - before).toBe(2);
+        }
+        const beforeRevocation = verifications;
+        const pending = manager.handleRequest(request(sampler.latest()!.sampledAt));
+        await advance(sampler, 0);
+        current = false;
+        await advance(sampler, 15_000);
+        expect(await pending).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+        expect(verifications - beforeRevocation).toBe(2);
+        const beforeDenied = verifications;
+        expect(await manager.handleRequest(request(sampler.latest()!.sampledAt))).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+        expect(verifications - beforeDenied).toBe(1);
+    });
     it('admits custodians and Use recipients to content-free machine facts', async () => {
         const { handlers } = await setup();
         for (const admitted of [context('owner', 'manage'), context('recipient', 'use')]) {

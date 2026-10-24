@@ -30,48 +30,55 @@ export type DaemonProcessesRoutes = Readonly<{
 
 /** Action RPC admission owns approval. These endpoints consume its admitted identity and never add approval policy. */
 export function registerDaemonProcessesRpcHandlers(rpc: RpcHandlerRegistrar, options: DaemonProcessesRoutes): void {
-    const admitted = async (request: Readonly<{ machineId: string; serverId?: string }>, context?: RpcHandlerContext) => {
+    const bindAdmission = (request: Readonly<{ machineId: string; serverId?: string }>, context?: RpcHandlerContext) => {
         const target = options.target();
+        const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
+        const matches = () => {
+            const current = options.target(); const admission = context?.machineAdmission;
+            if (!target || !current || current.serverId !== target.serverId) return deny('machine_home');
+            if (!admission) return deny('machine_admission');
+            if (context?.signal.aborted) return deny('request_cancelled');
+            if (admission.actorAccountId.length === 0) return deny('machine_actor');
+            if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
+            return doesMachineRpcTargetMatchAdmission(request, admission, current, context?.reportAdmissionDenial);
+        };
+        if (!matches()) throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
         const assertCurrent = async () => {
-            const deny = (predicate: RpcAdmissionPredicate) => { context?.reportAdmissionDenial?.(predicate); return false; };
-            const matches = () => {
-                const current = options.target(); const admission = context?.machineAdmission;
-                if (!target || !current || current.serverId !== target.serverId) return deny('machine_home');
-                if (!admission) return deny('machine_admission');
-                if (context?.signal.aborted) return deny('request_cancelled');
-                if (admission.actorAccountId.length === 0) return deny('machine_actor');
-                if (admission.role !== 'use' && admission.role !== 'manage') return deny('machine_role');
-                return doesMachineRpcTargetMatchAdmission(request, admission, current, context?.reportAdmissionDenial);
-            };
             const verified = async () => context?.verifyMachineAdmissionCurrent && await context.verifyMachineAdmissionCurrent()
                 || deny('machine_currentness');
             if (!matches() || !await verified() || !matches()) {
                 throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
             }
         };
-        await assertCurrent();
         const identity = context!.machineAdmission!;
         return { accountId: identity.actorAccountId, custodianAccountId: identity.custodianAccountId, assertCurrent };
     };
+    // Effects retain entry verification and their owning pre-effect callbacks.
+    // Passive reads already have dispatcher admission and verify at disclosure.
+    const admitted = async (request: Readonly<{ machineId: string; serverId?: string }>, context?: RpcHandlerContext) => {
+        const actor = bindAdmission(request, context);
+        await actor.assertCurrent();
+        return actor;
+    };
     rpc.registerHandler(RPC_METHODS.MACHINES_PROCESSES_LIST, async (raw: unknown, context) => {
-        const input = MachineProcessesListInputV1Schema.parse(raw); const requester = await admitted(input, context);
-        const answer = await options.view.list(input, requester); await requester.assertCurrent();
-        return MachineProcessesAnswerV1Schema.parse(answer);
+        const input = MachineProcessesListInputV1Schema.parse(raw); const requester = bindAdmission(input, context);
+        try { return MachineProcessesAnswerV1Schema.parse(await options.view.list(input, requester)); }
+        finally { await requester.assertCurrent(); }
     });
     rpc.registerHandler(RPC_METHODS.MACHINES_PROCESSES_GET, async (raw: unknown, context) => {
-        const input = MachineProcessesGetInputV1Schema.parse(raw); const requester = await admitted(input, context);
-        const answer = await options.view.get(input, requester); await requester.assertCurrent();
-        return MachineProcessesGetResultV1Schema.parse(answer);
+        const input = MachineProcessesGetInputV1Schema.parse(raw); const requester = bindAdmission(input, context);
+        try { return MachineProcessesGetResultV1Schema.parse(await options.view.get(input, requester)); }
+        finally { await requester.assertCurrent(); }
     });
     rpc.registerHandler(RPC_METHODS.MACHINES_PROCESSES_CHECK, async (raw: unknown, context) => {
-        const input = MachineProcessesCheckInputV1Schema.parse(raw); const requester = await admitted(input, context);
-        const answer = await options.view.check(input, requester); await requester.assertCurrent();
-        return MachineProcessesCheckResultV1Schema.parse(answer);
+        const input = MachineProcessesCheckInputV1Schema.parse(raw); const requester = bindAdmission(input, context);
+        try { return MachineProcessesCheckResultV1Schema.parse(await options.view.check(input, requester)); }
+        finally { await requester.assertCurrent(); }
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_PROCESSES_WATCH, async (raw: unknown, context) => {
-        const input = MachineProcessesWatchInputV1Schema.parse(raw); const requester = await admitted(input, context);
-        const answer = await options.view.watch(input, requester, context?.signal); await requester.assertCurrent();
-        return MachineProcessesWatchResultV1Schema.parse(answer);
+        const input = MachineProcessesWatchInputV1Schema.parse(raw); const requester = bindAdmission(input, context);
+        try { return MachineProcessesWatchResultV1Schema.parse(await options.view.watch(input, requester, context?.signal)); }
+        finally { await requester.assertCurrent(); }
     });
     if (!options.actions) return;
     const actions = options.actions;
