@@ -257,7 +257,7 @@ function shouldFallbackToScopedMachineRpc(error: unknown): boolean {
 }
 
 async function machineRpcWithServerTransport<R, A>(
-    params: ServerScopedMachineRpcParams<A>,
+    params: ServerScopedMachineRpcParams<A, R>,
     socketRpcAbortScope: { issued: boolean },
     timeoutBudget: ReturnType<typeof createMachineRpcTimeoutBudget>,
     onNoEffect: () => void,
@@ -335,6 +335,7 @@ async function machineRpcWithServerTransport<R, A>(
                             ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
                             ...(params.signal ? { signal: params.signal } : {}),
                             ...(params.readAdmission ? { readAdmission: params.readAdmission } : {}),
+                            ...(params.decodeResult ? { decodeResult: params.decodeResult } : {}),
                         },
                     ),
                 );
@@ -542,6 +543,7 @@ async function machineRpcWithServerTransport<R, A>(
             setupCancellation.dispose();
             return await runAdmittedMachineRpcRead({
                 admission: params.readAdmission,
+                decodeResult: params.decodeResult,
                 signal: params.signal,
                 binding: {
                     key: JSON.stringify([context.targetServerId, context.targetServerUrl, context.runtimeOrigin ?? null,
@@ -660,7 +662,7 @@ async function machineRpcWithServerTransport<R, A>(
     throw lastError ?? new Error('Machine RPC failed');
 }
 
-export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachineRpcParams<A>): Promise<R> {
+export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachineRpcParams<A, R>): Promise<R> {
     // One caller budget covers route discovery, setup, fallback and retries.
     // Caller-owned operation lifetimes still bound setup but not the RPC reply.
     const timeoutBudget = createMachineRpcTimeoutBudget({
@@ -680,7 +682,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
     };
     const observeScope = (scope: MachineReachabilityScope | null) => { requestEvidence.scope = scope; };
     const onNoEffect = () => { requestMayHaveEffects = false; };
-    const effectiveParams: ServerScopedMachineRpcParams<A> = {
+    const effectiveParams: ServerScopedMachineRpcParams<A, R> = {
         ...params,
         // The default budget bounds connection/setup, not remote operation work.
         // Explicit caller deadlines still cover the complete invocation.
@@ -712,6 +714,8 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
                     signal: effectiveParams.signal,
                     onDispatched: effectiveParams.onDispatched,
                     onDirectRefused: onNoEffect,
+                    readAdmission: effectiveParams.readAdmission,
+                    decodeResult: effectiveParams.decodeResult,
                     resolveDirectRoute: async (input) => await timeoutBudget.runWithinTimeout('scoped', async (timeoutMs) => {
                         const route = await resolveProductionMachineRpcDirectRoute({
                             ...input,
@@ -730,7 +734,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
                     postDirect: async (directInput) => {
                         const response = await withMachineRpcAbort(
                             effectiveParams.method,
-                            effectiveParams.signal,
+                            directInput.signal,
                             () => effectiveParams.operationTimeoutMs === null
                                 ? postProductionMachineRpcDirect(directInput)
                                 : timeoutBudget.runWithinTimeout('scoped', async (timeoutMs) =>
@@ -786,7 +790,7 @@ export function createOrderedMachineRpcCaller(
     call: typeof machineRpcWithServerScope = machineRpcWithServerScope,
 ): typeof machineRpcWithServerScope {
     let dispatchTail = Promise.resolve();
-    return async <R, A>(params: ServerScopedMachineRpcParams<A>): Promise<R> => {
+    return async <R, A>(params: ServerScopedMachineRpcParams<A, R>): Promise<R> => {
         const previous = dispatchTail;
         let releaseDispatch!: () => void;
         const dispatched = new Promise<void>((resolve) => { releaseDispatch = resolve; });

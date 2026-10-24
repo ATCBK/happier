@@ -463,7 +463,7 @@ describe('machineRpcWithPeerMediationRoute', () => {
         }));
     });
 
-    it('keeps a direct success bound to another method uncertain without replaying it', async () => {
+    it.each([RPC_METHODS.DAEMON_MEMORY_STATUS, RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH])('falls back for read identity failures and preserves mutation uncertainty: %s', async (method) => {
         const module = await importClient();
         expect(module).toHaveProperty('machineRpcWithPeerMediationRoute');
         if ('importError' in module) throw module.importError;
@@ -474,7 +474,7 @@ describe('machineRpcWithPeerMediationRoute', () => {
         const result = await module.machineRpcWithPeerMediationRoute({
             serverId: 'server_1',
             machineId: 'machine_1',
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+            method,
             payload: { includeWorkers: true },
             resolveDirectRoute: async () => ({
                 kind: 'selected',
@@ -494,7 +494,7 @@ describe('machineRpcWithPeerMediationRoute', () => {
                         scope: {
                             kind: 'machine_rpc',
                             rpcScopeId: 'rpc_scope_1',
-                            allowedMethods: [RPC_METHODS.DAEMON_MEMORY_STATUS],
+                            allowedMethods: [method],
                             maxCalls: 1,
                             maxIdleMs: 10_000,
                         },
@@ -532,11 +532,16 @@ describe('machineRpcWithPeerMediationRoute', () => {
             createRequestId: () => 'request_1',
         }).catch((error: unknown) => error);
 
-        expect(readRpcRequestDisposition(result)).toBe('outcomeUnknown');
-        expect(serverFallback).not.toHaveBeenCalled();
+        if (method === RPC_METHODS.DAEMON_MEMORY_STATUS) {
+            expect(result).toEqual({ routed: 'server' });
+            expect(serverFallback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: 'direct_response_identity_mismatch' }));
+        } else {
+            expect(readRpcRequestDisposition(result)).toBe('outcomeUnknown');
+            expect(serverFallback).not.toHaveBeenCalled();
+        }
     });
 
-    it('keeps a direct failure bound to another request uncertain without replaying it', async () => {
+    it('uses Home for a read failure bound to another direct request', async () => {
         const module = await importClient();
         expect(module).toHaveProperty('machineRpcWithPeerMediationRoute');
         if ('importError' in module) throw module.importError;
@@ -604,7 +609,7 @@ describe('machineRpcWithPeerMediationRoute', () => {
             createRequestId: () => 'request_1',
         }).catch((error: unknown) => error);
 
-        expect(readRpcRequestDisposition(result)).toBe('outcomeUnknown');
-        expect(serverFallback).not.toHaveBeenCalled();
+        expect(result).toEqual({ routed: 'server' });
+        expect(serverFallback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: 'direct_response_identity_mismatch' }));
     });
 });

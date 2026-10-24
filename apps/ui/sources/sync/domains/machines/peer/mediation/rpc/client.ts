@@ -7,9 +7,11 @@ import type { SignedDirectRouteGrantV2 } from '@happier-dev/protocol/machines/pe
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { isReadOnlyMachineRpcMethod } from '@happier-dev/protocol/actions/actionSpecs';
 import { markRpcRequestDisposition, readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { createMachineRpcPeerFallbackReceipt, type MachineRpcPeerFallbackReceipt } from './fallback';
+import { runAdmittedMachineRpcRead, type AdmittedMachineRpcReadBinding, type MachineRpcReadAdmission } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 
 export type MachineRpcDirectRouteResolution =
     | Readonly<{
@@ -21,6 +23,8 @@ export type MachineRpcDirectRouteResolution =
         }>;
         grant: SignedDirectRouteGrantV2;
         proof: PeerRouteEphemeralProofV2;
+        /** Captured by the production authority owner, never decoded from a grant. */
+        readBinding?: AdmittedMachineRpcReadBinding;
     }>
     | Readonly<{
         kind: 'fallback';
@@ -29,7 +33,7 @@ export type MachineRpcDirectRouteResolution =
         requiredCapability?: string;
     }>;
 
-export type MachineRpcWithPeerMediationRouteParams<A> = Readonly<{
+export type MachineRpcWithPeerMediationRouteParams<A, R = unknown> = Readonly<{
     serverId?: string | null;
     accountId?: string | null;
     machineId: string;
@@ -48,6 +52,8 @@ export type MachineRpcWithPeerMediationRouteParams<A> = Readonly<{
     onDispatched?: () => void;
     /** A bound direct refusal proves the issued direct attempt had no effect. */
     onDirectRefused?: () => void;
+    readAdmission?: MachineRpcReadAdmission;
+    decodeResult?: (raw: unknown) => R;
     resolveDirectRoute: (input: Readonly<{
         serverId?: string | null;
         accountId?: string | null;
@@ -124,8 +130,23 @@ function createDirectOutcomeUnknownError(): unknown {
         RPC_ERROR_CODES.OUTCOME_UNKNOWN), 'outcomeUnknown');
 }
 
+/** Local transport evidence; never a daemon refusal or a wire envelope. */
+export class MachineRpcDirectIdentityError extends RpcError {
+    constructor(readonly reasonCode: 'direct_response_content_type' | 'direct_response_invalid' | 'direct_response_identity_mismatch',
+        message = 'Machine RPC direct response did not establish target identity', rpcErrorCode = 'MACHINE_RPC_INVALID_RESPONSE') {
+        super(message, rpcErrorCode);
+    }
+}
+
+/** A bound no-effect transport refusal, not an Action's domain result. */
+class DirectReadRefusedError extends Error {
+    constructor(readonly response: Extract<PeerMachineRpcDirectResponseV2, { ok: false }>) {
+        super('Direct Machine read refused');
+    }
+}
+
 async function useServerFallback<R, A>(
-    params: MachineRpcWithPeerMediationRouteParams<A>,
+    params: MachineRpcWithPeerMediationRouteParams<A, R>,
     reasonCode: string,
     requestId?: string,
     receipt?: MachineRpcPeerFallbackReceipt,
@@ -176,7 +197,7 @@ async function useServerFallback<R, A>(
 }
 
 export async function machineRpcWithPeerMediationRoute<R, A>(
-    params: MachineRpcWithPeerMediationRouteParams<A>,
+    params: MachineRpcWithPeerMediationRouteParams<A, R>,
 ): Promise<R> {
     const confidential = params.method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE;
     if (confidential) params = { ...params, recordReceipt: undefined };
@@ -256,51 +277,86 @@ export async function machineRpcWithPeerMediationRoute<R, A>(
                 }
                 : {}),
         };
-    const rawDirectResponse = await params.postDirect({
-        url: resolveDirectRpcUrl(route.endpoint.url),
-        timeoutMs: params.timeoutMs,
-        operationTimeoutMs: params.operationTimeoutMs,
-        signal: params.signal,
-        onDispatched: () => { issued = true; params.onDispatched?.(); },
-        request: directRequest,
-    });
-    // A returned response also witnesses issuance for transport adapters that
-    // do not implement the optional dispatch callback.
-    issued = true;
-    const directResponse = PeerMachineRpcDirectResponseV2Schema.parse(rawDirectResponse);
+    const sendDirect = async (signal: AbortSignal | undefined, onIssued: () => void): Promise<R> => {
+        let dispatched = false;
+        const witnessDispatch = () => {
+            issued = true;
+            if (!dispatched) { dispatched = true; onIssued(); }
+        };
+        const rawDirectResponse = await params.postDirect({
+            url: resolveDirectRpcUrl(route.endpoint.url),
+            timeoutMs: params.timeoutMs,
+            operationTimeoutMs: params.operationTimeoutMs,
+            signal,
+            onDispatched: witnessDispatch,
+            request: directRequest,
+        });
+        // Validate correlation before a logical borrower can receive this read.
+        witnessDispatch();
+        const parsed = PeerMachineRpcDirectResponseV2Schema.safeParse(rawDirectResponse);
+        if (!parsed.success) throw new MachineRpcDirectIdentityError('direct_response_invalid');
+        const directResponse = parsed.data;
+        if (directResponse.requestId !== requestId || directResponse.method !== params.method) {
+            if (confidential) throw createPrivateContinuationTransportError(null, true);
+            throw new MachineRpcDirectIdentityError('direct_response_identity_mismatch');
+        }
+        if (!directResponse.ok) {
+            if (confidential) throw createPrivateContinuationTransportError(null, true);
+            // A handler refusal does not prove that replay cannot repeat an effect.
+            if (directResponse.reasonCode === 'handler_unavailable') throw createDirectOutcomeUnknownError();
+            throw new DirectReadRefusedError(directResponse);
+        }
+        params.recordReceipt?.({
+            receipt: directResponse.receipt, method: params.method,
+            requestId: directResponse.requestId, routeKind: directResponse.routeKind,
+        });
+        return directResponse.result as R;
+    };
 
-    if (directResponse.requestId !== requestId || directResponse.method !== params.method) {
-        if (confidential) throw createPrivateContinuationTransportError(null, true);
-        throw createDirectOutcomeUnknownError();
-    }
-    if (!directResponse.ok) {
-        if (confidential) throw createPrivateContinuationTransportError(null, true);
-        // The daemon uses this same refusal when invokeLocal throws after it
-        // entered a handler. Neither it nor a direct-only command receipt proves
-        // that replaying the payload on the relay cannot repeat an effect.
-        if (directResponse.reasonCode === 'handler_unavailable') throw createDirectOutcomeUnknownError();
+    // Each borrower still obtains its own route grant. Only pending reads with
+    // captured Account/credential/endpoint authority join the existing owner.
+    // Finite and explicitly identified calls retain their own deadline/identity.
+    const readBinding = params.readAdmission && params.operationTimeoutMs === null && !params.createRequestId
+        ? route.readBinding : undefined;
+    try {
+        if (readBinding) {
+            return await runAdmittedMachineRpcRead({
+                admission: params.readAdmission, binding: readBinding, signal: params.signal,
+                decodeResult: params.decodeResult,
+                onPhysicalAcquire: () => () => {},
+                onIssued: () => { issued = true; params.onDispatched?.(); },
+                resolve: sendDirect,
+            });
+        }
+        const result = await sendDirect(params.signal, () => params.onDispatched?.());
+        return params.decodeResult ? params.decodeResult(result) : result;
+    } catch (error) {
+        if (error instanceof MachineRpcDirectIdentityError && isReadOnlyMachineRpcMethod(params.method) && !params.signal?.aborted) {
+            readBinding?.assertCurrent();
+            issued = false;
+            params.onDirectRefused?.();
+            return await useServerFallback<R, A>(params, error.reasonCode, requestId);
+        }
+        if (!(error instanceof DirectReadRefusedError)) throw error;
+        // Rejected physical reads do not traverse the owner's fulfilled-result
+        // fence. Retirement must also prevent a refused read starting relay work.
+        readBinding?.assertCurrent();
+        const directResponse = error.response;
         issued = false;
         params.onDirectRefused?.();
         return await useServerFallback<R, A>(
             params,
             directResponse.reasonCode,
-            requestId,
+            directResponse.requestId,
             createMachineRpcPeerFallbackReceipt({
                 method: params.method,
-                requestId,
+                requestId: directResponse.requestId,
                 reasonCode: directResponse.reasonCode,
                 receipt: directResponse.receipt,
             }),
         );
     }
 
-    params.recordReceipt?.({
-        receipt: directResponse.receipt,
-        method: params.method,
-        requestId,
-        routeKind: directResponse.routeKind,
-    });
-    return directResponse.result as R;
     } catch (error) {
         if (confidential) throw createPrivateContinuationTransportError(error, issued);
         throw issued ? markRpcRequestDisposition(error, 'outcomeUnknown') : error;

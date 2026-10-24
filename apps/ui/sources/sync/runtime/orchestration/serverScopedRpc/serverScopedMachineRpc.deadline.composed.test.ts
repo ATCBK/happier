@@ -25,6 +25,15 @@ import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSc
 import { MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
+import { publishLocalDaemonStatus } from '@/components/settings/machines/localControl/localDaemonSharedState';
+
+// Establish the local task runner through its OS boundary, then restore the
+// ordinary web crypto/runtime environment used by this HTTP/Socket.IO suite.
+vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn() });
+const localRunner = getSystemTasksRunner();
+vi.unstubAllGlobals();
+expect(localRunner.mode).toBe('tauri');
 
 /** This in-process Home boundary serves the current exact-read wire contract. */
 function serializeMachineReadFixture(request: Pick<IncomingMessage, 'url'>, machine: Pick<MachinePublishedRowV1, 'id'> & Partial<MachinePublishedRowV1>) {
@@ -54,6 +63,7 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 });
 
 afterEach(async () => {
+    publishLocalDaemonStatus(localRunner, null);
     credentials.secret = undefined;
     vi.useRealTimers();
     resetRuntimeFetch();
@@ -714,6 +724,9 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
     const homePort = await listen(http);
     credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
     const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${homePort}`, name: 'HH direct/relay Home' });
+    publishLocalDaemonStatus(localRunner, {
+        machineId: 'machine-1', daemonAccountId: 'account-a', daemonServerUrl: home.serverUrl,
+    });
     const endpoint = PeerLoopbackEndpointCandidateV1Schema.parse({ v: 1, routeKind: 'loopback_direct',
         url: `http://127.0.0.1:${endpointPort}/`, endpointFingerprint: 'hh-endpoint', expiresAt: Date.now() + 300_000 });
     const machine = createMachineFixture({ daemonState: { peerMediation: { loopback: { endpoint } } } });
@@ -722,9 +735,9 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         fileList: (timeoutMs: number) => machineWorkspaceFileList(machine.id, { rootPath: '/', query: 'fsp-find-review' }, {
             serverId: home.id, accountId: 'account-a', timeoutMs,
         }),
-        call: (options: { timeoutMs?: number; signal?: AbortSignal } = {}) => machineRpcWithServerScope({
+        call: (options: { timeoutMs?: number; signal?: AbortSignal; method?: string } = {}) => machineRpcWithServerScope({
             serverId: home.id, accountId: 'account-a', machineId: machine.id,
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { includeWorkers: true }, preferScoped: true,
+            method: options.method ?? RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { includeWorkers: true }, preferScoped: true,
             timeoutMs: options.timeoutMs ?? 4_000, signal: options.signal }),
         close: async () => {
             await serverScopedRpcSocketPool.stopAll();
@@ -825,11 +838,12 @@ it('relays an unreachable direct endpoint, skips it after relay success, and ret
     }
 });
 
-it('relays the browser SOCKS preflight failure without waiting for an unusable direct-route grant', async () => {
+it('skips a remote browser loopback without probing or waiting for an unusable direct-route grant', async () => {
     const direct = createServer();
     const port = await listen(direct);
     const grantReply = createDeferred<void>();
     const home = await createDirectRelayHome(port, undefined, 0, grantReply.promise);
+    publishLocalDaemonStatus(localRunner, null);
     const realFetch = globalThis.fetch;
     const attempts: string[] = [];
     // Chromium exposes net::ERR_SOCKS_CONNECTION_FAILED to fetch as this
@@ -843,9 +857,9 @@ it('relays the browser SOCKS preflight failure without waiting for an unusable d
     });
     try {
         await expect(home.call()).resolves.toEqual({ route: 'relay', params: { includeWorkers: true } });
-        expect(attempts).toEqual(['OPTIONS']);
+        expect(attempts).toEqual([]);
         expect(home.calls).toHaveLength(1);
-        expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')?.outcome).toBe('failed');
+        expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')).toBeNull();
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1')?.outcome).toBe('succeeded');
     } finally {
         grantReply.resolve();
@@ -865,7 +879,7 @@ it.each(['lost', 'http-error'] as const)('never replays an accepted direct POST 
     });
     const home = await createDirectRelayHome(await listen(direct));
     try {
-        const error = await home.call().catch((cause: unknown) => cause);
+        const error = await home.call({ method: RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH }).catch((cause: unknown) => cause);
         expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
         expect(effects).toBe(1);
         expect(home.calls).toHaveLength(0);

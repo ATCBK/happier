@@ -707,6 +707,7 @@ class ApiSocket {
             waitForResultOnCancel?: boolean;
             requestId?: string;
             readAdmission?: MachineRpcReadAdmission;
+            decodeResult?: (raw: unknown) => R;
         },
     ): Promise<R> {
         const releaseRequestLease = userRequestLeaseOwner.acquire();
@@ -739,13 +740,14 @@ class ApiSocket {
             const controller = this.requestConfigurationAbortController;
             const capturedToken = config.token;
             const machineContext = capturedEncryption?.getMachineEncryptionContext(machineId) ?? capturedMachine ?? config;
-            const { readAdmission, ...rpcOptions } = options ?? {};
+            const { readAdmission, decodeResult, ...rpcOptions } = options ?? {};
             const assertCurrent = () => {
                 if (this.config !== config || config.token !== capturedToken || this.requestConfigurationAbortController !== controller || controller.signal.aborted
                     || !isMachineCurrent()) throw new StaleServerGenerationError();
             };
             return await runAdmittedMachineRpcRead({
                 admission: readAdmission,
+                decodeResult,
                 signal: options?.signal,
                 binding: {
                     key: JSON.stringify([config.serverId, config.endpoint, config.runtimeOrigin ?? null, config.carrier ?? null,

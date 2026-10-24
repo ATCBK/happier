@@ -16,7 +16,7 @@ import type { MachineRpcReadAdmission } from './machineRpcReadAdmission';
  */
 export const DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS = 30_000;
 
-export type ServerScopedMachineRpcParams<A> = Readonly<{
+export type ServerScopedMachineRpcParams<A, R = unknown> = Readonly<{
     machineId: string;
     method: string;
     payload: A;
@@ -44,6 +44,8 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     onDispatched?: () => void;
     /** Read-only consumers may join acquisition only after per-borrower admission. */
     readAdmission?: MachineRpcReadAdmission;
+    /** Stable pure decoder, applied once inside the admitted physical read. */
+    decodeResult?: (raw: unknown) => R;
 }>;
 
 export type ActiveServerRpcContext = Readonly<{

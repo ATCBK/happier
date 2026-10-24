@@ -41,15 +41,23 @@ export async function runAdmittedMachineRpcRead<T>(input: Readonly<{
     binding: AdmittedMachineRpcReadBinding;
     signal?: AbortSignal;
     resolve(signal: AbortSignal | undefined, onIssued: () => void): Promise<T>;
+    /** Pure ingress decoding; use a stable function so compatible readers can join. */
+    decodeResult?: (raw: unknown) => T;
     onIssued?: () => void;
     onPhysicalAcquire(signal: AbortSignal): () => void | Promise<void>;
 }>): Promise<T> {
-    if (!input.admission) return await input.resolve(input.signal, () => input.onIssued?.());
+    const decodeResult = input.decodeResult;
+    const resolve = decodeResult
+        ? async (signal: AbortSignal | undefined, onIssued: () => void) => decodeResult(await input.resolve(signal, onIssued))
+        : input.resolve;
+    if (!input.admission) return await resolve(input.signal, () => input.onIssued?.());
     input.binding.assertCurrent();
     const result = await input.admission.run({
-        binding: input.binding,
+        // Existing function identity partitions raw and differently decoded
+        // results without a decoder registry or a second pending owner.
+        binding: decodeResult ? { ...input.binding, scope: [...input.binding.scope, decodeResult] } : input.binding,
         signal: input.signal,
-        resolve: input.resolve,
+        resolve,
         onIssued: input.onIssued,
         onPhysicalAcquire: input.onPhysicalAcquire,
     });

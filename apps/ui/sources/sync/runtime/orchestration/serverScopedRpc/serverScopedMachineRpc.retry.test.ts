@@ -6,6 +6,9 @@ import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/ma
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const boundary = await installSessionOpsNetworkBoundary();
+vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn() });
+const { getSystemTasksRunner } = await import('@/components/systemTasks/systemTasksRuntime');
+const { publishLocalDaemonStatus } = await import('@/components/settings/machines/localControl/localDaemonSharedState');
 const { socketRpcCodec, readRpcRequestDisposition } = await import('@happier-dev/sync-client');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
@@ -48,6 +51,10 @@ async function waitForSetupBoundary(receipt: Promise<void>): Promise<void> {
 }
 
 async function enableDirectRoute(method: string) {
+    // Existing desktop status proves the advertised listener is on this host.
+    publishLocalDaemonStatus(getSystemTasksRunner(), {
+        machineId: 'machine-1', daemonAccountId: 'account-a', daemonServerUrl: home.serverUrl,
+    });
     const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
     const { getStorage } = await import('@/sync/domains/state/storageStore');
     const endpoint = { v: 1, routeKind: 'loopback_direct', url: 'http://127.0.0.1:3000/',
@@ -84,6 +91,7 @@ afterAll(() => boundary.dispose());
 
 describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     beforeEach(async () => {
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn() });
         clearMachineRequestReachabilityForTest();
         boundary.resetRequests();
         resetScopedMachineTransportCacheForTests();
@@ -106,6 +114,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     });
 
     afterEach(async () => {
+        publishLocalDaemonStatus(getSystemTasksRunner(), null);
         vi.unstubAllGlobals();
         await serverScopedRpcSocketPool.stopAll();
         await resetServerReachabilitySupervisors();

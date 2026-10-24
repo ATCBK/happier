@@ -351,6 +351,10 @@ export async function machineContributionRegistryProjectionDescribe(
         }
 }
 
+function decodeTargetedContributionsReadResponse(raw: unknown) {
+    return isRpcMethodNotFoundResult(raw) ? raw : parseDaemonPluginUiTargetedContributionsReadResponse(raw);
+}
+
 /**
  * Reads the current contributions to one mounted target. The daemon answers
  * with its current occurrence of that target; it never fences the read.
@@ -383,7 +387,7 @@ export async function machinePluginUiTargetedContributionsRead(
         serverId: opts.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
     try {
-            const response = await machineRpcWithServerScope<unknown, typeof payload>({
+            const response = await machineRpcWithServerScope<ReturnType<typeof decodeTargetedContributionsReadResponse>, typeof payload>({
                 machineId: payload.machineId,
                 serverId: opts.serverId,
                 accountId: opts.accountLifetime?.scope.accountId,
@@ -392,11 +396,12 @@ export async function machinePluginUiTargetedContributionsRead(
                 operationTimeoutMs: null,
                 signal: opts.signal,
                 readAdmission: projectionReadAdmission(scope, payload),
+                decodeResult: decodeTargetedContributionsReadResponse,
             });
             if (isRpcMethodNotFoundResult(response)) {
                 return { supported: false, reason: 'not-supported' };
             }
-            const parsed = parseDaemonPluginUiTargetedContributionsReadResponse(response);
+            const parsed = response;
             if (!parsed) return { supported: false, reason: 'invalid-response' };
             if (parsed.status === 'unavailable') {
                 return { supported: false, reason: 'unavailable', code: parsed.code };

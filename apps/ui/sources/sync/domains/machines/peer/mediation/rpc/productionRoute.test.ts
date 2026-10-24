@@ -11,6 +11,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
+import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
+import { publishLocalDaemonStatus } from '@/components/settings/machines/localControl/localDaemonSharedState';
 
 const getReadyServerFeaturesSpy = vi.hoisted(() => vi.fn());
 const TOKEN_A = 'header.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
@@ -40,16 +42,12 @@ vi.mock('@/sync/http/client', () => ({
     },
 }));
 
-vi.mock('@/auth/storage/tokenStorage', () => ({
-    TokenStorage: {
+vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
+    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
+    return await createTokenStorageModuleMock({ importOriginal, tokenStorage: {
         getCredentialsForServerUrl: (...args: unknown[]) => getCredentialsForServerUrlSpy(...args),
-    },
-    isLegacyAuthCredentials: (credentials: unknown) => Boolean(
-        credentials
-        && typeof credentials === 'object'
-        && typeof (credentials as { secret?: unknown }).secret === 'string',
-    ),
-}));
+    } });
+});
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: (...args: unknown[]) => getActiveServerSnapshotSpy(...args),
@@ -134,6 +132,12 @@ describe('production peer mediation machine RPC route adapter', () => {
         getActiveServerSnapshotSpy.mockReset();
         captureAuthoritySpy.mockReset();
         vi.unstubAllGlobals();
+        // Desktop host is the OS boundary; status publication and locality logic stay real.
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn() });
+        publishLocalDaemonStatus(getSystemTasksRunner(), {
+            machineId: 'machine_1', daemonAccountId: 'account-1',
+            daemonServerUrl: 'https://server-a.example.test',
+        });
         storageSnapshot.state = { machines: {}, machineListByServerId: {} };
         getActiveServerSnapshotSpy.mockReturnValue({
             serverId: 'server-a',
@@ -156,6 +160,41 @@ describe('production peer mediation machine RPC route adapter', () => {
             settings: { peerMediationPreferencesV1: { v: 1, flows: {}, byMachineId: {} } },
             ...storageSnapshot.state,
         }));
+    });
+
+    it.each([null, { machineId: 'other-machine', daemonAccountId: 'account-1', daemonServerUrl: 'https://server-a.example.test' },
+        { machineId: 'machine_1', daemonAccountId: 'other-account', daemonServerUrl: 'https://server-a.example.test' },
+        { machineId: 'machine_1', daemonAccountId: 'account-1', daemonServerUrl: 'https://other-home.example.test' },
+    ])('uses Home without a direct POST or probe when local Machine identity is unproven: %j', async (localStatus) => {
+        publishLocalDaemonStatus(getSystemTasksRunner(), localStatus);
+        storageSnapshot.state = { machines: { machine_1: { id: 'machine_1', daemonState: { peerMediation: { loopback: {
+            endpoint: { v: 1, routeKind: 'loopback_direct', url: 'http://127.0.0.1:46011',
+                endpointFingerprint: 'endpoint_1', expiresAt: Date.now() + 60_000 },
+        } } } } }, machineListByServerId: {} };
+        const fetchSpy = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+            if (String(url).endsWith('/route-grants')) {
+                const body = JSON.parse(String(init?.body)) as { ephemeralPublicKeyBase64Url: string };
+                const grant = createDirectRequest().grant;
+                return responseJson({ ok: true, grant: { ...grant, payload: { ...grant.payload,
+                    ephemeralPublicKeyBase64Url: body.ephemeralPublicKeyBase64Url } } });
+            }
+            const request = JSON.parse(String(init?.body)) as PeerMachineRpcDirectRequestV2;
+            return responseJson({ v: 2, ok: true, receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded,
+                requestId: request.requestId, method: request.method, routeKind: 'loopback_direct', result: { from: 'loopback' } });
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+        const { resolveProductionMachineRpcDirectRoute, postProductionMachineRpcDirect } = await import('./productionRoute');
+        const { machineRpcWithPeerMediationRoute } = await import('./client');
+        const serverFallback = vi.fn(async () => ({ from: 'Home' }));
+        await expect(machineRpcWithPeerMediationRoute({
+            serverId: 'server-a', accountId: 'account-1', machineId: 'machine_1',
+            method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: {},
+            resolveDirectRoute: resolveProductionMachineRpcDirectRoute,
+            postDirect: postProductionMachineRpcDirect, serverFallback,
+        })).resolves.toEqual({ from: 'Home' });
+        expect(serverFallback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: 'loopback_locality_unproven' }));
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('fails closed before route selection when stored credentials belong to another Account', async () => {
@@ -479,7 +518,7 @@ describe('production peer mediation machine RPC route adapter', () => {
         expect(String(error)).not.toContain('private-body');
     });
 
-    it('accepts the canonical direct response even without a content-type header', async () => {
+    it('requires a JSON content type even for a matching direct envelope', async () => {
         const payload = {
             v: 2, ok: true, receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded,
             requestId: 'request_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS, routeKind: 'loopback_direct',
@@ -490,7 +529,7 @@ describe('production peer mediation machine RPC route adapter', () => {
         if ('importError' in module) throw module.importError;
         await expect(module.postProductionMachineRpcDirect({
             url: 'http://127.0.0.1:46021/peer-mediation/v2/rpc', request: createDirectRequest(),
-        })).resolves.toEqual(payload);
+        })).rejects.toMatchObject({ reasonCode: 'direct_response_content_type' });
     });
 
     it('preserves a direct body transport failure instead of treating it as malformed JSON', async () => {
@@ -507,6 +546,36 @@ describe('production peer mediation machine RPC route adapter', () => {
         expect(error).toBe(failure);
         expect(error).toMatchObject({ httpStatus: 200, contentType: 'application/json', bodyWasJson: false });
         expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+    });
+
+    it.each([
+        { contentType: 'application/octet-stream', reasonCode: 'direct_response_content_type' },
+        { contentType: 'application/json', body: '{"unrelated":true}', reasonCode: 'direct_response_invalid' },
+        { contentType: 'application/json', requestId: 'other-request', reasonCode: 'direct_response_identity_mismatch' },
+        { contentType: 'application/json', method: RPC_METHODS.CAPABILITIES_DESCRIBE, reasonCode: 'direct_response_identity_mismatch' },
+    ])('uses one Home read after a non-identity direct response: $reasonCode', async (vector) => {
+        const request = createDirectRequest();
+        const fetchSpy = vi.fn(async () => new Response(vector.body ?? JSON.stringify({
+            v: 2, ok: true, receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded,
+            requestId: vector.requestId ?? request.requestId, method: vector.method ?? request.method,
+            routeKind: 'loopback_direct', result: { from: 'wrong-machine' },
+        }), { headers: { 'content-type': vector.contentType } }));
+        vi.stubGlobal('fetch', fetchSpy);
+        const { postProductionMachineRpcDirect } = await import('./productionRoute');
+        const { machineRpcWithPeerMediationRoute } = await import('./client');
+        const serverFallback = vi.fn(async () => ({ from: 'Home' }));
+        const recordReceipt = vi.fn();
+        await expect(machineRpcWithPeerMediationRoute({
+            machineId: request.grant.payload.machineId, method: request.method, payload: request.params,
+            createRequestId: () => request.requestId,
+            resolveDirectRoute: async () => ({ kind: 'selected', receipt: PEER_MEDIATION_RECEIPTS.routeSelected,
+                endpoint: { url: 'http://127.0.0.1:46021', endpointFingerprint: request.endpointFingerprint },
+                grant: request.grant, proof: request.proof }),
+            postDirect: postProductionMachineRpcDirect, serverFallback, recordReceipt,
+        })).resolves.toEqual({ from: 'Home' });
+        expect(fetchSpy).toHaveBeenCalledOnce();
+        expect(serverFallback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: vector.reasonCode }));
+        expect(recordReceipt).toHaveBeenCalledWith(expect.objectContaining({ routeKind: 'server_relay', reasonCode: vector.reasonCode }));
     });
 
     it('aborts the direct loopback request when its timeout elapses', async () => {

@@ -9,6 +9,8 @@ import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { getReadyServerFeatures } from '@/sync/api/capabilities/getReadyServerFeatures';
 import {
@@ -21,10 +23,14 @@ import { storage } from '@/sync/domains/state/storage';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolvePeerMediationDirectPreferencesForScope } from '@/sync/domains/settings/peerMediationPreferences';
 import { readMachineRequestReachabilityObservation, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
+import { readLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
+import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
+import { isDaemonOnActiveRelay } from '@/sync/domains/server/relayDrift/relayDriftModel';
 
 import { requestPeerMediationServerJsonForCredential } from '../peerMediationServerRequest';
 import { readPeerEndpointForServerScope } from '../readPeerEndpointForServerScope';
-import { resolveDirectRpcUrl, type MachineRpcDirectRouteResolution } from './client';
+import { MachineRpcDirectIdentityError, resolveDirectRpcUrl, type MachineRpcDirectRouteResolution } from './client';
 import { resolveMachineRpcDirectRoutePreflight } from './directRoutePreflight';
 
 const MACHINE_RPC_DIRECT_FETCH_TIMEOUT_MS = 5_000;
@@ -62,7 +68,9 @@ function createDirectResponseError(
     const reason = !response.ok ? 'Machine RPC direct HTTP response failed'
         : !response.bodyWasJson ? 'Machine RPC direct response is not JSON'
             : 'Machine RPC direct response is invalid';
-    return Object.assign(new RpcError(`${reason}: ${JSON.stringify(diagnostics)}`,
+    const message = `${reason}: ${JSON.stringify(diagnostics)}`;
+    return Object.assign(new MachineRpcDirectIdentityError(response.contentType?.split(';')[0]?.trim().toLowerCase() !== 'application/json'
+        ? 'direct_response_content_type' : 'direct_response_invalid', message,
         response.ok ? 'MACHINE_RPC_INVALID_RESPONSE' : RPC_ERROR_CODES.OUTCOME_UNKNOWN), diagnostics);
 }
 
@@ -252,6 +260,7 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
     resolveRemainingTimeoutMs?: () => number;
     signal?: AbortSignal;
 }>): Promise<MachineRpcDirectRouteResolution> {
+    const readLifetime = captureActiveServerAccountScopeLifetime();
     const server = resolveTargetServer(input.serverId);
     if (!server) return fallback('topology_unavailable');
 
@@ -318,6 +327,15 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
             : fallback('topology_unavailable');
     }
     const endpoint = routePreflight.endpoint;
+    // A daemon advert describes its host's loopback, never the browser's.
+    // Reuse an already observed desktop status; no probe can establish locality.
+    const localRunner = getSystemTasksRunner();
+    const local = localRunner.mode === 'tauri'
+        ? readLocalDaemonSharedState<LocalDaemonStatusData>(localRunner).status : null;
+    if (local?.machineId !== input.machineId || local.daemonAccountId !== accountId
+        || isDaemonOnActiveRelay({ activeRelayUrl: server.serverUrl, daemonRelayUrl: local.daemonServerUrl }) !== true) {
+        return fallback('loopback_locality_unproven');
+    }
     const routeServerProfile = getServerProfileById(server.serverId);
     const routeScope = { serverId: routeServerProfile ? resolveServerProfileScopeId(routeServerProfile) : server.serverId,
         accountId, machineId: input.machineId, route: 'loopback_direct' as const };
@@ -325,9 +343,8 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
         return fallback('topology_unavailable');
     }
 
-    // Prove the advertised endpoint is reachable before asking Home for a
-    // grant. A remote browser's loopback may be unavailable; grant latency for
-    // that unusable route must not consume the relay's entire setup budget.
+    // Check the eligible same-host endpoint before asking Home for a grant;
+    // a stopped listener must not consume the relay's entire setup budget.
     // This existing harmless probe also distinguishes an unsent request from
     // a lost POST reply, which browsers expose as the same network TypeError.
     const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
@@ -367,6 +384,23 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
                 },
                 grant: grant.value,
                 proof,
+                ...(readLifetime?.isCurrent() && readLifetime.scope.accountId === accountId
+                    && areServerProfileIdentifiersEquivalent(readLifetime.scope.serverId, server.serverId)
+                    ? { readBinding: {
+                        key: JSON.stringify(['direct', server.serverId, server.serverUrl,
+                            resolveAuthCredentialsScopeKey(credentials), input.machineId, input.method,
+                            endpoint.url, endpoint.endpointFingerprint, grant.value.signature.keyId,
+                            grant.value.payload.scope, grant.value.payload.callerAuthority ?? null]),
+                        scope: [readLifetime],
+                        assertCurrent: () => {
+                            const currentServer = resolveTargetServer(input.serverId);
+                            const currentEndpoint = readEndpointFromMachineState({ serverId: server.serverId, machineId: input.machineId });
+                            if (!readLifetime.isCurrent() || currentServer?.serverUrl !== server.serverUrl
+                                || currentEndpoint?.url !== endpoint.url || currentEndpoint.endpointFingerprint !== endpoint.endpointFingerprint) {
+                                throw new RpcError('Direct Machine read authority retired', 'MACHINE_ENCRYPTION_UNAVAILABLE');
+                            }
+                        },
+                    } } : {}),
             };
         } catch {
             return fallback('grant_invalid');
@@ -402,7 +436,7 @@ export async function postProductionMachineRpcDirect(input: Readonly<{
                 body: JSON.stringify(input.request),
             },
         });
-        if (!response.ok || !response.bodyWasJson) {
+        if (!response.ok || !response.bodyWasJson || response.contentType?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
             throw createDirectResponseError(response);
         }
         const parsed = PeerMachineRpcDirectResponseV2Schema.safeParse(response.body);
