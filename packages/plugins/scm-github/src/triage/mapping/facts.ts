@@ -38,6 +38,8 @@ export type GithubRowFactsInputV1 = Readonly<{
   updatedAtMs: number;
   /** `null` when GitHub did not report a comment count on this response. */
   commentCount: number | null;
+  /** Exact PR responses state this; search rows do not. Absence is not zero. */
+  changedFiles?: number | null;
   labelNames: readonly string[];
   /** `null` when unresolved: REST cannot always answer this (see `reviews.ts`). */
   reviewDecision: GithubReviewDecisionV1 | null;
@@ -197,6 +199,13 @@ export function buildGithubRowFacts(input: GithubRowFactsInputV1): GithubRowFact
       id: 'github/comments',
       importance: 'supplementary',
       value: Object.freeze({ kind: 'number', value: input.commentCount, format: 'compact' }),
+    });
+  }
+  if (input.kindId === 'pull-request' && input.changedFiles != null) {
+    push({
+      id: 'github/changed-files',
+      importance: 'secondary',
+      value: Object.freeze({ kind: 'number', value: input.changedFiles, format: 'plain' }),
     });
   }
   if (input.labelNames.length > 0) {

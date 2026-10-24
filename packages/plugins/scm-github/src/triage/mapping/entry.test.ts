@@ -36,6 +36,17 @@ function requireProjection(value: ReturnType<typeof projectGithubEntry>) {
 }
 
 describe('GitHub triage entry mapping', () => {
+  it('projects the already-read PR changed_files as the declared Files summary without inventing a scan count', () => {
+    const view = decodeGithubPullRequestBody({ ...GITHUB_PULL_REQUEST_RESPONSE, changed_files: 17 });
+    const projection = requireProjection(projectGithubEntry(view!, GITHUB_FIXTURE_REPOSITORY_ID));
+    const snapshot = TriageSourceEntrySnapshotV1Schema.parse(toTriageSnapshot(projection.snapshot, projection.locator, projection.localRef.entryId));
+    expect(snapshot.facts).toContainEqual({ id: 'github/changed-files', importance: 'secondary',
+      value: { kind: 'number', value: 17, format: 'plain' } });
+    const scan = requireProjection(projectGithubEntry(decodeGithubSearchItem(GITHUB_SEARCH_PULL_REQUEST_ITEM)!, GITHUB_FIXTURE_REPOSITORY_ID));
+    expect(scan.snapshot.rowFacts.some((fact) => fact.id === 'github/changed-files')).toBe(false);
+    const empty = requireProjection(projectGithubEntry(decodeGithubPullRequestBody({ ...GITHUB_PULL_REQUEST_RESPONSE, changed_files: 0 })!, GITHUB_FIXTURE_REPOSITORY_ID));
+    expect(empty.snapshot.rowFacts.find((fact) => fact.id === 'github/changed-files')?.value).toEqual({ kind: 'number', value: 0, format: 'plain' });
+  });
   it('preserves classified non-secret failure detail through the public source schema', () => {
     const failure = { class: 'rateLimit' as const, code: 'github_rate_limit',
       detail: 'GitHub asked us to wait.', retryNotBeforeMs: 1234 };

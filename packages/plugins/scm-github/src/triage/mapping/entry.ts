@@ -364,6 +364,7 @@ export function projectGithubEntry(
     // GitHub returns `comments` on every issue response, so "always for issues" holds
     // without coercion. A missing count stays omitted rather than becoming a fabricated 0.
     commentCount: view.commentCount,
+    changedFiles: view.kindId === 'pull-request' ? readCommentCount(view.state.changed_files) : null,
     labelNames: view.labelNames,
     reviewDecision: extras.reviewDecision ?? null,
     checks: extras.checks ?? null,
