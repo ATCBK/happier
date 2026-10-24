@@ -8,9 +8,11 @@ import { zhHant } from './translations/zh-Hant';
 import * as i18n from './i18n';
 
 describe('text/i18n language state', () => {
-    it('retains synchronous native Chinese locale composition', () => {
+    it('retains Chinese locale composition after readiness', async () => {
+        await i18n.preloadTranslationsForSettings('zh-Hant');
         i18n.setPreferredLanguageFromSettings('zh-Hant');
         expect(i18n.t('tabs.inbox')).toBe(zhHant.tabs.inbox);
+        await i18n.preloadTranslationsForSettings('zh-Hans');
         i18n.setPreferredLanguageFromSettings('zh-Hans');
         expect(i18n.t('tabs.inbox')).toBe(zhHans.tabs.inbox);
     });
@@ -24,6 +26,7 @@ describe('text/i18n language state', () => {
     });
 
     it('preloads an explicitly requested voice locale without activating it as UI language', async () => {
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
         await i18n.preloadTranslations('fr');
         expect(i18n.getPreferredLanguage()).toBe('es');
@@ -34,20 +37,22 @@ describe('text/i18n language state', () => {
         i18n.setPreferredLanguageFromSettings(null);
     });
 
-    it('reports the active preferred language after settings changes', () => {
+    it('reports the active preferred language after settings changes', async () => {
         expect(typeof i18n.getPreferredLanguage).toBe('function');
         expect(i18n.getPreferredLanguage()).toBe('en');
 
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
 
         expect(i18n.getPreferredLanguage()).toBe('es');
     });
 
-    it('resolves a non-default language from its own tree and reverts when cleared', () => {
+    it('resolves a non-default language from its own tree and reverts when cleared', async () => {
         // Locale trees are materialised lazily; this is the case that breaks if a deferred tree is
         // never resolved and the lookup silently falls through to English.
         expect(es.tabs.inbox).not.toBe(en.tabs.inbox);
 
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
         expect(i18n.t('tabs.inbox')).toBe(es.tabs.inbox);
 
@@ -55,10 +60,11 @@ describe('text/i18n language state', () => {
         expect(i18n.t('tabs.inbox')).toBe(en.tabs.inbox);
     });
 
-    it('resolves the host-owned form submit label from the active locale', () => {
+    it('resolves the host-owned form submit label from the active locale', async () => {
         expect(en.common.submit).toBe('Submit');
         expect(es.common.submit).toBe('Enviar');
 
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
         expect(i18n.t('common.submit')).toBe(es.common.submit);
     });
@@ -70,13 +76,15 @@ describe('text/i18n language state', () => {
         expect(i18n.t('tabs.inbox')).toBe(en.tabs.inbox);
     });
 
-    it('falls back to canonical English for bundled keys missing from the active locale', () => {
+    it('falls back to canonical English for bundled keys missing from the active locale', async () => {
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
 
         expect(i18n.t('agentInput.connectedServiceLabel.gemini')).toBe('Google Gemini');
     });
 
-    it('uses localized Home setup commands and details from the active locale', () => {
+    it('uses localized Home setup commands and details from the active locale', async () => {
+        await i18n.preloadTranslationsForSettings('es');
         i18n.setPreferredLanguageFromSettings('es');
 
         expect(i18n.t('setupOnboarding.webDesktopOnlySetupCommandSubtitle')).toBe(
