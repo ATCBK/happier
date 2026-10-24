@@ -52,8 +52,8 @@ export type PendingDeliveryBlockedReasonPresentation = Readonly<{
  * The IN-FLOW chrome a pending row paints for its current delivery state — i.e. the only part of its
  * delivery presentation that can change the row's HEIGHT.
  *
- * F-P2 (2026-08-10). The status chip (`PendingMessagesTranscriptBlock` `pendingAffordanceChip`) is
- * `position: 'absolute'`, so every state that only swaps the chip's icon/spinner/label — including
+ * F-P2 (2026-08-10). The status chip (`PendingMessagesTranscriptBlock` `pendingAffordanceChip`) paints
+ * one constant line on the action band, so every state that only swaps the chip's icon/spinner/label — including
  * the whole `queuedReason` vocabulary, which this block paints INSIDE that chip — leaves the row's
  * box byte-identical. `blockedDeliveryNotice` is the single in-flow status notice this block paints.
  * This matters because `ChatListInternal` wires Legend's vendored `getItemSizeVersion` to
@@ -66,7 +66,7 @@ export type PendingDeliveryBlockedReasonPresentation = Readonly<{
  * `groupedToolCallRowPaintDependsOnGroupExpansion` for the pending row.
  */
 export type PendingMessageHeightBearingChrome =
-    /** Chip only — absolutely positioned, cannot move the row. */
+    /** Chip only — one constant line, cannot move the row. */
     | 'none'
     /** `blockedDeliveryNotice`. */
     | 'blocked-notice';

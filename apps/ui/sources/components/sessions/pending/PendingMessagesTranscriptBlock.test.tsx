@@ -506,11 +506,8 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-        const affordance = screen.findByTestId('pendingMessages.pendingAffordance:p1');
-        expect(affordance).toBeTruthy();
-        const affordanceStyle = flattenStyle(affordance!.props.style);
-        expect(affordanceStyle.position).toBe('absolute');
-        expect(affordanceStyle.borderWidth).toBe(0);
+        expect(screen.findByTestId('pendingMessages.pendingAffordance:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:p1')).toBeTruthy();
     });
 
     it('exposes pending and discarded rows by their message-specific accessible names', async () => {
