@@ -1,11 +1,12 @@
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { waitForTestEvent } from '@/dev/testkit/hooks/waitForTestEvent';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
@@ -19,11 +20,11 @@ const { setServerReachabilityNetworkAllowed } = await import('@/sync/runtime/con
 const { useAccountSessionFollowController } = await import('./useAccountSessionFollowController');
 const before = storage.getState();
 
+beforeEach(() => network.resetRequests());
 afterEach(async () => {
     await standardCleanup();
     storage.setState(before, true);
     setServerReachabilityNetworkAllowed(true);
-    network.resetRequests();
 });
 afterAll(() => network.dispose());
 
@@ -50,7 +51,9 @@ it('keeps an inactive-Home editor across focused Home changes but retires its ow
     }) : null);
     const retired = vi.fn();
     const hook = await renderHook(() => useAccountSessionFollowController({ serverId: addressed.id, sessionId: 'shown-session' }, true, retired));
-    await vi.waitFor(() => expect(hook.getCurrent().state.projection?.follow?.notificationLevel).toBe('important'));
+    await act(async () => { await waitForTestEvent(hook.getCurrent().controller.subscribe,
+        hook.getCurrent().controller.getSnapshot, state => !state.loading && (state.projection !== null || state.error !== null)); });
+    expect(hook.getCurrent().state).toMatchObject({ projection: { follow: { notificationLevel: 'important' } }, error: null });
     await act(async () => { focus(addressed, 2); });
     await flushHookEffects();
     expect(retired).not.toHaveBeenCalled();
@@ -64,10 +67,10 @@ it('keeps an inactive-Home editor across focused Home changes but retires its ow
 it('keeps one personal Follow read across 1,000 unrelated changes while refreshing exact and private Follow facts', async () => {
     const home = await network.addHome('https://personal-follow-demand.test', 'follow-account');
     enableFollow(home.id);
+    publishAppliedActiveServerRuntimeAvailability(false);
     setActiveServerId(home.id);
+    storage.getState().activateProfileScope({ serverId: home.id, accountId: home.accountId });
     publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 1 });
-    storage.setState(state => ({ profileScope: { serverId: home.id, accountId: home.accountId },
-        profile: { ...state.profile, id: home.accountId } }));
     setServerReachabilityNetworkAllowed(true);
     const sessionId = 'shown-session';
     const path = `/v2/sessions/${sessionId}/follow`;
@@ -77,7 +80,9 @@ it('keeps one personal Follow read across 1,000 unrelated changes while refreshi
         isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
     }) : null);
     const hook = await renderHook(() => useAccountSessionFollowController({ serverId: home.id, sessionId }, true));
-    await vi.waitFor(() => expect(hook.getCurrent().state.projection?.follow?.notificationLevel).toBe('important'));
+    await act(async () => { await waitForTestEvent(hook.getCurrent().controller.subscribe,
+        hook.getCurrent().controller.getSnapshot, state => !state.loading && (state.projection !== null || state.error !== null)); });
+    expect(hook.getCurrent().state).toMatchObject({ projection: { follow: { notificationLevel: 'important' } }, error: null });
     const reads = () => network.httpRequests.filter(request => new URL(request.url).pathname === path).length;
     expect(reads()).toBe(1);
     await act(async () => {

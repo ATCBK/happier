@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { sessionFollowGet, sessionFollowRemove, sessionFollowSet } from '@/sync/api/session/sessionFollowApi';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -26,7 +25,7 @@ export function useAccountSessionFollowController(address: SessionAddress, enabl
     onRetireRef.current = onRetire;
     React.useEffect(() => {
         if (!enabled || !actions.ready) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = actions.binding;
         if (!lifetime?.isCurrent()) return;
         const retire = () => { controller.dispose(); onRetireRef.current?.(); };
         const retirement = lifetime.onRetire(retire);
@@ -46,7 +45,7 @@ export function useAccountSessionFollowController(address: SessionAddress, enabl
         });
         void controller.refresh();
         return () => { retirement.dispose(); credentials(); connectivity(); changes(); };
-    }, [actions.ready, controller, enabled, serverId, sessionId]);
+    }, [actions.binding, actions.ready, controller, enabled, serverId, sessionId]);
     const policyEditor = React.useMemo(() => projectAccountSessionFollowPolicyEditor(state), [state]);
     return { controller, state, policyEditor };
 }
