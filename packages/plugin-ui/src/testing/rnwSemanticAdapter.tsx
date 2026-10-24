@@ -16,6 +16,7 @@ import type {
 import type { RenderContext, RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import type { HappierFocusable } from '../presentation/portableTypes.js';
 import type { PluginUiEphemeralSharedScope } from '../hostApi/ephemeralSharedScope.public.js';
+import type { FindSurfaceRegistrationHost } from '../presentation/find/useFindSurfaceRegistration.js';
 
 import { Text } from '../components/Text.js';
 import {
@@ -53,6 +54,8 @@ export type PluginUiRnwSemanticSurfaceAdapterOptions = Readonly<{
   sessions?: boolean;
   /** Optional host-owned scope shared by the artifact mounts under test. */
   ephemeralSharedScope?: PluginUiEphemeralSharedScope;
+  /** Existing host Find registration boundary; the fixture supplies no parallel registry. */
+  find?: FindSurfaceRegistrationHost;
   /**
    * Mount the surface as the host mounts an app page: inside a page with the app details pane beside it. A
    * `DetailsPane` (or a `Collection` opening an item) then renders its detail in a host pane drawn OUTSIDE the
@@ -105,6 +108,7 @@ function createSemanticPresentationHost(input: Readonly<{
   paneHeader?: PluginUiPaneHeaderHost;
 }>): PluginUiPresentationHost {
   return Object.freeze({
+    ...(input.options.find === undefined ? {} : { find: input.options.find }),
     ...(input.detailsPane === undefined ? {} : { detailsPane: input.detailsPane }),
     ...(input.paneHeader === undefined ? {} : { paneHeader: input.paneHeader }),
     ...(input.options.physicalFocus === undefined
@@ -504,6 +508,7 @@ export function createPluginUiRnwSemanticSurfaceAdapter(
         : createSemanticDetailsPane(options.detailsPane);
       const paneHeader = options.paneHeader === true ? createSemanticPaneHeader() : undefined;
       const presentationHost = options.targetedSurfaces === undefined
+        && options.find === undefined
         && options.physicalFocus === undefined
         && options.overlays !== true
         && options.sessions !== true
