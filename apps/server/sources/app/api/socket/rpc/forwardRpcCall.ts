@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvelope } from '@happier-dev/protocol/actions/externalActionApi';
 
@@ -170,9 +170,13 @@ export async function forwardRpcCall(params: Readonly<{
     const callStartedAt = Date.now();
     const lookupStartedAt = Date.now();
     const targetTraceId = params.traceId ?? params.cancellation?.targetRequestId;
-    const correlation = targetTraceId && params.callerSocketId ? {
-        requestId: targetTraceId,
-        callerSocketId: params.callerSocketId,
+    const correlation = targetTraceId ? {
+        // Socket ingress already supplies its existing safe relay identity. HTTP
+        // roots use the same opaque-id privacy projection as daemon diagnostics;
+        // keep the original trace on the wire so the daemon derives the same id.
+        requestId: params.callerSocketId || /^(?:rpc_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetTraceId)
+            ? targetTraceId : `sha256:${createHash('sha256').update(targetTraceId).digest('hex')}`,
+        ...(params.callerSocketId ? { callerSocketId: params.callerSocketId } : {}),
     } : null;
     let methodRegistrationAbsent = false;
     let discoveryFailed = false;

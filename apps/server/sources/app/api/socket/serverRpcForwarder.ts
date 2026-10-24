@@ -5,6 +5,7 @@ import {
 } from '@happier-dev/protocol/socketRpc';
 
 import { forwardRpcCall } from "./rpc/forwardRpcCall";
+import { readWebLatencyRequestId } from "@/utils/webLatencyTrace";
 
 export type ServerRpcForwardResult =
     | Readonly<{ ok: true; result: unknown }>
@@ -33,6 +34,8 @@ export function createServerRpcForwarder(params: Readonly<{
             method,
             callParams,
             timeoutMs,
+            // Observation only: never turn an HTTP root into cancellation custody.
+            traceId: readWebLatencyRequestId(),
             ...(authorization ? { authorization } : {}),
         });
     };

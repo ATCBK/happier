@@ -67,7 +67,7 @@ export async function discoverRpcTargets(params: Readonly<{
     excludedSocketId?: string;
     answeringClient?: SocketRpcAnsweringClientV1;
     targetGuard?: RpcForwardTargetGuard;
-    correlation?: Readonly<{ requestId: string; callerSocketId: string }>;
+    correlation?: Readonly<{ requestId: string; callerSocketId?: string }>;
 }>): Promise<Readonly<{ targets: RpcAckResponseEmitter[]; methodRoomEmpty: boolean }> | null> {
     const room = buildRpcMethodRoom({
         userId: params.userId,
