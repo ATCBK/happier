@@ -280,7 +280,7 @@ function readBuiltinDestinationRows(): readonly BuiltinDestinationRow[] {
         available: (availability) => availability.inbox,
     },
     {
-        id: DISCUSSIONS_DESTINATION_ID, titleKey: 'session.collaboration.discussion.title', icon: 'chats-circle',
+        id: DISCUSSIONS_DESTINATION_ID, titleKey: 'session.collaboration.discussion.title', icon: 'chat-circle',
         placement: { kind: 'rail', region: 'app' }, column: 'discussions', activation: 'navigate', routePath: '/discussions',
         currentRoutePatterns: ['/discussions/[...rest]'],
         workspaceNavigationIdentity: { resourceParam: 'discussionId', scopeParams: ['serverId'] },

@@ -70,8 +70,9 @@ describe('workspace route identity round trips', () => {
     it('opens the Home Discussion destination and keeps colliding raw IDs in different Homes distinct', () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { ...ALL_BUILTINS, discussions: true } });
         expect(catalog.find(destination => destination.id === 'discussions')).toMatchObject({
-            placement: { kind: 'rail', region: 'app' }, routePath: '/discussions', activation: 'navigate',
+            placement: { kind: 'rail', region: 'app' }, routePath: '/discussions', activation: 'navigate', icon: 'chat-circle',
         });
+        expect(catalog.find(destination => destination.id === 'sessions')?.icon).toBe('chats-circle');
         for (const href of ['/discussions?serverId=home-a', '/discussions/new?serverId=home-a',
             '/discussions/new?serverId=home-a&draftId=00000000-0000-5000-8000-000000000001',
             '/discussions/same-id?serverId=home-a', '/discussions/same-id?serverId=home-b']) {
