@@ -32,6 +32,7 @@ export type BrowserToolbarOverflowItem = Readonly<{
  */
 export function BrowserToolbarOverflowMenu(props: Readonly<{
     items: readonly BrowserToolbarOverflowItem[];
+    onOpenChange?: (open: boolean) => void;
     testID: string;
     /** Visible trigger size and glyph; the dense chrome row by default. */
     size?: number;
@@ -43,6 +44,10 @@ export function BrowserToolbarOverflowMenu(props: Readonly<{
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(false);
+    const onOpenChange = React.useCallback((next: boolean) => {
+        setOpen(next);
+        props.onOpenChange?.(next);
+    }, [props.onOpenChange]);
     const anchorRef = React.useRef<View>(null);
 
     if (props.items.length === 0) {
@@ -67,7 +72,7 @@ export function BrowserToolbarOverflowMenu(props: Readonly<{
                         ? resolveMinimumInteractiveTargetSize(Platform.OS)
                         : props.touchTargetFloorPx ?? undefined}
                     interactiveTargetGapPx={4}
-                    onPress={() => setOpen((value) => !value)}
+                    onPress={() => onOpenChange(!open)}
                 />
             </View>
             {open ? (
@@ -78,7 +83,7 @@ export function BrowserToolbarOverflowMenu(props: Readonly<{
                     gap={6}
                     maxHeightCap={420}
                     maxWidthCap={BROWSER_CHROME_WIDTH.panel}
-                    onRequestClose={() => setOpen(false)}
+                    onRequestClose={() => onOpenChange(false)}
                     backdrop={{ enabled: false }}
                     portal={MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS}
                 >
@@ -104,7 +109,7 @@ export function BrowserToolbarOverflowMenu(props: Readonly<{
                                         ),
                                         onPress: () => {
                                             if (item.disabled === true) return;
-                                            setOpen(false);
+                                            onOpenChange(false);
                                             item.onPress();
                                         },
                                     }))}
