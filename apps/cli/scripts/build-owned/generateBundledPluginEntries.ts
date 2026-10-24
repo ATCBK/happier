@@ -1744,7 +1744,7 @@ async function loadPluginManifest(
   // Authored inspection has its own process and does not consume the parent's
   // workspace modules. Load those independent graphs together, then validate.
   const [mod, resolvedDependencies] = await Promise.all([
-    importTypescriptModule(manifestPath) as Promise<{ PLUGIN_MANIFEST?: unknown }>,
+    importTypescriptModule(manifestPath, { exports: ['PLUGIN_MANIFEST'] }) as Promise<{ PLUGIN_MANIFEST?: unknown }>,
     dependencies,
   ]);
   if (!('PLUGIN_MANIFEST' in mod)) {
