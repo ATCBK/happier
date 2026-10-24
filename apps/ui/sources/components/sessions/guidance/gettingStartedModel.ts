@@ -7,6 +7,8 @@ import { computeMachinesSummary, type MachinesSummary } from './computeMachinesS
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { resolveMachineSetupSatisfied } from '@/components/machines/add/machineAddPaths';
 
 export { computeMachinesSummary, type MachinesSummary } from './computeMachinesSummary';
 
@@ -148,13 +150,17 @@ function resolveTargetLabel(input: SessionGettingStartedViewModelInput, activeSe
  * this computer is not counted: it may be signed in to another account or serve another Home, and
  * the shared this-computer connection owner explains that state instead.
  */
-export function resolveSessionGettingStartedMachinesSummary(input: SessionGettingStartedMachinesInput): SessionGettingStartedMachinesResolution {
+function resolveGettingStartedMachines(
+    input: SessionGettingStartedMachinesInput,
+    summarize: (machines: SessionGettingStartedViewModelInput['activeMachines'], serverId: string,
+        resolveScopeId: ReturnType<typeof captureServerProfileScopeResolver>) => Readonly<{ machineCount: number; onlineCount: number }>,
+): SessionGettingStartedMachinesResolution {
     const resolveScopeId = captureServerProfileScopeResolver();
     const machinesFor = (serverId: string) => resolveServerScopedMachines({
         serverId,
         activeServerId: input.selection.activeServerId,
         serverIdAliases: resolveActiveProfileServerIdAliases(input.activeServerProfile, serverId),
-        activeMachines: input.activeMachines,
+        get activeMachines() { return input.activeMachines; },
         machineListByServerId: input.machineListByServerId,
         machineListStatusByServerId: input.machineListStatusByServerId,
     }, resolveScopeId);
@@ -164,35 +170,17 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
         !machinesFor(serverId) && isHomeUnavailable(input.machineListStatusByServerId?.[serverId])
     ));
     const selectedServerIds = input.selection.allowedServerIds.filter((serverId) => !unavailableServerIds.includes(serverId));
-    const activeServerMachines = resolveServerScopedMachines({
-        serverId: input.selection.activeServerId,
-        activeServerId: input.selection.activeServerId,
-        serverIdAliases: resolveActiveProfileServerIdAliases(input.activeServerProfile, input.selection.activeServerId),
-        activeMachines: input.activeMachines,
-        machineListByServerId: input.machineListByServerId,
-        machineListStatusByServerId: input.machineListStatusByServerId,
-    }, resolveScopeId);
+    const activeServerMachines = machinesFor(input.selection.activeServerId);
     const perServer = selectedServerIds.map((serverId) => {
-        const machines = resolveServerScopedMachines({
-            serverId,
-            activeServerId: input.selection.activeServerId,
-            serverIdAliases: resolveActiveProfileServerIdAliases(input.activeServerProfile, serverId),
-            activeMachines: input.activeMachines,
-            machineListByServerId: input.machineListByServerId,
-            machineListStatusByServerId: input.machineListStatusByServerId,
-        }, resolveScopeId);
+        const machines = machinesFor(serverId);
         if (!machines) {
             return { machineCount: null, onlineCount: null };
         }
-        const online = machines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(serverId), machine, undefined, resolveScopeId)).length;
-        return { machineCount: machines.length, onlineCount: online };
+        return summarize(machines, serverId, resolveScopeId);
     });
     const selectedMachines = computeMachinesSummary(perServer);
     const activeServerSummary = activeServerMachines
-        ? {
-            machineCount: activeServerMachines.length,
-            onlineCount: activeServerMachines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(input.selection.activeServerId), machine, undefined, resolveScopeId)).length,
-        }
+        ? summarize(activeServerMachines, input.selection.activeServerId, resolveScopeId)
         : null;
     if (selectedServerIds.length === 0 && unavailableServerIds.length > 0) {
         return {
@@ -213,6 +201,22 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
             : selectedMachines;
 
     return { ...machines, unavailableServerIds };
+}
+
+export function resolveSessionGettingStartedMachinesSummary(input: SessionGettingStartedMachinesInput): SessionGettingStartedMachinesResolution {
+    return resolveGettingStartedMachines(input, (machines, serverId, resolveScopeId) => ({
+        machineCount: machines.length,
+        onlineCount: machines.filter(machine => isMachineSelectableForFleet(input.accountScopesByServerId?.get(serverId),
+            machine, undefined, resolveScopeId)).length,
+    }));
+}
+
+/** Setup needs existence, not fleet presentation or liveness. Worst case scans a Home with no visible Machine. */
+export function resolveSessionGettingStartedMachineSetupSatisfied(input: SessionGettingStartedMachinesInput): boolean | null {
+    return resolveMachineSetupSatisfied(resolveGettingStartedMachines(input, machines => ({
+        machineCount: machines.some(isMachineVisibleForSelection) ? 1 : 0,
+        onlineCount: 0,
+    })));
 }
 
 export function buildSessionGettingStartedViewModel(input: SessionGettingStartedViewModelInput): SessionGettingStartedViewModel {

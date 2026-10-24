@@ -19,6 +19,52 @@ function activeServerId(): string {
 }
 
 describe('useHasMachineForGettingStartedGuidance', () => {
+    it('subscribes to the setup answer, not unrelated Machine display facts', async () => {
+        const previousState = storage.getState();
+        const serverId = activeServerId();
+        const metadata = createMachineFixture().metadata!;
+        const selected = createMachineFixture({ id: 'setup-incumbent', metadata: { ...metadata, displayName: 'Incumbent' } });
+        let others = Array.from({ length: 127 }, (_, index) => createMachineFixture({ id: `setup-other-${index}`,
+            metadata: { ...metadata, displayName: `Other ${index}` } }));
+        storage.getState().applyMachines([selected, ...others], true, { sourceServerId: serverId });
+        storage.getState().markMachineListSettled(serverId);
+        let metadataReads = 0;
+        // Observe reads of real admitted fixture rows without changing their facts.
+        for (const machine of storage.getState().machineListByServerId[serverId] ?? []) {
+            const metadata = machine.metadata;
+            Object.defineProperty(machine, 'metadata', { enumerable: true, configurable: true,
+                get: () => { metadataReads += 1; return metadata; } });
+        }
+        let renders = 0;
+        const hook = await renderHook(({ enabled }) => { renders += 1; return useHasMachineForGettingStartedGuidance(enabled); },
+            { initialProps: { enabled: true } });
+        try {
+            expect(hook.getCurrent()).toBe(true);
+            expect(metadataReads).toBe(0);
+            const settled = renders;
+            for (let index = 0; index < 5; index += 1) {
+                others = others.map((machine, position) => position === index ? { ...machine,
+                    metadataVersion: machine.metadataVersion + 1,
+                    metadata: { ...machine.metadata!, displayName: `Renamed ${index}` } } : machine);
+                await act(async () => storage.getState().applyMachines([selected, ...others], true, { sourceServerId: serverId }));
+            }
+            expect(renders - settled).toBe(0);
+            await act(async () => storage.getState().applyMachines([], true, { sourceServerId: serverId }));
+            expect(hook.getCurrent()).toBe(false);
+            expect(renders).toBeGreaterThan(settled);
+            await hook.rerender({ enabled: false });
+            expect(hook.getCurrent()).toBeNull();
+            const disabled = renders;
+            await act(async () => storage.getState().applyMachines([selected, ...others], true, { sourceServerId: serverId }));
+            expect(renders).toBe(disabled);
+            await hook.rerender({ enabled: true });
+            expect(hook.getCurrent()).toBe(true);
+        } finally {
+            await hook.unmount();
+            storage.setState(previousState);
+        }
+    });
+
     it('keeps setup consumers quiet across resource-only revisions while observing removal', async () => {
         const previousState = storage.getState();
         let unmount: (() => Promise<void>) | undefined;

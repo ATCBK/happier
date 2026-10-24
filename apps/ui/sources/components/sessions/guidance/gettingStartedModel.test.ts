@@ -6,6 +6,7 @@ import {
     computeSessionGettingStartedDecision,
     resolveActiveServerProfile,
     resolveSessionGettingStartedMachinesSummary as resolveScopedMachinesSummary,
+    resolveSessionGettingStartedMachineSetupSatisfied,
     type SessionGettingStartedMachinesInput,
 } from './gettingStartedModel';
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
@@ -34,7 +35,13 @@ function buildSessionGettingStartedViewModel(input: Omit<Parameters<typeof build
     return buildScopedViewModel({ ...input, ...normalizeFixtureMachines(input), activeServerProfile: input.activeServerProfile });
 }
 function resolveSessionGettingStartedMachinesSummary(input: FixtureMachinesInput) {
-    return resolveScopedMachinesSummary(normalizeFixtureMachines(input));
+    const normalized = normalizeFixtureMachines(input);
+    const summary = resolveScopedMachinesSummary(normalized);
+    // Both questions share Home/status/alias/fallback policy; setup differs only
+    // in needing existence rather than count, presentation or online detail.
+    expect(resolveSessionGettingStartedMachineSetupSatisfied(normalized))
+        .toBe(summary.machineCount > 0 ? true : summary.hasUnknownServers ? null : false);
+    return summary;
 }
 
 describe('computeSessionGettingStartedDecision', () => {
