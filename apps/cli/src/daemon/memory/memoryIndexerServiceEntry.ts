@@ -23,7 +23,7 @@ function readMemoryServices(value: unknown): MemoryIndexerProcessServices {
     || !('getBootstrap' in value) || typeof value.getBootstrap !== 'function'
     || !('serve' in value) || typeof value.serve !== 'function'
     || !('host' in value) || typeof value.host !== 'object' || value.host === null
-    || !['publish', 'failed', 'wake', 'readExternalSources', 'observeSessions', 'runHint', 'commitHint'].every(
+    || !['publish', 'failed', 'readExternalSources', 'observeSessions', 'runHint', 'commitHint'].every(
       name => typeof Reflect.get(value.host as object, name) === 'function')) {
     throw new Error('memory_indexer_process_services_unavailable');
   }
@@ -49,7 +49,6 @@ export async function runMemoryIndexerService(context: HostBackgroundServiceProc
   const host: MemoryIndexerHost = {
     publish: snapshot => notify(memory.host.publish(snapshot)),
     failed: error => notify(memory.host.failed(error)),
-    wake: refresh => notify(memory.host.wake(refresh)),
     readExternalSources: (refresh, signal) => memory.host.readExternalSources(refresh, signal),
     observeSessions: ids => memory.host.observeSessions(ids),
     runHint: (request, signal) => memory.host.runHint(request, signal),

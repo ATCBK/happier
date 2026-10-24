@@ -15,6 +15,8 @@ import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } fr
 import { resolveSessionEncryptionContextFromCredentials, resolveSessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { AccountEncryptionMaterialUnavailableError } from '@/api/client/encryptionKey';
+import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { collectRetainedSessionInventoryVisibility, fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
 import { commitMemorySystemRecords } from '@/session/systemRecords/memory/commitMemorySystemRecords';
 import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
 import { ensureProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
@@ -29,6 +31,7 @@ import { buildUnavailableMemoryEmbeddingsDiagnostics, type OperationalMemoryEmbe
 import { syncMemoryDocuments, type MemoryDocumentSearchScope } from './syncMemoryDocuments';
 import { runMemoryHintsExecutionRun } from './hints/runMemoryHintsExecutionRun';
 import type { ConnectMemoryIndexer, MemoryIndexerConnection, MemoryIndexerHost, MemoryIndexerSnapshot } from './memoryIndexerBoundary';
+import { INITIAL_MEMORY_INVENTORY_STATE, isMemorySessionOnMachine, refreshMemoryInventoryOnce } from './inventory/refreshMemoryInventory';
 
 export type MemoryWorkerHandle = Readonly<{
   stop: () => void | Promise<void>;
@@ -100,6 +103,8 @@ export async function startMemoryWorker(params: Readonly<{
   let inventoryLoop: SingleFlightIntervalLoopHandle | null = null;
   let workLoop: SingleFlightIntervalLoopHandle | null = null;
   let loopPolicy: string | null = null;
+  let policyWorkRequested = false;
+  let settingsApplied = false;
   let settingsOperation: Promise<void> = Promise.resolve();
   let clearPromise: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
@@ -121,8 +126,12 @@ export async function startMemoryWorker(params: Readonly<{
     snapshot = { ...snapshot, worker: { ...snapshot.worker, state: 'error', currentSessionId: null, currentPhase: null } };
   };
   const host: MemoryIndexerHost = {
-    publish: next => { snapshot = { ...next,
-      ...(next.nextWorkAtMs === undefined ? { nextWorkAtMs: snapshot.nextWorkAtMs } : {}) }; },
+    publish: next => {
+      const priorDeadline = snapshot.nextWorkAtMs;
+      snapshot = { ...next,
+        ...(next.nextWorkAtMs === undefined ? { nextWorkAtMs: priorDeadline } : {}) };
+      if (snapshot.nextWorkAtMs !== priorDeadline) workLoop?.trigger();
+    },
     failed: markFailure,
     settled: () => {
       if (snapshot.worker.state === 'error') return;
@@ -136,11 +145,11 @@ export async function startMemoryWorker(params: Readonly<{
       for (const id of unseen) observedSessionIds.add(id);
       return unseen;
     },
-    wake: refresh => { externalNeedsRefresh ||= refresh; workLoop?.trigger(); },
     readExternalSources: async (refresh, signal) => {
       if (refresh || externalNeedsRefresh) {
-        await observation.refresh(desired, signal);
         externalNeedsRefresh = false;
+        try { await observation.refresh(desired, signal); }
+        catch (error) { externalNeedsRefresh = true; throw error; }
       }
       return observation.takeSnapshot();
     },
@@ -249,6 +258,26 @@ export async function startMemoryWorker(params: Readonly<{
     })();
     await retirement;
   };
+  const hasArchivedChange = async (signal?: AbortSignal): Promise<boolean> => {
+    if (desired.includeArchivedSessions) return false;
+    try {
+      const archived = await collectRetainedSessionInventoryVisibility({
+        retainedSessionIds: withReaders(retainedIds), scopes: ['archived'], signal,
+        fetchInventoryPage: args => fetchSessionInventoryPage({ token: params.credentials.token,
+          limit: desired.worker.sessionListPageLimit, ...args }),
+      });
+      signal?.throwIfAborted();
+      if (archived.size > 0) return true;
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, includeArchivedSessions: false } };
+    } catch (error) {
+      signal?.throwIfAborted();
+      // Retained rows may still be archived. Preserve the existing truthful
+      // effective-policy projection until observation/purge succeeds.
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, includeArchivedSessions: true } };
+      logger.debug('[memoryWorker] Archived observation incomplete', { message: error instanceof Error ? error.message : String(error) });
+    }
+    return false;
+  };
   const startLoops = async () => {
     if (!configuration.isDaemonProcess || !desired.enabled || stopped) return;
     const policy = JSON.stringify(desired.worker);
@@ -256,19 +285,61 @@ export async function startMemoryWorker(params: Readonly<{
     await stopLoops();
     loopPolicy = policy;
     inventoryLoop = startSingleFlightIntervalLoop({
-      intervalMs: Math.max(5_000, Math.trunc(desired.worker.inventoryRefreshIntervalMs)),
-      task: async signal => { await callWithRevisions((indexer, signal) => indexer.inventory(signal), signal); },
+      // This existing freshness cadence observes metadata only. Unchanged
+      // inventory never admits transcript work or prepares a child service.
+      intervalMs: desired.worker.inventoryRefreshIntervalMs,
+      task: async signal => {
+        const observed = new Map(snapshot.observedSeqBySessionId);
+        const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
+        let state = INITIAL_MEMORY_INVENTORY_STATE;
+        let changed = !desired.includeArchivedSessions && snapshot.settings.includeArchivedSessions
+          ? await hasArchivedChange(signal) : false;
+        do {
+          const refresh = await refreshMemoryInventoryOnce({
+            backfillPolicy: desired.backfillPolicy, includeArchivedSessions: desired.includeArchivedSessions,
+            enabledAtMs: desired.enabledAtMs ?? 0, pageLimit: desired.worker.sessionListPageLimit,
+            nowMs: Date.now(), state, seenSessionIds: new Set<string>(), signal,
+            fetchSessionsPage: args => fetchSessionInventoryPage({ token: params.credentials.token, ...args }),
+            isSessionEligible: session => {
+              // Do not retain opened metadata or recreate the child's locality memo.
+              const local = isMemorySessionOnMachine({ ...params, session, accountEncryptionMode });
+              if (!local && observed.has(session.id)) changed = true;
+              return local;
+            },
+          });
+          signal.throwIfAborted();
+          changed ||= [...refresh.observedSeqBySessionId].some(([id, seq]) => observed.get(id) !== seq);
+          state = refresh.state;
+          if (refresh.mode === 'snapshot') break;
+        } while (!changed && (state.active.hasNext || (desired.includeArchivedSessions && state.archived.hasNext)));
+        if (changed) await callWithRevisions((indexer, signal) => indexer.inventory(signal), signal);
+      },
       onError: error => { markFailure(error); logger.debug('[memoryWorker] Inventory refresh failed', { message: error instanceof Error ? error.message : String(error) }); },
     });
     workLoop = startSingleFlightIntervalLoop({
-      intervalMs: Math.max(500, Math.trunc(desired.worker.tickIntervalMs)),
+      intervalMs: desired.worker.tickIntervalMs,
       task: async signal => {
-        await callWithRevisions((indexer, signal) => indexer.tick(signal), signal);
-        return { nextAutomaticRunAfterMs: snapshot.nextWorkAtMs == null ? null : Math.max(0, snapshot.nextWorkAtMs - Date.now()) };
+        const deadlineDue = snapshot.nextWorkAtMs != null && snapshot.nextWorkAtMs <= Date.now();
+        if (policyWorkRequested || pendingRevisions.size > 0 || externalNeedsRefresh
+          || observation.hasPendingChanges() || deadlineDue) {
+          policyWorkRequested = false;
+          try { await callWithRevisions((indexer, signal) => indexer.tick(signal), signal); }
+          catch (error) {
+            if (!signal.aborted) {
+              markFailure(error);
+              logger.debug('[memoryWorker] Tick failed', { message: error instanceof Error ? error.message : String(error) });
+            }
+            // Failure is visible; a later real change/explicit refresh retries.
+            return { nextAutomaticRunAfterMs: null };
+          }
+        }
+        return { nextAutomaticRunAfterMs: snapshot.nextWorkAtMs == null ? null : snapshot.nextWorkAtMs - Date.now() };
       },
       onError: error => { markFailure(error); logger.debug('[memoryWorker] Tick failed', { message: error instanceof Error ? error.message : String(error) }); },
     });
-    inventoryLoop.trigger(); workLoop.trigger();
+    // Policy admission already inventories in its first child tick. Starting
+    // a concurrent observation here would re-admit that same initial frontier.
+    workLoop.trigger();
   };
   const serializeSettings = (run: () => Promise<void>) => {
     const next = settingsOperation.then(run);
@@ -278,6 +349,15 @@ export async function startMemoryWorker(params: Readonly<{
   const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const changed = JSON.stringify(next) !== JSON.stringify(desired);
+    if (settingsApplied && !changed && !retireForPluginChange) {
+      if (next.enabled && await hasArchivedChange(signal)) {
+        await callWithRevisions((indexer, signal) => indexer.inventory(signal), signal);
+      }
+      await startLoops();
+      return;
+    }
+    settingsApplied = false;
+    policyWorkRequested = next.enabled;
     if (changed || retireForPluginChange) {
       // Prior-policy rows are not qualified for the replacement occurrence,
       // including when its process fails before publishing its first facts.
@@ -294,6 +374,7 @@ export async function startMemoryWorker(params: Readonly<{
       snapshot = { ...snapshot, settings: next, indexesQualified: false,
         embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(next.embeddings),
         worker: { ...snapshot.worker, state: 'disabled', currentSessionId: null, currentPhase: null, activeOperations: [] } };
+      settingsApplied = true;
       return;
     }
     await ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' });
@@ -301,6 +382,7 @@ export async function startMemoryWorker(params: Readonly<{
     const indexer = await getIndexer();
     if (existing || !params.deps?.connectIndexer) await indexer.applySettings(next, signal);
     await startLoops();
+    settingsApplied = true;
   };
   const reloadSettings = (signal?: AbortSignal) => serializeSettings(async () => {
     if (stopped) return;
@@ -336,6 +418,7 @@ export async function startMemoryWorker(params: Readonly<{
     if (!desired.enabled || (previous?.source === next?.source && previous?.settings === next?.settings)) return;
     externalNeedsRefresh = true;
     inventoryLoop?.trigger();
+    workLoop?.trigger();
     if (connection) void call((indexer, signal) => indexer.retryEmbeddings(signal)).catch(markFailure);
   });
   const unsubscribeInstall = subscribeOptionalRuntimeInstallSuccess(key => {
@@ -368,7 +451,7 @@ export async function startMemoryWorker(params: Readonly<{
           snapshot = { ...snapshot, indexesQualified: false, candidateSessionIds: [], observedSeqBySessionId: [], editedSessionIds: [], externalSources: [] };
           observedSessionIds.clear();
           pendingRevisions.clear();
-        } finally { externalNeedsRefresh = true; await applySettings(prior); }
+        } finally { externalNeedsRefresh = true; settingsApplied = false; await applySettings(prior); }
       }).finally(() => { clearPromise = null; });
       return clearPromise;
     },
@@ -405,7 +488,6 @@ export async function startMemoryWorker(params: Readonly<{
     },
     attachExternalObservation: next => {
       const detach = observation.attach(next);
-      externalNeedsRefresh = true; workLoop?.trigger();
       return detach;
     },
     readExternalTranscriptPage: (request, signal) => call((indexer, signal) => indexer.readExternalPage(request, signal), signal),

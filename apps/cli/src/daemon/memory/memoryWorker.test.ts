@@ -606,13 +606,14 @@ describe('memoryWorker', () => {
     if (homeDir) await removeTempDir(homeDir);
   });
 
-  it('keeps locality reuse across inventory refreshes for unchanged local and excluded Sessions', async () => {
+  it('observes locality once per metadata row without retaining a daemon locality memo', async () => {
     vi.useFakeTimers();
+    const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
     const secret = new Uint8Array(32).fill(19);
     const sessions = ['machine_1', 'elsewhere'].map((machineId, index) => ({
       id: `locality-${index}`, seq: 0, createdAt: 1000, updatedAt: 1000, active: false, activeAt: 0,
       archivedAt: null, encryptionMode: 'e2ee', share: null,
-      metadata: encodeBase64(encryptLegacy({ machineId }, secret)),
+      metadata: encodeBase64(encryptLegacy(createTestMetadata({ machineId }), secret)),
     }));
     const fetchSessionsPage = vi.fn(async () => ({ sessions, nextCursor: null, hasNext: false }));
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
@@ -637,7 +638,7 @@ describe('memoryWorker', () => {
       await vi.waitFor(() => expect(fetchSessionsPage.mock.calls.length).toBeGreaterThan(previousReads));
       const ownerBodies = sessions.map(session => Buffer.from(session.metadata, 'base64').subarray(nacl.secretbox.nonceLength));
       const localityOpens = opens.mock.calls.filter(([body]) => ownerBodies.some(expected => expected.equals(Buffer.from(body))));
-      expect(localityOpens.length).toBe(0);
+      expect(localityOpens.length).toBe(sessions.length);
     } finally { opens.mockRestore(); await worker.stop(); setDaemonProcess(configuration, daemonBefore); vi.useRealTimers(); }
   });
 
@@ -1182,7 +1183,7 @@ describe('memoryWorker', () => {
     await worker.stop();
   });
 
-  it('reuses a failed embeddings resolution across background ticks but retries on settings publication, explicit use, and reload', async () => {
+  it('reuses failed embeddings across idle work and unchanged reloads but retries on publication and explicit use', async () => {
     vi.useFakeTimers();
     const argvBackup = process.argv.slice();
     let publishInventory = () => {};
@@ -1242,7 +1243,7 @@ describe('memoryWorker', () => {
       });
       try {
         await vi.waitFor(() => expect(pipeline).toHaveBeenCalledTimes(1));
-        await vi.waitFor(() => expect(fetchSessionsPage).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(fetchSessionsPage).toHaveBeenCalled());
         publishInventory();
         await fetchSessionsPage.mock.results[0]!.value;
         await vi.advanceTimersByTimeAsync(2_500);
@@ -1265,7 +1266,7 @@ describe('memoryWorker', () => {
         expect(pipeline).toHaveBeenCalledTimes(3);
 
         await worker.reloadSettings();
-        await vi.waitFor(() => expect(pipeline).toHaveBeenCalledTimes(4));
+        expect(pipeline).toHaveBeenCalledTimes(3);
       } finally {
         publishInventory();
         await worker.stop();

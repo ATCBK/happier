@@ -62,7 +62,6 @@ export type MemoryIndexerHost = Readonly<{
   publish(snapshot: MemoryIndexerSnapshot): void;
   failed(error: unknown): void;
   settled?(): void;
-  wake(refreshSources: boolean): void;
   readExternalSources(refresh: boolean, signal: AbortSignal): Promise<MemoryExternalTranscriptSourcesSnapshot>;
   observeSessions(sessionIds: readonly string[]): Promise<readonly string[]>;
   runHint(request: MemoryHintRun, signal?: AbortSignal): Promise<string>;

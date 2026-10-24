@@ -77,7 +77,7 @@ function createProcessBoundary() {
 }
 
 describe('Memory process placement composition', () => {
-  const env = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+  const env = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_LOG_LEVEL']);
   let home: string;
   const connections: MemoryIndexerConnection[] = [];
   beforeEach(async () => {
@@ -87,6 +87,7 @@ describe('Memory process placement composition', () => {
   });
   afterEach(async () => {
     for (const connection of connections.splice(0)) await connection.retire();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     restoreEnvValues(env);
     vi.resetModules();
@@ -103,7 +104,7 @@ describe('Memory process placement composition', () => {
     const settlements: boolean[] = [];
     const host: MemoryIndexerHost = {
       publish: snapshot => { snapshots.push(snapshot); },
-      failed: error => { failures.push(error); }, wake() {},
+      failed: error => { failures.push(error); },
       settled: () => { settlements.push(boundary.children.every(child => child.closed)); },
       readExternalSources: async () => ({ sources: [], configuredSourceKeys: [], changes: [] }),
       observeSessions: async ids => ids,
@@ -347,6 +348,97 @@ describe('Memory process placement composition', () => {
     expect(boundary.children.every(child => child.closed)).toBe(true);
   });
 
+  it('admits the current inventory on a deadline tick in a fresh child and exits after indexing', async () => {
+    const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
+    const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+    const session = createSessionRecordFixture({ id: 'deadline-source', seq: 1, createdAt: 1, updatedAt: 2,
+      encryptionMode: 'plain', metadata: JSON.stringify(createTestMetadata({ machineId: 'machine_1' })) });
+    const axios = (await import('axios')).default;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const request = new URL(String(url));
+      if (request.pathname === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (request.pathname === '/v2/sessions') return { status: 200, data: { sessions: [session], hasNext: false, nextCursor: null } };
+      if (request.pathname === `/v2/sessions/${session.id}`) return { status: 200, data: { session } };
+      if (request.pathname === `/v1/sessions/${session.id}/messages`) return { status: 200, data: {
+        messages: Number(request.searchParams.get('afterSeq')) === 0 ? [{ id: 'deadline-row', seq: 1,
+          createdAt: 1000, updatedAt: 1000, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'deadline searchable marker' } } } }] : [],
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+      } };
+      throw new Error(`Unexpected deadline HTTP fixture path: ${request.pathname}`);
+    });
+    const { connection, boundary } = await setup({}, { enabled: true, indexMode: 'deep',
+      backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
+    await connection.tick();
+    expect(boundary.children).toHaveLength(1);
+    expect(boundary.children[0]?.closed).toBe(true);
+    const { openDeepIndexReader } = await import('./deepIndex/deepIndexDb');
+    const { resolveMemoryIndexPaths } = await import('./memoryIndexPaths');
+    const retained = openDeepIndexReader({ dbPath: resolveMemoryIndexPaths().deepDbPath });
+    try { expect(retained.search({ query: 'deadline', scope: { type: 'global' }, maxResults: 10 })).toHaveLength(1); }
+    finally { retained.close(); }
+  });
+
+  it('births no child over fifteen settled minutes and exactly one for a real append through the daemon worker', async () => {
+    applyEnvValues({ HAPPIER_LOG_LEVEL: 'silent' });
+    const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
+    const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+    const session = createSessionRecordFixture({ id: 'demand-source', seq: 1, createdAt: 1, updatedAt: 2,
+      encryptionMode: 'plain', metadata: JSON.stringify(createTestMetadata({ machineId: 'machine_1' })) });
+    let seq = 1;
+    const axios = (await import('axios')).default;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const request = new URL(String(url));
+      if (request.pathname === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (request.pathname === '/v2/sessions') return { status: 200, data: { sessions: [{ ...session, seq }], hasNext: false, nextCursor: null } };
+      if (request.pathname === `/v2/sessions/${session.id}`) return { status: 200, data: { session: { ...session, seq } } };
+      if (request.pathname === `/v1/sessions/${session.id}/messages`) return { status: 200, data: {
+        messages: Array.from({ length: seq }, (_, index) => ({ id: `demand-row-${index + 1}`, seq: index + 1,
+          createdAt: 1000 + index, updatedAt: 1000 + index, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: index ? 'appendmarker searchable' : 'initialmarker searchable' } } },
+        })).filter(row => row.seq > Number(request.searchParams.get('afterSeq'))),
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+      } };
+      throw new Error(`Unexpected worker demand HTTP fixture path: ${request.pathname}`);
+    });
+    const { writeMemorySettingsToDisk, readMemorySettingsFromDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, deleteOnDisable: false, indexMode: 'deep',
+      backfillPolicy: 'all_history', coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
+    const { configuration } = await import('@/configuration');
+    const priorDaemon = configuration.isDaemonProcess;
+    Object.assign(configuration, { isDaemonProcess: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const boundary = createProcessBoundary();
+    const { connectProcessMemoryIndexer } = await import('./processMemoryIndexer');
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1',
+      deps: { connectIndexer: async host => {
+        const settings = await readMemorySettingsFromDisk();
+        return await connectProcessMemoryIndexer({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1',
+          host, readSettings: () => settings, spawnChannel: boundary.spawnChannel });
+      } } });
+    try {
+      await vi.waitFor(() => {
+        expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
+        expect(boundary.children.length).toBeGreaterThan(0);
+        expect(boundary.children.every(child => child.closed)).toBe(true);
+      });
+      const births = boundary.children.length;
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(boundary.children).toHaveLength(births);
+      seq = 2;
+      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      await vi.waitFor(() => {
+        expect(boundary.children).toHaveLength(births + 1);
+        expect(boundary.children.every(child => child.closed)).toBe(true);
+      });
+      const { openDeepIndexReader } = await import('./deepIndex/deepIndexDb');
+      const retained = openDeepIndexReader({ dbPath: worker.getDeepDbPath()! });
+      try { expect(retained.search({ query: 'appendmarker', scope: { type: 'global' }, maxResults: 10 })).toHaveLength(1); }
+      finally { retained.close(); }
+    } finally { await worker.stop(); Object.assign(configuration, { isDaemonProcess: priorDaemon }); vi.useRealTimers(); }
+  });
+
   it('rejects an active demand on child death, reports failure, and starts fresh on later demand', async () => {
     const entered = deferred();
     let reads = 0;
@@ -508,7 +600,11 @@ describe('Memory process placement composition', () => {
     } finally { lifetime.abort(); await services.dispose(); }
   });
 
-  it('prepares hints in the child and delegates execution plus record commit to daemon-bound authorities', async () => {
+  it.each(['continuous', 'deadline admitted during settlement'] as const)('prepares hints in the child and delegates execution plus record commit to daemon-bound authorities (%s)', async mode => {
+    if (mode !== 'continuous') {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(2000);
+    }
     const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
     const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
     const { DEFAULT_MEMORY_SETTINGS } = await import('@/settings/memorySettings');
@@ -529,6 +625,13 @@ describe('Memory process placement composition', () => {
     const executions: MemoryHintRun[] = [];
     const commits: MemoryHintCommit[] = [];
     const { connection } = await setup({
+      publish: snapshot => {
+        // Cross the real hint idle deadline while this same child is still
+        // serving its admitted run, before its scheduler settles.
+        if (mode !== 'continuous' && snapshot.nextWorkAtMs != null && snapshot.nextWorkAtMs > Date.now()) {
+          vi.setSystemTime(snapshot.nextWorkAtMs);
+        }
+      },
       runHint: async request => {
         executions.push(request);
         return JSON.stringify({ shard: { v: 1, seqFrom: 0, seqTo: 0, createdAtFromMs: 0, createdAtToMs: 0,
@@ -537,7 +640,7 @@ describe('Memory process placement composition', () => {
       },
       commitHint: async request => { commits.push(request); },
     }, { enabled: true, indexMode: 'hints', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' },
-      hints: { ...DEFAULT_MEMORY_SETTINGS.hints, enabled: true, updateMode: 'continuous',
+      hints: { ...DEFAULT_MEMORY_SETTINGS.hints, enabled: true, updateMode: mode === 'continuous' ? 'continuous' : 'onIdle', idleDelayMs: 5000,
         summarizerBackendId: 'fixture-agent', summarizerModelId: 'fixture-model', summarizerPermissionMode: 'read_only' },
     });
     await connection.refresh(session.id);

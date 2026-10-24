@@ -183,6 +183,7 @@ export function createMemoryExternalTranscriptObservation(input: Readonly<{
 
   return {
     refresh, release, getSnapshot,
+    hasPendingChanges: () => changes.size > 0,
     takeSnapshot() {
       const snapshot = getSnapshot();
       changes.clear();
