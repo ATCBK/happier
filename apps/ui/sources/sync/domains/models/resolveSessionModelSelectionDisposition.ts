@@ -6,6 +6,7 @@ import { readSessionModelSelectionIntentFromMetadata } from '@/sync/domains/mode
 import { readSessionProviderBindingMetadataStateV1, sessionProviderBindingMetadataMatchesRuntimeBasisV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import type { ProviderBoundModelRef, SessionModelSelectionIntentV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionActiveModelSelection, SessionModelRefV2, SessionModelSelectionV2 } from '@happier-dev/protocol/providers/selection/v2';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 
 export type CurrentSessionRunnerProcessIdentity = Readonly<{
     pid: number;
@@ -17,6 +18,10 @@ export type SessionModelSelectionDisposition = Readonly<{
     proposedIntent: SessionModelSelectionIntentV1 | null;
     proposedSelection: ProviderBoundModelRef | null;
     proposedSelectionV2: SessionModelSelectionV2 | null;
+    /** Picker identity, including coherent applied history; never live runtime authority. */
+    selectedTeamCredentialModel: TeamCredentialProviderModelSelectionV1 | null;
+    /** Source identity for the picker's running/last-reported marker. */
+    reportedTeamCredentialModel: TeamCredentialProviderModelSelectionV1 | null;
     activeSelection: ProviderBoundModelRef | null;
     activeRouteSelection: ProviderBoundModelRef | SessionModelRefV2 | null;
     /** Coherent runtime-applied history for presentation; never current runner/context authority. */
@@ -38,6 +43,17 @@ function routeSelection(fact: SessionActiveModelSelection | null): ProviderBound
     if (fact.v === 1) return fact.selection;
     const { kind: _kind, ...ref } = fact.teamCredentialModel;
     return { source: 'team_resource', ...ref };
+}
+
+function matchingAppliedTeamSelection(
+    fact: SessionActiveModelSelection | null,
+    selection: ProviderBoundModelRef | null,
+): TeamCredentialProviderModelSelectionV1 | null {
+    return fact?.v === 2 && selection
+        && selection.agentTargetKey === fact.selection.agentTargetKey
+        && selection.providerConnectionId === fact.selection.providerConnectionId
+        && selection.modelId === fact.selection.modelId
+        ? fact.teamCredentialModel : null;
 }
 
 /**
@@ -121,6 +137,17 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         currentRunnerProcessIdentity: params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
     });
     const lastAppliedSelection = lastAppliedFact?.selection ?? null;
+    // The V1 launch intent names a model tuple, not its runtime-opened source.
+    // Retain that source for presentation only while the tuple still matches;
+    // an explicit V2 native/Provider choice always takes precedence.
+    let selectedTeamCredentialModel: TeamCredentialProviderModelSelectionV1 | null = null;
+    if (proposedSelectionV2?.ref.source === 'team_resource') {
+        const { source: _source, ...ref } = proposedSelectionV2.ref;
+        selectedTeamCredentialModel = { kind: 'team_credential_provider_model', ...ref };
+    } else if (!proposedSelectionV2) {
+        selectedTeamCredentialModel = matchingAppliedTeamSelection(lastAppliedFact, proposedSelection ?? reportedSelection);
+    }
+    const reportedTeamCredentialModel = matchingAppliedTeamSelection(lastAppliedFact, reportedSelection);
     const exactRouteSelection = routeSelection(exactFact);
     const activeRouteSelection = params.sessionActive ? exactRouteSelection : null;
     const lastAppliedRouteSelection = exactFact ? exactRouteSelection : routeSelection(lastAppliedFact);
@@ -164,10 +191,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
     const contextSelection: ProviderBoundModelRef | null = params.sessionActive ? activeSelection : proposedSelection ?? reportedSelection;
     const contextRouteSelection = params.sessionActive ? activeRouteSelection
         : proposedSelectionV2?.ref ?? (
-            lastAppliedFact?.v === 2 && contextSelection
-            && contextSelection.agentTargetKey === lastAppliedFact.selection.agentTargetKey
-            && contextSelection.providerConnectionId === lastAppliedFact.selection.providerConnectionId
-            && contextSelection.modelId === lastAppliedFact.selection.modelId
+            selectedTeamCredentialModel
                 ? lastAppliedRouteSelection : contextSelection
         );
 
@@ -176,6 +200,8 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         proposedIntent,
         proposedSelection,
         proposedSelectionV2,
+        selectedTeamCredentialModel,
+        reportedTeamCredentialModel,
         activeSelection,
         activeRouteSelection,
         lastAppliedSelection,

@@ -12,6 +12,7 @@ import { t } from '@/text';
 
 import { resolveSessionModelSelectionDisposition } from './resolveSessionModelSelectionDisposition';
 import { resolveSessionComposerSendDestination } from '@/sync/domains/session/input/resolveSessionComposerSendDestination';
+import { createSessionActiveModelSelection } from '@happier-dev/protocol/providers/selection/v2';
 
 function appliedConnectedClaudeMetadata() {
     return MetadataSchema.parse({
@@ -39,6 +40,46 @@ function appliedConnectedClaudeMetadata() {
 }
 
 describe('resolveSessionModelSelectionDisposition', () => {
+    it('projects the applied Team source for the picker and chip when launch retained only V1 intent', () => {
+        const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-luna' });
+        const active = createSessionActiveModelSelection({ selection, source: 'runtime_apply',
+            runner: { pid: 42, processStartTimeMs: 10 }, teamCredentialModel: {
+                kind: 'team_credential_provider_model', teamId: 'team', resourceId: 'resource',
+                expectedResourceRevision: 0, deliveryMode: 'brokered', agentTargetKey: selection.agentTargetKey, modelId: selection.modelId,
+            } });
+        if (active?.v !== 2) throw new Error('Expected canonical Team runtime fact');
+        const metadata = MetadataSchema.parse({ path: '/workspace', host: 'test',
+            modelSelectionIntentV1: { v: 1, updatedAt: 11, selection },
+            sessionModelsV1: { v: 1, agentId: 'codex', updatedAt: 0, currentModelId: selection.modelId,
+                availableModels: [{ id: selection.modelId, name: 'Luna' }], activeSelectionV1: active } });
+        for (const sessionActive of [true, false]) {
+            for (const currentRunnerProcessIdentity of [active.runner, null]) {
+                const disposition = resolveSessionModelSelectionDisposition({ metadata, agentId: 'codex',
+                    agentTargetKey: selection.agentTargetKey, sessionActive, currentRunnerProcessIdentity });
+                expect(disposition.selectedTeamCredentialModel).toEqual(active.teamCredentialModel);
+                expect(disposition.reportedTeamCredentialModel).toEqual(active.teamCredentialModel);
+                const native = { label: 'Own sign-in', authSource: 'native' as const, connectedCount: 0 };
+                const route = resolveSessionRoutePresentation({ phase: sessionActive ? 'running' : 'draft', native,
+                    selection: disposition.contextRouteSelection, appliedSelection: disposition.activeRouteSelection,
+                    reportedSelection: disposition.lastAppliedRouteSelection,
+                    teamSources: [{ teamId: 'team', resourceId: 'resource', displayName: 'QA43 Leeroy brokered' }] });
+                expect(presentSessionRouteChip(route, native)?.label).toBe(t('connectedServices.authChip.runsThrough', { source: 'QA43 Leeroy brokered' }));
+                if (!currentRunnerProcessIdentity || !sessionActive) expect(disposition.activeRouteSelection).toBeNull();
+            }
+        }
+        const changed = MetadataSchema.parse({ ...metadata, modelSelectionIntentV2: {
+            v: 2, updatedAt: 30, ref: { source: 'native', agentTargetKey: selection.agentTargetKey, modelId: selection.modelId },
+        } });
+        expect(resolveSessionModelSelectionDisposition({ metadata: changed, agentId: 'codex', agentTargetKey: selection.agentTargetKey,
+            sessionActive: true, currentRunnerProcessIdentity: active.runner }).selectedTeamCredentialModel).toBeNull();
+        const differentModel = MetadataSchema.parse({ ...metadata, modelSelectionIntentV1: {
+            v: 1, updatedAt: 30, selection: { ...selection, modelId: 'another-model' },
+        } });
+        expect(resolveSessionModelSelectionDisposition({ metadata: differentModel, agentId: 'codex', agentTargetKey: selection.agentTargetKey,
+            sessionActive: true, currentRunnerProcessIdentity: active.runner })).toMatchObject({
+                selectedTeamCredentialModel: null, reportedTeamCredentialModel: active.teamCredentialModel, selectionTransitionPending: true,
+            });
+    });
     it('presents the runtime-opened Team source while another source is armed, retaining only history after runner replacement', () => {
         const teamCredentialModel = { kind: 'team_credential_provider_model' as const, resourceId: 'opened', teamId: 'team',
             expectedResourceRevision: 0, deliveryMode: 'brokered' as const, agentTargetKey: 'backend:codex', modelId: 'shared' };
