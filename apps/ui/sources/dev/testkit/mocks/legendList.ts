@@ -48,6 +48,8 @@ type CapturingLegendListMockOptions = Readonly<{
     renderItemLimit?: number;
     /** Native viewability follows the rows rendered by this measured-viewport substitute. */
     emitViewability?: boolean;
+    /** A warm measured recycler may finish its initial layout before its parent's passive effects. */
+    emitLoadDuringLayout?: boolean;
     /** Keep mounted cells until their item or the recycler's dataVersion changes. */
     memoizeItems?: boolean;
     /** Stateful geometry feed: merged over the static defaults on every getState() read. */
@@ -105,6 +107,13 @@ export function createCapturingLegendListMock(
         renderItemRef.current = nextProps.renderItem;
         if (typeof ref === 'function') ref(refHandle);
         else if (ref && typeof ref === 'object') ref.current = refHandle;
+
+        const didLoad = React.useRef(false);
+        React.useLayoutEffect(() => {
+            if (!options.emitLoadDuringLayout || didLoad.current || !nextProps.data?.length) return;
+            didLoad.current = true;
+            nextProps.onLoad?.({ elapsedTimeInMs: 0 });
+        }, [nextProps.data, nextProps.onLoad]);
 
         React.useEffect(() => {
             if (!options.emitViewability || !nextProps.onViewableItemsChanged || !Array.isArray(nextProps.data)) return;

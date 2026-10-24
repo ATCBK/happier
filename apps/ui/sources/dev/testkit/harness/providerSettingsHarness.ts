@@ -483,6 +483,28 @@ export function installProviderSettingsRpcBoundary(harness: ProviderSettingsHarn
     installDisconnectedServerSocketBoundary(configureProviderSettingsSocket);
 }
 
+/** A fixture Machine admits the real bundled declarations, not a mocked classifier/writer. */
+export function installBundledProviderDeclarationsRpcBoundary(harness: ProviderSettingsHarness): void {
+    harness.intercept(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, async () => {
+        const { readAccountProviderDeclarations } = await import('@/providers/catalog/accountProviderDeclarations');
+        const { BUNDLED_CANONICAL_AGENT_DECLARATIONS } = await import('@/agents/registry/generatedBundledPluginEntries');
+        return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+            projection: { v: 2, generation: 1,
+                agentsById: Object.fromEntries(Object.entries(BUNDLED_CANONICAL_AGENT_DECLARATIONS).flatMap(([id, declaration]) =>
+                    declaration ? [[id, { id, identity: declaration.identity,
+                        ...(declaration.providerRequirements ? { providerRequirements: declaration.providerRequirements } : {}),
+                    }]] : [])),
+                familiesById: { providers: { family: 'providers',
+                entriesById: Object.fromEntries(readAccountProviderDeclarations({ kind: 'account' }).map(row => [
+                    row.contributionKey, { id: row.contributionKey,
+                        pluginId: row.contributionKey.slice(0, row.contributionKey.indexOf('/')),
+                        provenance: row.provenance, sourceKind: 'bundled', definition: row.definition },
+                ])),
+            } } },
+        });
+    });
+}
+
 function configureProviderSettingsSocket(socket: Socket, serverUrl: string | undefined): void {
     socket.connect = vi.fn<typeof socket.connect>(() => {
         socket.connected = true;

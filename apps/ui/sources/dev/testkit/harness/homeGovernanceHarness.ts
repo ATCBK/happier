@@ -36,6 +36,19 @@ import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines
 import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, DiscussionPostRequestV1Schema,
     type DiscussionCreateResponseV1 } from '@happier-dev/protocol/discussions/api';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoverInputV1Schema,
+    TeamCredentialResourceDiscoveryPageV1Schema, type TeamCredentialResourceDiscoverInputV1,
+    type TeamCredentialResourceDiscoveryPageV1 } from '@happier-dev/protocol/teams';
+
+/** The batched recipient catalog HTTP leaf; directory, eligibility and projection stay real. */
+export function answerTeamCredentialDiscoveryForTests(homes: HomeGovernanceHarness, serverId: string,
+    read: (input: TeamCredentialResourceDiscoverInputV1) => TeamCredentialResourceDiscoveryPageV1): void {
+    homes.answer(serverId, `POST ${TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1}`, {
+        select: input => ({ body: TeamCredentialResourceDiscoveryPageV1Schema.parse(
+            read(TeamCredentialResourceDiscoverInputV1Schema.parse(input)),
+        ) }),
+    });
+}
 
 /** Stateful HTTP boundary; the real Discussion adapter owns sealing, opening and mutation intent. */
 export function answerDiscussionThreadForTests(homes: HomeGovernanceHarness, serverId: string,

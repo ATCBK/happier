@@ -66,6 +66,10 @@ export async function getPresentedNotificationsAsync(): Promise<[]> {
     return [];
 }
 
+export async function scheduleNotificationAsync(_request: unknown): Promise<string> {
+    return 'expo-local-notification-stub';
+}
+
 export async function setBadgeCountAsync(_count: number): Promise<boolean> {
     return true;
 }
