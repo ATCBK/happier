@@ -4,13 +4,33 @@ import { resolveAnnotationCropClip } from '@/sync/domains/browser/context/annota
 
 const invokeDesktopHostMock = vi.hoisted(() => vi.fn());
 const isDesktopHostMock = vi.hoisted(() => vi.fn());
+const listenDesktopHostEventMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/utils/platform/desktopHost', () => ({
     invokeDesktopHost: (command: string, args?: Record<string, unknown>) => invokeDesktopHostMock(command, args),
     isDesktopHost: () => isDesktopHostMock(),
+    listenDesktopHostEvent: (...args: unknown[]) => listenDesktopHostEventMock(...args),
 }));
 
 describe('desktop WebView native bridge', () => {
+    it('admits changed native facts only for the subscribed view and releases the host listener', async () => {
+        const stop = vi.fn();
+        listenDesktopHostEventMock.mockResolvedValue(stop);
+        const { subscribeDesktopBrowserView } = await import('./desktopWebViewBridge');
+        const listener = vi.fn();
+        const unsubscribe = await subscribeDesktopBrowserView({ browserSessionId: 'session', viewId: 'view' }, listener);
+        const publish = listenDesktopHostEventMock.mock.calls.at(-1)![1] as (value: unknown) => void;
+        const pageInfo = { browserSessionId: 'session', viewId: 'view', requestedUrl: 'https://example.test',
+            loadingState: 'finished', canGoBack: true, canGoForward: false, title: 'Document' };
+        publish({ browserSessionId: 'other', viewId: 'view', kind: 'pageInfoChanged', pageInfo, lifecycleChanged: false, navigationGeneration: 0 });
+        publish({ browserSessionId: 'session', viewId: 'view', kind: 'pageInfoChanged', pageInfo: { ...pageInfo, canGoBack: 'yes' }, lifecycleChanged: false, navigationGeneration: 0 });
+        expect(listener).not.toHaveBeenCalled();
+        publish({ browserSessionId: 'session', viewId: 'view', kind: 'pageInfoChanged', pageInfo, lifecycleChanged: false, navigationGeneration: 0 });
+        expect(listener).toHaveBeenCalledWith({ kind: 'pageInfoChanged', pageInfo: expect.objectContaining(pageInfo), lifecycleChanged: false, navigationGeneration: 0 });
+        unsubscribe();
+        expect(stop).toHaveBeenCalledTimes(1);
+    });
+
     beforeEach(() => {
         invokeDesktopHostMock.mockReset();
         isDesktopHostMock.mockReset();

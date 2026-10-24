@@ -1,6 +1,6 @@
 import { readCanonicalPaddedBase64DecodedLength } from '@happier-dev/protocol/crypto/base64';
 
-import { invokeDesktopHost, isDesktopHost } from '@/utils/platform/desktopHost';
+import { invokeDesktopHost, isDesktopHost, listenDesktopHostEvent } from '@/utils/platform/desktopHost';
 
 import {
     desktopWebViewAvailabilitySupportsBrowsing,
@@ -115,6 +115,29 @@ export type DesktopBrowserPageInfoResult = Readonly<{
     availability: DesktopWebViewNativeAvailability;
     pageInfo?: DesktopBrowserPageInfo;
 }>;
+
+export type DesktopBrowserViewEvent =
+    | Readonly<{ kind: 'pageInfoChanged'; pageInfo: DesktopBrowserPageInfo; lifecycleChanged: boolean; navigationGeneration: number }>
+    | Readonly<{ kind: 'diagnosticsAvailable' }>;
+
+/** Native facts and IPC arrivals, scoped to the exact mounted view. No settled polling. */
+export function subscribeDesktopBrowserView(
+    target: Omit<DesktopBrowserViewCommandRequest, 'url'>,
+    listener: (event: DesktopBrowserViewEvent) => void,
+): Promise<() => void> {
+    return listenDesktopHostEvent<unknown>('desktop-browser-view', (payload) => {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+        const value = payload as Record<string, unknown>;
+        if (value.browserSessionId !== target.browserSessionId || value.viewId !== target.viewId) return;
+        if (value.kind === 'diagnosticsAvailable') { listener({ kind: 'diagnosticsAvailable' }); return; }
+        if (value.kind !== 'pageInfoChanged' || typeof value.lifecycleChanged !== 'boolean') return;
+        const pageInfo = normalizeDesktopBrowserPageInfo(value.pageInfo);
+        const navigationGeneration = readNonNegativeInteger(value.navigationGeneration);
+        if (navigationGeneration === null) return;
+        if (!pageInfo || pageInfo.browserSessionId !== target.browserSessionId || pageInfo.viewId !== target.viewId) return;
+        listener({ kind: 'pageInfoChanged', pageInfo, lifecycleChanged: value.lifecycleChanged, navigationGeneration });
+    });
+}
 
 export type DesktopBrowserDrainDiagnosticsResult = Readonly<{
     ok: boolean;

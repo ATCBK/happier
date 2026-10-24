@@ -28,14 +28,14 @@ import {
     navigateDesktopBrowserView,
     openDesktopBrowserDevtools,
     openDesktopBrowserView,
-    readDesktopBrowserPageInfo,
     setDesktopBrowserPointerPassthrough,
     setDesktopBrowserViewBounds,
+    subscribeDesktopBrowserView,
+    type DesktopBrowserViewEvent,
     type DesktopBrowserBoundsPayload,
     type DesktopBrowserCommandResult,
     type DesktopBrowserDrainDiagnosticsResult,
     type DesktopBrowserOpenViewRequest,
-    type DesktopBrowserPageInfoResult,
     type DesktopBrowserPointerPassthroughPayload,
     type DesktopBrowserViewCommandRequest,
 } from '@/sync/domains/browser/adapters/desktopWebViewBridge';
@@ -66,13 +66,13 @@ export type DesktopWebViewNavigationDispatchRequest = Readonly<{
 }>;
 
 export type DesktopWebViewEngineBridge = Readonly<{
+    subscribe: (target: Omit<DesktopBrowserViewCommandRequest, 'url'>, listener: (event: DesktopBrowserViewEvent) => void) => Promise<() => void>;
     openView: (request: DesktopBrowserOpenViewRequest) => Promise<DesktopBrowserCommandResult>;
     navigateView: (request: Required<DesktopBrowserViewCommandRequest>) => Promise<DesktopBrowserCommandResult>;
     setBounds: (request: DesktopBrowserBoundsPayload) => Promise<DesktopBrowserCommandResult>;
     setPointerPassthrough: (request: DesktopBrowserPointerPassthroughPayload) => Promise<DesktopBrowserCommandResult>;
     closeView: (request: Omit<DesktopBrowserViewCommandRequest, 'url'>) => Promise<DesktopBrowserCommandResult>;
     openDevtools: (request: Omit<DesktopBrowserViewCommandRequest, 'url'>) => Promise<DesktopBrowserCommandResult>;
-    readPageInfo: (request: Omit<DesktopBrowserViewCommandRequest, 'url'>) => Promise<DesktopBrowserPageInfoResult>;
     /** Drains the native ipc buffer of injected-collector envelopes posted by the page since the last drain. */
     drainDiagnostics: (request: Omit<DesktopBrowserViewCommandRequest, 'url'>) => Promise<DesktopBrowserDrainDiagnosticsResult>;
     /** Evaluates canonical diagnostics/automation commands; results return over the ipc/drain channel. */
@@ -84,13 +84,13 @@ export type DesktopWebViewEngineBridge = Readonly<{
 }>;
 
 const defaultBridge: DesktopWebViewEngineBridge = {
+    subscribe: subscribeDesktopBrowserView,
     openView: openDesktopBrowserView,
     navigateView: navigateDesktopBrowserView,
     setBounds: setDesktopBrowserViewBounds,
     setPointerPassthrough: setDesktopBrowserPointerPassthrough,
     closeView: closeDesktopBrowserView,
     openDevtools: openDesktopBrowserDevtools,
-    readPageInfo: readDesktopBrowserPageInfo,
     drainDiagnostics: drainDesktopBrowserDiagnostics,
     evalScript: evalDesktopBrowserScript,
     dispatchNavigation: dispatchDesktopBrowserNavigation,
@@ -117,7 +117,7 @@ function resolveViewUrl(view: BrowserControlViewState): string | null {
     return view.pendingUrl ?? view.currentUrl ?? view.target.url;
 }
 
-function firstDisabledReason(result: DesktopBrowserCommandResult | DesktopBrowserPageInfoResult): string | null {
+function firstDisabledReason(result: DesktopBrowserCommandResult): string | null {
     return result.availability.disabledReasons[0] ?? null;
 }
 
@@ -160,7 +160,6 @@ export function DesktopWebViewEngine(props: Readonly<{
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig | null;
     automation?: BrowserAutomationEngineBridgeConfig;
     bridge?: DesktopWebViewEngineBridge;
-    pageInfoPollIntervalMs?: number | null;
     /**
      * Browser-surface lifecycle state the host computes (visible|hidden|parked|suspended|orphaned|
      * closed). Drives keep-mounted continuity: hidden/parked hide the native view (no reload on
@@ -177,9 +176,9 @@ export function DesktopWebViewEngine(props: Readonly<{
      */
     navigationCommand?: BrowserFrameNavigationCommand;
     /**
-     * B-2 cause-2: the page-load lifecycle sink. `publishPageInfo` (and the open/navigate failure
+     * B-2 cause-2: the page-load lifecycle sink. Native facts (and the open/navigate failure
      * paths) feed it so the control reducer transitions `loading → ready/failed` instead of relying
-     * on the diagnostics-only page-info events. Held in a ref so it never churns `publishPageInfo`.
+     * on diagnostics-only events. Held in a ref to retain the native subscription.
      */
     onLifecycle?: BrowserViewLifecycleEmitter;
     /**
@@ -202,6 +201,7 @@ export function DesktopWebViewEngine(props: Readonly<{
     const containerRef = React.useRef<React.ElementRef<typeof View> | null>(null);
     const desiredUrlRef = React.useRef<string | null>(desiredUrl);
     const lastRequestedUrlRef = React.useRef<string | null>(null);
+    const lastObservedUrlRef = React.useRef<string | null>(null);
     const pageInfoSequenceRef = React.useRef(0);
     const [unavailableReason, setUnavailableReason] = React.useState<string | null>(desiredUrl ? null : 'external_url_unavailable');
     // Last good URL captured when the render process crashed (macOS WebKit content-process
@@ -215,7 +215,7 @@ export function DesktopWebViewEngine(props: Readonly<{
     // Injected full in-page devtools (console/network/resources/storage) without CDP: the canonical
     // collector is injected as the Wry document-start init script at open (it re-runs natively on every
     // navigation), and posts its batched envelopes back over `window.ipc.postMessage`. The native host
-    // buffers them; we drain on each poll tick and parse against the identity captured at injection time
+    // buffers them; IPC arrival events trigger drains, parsed against the identity captured at injection time
     // (the runtime may rotate the live diagnostics bridge across navigations, so parsing against the
     // injected identity keeps drained events bound correctly).
     const propsDiagnosticsRef = React.useRef<BrowserDiagnosticsEngineBridgeConfig | null | undefined>(props.diagnostics);
@@ -229,6 +229,9 @@ export function DesktopWebViewEngine(props: Readonly<{
     // dropping those early events as `collector_mismatch`. Reset on a fresh open (no prior window).
     const priorInjectedDiagnosticsRef = React.useRef<BrowserDiagnosticsEngineBridgeConfig | null>(null);
     const automationMessageListenersRef = React.useRef(new Set<(raw: string) => void>());
+    const presentationActive = props.lifecycleState === undefined || props.lifecycleState === 'visible';
+    const presentationActiveRef = React.useRef(presentationActive);
+    presentationActiveRef.current = presentationActive;
 
     const buildDiagnosticsInitScript = React.useCallback((diagnostics: BrowserDiagnosticsEngineBridgeConfig): string => (
         buildInjectedBrowserDiagnosticsScript({
@@ -239,6 +242,9 @@ export function DesktopWebViewEngine(props: Readonly<{
             nonce: diagnostics.nonce,
             version: diagnostics.collectorVersion,
             desktopIpcDelivery: true,
+            // Every document starts paused; the native lifecycle receipt applies current
+            // presentation demand after injection, including navigation while retained hidden.
+            presentationActive: false,
             ownerConsoleValueCapture: diagnostics.consoleValueCapture === true,
             ownerDiagnosticsValueCapture: diagnostics.valueCapture === true,
         })
@@ -320,43 +326,45 @@ export function DesktopWebViewEngine(props: Readonly<{
     const markNativeViewUnavailableRef = React.useRef(markNativeViewUnavailable);
     markNativeViewUnavailableRef.current = markNativeViewUnavailable;
 
-    const publishPageInfo = React.useCallback(async () => {
+    const syncCollectorPresentation = React.useCallback(() => bridge.evalScript({
+        ...commandTarget,
+        script: `window.__happierBrowserDiagnostics?.setPresentationActive(${presentationActiveRef.current ? 'true' : 'false'})`,
+    }), [bridge, commandTarget]);
+    const publishNativePageInfo = React.useCallback((pageInfo: DesktopBrowserPageInfo, lifecycleChanged: boolean, navigationGeneration: number) => {
         const diagnostics = props.diagnostics;
-        const result = await bridge.readPageInfo(commandTarget);
-        if (!result.ok || !result.pageInfo) {
-            const reasonCode = firstDisabledReason(result);
-            if (reasonCode) {
-                emitDiagnosticsUnavailable(reasonCode);
-            }
-            return;
-        }
-        if (isPageInfoCrashed(result.pageInfo.loadingState)) {
-            setCrashedUrl(result.pageInfo.currentUrl ?? result.pageInfo.requestedUrl);
+        if (isPageInfoCrashed(pageInfo.loadingState)) {
+            setCrashedUrl(pageInfo.currentUrl ?? pageInfo.requestedUrl);
         } else {
             setCrashedUrl(null);
         }
+        const observedUrl = pageInfo.currentUrl ?? pageInfo.requestedUrl;
+        if (pageInfo.loadingState === 'loading' || pageInfo.loadingState === 'finished') {
+            lastObservedUrlRef.current = observedUrl;
+        }
         // B-2 cause-2: feed the native load lifecycle back to the control reducer (independent of
         // whether a diagnostics bridge is attached) so the view leaves `loading`.
-        const lifecycleSignal = desktopPageInfoLifecycleSignal(result.pageInfo);
-        if (lifecycleSignal) {
+        const lifecycleSignal = desktopPageInfoLifecycleSignal(pageInfo);
+        if (lifecycleSignal && lifecycleChanged) {
             onLifecycleRef.current?.(lifecycleSignal);
         }
         // Like native WebView callbacks, only successful/in-progress loads project navigation state:
         // a ready snapshot after loadFailed would resurrect a failed or crashed page in the reducer.
-        if (result.pageInfo.loadingState === 'loading' || result.pageInfo.loadingState === 'finished') {
+        if (pageInfo.loadingState === 'loading' || pageInfo.loadingState === 'finished') {
             onLifecycleRef.current?.({
                 kind: 'navigationStateChanged',
-                url: result.pageInfo.currentUrl ?? result.pageInfo.requestedUrl,
-                title: result.pageInfo.title,
-                loading: isPageInfoLoading(result.pageInfo.loadingState),
-                canGoBack: result.pageInfo.canGoBack,
-                canGoForward: result.pageInfo.canGoForward,
+                // Same-document URL/history changes retain the native capture generation.
+                navigationGeneration,
+                url: observedUrl,
+                title: pageInfo.title,
+                loading: isPageInfoLoading(pageInfo.loadingState),
+                canGoBack: pageInfo.canGoBack,
+                canGoForward: pageInfo.canGoForward,
             });
         }
-        if (!diagnostics) return;
+        if (!diagnostics || !presentationActiveRef.current) return;
         if (
-            result.pageInfo.browserSessionId !== diagnostics.browserSessionId
-            || result.pageInfo.viewId !== diagnostics.viewId
+            pageInfo.browserSessionId !== diagnostics.browserSessionId
+            || pageInfo.viewId !== diagnostics.viewId
         ) {
             emitDiagnosticsUnavailable('desktop_webview_native_contract_invalid');
             return;
@@ -374,14 +382,14 @@ export function DesktopWebViewEngine(props: Readonly<{
                 viewId: diagnostics.viewId,
                 navigationGeneration: diagnostics.navigationGeneration,
                 capturedAtMs: props.nowMs?.() ?? Date.now(),
-                url: result.pageInfo.currentUrl ?? result.pageInfo.requestedUrl,
-                loading: isPageInfoLoading(result.pageInfo.loadingState),
-                title: result.pageInfo.title,
+                url: observedUrl,
+                loading: isPageInfoLoading(pageInfo.loadingState),
+                title: pageInfo.title,
             }),
         ]);
     }, [bridge, commandTarget, emitDiagnosticsUnavailable, props.diagnostics, props.nowMs]);
-    const publishPageInfoRef = React.useRef(publishPageInfo);
-    publishPageInfoRef.current = publishPageInfo;
+    const publishNativePageInfoRef = React.useRef(publishNativePageInfo);
+    publishNativePageInfoRef.current = publishNativePageInfo;
 
     React.useEffect(() => {
         const openUrl = desiredUrlRef.current;
@@ -392,6 +400,7 @@ export function DesktopWebViewEngine(props: Readonly<{
 
         let disposed = false;
         lastRequestedUrlRef.current = openUrl;
+        lastObservedUrlRef.current = null;
         setUnavailableReason(null);
 
         // Inject the canonical diagnostics collector at document-start (when diagnostics are enabled),
@@ -404,19 +413,31 @@ export function DesktopWebViewEngine(props: Readonly<{
         lastInjectedCollectorIdRef.current = diagnostics?.collectorId ?? null;
         const diagnosticsInitScript = diagnostics ? buildDiagnosticsInitScript(diagnostics) : undefined;
 
-        bridge.openView({
-            ...commandTarget,
-            profileId: props.profileId,
-            url: openUrl,
-            ...(diagnosticsInitScript ? { diagnosticsInitScript } : {}),
-        }).then((result) => {
+        let unsubscribe: (() => void) | undefined;
+        bridge.subscribe(commandTarget, (event) => {
             if (disposed) return;
+            if (event.kind === 'diagnosticsAvailable') void drainInjectedDiagnosticsRef.current();
+            else {
+                publishNativePageInfoRef.current(event.pageInfo, event.lifecycleChanged, event.navigationGeneration);
+                if (event.lifecycleChanged && injectedDiagnosticsRef.current) void syncCollectorPresentation();
+            }
+        }).then((stop) => {
+            if (disposed) { stop(); return null; }
+            unsubscribe = stop;
+            return bridge.openView({
+                ...commandTarget,
+                profileId: props.profileId,
+                url: openUrl,
+                ...(diagnosticsInitScript ? { diagnosticsInitScript } : {}),
+            });
+        }).then((result) => {
+            if (disposed || !result) return;
             if (!result.ok) {
                 markNativeViewUnavailableRef.current(firstDisabledReason(result) ?? 'desktop_webview_native_command_unavailable');
                 return;
             }
-            void publishPageInfoRef.current();
             void drainInjectedDiagnosticsRef.current();
+            if (diagnostics) void syncCollectorPresentation();
         }).catch(() => {
             if (!disposed) {
                 markNativeViewUnavailableRef.current('desktop_webview_native_command_unavailable');
@@ -425,13 +446,15 @@ export function DesktopWebViewEngine(props: Readonly<{
 
         return () => {
             disposed = true;
+            unsubscribe?.();
             lastRequestedUrlRef.current = null;
+            lastObservedUrlRef.current = null;
             // The native view lifetime (hide vs close) is owned by `useDesktopWebViewSurfaceSync`:
             // a hidden/parked lifecycle keeps it mounted and a genuine teardown closes it. The open
             // effect therefore no longer unconditionally closes on every unmount/re-open. Re-open
             // (a viewKey change) is handled natively — `open_view` replaces and drops the old view.
         };
-    }, [bridge, buildDiagnosticsInitScript, commandTarget, props.profileId, viewKey]);
+    }, [bridge, buildDiagnosticsInitScript, commandTarget, props.profileId, syncCollectorPresentation, viewKey]);
 
     React.useEffect(() => {
         // Harden (§15 Δ2): only skip when the URL is genuinely unchanged. The previous
@@ -442,6 +465,10 @@ export function DesktopWebViewEngine(props: Readonly<{
             return;
         }
         lastRequestedUrlRef.current = desiredUrl;
+        // Link/history callbacks already committed this location in the native
+        // view. Its projection is not another navigation: reloading it would
+        // discard Forward history. Explicit reload still uses its command owner.
+        if (lastObservedUrlRef.current === desiredUrl) return;
         bridge.navigateView({
             ...commandTarget,
             url: desiredUrl,
@@ -450,36 +477,15 @@ export function DesktopWebViewEngine(props: Readonly<{
                 markNativeViewUnavailable(firstDisabledReason(result) ?? 'desktop_webview_native_command_unavailable');
                 return;
             }
-            void publishPageInfo();
             void drainInjectedDiagnosticsRef.current();
         }).catch(() => {
             markNativeViewUnavailable('desktop_webview_native_command_unavailable');
         });
-    }, [bridge, commandTarget, desiredUrl, markNativeViewUnavailable, publishPageInfo]);
+    }, [bridge, commandTarget, desiredUrl, markNativeViewUnavailable]);
 
-    // B-2 cause-2 completion: the native page-info poll drives the control-reducer lifecycle
-    // (loading → ready/failed), the in-place URL/title sync after an in-webview link navigation,
-    // render-crash detection, and native-devtools availability — none of which depend on a
-    // diagnostics bridge. Gating this poll on `props.diagnostics` (its original diagnostics-only
-    // purpose) left a desktop view with diagnostics unavailable stuck on a permanent spinner: the
-    // single post-open `publishPageInfo` reports `loading`, and with no further poll the view never
-    // reaches `ready` (so the toolbar reload stays a disabled "stop" and link clicks never settle).
-    // Poll whenever the native view is active; `publishPageInfo` already self-skips diagnostics
-    // emission when no bridge is attached.
-    const pageInfoPollActive = !!desiredUrl && !unavailableReason;
     React.useEffect(() => {
-        const intervalMs = props.pageInfoPollIntervalMs === undefined ? 2_000 : props.pageInfoPollIntervalMs;
-        if (!pageInfoPollActive || !intervalMs || intervalMs <= 0) {
-            return undefined;
-        }
-        const timer = setInterval(() => {
-            void publishPageInfo();
-            void drainInjectedDiagnosticsRef.current();
-        }, intervalMs);
-        return () => {
-            clearInterval(timer);
-        };
-    }, [pageInfoPollActive, props.pageInfoPollIntervalMs, publishPageInfo]);
+        if (injectedDiagnosticsRef.current && desiredUrl && !unavailableReason) void syncCollectorPresentation();
+    }, [desiredUrl, presentationActive, syncCollectorPresentation, unavailableReason]);
 
     // Keep the in-page collector synced to the live diagnostics identity. The first injection is the
     // document-start init script set at open; a later identity rotation (a navigation bumps the
@@ -498,8 +504,8 @@ export function DesktopWebViewEngine(props: Readonly<{
         priorInjectedDiagnosticsRef.current = injectedDiagnosticsRef.current;
         injectedDiagnosticsRef.current = diagnostics;
         lastInjectedCollectorIdRef.current = diagnostics.collectorId;
-        void bridge.evalScript({ ...commandTarget, script: buildDiagnosticsInitScript(diagnostics) });
-    }, [bridge, buildDiagnosticsInitScript, commandTarget, desiredUrl, props.diagnostics, unavailableReason]);
+        void bridge.evalScript({ ...commandTarget, script: buildDiagnosticsInitScript(diagnostics) }).then(() => syncCollectorPresentation());
+    }, [bridge, buildDiagnosticsInitScript, commandTarget, desiredUrl, props.diagnostics, syncCollectorPresentation, unavailableReason]);
 
     const automationRef = React.useRef(props.automation);
     automationRef.current = props.automation;
@@ -676,7 +682,7 @@ export function DesktopWebViewEngine(props: Readonly<{
     const requestBoundsSync = surfaceSync.requestSync;
 
     // Reload-after-crash: re-issue navigation to the last good URL through the same native command
-    // the engine already uses, clear the crashed surface optimistically, and re-poll page-info so a
+    // the engine already uses, clear the crashed surface optimistically, and await native facts so a
     // successful reload restores the live view. No eval/injection — this is the trusted nav seam.
     const reloadAfterCrash = React.useCallback(() => {
         const reloadUrl = crashedUrl ?? desiredUrlRef.current;
@@ -691,11 +697,10 @@ export function DesktopWebViewEngine(props: Readonly<{
                 markNativeViewUnavailable(firstDisabledReason(result) ?? 'desktop_webview_native_command_unavailable');
                 return;
             }
-            void publishPageInfo();
         }).catch(() => {
             markNativeViewUnavailable('desktop_webview_native_command_unavailable');
         });
-    }, [bridge, commandTarget, crashedUrl, markNativeViewUnavailable, publishPageInfo]);
+    }, [bridge, commandTarget, crashedUrl, markNativeViewUnavailable]);
 
     if (!desiredUrl || unavailableReason) {
         return (

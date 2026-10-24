@@ -345,6 +345,8 @@ impl FakeWebViewLog {
 
 #[derive(Clone)]
 struct FakeWebViewHost {
+    history_error: Arc<Mutex<Option<String>>>,
+    current_url_override: Arc<Mutex<Option<String>>>,
     log: FakeWebViewLog,
     devtools_supported: bool,
     capture_result: Arc<Mutex<Result<DesktopBrowserCapturedSnapshot, String>>>,
@@ -363,6 +365,8 @@ struct FakeWebViewHost {
 impl FakeWebViewHost {
     fn new(devtools_supported: bool) -> Self {
         Self {
+            history_error: Arc::new(Mutex::new(None)),
+            current_url_override: Arc::new(Mutex::new(None)),
             log: FakeWebViewLog::new(),
             devtools_supported,
             capture_result: Arc::new(Mutex::new(Ok(DesktopBrowserCapturedSnapshot {
@@ -472,6 +476,8 @@ impl DesktopBrowserWebViewHost for FakeWebViewHost {
         page_info.record_title(format!("Loaded {url}"));
         page_info.record_page_load(DesktopBrowserPageLoadEvent::Finished, url.to_string());
         Ok(Box::new(FakeWebViewHandle {
+            history_error: self.history_error.clone(),
+            current_url_override: self.current_url_override.clone(),
             view_id: view_id.to_string(),
             history: std::cell::RefCell::new((vec![url.to_string()], 0)),
             log: self.log.clone(),
@@ -492,6 +498,8 @@ impl DesktopBrowserWebViewHost for FakeWebViewHost {
 }
 
 struct FakeWebViewHandle {
+    history_error: Arc<Mutex<Option<String>>>,
+    current_url_override: Arc<Mutex<Option<String>>>,
     view_id: String,
     // Native engine boundary: models the browser-owned history, never a host URL projection.
     history: std::cell::RefCell<(Vec<String>, usize)>,
@@ -507,7 +515,13 @@ struct FakeWebViewHandle {
 }
 
 impl DesktopBrowserWebViewHandle for FakeWebViewHandle {
+    fn current_url(&self) -> Result<Option<String>, String> {
+        Ok(self.current_url_override.lock().unwrap().clone())
+    }
     fn navigation_state(&self) -> Result<(bool, bool), String> {
+        if let Some(error) = self.history_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         let history = self.history.borrow();
         Ok((history.1 > 0, history.1 + 1 < history.0.len()))
     }
@@ -1386,6 +1400,84 @@ fn native_state_tracks_page_info_from_native_callbacks() {
     assert_eq!(page.loading_state, DesktopBrowserViewLoadingState::Finished);
     assert!(page.last_error.is_none());
     assert!(page.last_rejected_navigation.is_none());
+}
+
+#[test]
+fn native_page_info_publishes_only_changed_facts() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let host = FakeWebViewHost::new(false);
+    let state = DesktopBrowserState::for_test(
+        available_test_availability(),
+        temp_dir.path().to_path_buf(),
+        Box::new(host.clone()),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = events.clone();
+    state.inner.lock().unwrap().event_senders.insert(
+        super::view_key("browser_session_1", "view_1"),
+        super::DesktopBrowserEventSender(Arc::new(move |event| {
+            observed.lock().unwrap().push(event);
+        })),
+    );
+    assert!(
+        state
+            .open_view(open_request_with_diagnostics(
+                "view_1",
+                "profile_1",
+                "https://example.test",
+                "true;"
+            ))
+            .ok
+    );
+    let sink = host
+        .page_info_by_view_id
+        .lock()
+        .unwrap()
+        .get("view_1")
+        .unwrap()
+        .clone();
+    events.lock().unwrap().clear();
+    for _ in 0..30 {
+        sink.record_title("Loaded https://example.test".to_string());
+        sink.record_page_load(
+            DesktopBrowserPageLoadEvent::Finished,
+            "https://example.test".to_string(),
+        );
+    }
+    assert_eq!(events.lock().unwrap().len(), 0);
+    *host.current_url_override.lock().unwrap() =
+        Some("https://example.test/same-document".to_string());
+    sink.record_title("Changed title".to_string());
+    assert_eq!(events.lock().unwrap().len(), 1);
+    let publication = serde_json::to_value(&events.lock().unwrap()[0]).unwrap();
+    assert_eq!(publication["kind"], "pageInfoChanged");
+    assert_eq!(publication["lifecycleChanged"], false);
+    assert_eq!(publication["navigationGeneration"], 0);
+    assert_eq!(publication["pageInfo"]["title"], "Changed title");
+    events.lock().unwrap().clear();
+    host.diagnostics_by_view_id
+        .lock()
+        .unwrap()
+        .get("view_1")
+        .unwrap()
+        .record_message("command-reply".to_string());
+    let publication = serde_json::to_value(&events.lock().unwrap()[0]).unwrap();
+    assert_eq!(publication["kind"], "diagnosticsAvailable");
+    assert_eq!(publication["viewId"], "view_1");
+    assert_eq!(
+        state.drain_diagnostics(view_request("view_1")).messages,
+        vec!["command-reply"]
+    );
+    events.lock().unwrap().clear();
+    *host.history_error.lock().unwrap() = Some("render process terminated".to_string());
+    *host.current_url_override.lock().unwrap() = None;
+    sink.record_crash();
+    let publication = serde_json::to_value(&events.lock().unwrap()[0]).unwrap();
+    assert_eq!(publication["pageInfo"]["loadingState"], "crashed");
+    assert_eq!(
+        publication["pageInfo"]["currentUrl"],
+        "https://example.test/same-document"
+    );
 }
 
 #[test]

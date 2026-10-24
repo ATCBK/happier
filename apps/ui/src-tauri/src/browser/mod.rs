@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 use std::sync::{Arc as StdArc, Mutex, Weak};
-use tauri::{Manager, Runtime, State, Window};
+use tauri::{Emitter, Manager, Runtime, State, Window};
 use types::{
     DesktopBrowserAvailability, DesktopBrowserBoundsPayload, DesktopBrowserCaptureClipRect,
     DesktopBrowserCaptureErrorCode, DesktopBrowserCaptureRecordingFrameRequest,
@@ -57,6 +57,9 @@ type PendingNativeCapture =
 pub(crate) trait DesktopBrowserWebViewHandle {
     fn load_url(&self, url: &str) -> Result<(), String>;
     fn navigation_state(&self) -> Result<(bool, bool), String>;
+    fn current_url(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     fn go_back(&self) -> Result<bool, String>;
     fn go_forward(&self) -> Result<bool, String>;
     fn set_bounds(
@@ -100,7 +103,7 @@ pub(crate) trait DesktopBrowserWebViewHost: Send + Sync {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct DesktopBrowserViewKey {
+pub(crate) struct DesktopBrowserViewKey {
     browser_session_id: String,
     view_id: String,
 }
@@ -118,6 +121,35 @@ struct DesktopBrowserViewState {
     loading_state: DesktopBrowserViewLoadingState,
     last_error: Option<DesktopBrowserPageNavigationIssue>,
     last_rejected_navigation: Option<DesktopBrowserPageNavigationIssue>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum DesktopBrowserViewEvent {
+    PageInfoChanged {
+        browser_session_id: String,
+        view_id: String,
+        page_info: DesktopBrowserPageInfo,
+        lifecycle_changed: bool,
+        navigation_generation: u64,
+    },
+    DiagnosticsAvailable {
+        browser_session_id: String,
+        view_id: String,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct DesktopBrowserEventSender(StdArc<dyn Fn(DesktopBrowserViewEvent) + Send + Sync>);
+
+impl std::fmt::Debug for DesktopBrowserEventSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DesktopBrowserEventSender")
+    }
 }
 
 #[derive(Debug)]
@@ -138,6 +170,8 @@ struct DesktopBrowserStateInner {
     views: HashMap<DesktopBrowserViewKey, DesktopBrowserViewState>,
     profiles: HashMap<String, DesktopBrowserProfileState>,
     diagnostics: HashMap<DesktopBrowserViewKey, DesktopBrowserDiagnosticsBuffer>,
+    event_senders: HashMap<DesktopBrowserViewKey, DesktopBrowserEventSender>,
+    published_page_info: HashMap<DesktopBrowserViewKey, (DesktopBrowserPageInfo, u64)>,
 }
 
 pub struct DesktopBrowserState {
@@ -373,8 +407,18 @@ impl DesktopBrowserState {
             }
         }
         let page_info = DesktopBrowserPageInfoSink::new(key.clone(), self.inner.clone());
-        let diagnostics =
+        let mut diagnostics =
             DesktopBrowserDiagnosticsSink::new(diagnostics_init_script, diagnostics_buffer);
+        if let DesktopBrowserDiagnosticsSink::Enabled { notifier, .. } = &mut diagnostics {
+            *notifier = self
+                .inner
+                .lock()
+                .expect("browser state lock poisoned")
+                .event_senders
+                .get(&key)
+                .cloned()
+                .map(|sender| (key.clone(), sender));
+        }
         let handle = match host.create_webview(
             &request.view_id,
             &profile_dir,
@@ -392,7 +436,8 @@ impl DesktopBrowserState {
             }
         };
 
-        replace_native_handle(key, handle);
+        replace_native_handle(key.clone(), handle);
+        publish_native_page_info(&key, &self.inner);
 
         self.success_result()
     }
@@ -760,32 +805,10 @@ impl DesktopBrowserState {
         }
 
         let key = view_key(&request.browser_session_id, &request.view_id);
-        // Read the native history authority on demand, including same-document history changes.
-        let (can_go_back, can_go_forward) =
-            match with_native_handle(&key, |handle| handle.navigation_state()) {
-                Ok(state) => state,
-                Err(_) => return self.unavailable_page_info_result(),
-            };
-        let inner = self.inner.lock().expect("browser state lock poisoned");
-        let Some(view) = inner.views.get(&key) else {
-            return self.unavailable_page_info_result();
-        };
-
-        DesktopBrowserPageInfoResult::success(
-            self.availability(),
-            DesktopBrowserPageInfo {
-                browser_session_id: key.browser_session_id,
-                view_id: key.view_id,
-                requested_url: view.requested_url.clone(),
-                current_url: view.current_url.clone(),
-                title: view.title.clone(),
-                loading_state: view.loading_state,
-                can_go_back,
-                can_go_forward,
-                last_error: view.last_error.clone(),
-                last_rejected_navigation: view.last_rejected_navigation.clone(),
-            },
-        )
+        match read_native_page_info(&key, &self.inner) {
+            Ok((info, _)) => DesktopBrowserPageInfoResult::success(self.availability(), info),
+            Err(_) => self.unavailable_page_info_result(),
+        }
     }
 
     fn drain_view_diagnostics(
@@ -883,6 +906,7 @@ impl DesktopBrowserState {
         if remove_view_from_state(&mut inner, &key).is_none() {
             return self.unavailable_result();
         }
+        inner.event_senders.remove(&key);
         remove_native_handle(&key);
         self.success_result()
     }
@@ -934,11 +958,33 @@ pub fn desktop_browser_open_view<R: Runtime>(
     state: State<'_, DesktopBrowserState>,
     request: DesktopBrowserOpenViewRequest,
 ) -> DesktopBrowserCommandResult {
-    let host = TauriWryWebViewHost::new(window);
+    let host = TauriWryWebViewHost::new(window.clone());
     let Ok(profile_root) = resolve_profile_root(&host.window) else {
         return state.unavailable_result();
     };
-    state.open_view_with_profile_root(request, &host, profile_root)
+    let key = view_key(&request.browser_session_id, &request.view_id);
+    let event_window = window.clone();
+    state
+        .inner
+        .lock()
+        .expect("browser state lock poisoned")
+        .event_senders
+        .insert(
+            key.clone(),
+            DesktopBrowserEventSender(StdArc::new(move |event| {
+                let _ = event_window.emit("desktop-browser-view", event);
+            })),
+        );
+    let result = state.open_view_with_profile_root(request, &host, profile_root);
+    if !result.ok {
+        state
+            .inner
+            .lock()
+            .expect("browser state lock poisoned")
+            .event_senders
+            .remove(&key);
+    }
+    result
 }
 
 #[tauri::command]
@@ -1085,6 +1131,7 @@ fn remove_view_from_state(
 ) -> Option<DesktopBrowserViewState> {
     let removed = inner.views.remove(key)?;
     inner.diagnostics.remove(key);
+    inner.published_page_info.remove(key);
     let should_remove_profile = inner
         .profiles
         .get_mut(&removed.profile_id)
@@ -1384,10 +1431,13 @@ impl DesktopBrowserPageInfoSink {
     }
 
     fn with_view(&self, update: impl FnOnce(&mut DesktopBrowserViewState)) {
-        let mut inner = self.inner.lock().expect("browser state lock poisoned");
-        if let Some(view) = inner.views.get_mut(&self.key) {
-            update(view);
+        {
+            let mut inner = self.inner.lock().expect("browser state lock poisoned");
+            if let Some(view) = inner.views.get_mut(&self.key) {
+                update(view);
+            }
         }
+        publish_native_page_info(&self.key, &self.inner);
     }
 }
 
@@ -1404,6 +1454,7 @@ pub(crate) enum DesktopBrowserDiagnosticsSink {
     Enabled {
         init_script: String,
         buffer: DesktopBrowserDiagnosticsBuffer,
+        notifier: Option<(DesktopBrowserViewKey, DesktopBrowserEventSender)>,
     },
 }
 
@@ -1413,6 +1464,7 @@ impl DesktopBrowserDiagnosticsSink {
             (Some(init_script), Some(buffer)) => Self::Enabled {
                 init_script,
                 buffer,
+                notifier: None,
             },
             _ => Self::Disabled,
         }
@@ -1428,7 +1480,10 @@ impl DesktopBrowserDiagnosticsSink {
     /// - `DESKTOP_BROWSER_DIAGNOSTICS_BUFFER_CAP`: entry-count ceiling.
     /// - `DESKTOP_BROWSER_DIAGNOSTICS_BYTES_CAP`: aggregate byte budget across all buffered entries.
     fn record_message(&self, message: String) {
-        let Self::Enabled { buffer, .. } = self else {
+        let Self::Enabled {
+            buffer, notifier, ..
+        } = self
+        else {
             return;
         };
         if message.len() > DESKTOP_BROWSER_DIAGNOSTICS_MAX_MESSAGE_BYTES {
@@ -1446,6 +1501,106 @@ impl DesktopBrowserDiagnosticsSink {
                 None => break,
             }
         }
+        drop(entries);
+        if let Some((key, notifier)) = notifier {
+            (notifier.0)(DesktopBrowserViewEvent::DiagnosticsAvailable {
+                browser_session_id: key.browser_session_id.clone(),
+                view_id: key.view_id.clone(),
+            });
+        }
+    }
+}
+
+/// Commands and notifications read the same native URL/history and callback-owned lifecycle facts.
+fn read_native_page_info(
+    key: &DesktopBrowserViewKey,
+    shared: &Mutex<DesktopBrowserStateInner>,
+) -> Result<(DesktopBrowserPageInfo, u64), String> {
+    let (history, native_url) = with_native_handle(key, |handle| {
+        Ok((
+            handle.navigation_state(),
+            handle.current_url().ok().flatten(),
+        ))
+    })?;
+    let inner = shared.lock().expect("browser state lock poisoned");
+    let view = inner
+        .views
+        .get(key)
+        .ok_or("desktop browser native view is missing")?;
+    // A dead render process may no longer answer history queries. Its native crash
+    // callback remains authoritative; retain the last observed history on that terminal fact.
+    let (can_go_back, can_go_forward) = match history {
+        Ok(history) => history,
+        Err(_) if view.loading_state == DesktopBrowserViewLoadingState::Crashed => inner
+            .published_page_info
+            .get(key)
+            .map(|(info, _)| (info.can_go_back, info.can_go_forward))
+            .unwrap_or((false, false)),
+        Err(error) => return Err(error),
+    };
+    Ok((
+        DesktopBrowserPageInfo {
+            browser_session_id: key.browser_session_id.clone(),
+            view_id: key.view_id.clone(),
+            requested_url: view.requested_url.clone(),
+            current_url: native_url
+                .filter(|url| is_allowed_external_url(url))
+                .or_else(|| {
+                    inner
+                        .published_page_info
+                        .get(key)
+                        .and_then(|(info, _)| info.current_url.clone())
+                })
+                .or_else(|| view.current_url.clone()),
+            title: view.title.clone(),
+            loading_state: view.loading_state,
+            can_go_back,
+            can_go_forward,
+            last_error: view.last_error.clone(),
+            last_rejected_navigation: view.last_rejected_navigation.clone(),
+        },
+        view.navigation_generation,
+    ))
+}
+
+/// One producer owns publication equality; unchanged callbacks never cross the bridge.
+fn publish_native_page_info(key: &DesktopBrowserViewKey, shared: &Mutex<DesktopBrowserStateInner>) {
+    // Creation callbacks can precede handle installation; open publishes after installing it.
+    let Ok(facts) = read_native_page_info(key, shared) else {
+        return;
+    };
+    let publication = {
+        let mut inner = shared.lock().expect("browser state lock poisoned");
+        let (info, navigation_generation) = &facts;
+        let previous = inner.published_page_info.get(key);
+        if previous == Some(&facts) {
+            return;
+        }
+        let lifecycle_changed = previous.map_or(true, |(old, generation)| {
+            generation != navigation_generation
+                || old.loading_state != info.loading_state
+                || (info.loading_state == DesktopBrowserViewLoadingState::Loading
+                    && old.requested_url != info.requested_url)
+                || old.last_error != info.last_error
+        });
+        let info = info.clone();
+        let navigation_generation = *navigation_generation;
+        inner.published_page_info.insert(key.clone(), facts);
+        inner.event_senders.get(key).cloned().map(|sender| {
+            (
+                sender,
+                DesktopBrowserViewEvent::PageInfoChanged {
+                    browser_session_id: key.browser_session_id.clone(),
+                    view_id: key.view_id.clone(),
+                    page_info: info,
+                    lifecycle_changed,
+                    navigation_generation,
+                },
+            )
+        })
+    };
+    if let Some((sender, event)) = publication {
+        (sender.0)(event);
     }
 }
 
@@ -1470,6 +1625,13 @@ fn begin_document_navigation(view: &mut DesktopBrowserViewState, url: &str) {
 }
 
 fn finish_document_navigation(view: &mut DesktopBrowserViewState, url: &str) {
+    // Repeated Finished observations preserve this document's capture generation.
+    if view.loading_state == DesktopBrowserViewLoadingState::Finished
+        && view.current_url.as_deref() == Some(url)
+        && view.pending_generation_url.is_none()
+    {
+        return;
+    }
     if is_initial_document_load(view, url) {
         return;
     }
@@ -1641,7 +1803,8 @@ impl WryDesktopBrowserView {
         let title_info = page_info.clone();
         #[cfg(target_os = "macos")]
         let crash_info = page_info.clone();
-        let load_info = page_info;
+        let load_info = page_info.clone();
+        let history_info = page_info;
         let mut builder = wry::WebViewBuilder::new_with_web_context(&mut context)
             .with_id(view_id)
             .with_url(url)
@@ -1677,24 +1840,31 @@ impl WryDesktopBrowserView {
         // at document-start on every navigation and buffer the page's `window.ipc.postMessage(...)`
         // batch envelopes for `desktop_browser_drain_diagnostics`. The IPC handler clones the shared
         // buffer Arc (mirroring how the page-info sink clones the shared state Arc) and forwards the
-        // raw request body string verbatim — the native side never parses it. Without a diagnostics
-        // script we attach neither, preserving parity with the non-diagnostics path.
+        // raw diagnostic body verbatim. The history notification is separate and grants no
+        // diagnostics collection or evaluation capability when diagnostics are disabled.
         if let DesktopBrowserDiagnosticsSink::Enabled { init_script, .. } = &diagnostics {
             let init_script = init_script.clone();
-            let ipc_sink = diagnostics.clone();
-            builder = builder
-                .with_initialization_script(init_script)
-                .with_ipc_handler(move |request| {
-                    ipc_sink.record_message(request.into_body());
-                });
+            builder = builder.with_initialization_script(init_script);
         }
+        // The page reports only that history changed. URL and Back/Forward facts are
+        // read from Wry, never trusted from a page-authored envelope.
+        builder = builder
+            .with_initialization_script(include_str!("history_notifications.js"))
+            .with_ipc_handler(move |request| {
+                let message = request.into_body();
+                if message == "happier:history-changed" {
+                    publish_native_page_info(&history_info.key, &history_info.inner);
+                } else {
+                    diagnostics.record_message(message);
+                }
+            });
 
         #[cfg(target_os = "macos")]
         {
             use wry::WebViewBuilderExtDarwin;
             // Native render-process crash recovery: WebKit's content-process termination is the only
             // crash signal the vendored Wry exposes (macOS/iOS only). On terminate we record a
-            // recoverable `Crashed` state on the same page-info sink the engine already polls, so a
+            // recoverable `Crashed` state on the same page-info publisher, so a
             // single tab crash surfaces a reloadable surface instead of wedging on a dead page. This
             // is a trusted native callback — no IPC, script, or automation is granted to the page.
             builder = builder
@@ -1716,6 +1886,12 @@ impl WryDesktopBrowserView {
 }
 
 impl DesktopBrowserWebViewHandle for WryDesktopBrowserView {
+    fn current_url(&self) -> Result<Option<String>, String> {
+        self.webview
+            .url()
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
     fn navigation_state(&self) -> Result<(bool, bool), String> {
         Ok((
             self.webview

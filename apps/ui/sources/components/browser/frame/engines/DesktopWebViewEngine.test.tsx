@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readFileSync } from 'node:fs';
 import { act } from 'react-test-renderer';
 import { JSDOM } from 'jsdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,10 +13,14 @@ import { createBrowserAutomationControlService } from '@/sync/domains/browser/au
 import type {
     DesktopBrowserCommandResult,
     DesktopBrowserPageInfoResult,
+    DesktopBrowserPageInfo,
+    DesktopBrowserViewEvent,
 } from '@/sync/domains/browser/adapters/desktopWebViewBridge';
 
 import { DesktopWebViewEngine, type DesktopWebViewEngineBridge } from './DesktopWebViewEngine';
-import { LocalPreviewTarget } from '../../adapters/LocalPreviewTarget.web';
+import { buildInjectedBrowserDiagnosticsScript } from '@/components/browser/adapters/diagnostics';
+import { applyBrowserControlEvent, createBrowserControlState } from '@/sync/domains/browser/control/reducer';
+import { browserViewLifecycleEvent, type BrowserViewLifecycleSignal } from '@/sync/domains/browser/control/lifecycle';
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
@@ -84,6 +89,7 @@ function createExternalDesktopView(overrides: Partial<BrowserControlViewState> =
 }
 
 function createBridge() {
+    const listeners = new Set<(event: DesktopBrowserViewEvent) => void>();
     const commandResult = { ok: true, availability: availableDesktopWebView } satisfies DesktopBrowserCommandResult;
     const pageInfoResult = {
         ok: true,
@@ -99,18 +105,35 @@ function createBridge() {
             canGoForward: false,
         },
     } satisfies DesktopBrowserPageInfoResult;
+    const readPageInfo = vi.fn<() => Promise<DesktopBrowserPageInfoResult>>(async () => pageInfoResult);
+    const publishPageInfo = async () => {
+        const result = await readPageInfo();
+        if (result.ok && result.pageInfo) for (const listener of listeners) listener({ kind: 'pageInfoChanged', pageInfo: result.pageInfo, lifecycleChanged: true, navigationGeneration: 0 });
+    };
     return {
-        openView: vi.fn<DesktopWebViewEngineBridge['openView']>(async () => commandResult),
-        navigateView: vi.fn<DesktopWebViewEngineBridge['navigateView']>(async () => commandResult),
+        subscribe: vi.fn<DesktopWebViewEngineBridge['subscribe']>(async (_target, listener) => {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+        }),
+        emitNativeEvent: (kind: 'pageInfoChanged' | 'diagnosticsAvailable', changes?: Partial<DesktopBrowserPageInfo>, lifecycleChanged = true, navigationGeneration = 0) => {
+            for (const listener of listeners) listener(kind === 'diagnosticsAvailable' ? { kind } : {
+                kind, pageInfo: { ...pageInfoResult.pageInfo, ...changes }, lifecycleChanged, navigationGeneration,
+            });
+        },
+        openView: vi.fn<DesktopWebViewEngineBridge['openView']>(async () => { await publishPageInfo(); return commandResult; }),
+        navigateView: vi.fn<DesktopWebViewEngineBridge['navigateView']>(async () => { await publishPageInfo(); return commandResult; }),
         setBounds: vi.fn<DesktopWebViewEngineBridge['setBounds']>(async () => commandResult),
         setPointerPassthrough: vi.fn<DesktopWebViewEngineBridge['setPointerPassthrough']>(async () => commandResult),
         closeView: vi.fn<DesktopWebViewEngineBridge['closeView']>(async () => commandResult),
         openDevtools: vi.fn<DesktopWebViewEngineBridge['openDevtools']>(async () => commandResult),
-        readPageInfo: vi.fn<DesktopWebViewEngineBridge['readPageInfo']>(async () => pageInfoResult),
+        readPageInfo,
         drainDiagnostics: vi.fn<DesktopWebViewEngineBridge['drainDiagnostics']>(async () => ({ ok: true, availability: availableDesktopWebView, messages: [] })),
         evalScript: vi.fn<DesktopWebViewEngineBridge['evalScript']>(async () => commandResult),
         dispatchNavigation: vi.fn<DesktopWebViewEngineBridge['dispatchNavigation']>(async () => commandResult),
-    } satisfies DesktopWebViewEngineBridge;
+    } satisfies DesktopWebViewEngineBridge & {
+        emitNativeEvent: (kind: 'pageInfoChanged' | 'diagnosticsAvailable', changes?: Partial<DesktopBrowserPageInfo>, lifecycleChanged?: boolean, navigationGeneration?: number) => void;
+        readPageInfo: typeof readPageInfo;
+    };
 }
 
 describe('DesktopWebViewEngine', () => {
@@ -118,23 +141,183 @@ describe('DesktopWebViewEngine', () => {
         vi.restoreAllMocks();
     });
 
-    it('opens and releases a local preview in the native child view rather than a host iframe', async () => {
+    it('preserves the native capture generation across same-document URL changes', async () => {
         const bridge = createBridge();
-        const view = createExternalDesktopView({
-            target: { kind: 'localServicePreview', targetId: 'preview-1', machineId: 'machine-1' },
-            adapterKind: 'localPreview', currentUrl: null,
+        const view = createExternalDesktopView();
+        bridge.readPageInfo.mockResolvedValue({ ok: true, availability: availableDesktopWebView, pageInfo: {
+            browserSessionId: view.browserSessionId, viewId: view.viewId, requestedUrl: view.currentUrl!, currentUrl: view.currentUrl!,
+            loadingState: 'finished', canGoBack: false, canGoForward: false,
+        } });
+        let state = { ...createBrowserControlState(), viewsById: { [view.viewId]: view } };
+        const onLifecycle = (signal: BrowserViewLifecycleSignal) => {
+            const event = browserViewLifecycleEvent(view, signal);
+            if (event) state = applyBrowserControlEvent(state, event);
+        };
+        const screen = await renderScreen(<DesktopWebViewEngine view={view} profileId="profile-1" testID="native-generation"
+            bridge={bridge} onLifecycle={onLifecycle} />);
+        await flushHookEffects();
+        const nativeFacts = { currentUrl: 'https://example.com/same-document' };
+        bridge.emitNativeEvent('pageInfoChanged', nativeFacts, false, 0);
+        await flushHookEffects();
+        expect(state.viewsById[view.viewId].currentUrl).toBe(nativeFacts.currentUrl);
+        expect(state.viewsById[view.viewId].navigationGeneration).toBe(0);
+        await screen.unmount();
+    });
+
+    it('notifies native history for URL changes and same-URL entries without polling', () => {
+        const page = new JSDOM('', { url: 'https://example.test', runScripts: 'outside-only' });
+        const messages: string[] = [];
+        Object.defineProperty(page.window, 'ipc', { value: { postMessage: (message: string) => messages.push(message) } });
+        page.window.eval(readFileSync(new URL('../../../../../src-tauri/src/browser/history_notifications.js', import.meta.url), 'utf8'));
+        page.window.history.pushState(null, '', '/next');
+        page.window.history.replaceState(null, '', '/next');
+        page.window.history.pushState(null, '', '/next');
+        expect(messages).toEqual(['happier:history-changed', 'happier:history-changed']);
+        page.window.dispatchEvent(new page.window.PopStateEvent('popstate'));
+        expect(messages).toHaveLength(3);
+        page.window.close();
+    });
+
+    it('resumes diagnostics on a socket created while the retained page was hidden', async () => {
+        const page = new JSDOM('', { runScripts: 'outside-only' });
+        const messages: string[] = [];
+        class NativeSocket extends page.window.EventTarget { send() {} }
+        Object.defineProperty(page.window, 'WebSocket', { value: NativeSocket, configurable: true });
+        Object.defineProperty(page.window, 'ipc', { value: { postMessage: (message: string) => messages.push(message) } });
+        vi.spyOn(page.window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+        page.window.eval(buildInjectedBrowserDiagnosticsScript({
+            browserSessionId: 'session', viewId: 'view', navigationGeneration: 0, collectorId: 'collector', nonce: 'nonce',
+            version: '1.0.0', desktopIpcDelivery: true, presentationActive: false,
+        }));
+        const socket = new page.window.WebSocket('wss://example.test');
+        socket.dispatchEvent(new page.window.MessageEvent('message', { data: 'hidden' }));
+        expect(messages).toHaveLength(0);
+        page.window.eval('window.__happierBrowserDiagnostics.setPresentationActive(true)');
+        messages.length = 0;
+        socket.dispatchEvent(new page.window.MessageEvent('message', { data: 'visible' }));
+        const events = messages.flatMap((raw) => JSON.parse(raw).events ?? []);
+        expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'network.websocketSummary' })]));
+        page.window.close();
+    });
+
+    it('projects title and same-document history facts without replaying the load lifecycle', async () => {
+        const bridge = createBridge();
+        const onLifecycle = vi.fn();
+        const screen = await renderScreen(<DesktopWebViewEngine view={createExternalDesktopView()} profileId="profile-1"
+            testID="native-facts" bridge={bridge} onLifecycle={onLifecycle} />);
+        await flushHookEffects();
+        onLifecycle.mockClear();
+        bridge.readPageInfo.mockClear();
+        bridge.emitNativeEvent('pageInfoChanged', { title: 'Renamed', canGoForward: true }, false);
+        await flushHookEffects();
+        expect(onLifecycle.mock.calls.map(([signal]) => signal.kind)).toEqual(['navigationStateChanged']);
+        expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ title: 'Renamed', canGoForward: true }));
+        expect(bridge.readPageInfo).not.toHaveBeenCalled();
+        await screen.unmount();
+        onLifecycle.mockClear();
+        bridge.emitNativeEvent('pageInfoChanged');
+        expect(onLifecycle).not.toHaveBeenCalled();
+    });
+
+    it.each(['visible', 'hidden', 'parked'] as const)('does no bridge reads or publications during a settled %s minute', async (lifecycleState) => {
+        vi.useFakeTimers();
+        try {
+            const bridge = createBridge();
+            const onLifecycle = vi.fn();
+            const onEvents = vi.fn();
+            const diagnostics = { browserSessionId: 'browser_session_1', viewId: 'view_external_1', navigationGeneration: 0,
+                collectorId: 'collector-1', nonce: 'nonce-1', collectorVersion: '1.0.0', onEvents };
+            const screen = await renderScreen(<DesktopWebViewEngine view={createExternalDesktopView()} profileId="profile-1"
+                testID="native-idle" bridge={bridge} lifecycleState={lifecycleState} diagnostics={diagnostics} onLifecycle={onLifecycle} />);
+            await flushHookEffects();
+            bridge.readPageInfo.mockClear();
+            bridge.drainDiagnostics.mockClear();
+            onLifecycle.mockClear();
+            onEvents.mockClear();
+            await flushHookEffects({ cycles: 1, turns: 3, advanceTimersMs: 60_000 });
+            expect(bridge.readPageInfo).toHaveBeenCalledTimes(0);
+            expect(bridge.drainDiagnostics).toHaveBeenCalledTimes(0);
+            expect(onLifecycle).toHaveBeenCalledTimes(0);
+            expect(onEvents).toHaveBeenCalledTimes(0);
+            await screen.unmount();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it.each([
+        { label: 'direct Session preview', url: 'http://127.0.0.1:48128/app', serviceTarget: undefined },
+        { label: 'relay external-plugin Service', url: 'https://preview.example.test/app?previewToken=fresh-admission', serviceTarget: {
+            kind: 'managed_service', managedServiceId: 'external-service-1', machineId: 'machine-1', cwd: '/workspace/external-service',
+            declaration: { workspaceRefId: 'workspace-1', selection: { kind: 'native', source: {
+                kind: 'pluginNative', adapter: { pluginId: 'external.preview.fixture', localId: 'services' }, file: 'external-services.json', target: 'web',
+            } } },
+        } },
+    ] as const)('opens and releases a local preview through its selected native child view: $label', async ({ url, serviceTarget }) => {
+        const [{ LocalPreviewTarget }, { createBrowserViewState, openBrowserTarget, resolveBrowserViewIdForTarget }, { BrowserLocalServicePreviewTargetV1Schema }] = await Promise.all([
+            import('../../adapters/LocalPreviewTarget.web'),
+            import('@/sync/domains/browser/store'),
+            import('@happier-dev/protocol'),
+        ]);
+        const bridge = createBridge();
+        const target = BrowserLocalServicePreviewTargetV1Schema.parse({
+            kind: 'localServicePreview', targetId: 'preview-1', machineId: 'machine-1', ...(serviceTarget ? { serviceTarget } : {}),
         });
+        const state = openBrowserTarget(createBrowserViewState(), target, {
+            platform: 'desktop', desktopWebViewAvailability: availableDesktopWebView,
+        });
+        const view = state.viewsById[resolveBrowserViewIdForTarget(target)];
+        bridge.readPageInfo.mockResolvedValue({
+            ok: true, availability: availableDesktopWebView,
+            pageInfo: {
+                browserSessionId: view.browserSessionId, viewId: view.viewId,
+                requestedUrl: url, currentUrl: url, title: 'Preview document', loadingState: 'finished',
+                canGoBack: true, canGoForward: false,
+            },
+        });
+        const onLifecycle = vi.fn();
         const screen = await renderScreen(<LocalPreviewTarget
-            title="Preview" url="http://127.0.0.1:48128/app" testID="preview"
-            view={view} profileId="profile-1" bridge={bridge}
+            title="Preview" url={url} testID="preview"
+            view={view} profileId="profile-1" bridge={bridge} onLifecycle={onLifecycle}
         />);
         await flushHookEffects();
-        expect(bridge.openView).toHaveBeenCalledWith(expect.objectContaining({ url: 'http://127.0.0.1:48128/app' }));
+        expect(bridge.openView).toHaveBeenCalledWith(expect.objectContaining({ url }));
+        expect(screen.findAllByType('iframe')).toHaveLength(0);
+        expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'navigationStateChanged', title: 'Preview document', canGoBack: true, canGoForward: false,
+        }));
         await screen.unmount();
         expect(bridge.closeView).toHaveBeenCalledWith(expect.objectContaining({ viewId: view.viewId }));
     });
 
-    it('executes agent commands in the mounted page and returns injected IPC results through its registered owner', async () => {
+    it('does not reload a native-observed page when its navigation state is projected back to the engine', async () => {
+        const bridge = createBridge();
+        const view = createExternalDesktopView();
+        const observedUrl = 'https://example.com/followed-link';
+        bridge.readPageInfo.mockResolvedValue({
+            ok: true, availability: availableDesktopWebView,
+            pageInfo: {
+                browserSessionId: view.browserSessionId, viewId: view.viewId,
+                requestedUrl: view.currentUrl!, currentUrl: observedUrl, title: 'Followed link', loadingState: 'finished',
+                canGoBack: true, canGoForward: true,
+            },
+        });
+        const onLifecycle = vi.fn();
+        const screen = await renderScreen(<DesktopWebViewEngine
+            view={view} profileId="profile-1" bridge={bridge} testID="native-page"
+            onLifecycle={onLifecycle}
+        />);
+        await flushHookEffects();
+        expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigationStateChanged', url: observedUrl }));
+        await screen.update(<DesktopWebViewEngine
+            view={{ ...view, currentUrl: observedUrl }} profileId="profile-1" bridge={bridge} testID="native-page"
+            onLifecycle={onLifecycle}
+        />);
+        await flushHookEffects();
+        // Re-loading this already committed URL would discard native Forward history.
+        expect(bridge.navigateView).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
+    it('executes agent commands through its retained owner while presentation collection is paused in a settled hidden view', async () => {
         // The native WebView is the boundary: execute its actual init/command scripts in a DOM,
         // and buffer window.ipc messages exactly as the Wry host does.
         const page = new JSDOM('<button id="go">Go</button>', { url: 'https://example.com/', runScripts: 'outside-only' });
@@ -178,7 +361,6 @@ describe('DesktopWebViewEngine', () => {
             diagnostics={diagnostics}
             automation={automation}
             bridge={bridge}
-            pageInfoPollIntervalMs={null}
         />);
         await flushHookEffects({ cycles: 3, turns: 3 });
         const request = {
@@ -196,7 +378,20 @@ describe('DesktopWebViewEngine', () => {
         try {
             const result = await controlService.executeAction(request);
             expect(result.status).toBe('succeeded');
-            expect(clicks).toBe(1);
+            await screen.update(<DesktopWebViewEngine
+                view={createExternalDesktopView()} profileId="profile_external_1" testID="desktop-webview"
+                diagnostics={diagnostics} automation={automation} bridge={bridge} lifecycleState="hidden"
+            />);
+            await flushHookEffects();
+            diagnostics.onEvents.mockClear();
+            page.window.console.info('presentation-only hidden diagnostic');
+            bridge.emitNativeEvent('diagnosticsAvailable');
+            await flushHookEffects();
+            expect(diagnostics.onEvents).toHaveBeenCalledTimes(0);
+            const hiddenResult = await controlService.executeAction({ ...request, automationRequestId: 'hidden-agent-click' });
+            expect(hiddenResult.status).toBe('succeeded');
+            expect(diagnostics.onEvents).toHaveBeenCalledTimes(0);
+            expect(clicks).toBe(2);
             const missing = await controlService.executeAction({
                 ...request,
                 automationRequestId: 'agent_missing',
@@ -221,11 +416,10 @@ describe('DesktopWebViewEngine', () => {
                 diagnostics={{ ...diagnostics }}
                 automation={{ ...automation, supportedActions: [...automation.supportedActions] }}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
             />);
             evaluationGate.resolve(undefined);
             expect(await pending).toMatchObject({ status: 'succeeded' });
-            expect(clicks).toBe(2);
+            expect(clicks).toBe(3);
             await screen.unmount();
             expect(await controlService.executeAction({ ...request, automationRequestId: 'agent_after_unmount' }))
                 .toMatchObject({ status: 'canceled', errorCode: 'owner_disconnected' });
@@ -270,10 +464,6 @@ describe('DesktopWebViewEngine', () => {
             diagnosticsInitScript: expect.stringContaining('desktop_collector_1'),
         }));
         expect(bridge.drainDiagnostics).toHaveBeenCalledWith({
-            browserSessionId: 'browser_session_1',
-            viewId: 'view_external_1',
-        });
-        expect(bridge.readPageInfo).toHaveBeenCalledWith({
             browserSessionId: 'browser_session_1',
             viewId: 'view_external_1',
         });
@@ -340,7 +530,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 dragSignal={{
                     isActive: () => dragActive,
                     subscribe: (cb) => {
@@ -378,7 +567,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 lifecycleState="visible"
                 nowMs={() => 5_000}
             />,
@@ -391,7 +579,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 lifecycleState="hidden"
                 nowMs={() => 5_000}
             />,
@@ -436,7 +623,6 @@ describe('DesktopWebViewEngine', () => {
                     onEvents: onDiagnosticsEvents,
                 }}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_000}
             />,
         );
@@ -444,14 +630,7 @@ describe('DesktopWebViewEngine', () => {
 
         expect(screen.findByTestId('desktop-webview')).not.toBeNull();
         expect(screen.findByTestId('desktop-webview-unavailable')).toBeNull();
-        expect(onDiagnosticsEvents).toHaveBeenCalledWith([
-            expect.objectContaining({
-                kind: 'diagnostics.unavailable',
-                data: expect.objectContaining({
-                    errorCode: 'desktop_webview_native_command_unavailable',
-                }),
-            }),
-        ]);
+        expect(onDiagnosticsEvents).not.toHaveBeenCalled();
     });
 
     it('injects location.reload() into the native view for a reload navigation command', async () => {
@@ -463,7 +642,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_000}
             />,
         );
@@ -476,7 +654,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={{ commandId: 'cmd_reload_1', kind: 'reload' }}
                 nowMs={() => 5_000}
             />,
@@ -500,7 +677,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={{ commandId: 'cmd_stop_1', kind: 'stop' }}
                 nowMs={() => 5_000}
             />,
@@ -556,7 +732,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 onLifecycle={onLifecycle}
                 nowMs={() => 5_000}
             />,
@@ -596,7 +771,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 onLifecycle={onLifecycle}
                 nowMs={() => 5_000}
             />,
@@ -613,6 +787,7 @@ describe('DesktopWebViewEngine', () => {
         });
         expect(onLifecycle).toHaveBeenCalledWith({
             kind: 'navigationStateChanged',
+            navigationGeneration: 0,
             url: 'https://example.com/dashboard?token=secret#panel',
             title: 'Example dashboard',
             loading: false,
@@ -633,7 +808,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 onLifecycle={onLifecycle}
                 nowMs={() => 5_000}
             />,
@@ -660,7 +834,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 onLifecycle={onLifecycle}
                 nowMs={() => 5_001}
             />,
@@ -680,16 +853,11 @@ describe('DesktopWebViewEngine', () => {
         await screen.unmount();
     });
 
-    it('B-2 cause-2: polls page-info to settle the load lifecycle even with no diagnostics bridge', async () => {
-        // Regression: the page-info poll (which transitions loading → ready, syncs the URL after an
-        // in-webview link click, and surfaces native devtools) was gated on a diagnostics bridge.
-        // A desktop view with diagnostics unavailable therefore opened in `loading` and never left it
-        // — the toolbar reload stayed a disabled "stop" and link clicks never settled. The poll must
-        // run whenever the native view is active, independent of diagnostics.
+    it('settles native lifecycle from changed producer facts even without diagnostics', async () => {
         vi.useFakeTimers();
         try {
             const bridge = createBridge();
-            // First (post-open) read still loading; the next poll reports the finished load.
+            // Initial read still loading; the producer subsequently reports the finished load.
             vi.mocked(bridge.readPageInfo).mockResolvedValueOnce({
                 ok: true,
                 availability: availableDesktopWebView,
@@ -713,7 +881,6 @@ describe('DesktopWebViewEngine', () => {
                     testID="desktop-webview"
                     bridge={bridge}
                     // No `diagnostics` prop: this is the diagnostics-unavailable desktop case.
-                    pageInfoPollIntervalMs={2_000}
                     onLifecycle={onLifecycle}
                     nowMs={() => 5_000}
                 />,
@@ -722,10 +889,9 @@ describe('DesktopWebViewEngine', () => {
             expect(onLifecycle).toHaveBeenCalledWith({ kind: 'loadStarted', url: 'https://example.com/' });
             onLifecycle.mockClear();
 
-            // Advance past the poll interval: the page-info poll must fire (diagnostics-independent)
-            // and move the reducer out of `loading`.
-            await flushHookEffects({ cycles: 1, turns: 3, advanceTimersMs: 2_000 });
-            expect(vi.mocked(bridge.readPageInfo).mock.calls.length).toBeGreaterThanOrEqual(2);
+            bridge.emitNativeEvent('pageInfoChanged');
+            await flushHookEffects();
+            expect(bridge.readPageInfo).toHaveBeenCalledTimes(1);
             expect(onLifecycle).toHaveBeenCalledWith({
                 kind: 'loadFinished',
                 url: 'https://example.com/dashboard?token=secret#panel',
@@ -767,7 +933,6 @@ describe('DesktopWebViewEngine', () => {
                 testID="desktop-webview"
                 diagnostics={diagnostics}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_000}
             />,
         );
@@ -786,7 +951,7 @@ describe('DesktopWebViewEngine', () => {
 
     it('dispatches Back and Forward through native history rather than injecting guessed history', async () => {
         const bridge = createBridge();
-        const props = { view: createExternalDesktopView(), profileId: 'profile_external_1', testID: 'desktop-webview', bridge, pageInfoPollIntervalMs: null };
+        const props = { view: createExternalDesktopView(), profileId: 'profile_external_1', testID: 'desktop-webview', bridge };
         const screen = await renderScreen(<DesktopWebViewEngine {...props} navigationCommand={{ commandId: 'back_1', kind: 'goBack' }} />);
         await flushHookEffects({ cycles: 3, turns: 3 });
         expect(bridge.dispatchNavigation).toHaveBeenCalledWith({ browserSessionId: 'browser_session_1', viewId: 'view_external_1', kind: 'goBack' });
@@ -806,7 +971,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={command}
                 nowMs={() => 5_000}
             />,
@@ -820,7 +984,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={command}
                 nowMs={() => 6_000}
             />,
@@ -840,7 +1003,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={firstBridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={{ commandId: 'cmd_1', kind: 'reload' }}
                 nowMs={() => 5_000}
             />,
@@ -856,7 +1018,6 @@ describe('DesktopWebViewEngine', () => {
                 profileId="profile_external_1"
                 testID="desktop-webview"
                 bridge={secondBridge}
-                pageInfoPollIntervalMs={null}
                 navigationCommand={{ commandId: 'cmd_2', kind: 'stop' }}
                 nowMs={() => 6_000}
             />,
@@ -917,7 +1078,6 @@ describe('DesktopWebViewEngine', () => {
                 testID="desktop-webview"
                 diagnostics={diagnosticsForGeneration(0, 'collector_gen0')}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_000}
             />,
         );
@@ -932,7 +1092,6 @@ describe('DesktopWebViewEngine', () => {
                 testID="desktop-webview"
                 diagnostics={diagnosticsForGeneration(1, 'collector_gen1')}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_001}
             />,
         );
@@ -954,7 +1113,6 @@ describe('DesktopWebViewEngine', () => {
                 testID="desktop-webview"
                 diagnostics={diagnosticsForGeneration(1, 'collector_gen1')}
                 bridge={bridge}
-                pageInfoPollIntervalMs={null}
                 nowMs={() => 5_002}
             />,
         );
