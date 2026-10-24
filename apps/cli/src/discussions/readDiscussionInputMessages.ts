@@ -10,7 +10,7 @@ type DiscussionInputRead = Readonly<{
   signal: AbortSignal;
 }>;
 
-/** Read only the original before Follow policy decides whether its background is needed. */
+/** Read the exact original; the intake owns selection, and Pending owns dispatch authority. */
 export async function readDiscussionInputQuestion(input: DiscussionInputRead): Promise<DiscussionOpenedMessageV1 | null> {
   const { addressing, serverId, signal, discussionAction } = input;
   const opened = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
@@ -19,9 +19,7 @@ export async function readDiscussionInputQuestion(input: DiscussionInputRead): P
   if (!opened.success || opened.data.incomplete || opened.data.serverId !== serverId
     || opened.data.discussionId !== addressing.discussionId) return null;
   const question = opened.data.messages.find(message => message.id === addressing.messageId && message.seq === addressing.throughSeq);
-  if (!question?.content || !question.addressingV1?.participantSessionIds.includes(addressing.participantSessionId)
-    || question.producerV1?.kind === 'workflow') return null;
-  return question;
+  return question?.content ? question : null;
 }
 
 /** The exact question and reply ancestry admitted to Discussion input, in conversation order. */

@@ -3,7 +3,13 @@ import { mkdtemp, readFile, stat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { AgentSessionSendRequestV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import type { AgentSessionRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createExternalContributionFixtures } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
+import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionMessageContentV1StoredSchema, type DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 import { readSessionAttachmentDescriptorsV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
@@ -24,7 +30,10 @@ const http = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('axios', () => ({ default: http }));
 
 describe('Discussion source at actual provider preparation', () => {
-  it.each(['plain', 'e2ee'] as const)('materializes only the original %s question and ancestors independently on each Machine', async mode => {
+  it.each([
+    { mode: 'plain', source: 'addressed' }, { mode: 'e2ee', source: 'addressed' },
+    { mode: 'plain', source: 'workflow-selected' }, { mode: 'e2ee', source: 'workflow-selected' },
+  ] as const)('materializes only the original $mode $source question and ancestors independently on each Machine', async ({ mode, source }) => {
     const credentials = mode === 'plain' ? { token: 'fixture', encryption: null }
       : { token: 'fixture', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(3) } };
     const key = await createResourceDataKey({ credentials, mode });
@@ -47,7 +56,7 @@ describe('Discussion source at actual provider preparation', () => {
       localId: `message-${index}`, seq: index + 1, authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
       producerV1: null, mentionedAccountIds: [], content: sealSessionStoredContent({ ...crypto,
         payload: DiscussionMessageContentV1StoredSchema.parse(content) }), createdAt: 1,
-      ...(index === 1 ? { addressingV1: { throughSeq: 2, participantSessionIds: sessionIds }, replyTarget: { kind: 'message', messageId: 'ancestor' } } : {}),
+      ...(index === 1 ? { addressingV1: { throughSeq: 2, participantSessionIds: source === 'addressed' ? sessionIds : [] }, replyTarget: { kind: 'message', messageId: 'ancestor' } } : {}),
     }));
     const summary = DiscussionSummaryV1Schema.parse({ id: 'discussion', ownerAccountId: 'owner', encryptionMode: mode,
       dataEncryptionKey: key.dataEncryptionKey, keyReadiness: true, anchor: null, access: 'owner', creationLocalId: 'creation',
@@ -110,6 +119,30 @@ describe('Discussion source at actual provider preparation', () => {
         expect(prepared.requiredPrompt).toContain('project');
         expect(prepared.requiredPrompt).not.toContain('future.txt');
         expect(prepared.structuredInput).toMatchObject({ imageInputs: [{ mimeType: 'image/png' }] });
+        // The external Agent is the native boundary. Both input sources use the
+        // real dispatch preparation and strict native new-Turn adapter.
+        const sent: ReturnType<typeof AgentSessionSendRequestV1Schema.parse>[] = [];
+        const native: AgentSessionRuntime = {
+          async send(request) { sent.push(AgentSessionSendRequestV1Schema.parse(request)); return { status: 'admitted' }; },
+          watch: () => ({ dispose() {} }), dispose() {},
+        };
+        const lifetime = new AbortController();
+        const contribution = createExternalContributionFixtures('acme.answerer');
+        const services = createUnavailablePluginServices();
+        const context = createAcpSessionRuntimeContextFixture({ agent: contribution.agent.richDefinition.definition,
+          pluginId: contribution.agent.pluginId, sessionId, directory: workspace, signal: lifetime.signal, services,
+          protocols: createPublicAcpRuntimeProtocols({ pluginId: contribution.agent.pluginId, agentId: contribution.agent.id,
+            signal: lifetime.signal, isCurrent: () => !lifetime.signal.aborted, services }) });
+        const runtime = createNativeAgentSessionOperations(native, sessionId, () => context.dispose(), undefined, undefined,
+          undefined, undefined, { context: context.context, cwd: workspace, connectedAccounts: [],
+            capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+            cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } });
+        try {
+          await runtime.sendTurnPrompt(prepared.renderPrompt(), { localId: 'original', turnId: 'answer-turn',
+            ...(prepared.structuredInput ? { structuredInput: prepared.structuredInput } : {}) });
+          expect(sent).toMatchObject([{ inputIds: ['original'], delivery: { kind: 'newTurn', turnId: 'answer-turn' },
+            input: { text: expect.stringContaining('ancestor.txt'), structuredInput: { imageInputs: [{ mimeType: 'image/png' }] } } }]);
+        } finally { await runtime.resetOrDisposeRuntime('session_closed'); }
         const folder = files.find(file => file.mimeType === 'inode/directory')!;
         expect(await readFile(join(workspace, folder.path, 'nested/notes.txt'))).toEqual(bytes[2]);
         expect((await stat(join(workspace, folder.path, 'empty'))).isDirectory()).toBe(true);
