@@ -119,10 +119,11 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
  */
 export function describeLocalServiceActionFailure(input: Readonly<{
     reasonCode: string | null;
+    serviceName?: string;
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
 }>): Readonly<{ body: string; details: readonly string[]; refusal: boolean }> {
-    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction', prerequisite: input.prerequisite,
+    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction', serviceName: input.serviceName, prerequisite: input.prerequisite,
         establishmentFailure: input.establishmentFailure });
     const failure = input.establishmentFailure;
     return {
@@ -145,6 +146,7 @@ export function describeLocalServiceActionFailure(input: Readonly<{
 export function presentLocalServiceActionFailure(input: Readonly<{
     title: string;
     reasonCode: string | null;
+    serviceName?: string;
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
 }>): void {
@@ -173,6 +175,7 @@ export type LocalServiceActionFailure = Readonly<{
 type LocalServiceActionRunInput = Readonly<{
     id: string;
     failureTitle: string;
+    serviceName?: string;
     action: () => Promise<unknown>;
     observeNativeStart?: boolean;
 }>;
@@ -234,6 +237,7 @@ export function useLocalServiceActionRunner(options?: Readonly<{ presentation?: 
             const unknown = outcome.kind === 'outcome_unknown';
             const cause = {
                 reasonCode: outcome.reasonCode,
+                serviceName: input.serviceName,
                 ...(outcome.kind === 'failed' && outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
                 ...(outcome.kind === 'failed' && outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
             };

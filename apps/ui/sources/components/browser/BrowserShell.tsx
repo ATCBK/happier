@@ -584,6 +584,7 @@ export function BrowserShell(props: Readonly<{
         onOpenAgain: endedServiceTarget && openServiceAgain ? () => runReopen({
             id: 'ended-preview-open-again',
             failureTitle: t('browserShell.unavailable.openAgain'),
+            serviceName: endedServiceTarget.title,
             action: () => openServiceAgain(endedServiceTarget),
         }).then((opened) => {
             if (opened) closePage();

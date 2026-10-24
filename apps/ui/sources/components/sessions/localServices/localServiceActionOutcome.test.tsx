@@ -237,6 +237,20 @@ describe('useLocalServiceActionRunner', () => {
         expect(value.current?.pendingId).toBeNull();
     });
 
+    it.each(['service_not_listening', 'preview_unknown_managed_service'])('names the stopped Service and its recovery for %s', async reasonCode => {
+        const { value, Harness } = renderRunner();
+        await renderScreen(<Harness />);
+        await act(async () => {
+            await value.current?.run({ id: 'open-again', failureTitle: 'Open again', serviceName: 'Reading desk',
+                action: async () => ({ status: 'denied', reasonCode }) });
+        });
+        const body = modalSpies.alert.mock.calls[0]?.[1];
+        expect(body).toContain('Reading desk');
+        expect(body).toContain('Services');
+        expect(body).not.toContain(reasonCode);
+        expect(value.current?.pendingId).toBeNull();
+    });
+
     it.each([
         new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN),
         'private transport detail',

@@ -8907,6 +8907,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 refused: '機器拒絕了此操作。請檢查此機器的本機服務權限後再試一次。',
                 unavailable: '此操作不適用於此機器上的該服務。',
                 incomplete: '操作沒有完成，你可以再試一次。',
+                serviceNotRunning: '此服務已停止執行，請查看「服務」。',
+                namedServiceNotRunning: ({ service }: { service: string }) => `${service} 已停止執行，請查看「服務」。`,
                 outcomeUnknown: '操作結果未知。重試前，請在所選機器上檢查此服務。',
       portInUse: ({ port }: { port: number }) => `連接埠 ${port} 已被佔用。請停止現有服務或選擇其他連接埠。`,
       portInUseSameProject: ({ port }: { port: number }) => `此專案已在使用連接埠 ${port}。請使用正在執行的服務或選擇其他連接埠。`,

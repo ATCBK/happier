@@ -10688,6 +10688,8 @@ export const zhHans: TranslationStructure = {
                 refused: '机器拒绝了此操作。请检查此机器的本地服务权限后重试。',
                 unavailable: '此操作不适用于此机器上的该服务。',
                 incomplete: '操作没有完成，你可以再试一次。',
+                serviceNotRunning: '此服务已停止运行，请查看“服务”。',
+                namedServiceNotRunning: ({ service }: { service: string }) => `${service} 已停止运行，请查看“服务”。`,
                 outcomeUnknown: '操作结果未知。重试前，请在所选机器上检查此服务。',
       portInUse: ({ port }: { port: number }) => `端口 ${port} 已被占用。请停止现有服务或选择其他端口。`,
       portInUseSameProject: ({ port }: { port: number }) => `此项目已在使用端口 ${port}。请使用正在运行的服务或选择其他端口。`,

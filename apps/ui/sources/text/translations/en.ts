@@ -12901,6 +12901,8 @@ const enLocalServices = {
       unavailable:
         'This action is not available for this service on this machine.',
       incomplete: 'The action did not finish. You can try it again.',
+      serviceNotRunning: 'This service isn’t running anymore; check Services.',
+      namedServiceNotRunning: ({ service }: { service: string }) => `${service} isn’t running anymore; check Services.`,
       outcomeUnknown: 'The action outcome is unknown. Check this service on the selected machine before trying again.',
       portInUse: ({ port }: { port: number }) => `Port ${port} is already in use. Stop the existing service or choose another port.`,
       portInUseSameProject: ({ port }: { port: number }) => `Port ${port} is already in use by this project. Use the running service or choose another port.`,

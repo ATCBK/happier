@@ -221,10 +221,9 @@ const LOCAL_SERVICE_INVENTORY_KEYS = {
 /**
  * Daemon `LocalServiceActionResultV1.reasonCode` → the one sentence the user can act on.
  *
- * Thirty-one codes, three sentences, on purpose. `DESIGN.md`'s error-copy rule asks what failed *in
+ * `DESIGN.md`'s error-copy rule asks what failed *in
  * language the user can act on* and whether the operation can be retried, needs permission, or must
- * wait — and on that axis these codes collapse to exactly three answers. Enumerating thirty-one
- * bespoke sentences across twelve locales would be machinery, not clarity.
+ * wait. A stopped Service names that outcome and points to Services instead of offering a futile retry.
  *
  * The map stays explicit per code rather than pattern-matching a suffix, so an unmapped code added
  * by a newer daemon is visible to a grep and falls to the generic "didn't complete" sentence instead
@@ -253,7 +252,6 @@ const LOCAL_SERVICE_ACTION_KEYS = {
     restart_not_configured: 'localServices.actions.failure.unavailable',
     terminate_detected_executor_unavailable: 'localServices.actions.failure.unavailable',
     unknown_inventory_entry: 'localServices.actions.failure.unavailable',
-    unknown_managed_service: 'localServices.actions.failure.unavailable',
     unsafe_pid: 'localServices.actions.failure.unavailable',
     wrong_machine: 'localServices.actions.failure.unavailable',
     wrong_target_kind: 'localServices.actions.failure.unavailable',
@@ -268,7 +266,6 @@ const LOCAL_SERVICE_ACTION_KEYS = {
     port_not_released: 'localServices.actions.failure.incomplete',
     port_release_unverified: 'localServices.actions.failure.incomplete',
     process_tree_unresolved: 'localServices.actions.failure.incomplete',
-    service_not_listening: 'localServices.actions.failure.incomplete',
     terminate_detected_executor_failed: 'localServices.actions.failure.incomplete',
     terminate_no_process_signaled: 'localServices.actions.failure.incomplete',
     terminate_signal_failed: 'localServices.actions.failure.incomplete',
@@ -768,6 +765,7 @@ export function resolveReasonCopy(input: Readonly<{
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
     machineName?: string;
+    serviceName?: string;
 }>): ResolvedReasonCopy {
     const rawCode = input.reasonCode ?? null;
     const frameTitleKey = input.kind === 'browserFrame' && rawCode
@@ -786,7 +784,13 @@ export function resolveReasonCopy(input: Readonly<{
     const prerequisite = input.kind === 'localServiceAction' && rawCode === 'native_tool_unavailable' ? input.prerequisite : undefined;
     const failure = input.kind === 'localServiceAction' && rawCode === 'plugin_managed_service_establishment_failed'
         ? input.establishmentFailure : undefined;
-    const body = input.kind === 'localServiceLauncher' && rawCode === 'project_service_binding_unavailable' && input.machineName
+    const stoppedService = input.kind === 'localServiceAction' && (
+        rawCode === 'service_not_listening' || rawCode === 'preview_service_not_listening'
+        || rawCode === 'unknown_managed_service' || rawCode === 'preview_unknown_managed_service');
+    const body = stoppedService ? input.serviceName
+        ? t('localServices.actions.failure.namedServiceNotRunning', { service: input.serviceName })
+        : t('localServices.actions.failure.serviceNotRunning')
+        : input.kind === 'localServiceLauncher' && rawCode === 'project_service_binding_unavailable' && input.machineName
         ? t('localServices.launcher.unavailableReason.bindingUnavailableOnMachine', { machine: input.machineName })
         : prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
         : failure?.cause === 'port_in_use' && failure.port !== undefined ? t(failure.sameProject

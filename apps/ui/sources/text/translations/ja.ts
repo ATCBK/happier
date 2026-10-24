@@ -11352,6 +11352,8 @@ localTailscale: {
                 refused: 'マシンがこの操作を拒否しました。このマシンのローカルサービスの権限を確認してから、もう一度お試しください。',
                 unavailable: 'この操作は、このマシンのこのサービスでは利用できません。',
                 incomplete: '操作が最後まで進みませんでした。もう一度お試しいただけます。',
+                serviceNotRunning: 'このサービスは停止しているため、「サービス」を確認してください。',
+                namedServiceNotRunning: ({ service }: { service: string }) => `${service} は停止しているため、「サービス」を確認してください。`,
                 outcomeUnknown: '操作結果を確認できません。再試行する前に、選択したマシンでこのサービスを確認してください。',
       portInUse: ({ port }: { port: number }) => `ポート ${port} は使用中です。既存のサービスを停止するか、別のポートを選んでください。`,
       portInUseSameProject: ({ port }: { port: number }) => `このプロジェクトはポート ${port} を使用中です。実行中のサービスを使うか、別のポートを選んでください。`,
