@@ -60,6 +60,7 @@ export function resolveKeyboardShortcutCommandGroupId(commandId: KeyboardCommand
             return 'code';
         case 'session':
         case 'sessions':
+        case 'sessionList':
             return 'sessions';
         case 'composer':
         case 'mode':
