@@ -286,7 +286,7 @@ function ApprovalRequestRow(
     <Item
       testID="tool-details-approval-request"
       title={declinedApproval ? t(`approvals.status.${declinedApproval}`) : t('toolView.approvalRequested.title')}
-      subtitle={declinedApproval ? t('toolView.actionOutcome.refusedReason') : t('toolView.approvalRequested.description')}
+      subtitle={declinedApproval ? undefined : t('toolView.approvalRequested.description')}
       subtitleLines={0}
       onPress={
         serverId
