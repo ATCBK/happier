@@ -15,12 +15,38 @@ vi.mock('react-native', () => ({
 import { SURFACE_CONTEXT_THEME_FIXTURE as theme } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
 import { HappierUiPlatformProvider } from '../../environment/context.js';
 import { StackedSeriesChart } from './StackedSeriesChart.js';
+import { CoreLoadBars } from './CoreLoadBars.js';
 
 let renderer: ReactTestRenderer | undefined;
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 const points = Array.from({ length: 45_000 }, (_, x) => ({ id: `p${x}`, x, y: x === 0 ? 0.00004 : x === 1 ? null : x === 2 ? 0 : x }));
 const input = [{ id: 'used', label: 'Used', points }];
+
+it('retains measured core rows through hidden zero layouts and accepts a visible resize', () => {
+  let commits = 0;
+  act(() => { renderer = create(<React.Profiler id="cores" onRender={() => { commits += 1; }}>
+    <CoreLoadBars theme={theme} label="Cores" cores={Array.from({ length: 100 }, (_, index) => ({ index, busyPct: 25 }))}
+      coreLabel={core => `Core ${core.index}`} testID="retained-cores" />
+  </React.Profiler>); });
+  const measure = (width: number) => act(() => renderer!.root.findAllByType('View')
+    .find(node => node.props.testID === 'retained-cores')!.props.onLayout({
+      nativeEvent: { layout: { x: 0, y: 0, width, height: 64 } },
+    }));
+  const rows = () => renderer!.root.findAllByType(StackedSeriesChart);
+  expect(rows().every(row => row.props.width === 0)).toBe(true);
+  measure(400);
+  const wideRows = rows().length;
+  expect(rows().every(row => row.props.width === 400)).toBe(true);
+  commits = 0;
+  for (let index = 0; index < 100; index += 1) measure(0);
+  expect(rows()).toHaveLength(wideRows);
+  expect(rows().every(row => row.props.width === 400)).toBe(true);
+  expect(commits).toBe(0);
+  measure(280);
+  expect(rows().length).toBeGreaterThan(wideRows);
+  expect(rows().every(row => row.props.width === 280)).toBe(true);
+});
 
 it('does not mount per-point Views in a native inline history while retaining every exact accessible fact', () => {
   act(() => { renderer = create(<HappierUiPlatformProvider platform={{ platform: 'android', colorScheme: 'light' }}>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import type { HappierUiTheme } from '../../environment/types.js';
 import type { HappierLayoutChangeEvent } from '../portableTypes.js';
+import { readHappierVisibleLayoutWidth } from '../layout/pageMetrics.js';
 import { HappierText } from '../text/Text.js';
 import { StackedSeriesChart } from './StackedSeriesChart.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
@@ -35,7 +36,10 @@ export function CoreLoadBars(props: CoreLoadBarsProps) {
   const perRow = width > 0 ? Math.max(1, Math.floor((width + coreGapPx) / (coreWidthPx + coreGapPx))) : Math.max(1, cores.length);
   const rows = Array.from({ length: Math.ceil(cores.length / perRow) }, (_, index) => cores.slice(index * perRow, (index + 1) * perRow));
   return <View testID={props.testID} accessibilityLabel={props.label} style={{ width: props.width, gap: coreGapPx }}
-    onLayout={(event: HappierLayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}>
+    onLayout={(event: HappierLayoutChangeEvent) => {
+      const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+      if (visibleWidth !== null) setWidth(visibleWidth);
+    }}>
     {rows.map((row, rowIndex) => <StackedSeriesChart key={rowIndex} theme={props.theme} label={props.label}
       series={[{ id: 'cores', label: props.label, points: row.map((core) => ({ id: String(core.index), x: core.index,
         y: core.busyPct, color: core.cluster === 'e' ? props.theme.colors.mutedText : props.theme.colors.secondaryText, opacity: 1 })) }]}

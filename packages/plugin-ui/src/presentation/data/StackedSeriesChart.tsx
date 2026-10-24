@@ -8,6 +8,7 @@ import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierPortableStyle } from '../portableTypes.js';
+import { readHappierVisibleLayoutWidth } from '../layout/pageMetrics.js';
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
 import { HappierDataTable } from './DataRows.js';
@@ -633,7 +634,10 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   return <View testID={props.testID} accessible={nativeInline ? true : undefined}
     accessibilityRole={threshold || props.mirrored || props.liveMotion ? 'image' : undefined}
     accessibilityLabel={`${props.label}${exact ? `: ${exact}` : ''}${threshold ? `; ${threshold.label} ${format(threshold.value)}` : ''}${reference ? `; ${reference.label} ${reference.value}` : ''}${barRanges.map(range => `; ${range.label} ${range.lower}–${range.upper}`).join('')}`}
-    onLayout={(event: HappierLayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)} style={props.width ? { width: props.width } : undefined}>
+    onLayout={(event: HappierLayoutChangeEvent) => {
+      const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+      if (visibleWidth !== null) setWidth(visibleWidth);
+    }} style={props.width ? { width: props.width } : undefined}>
     {props.showAnnotations ? geometry.buckets.filter((bucket) => bucket.annotation).map((bucket) => <HappierText key={bucket.id} style={{ ...text.caption, marginBottom: 6 }}>{bucket.label}{` · ${bucket.annotation}`}</HappierText>) : null}
     <View style={{ position: 'relative' }}>
       {showGrid ? <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: props.scaleGutter ?? 0, top: peakInset, height }}>

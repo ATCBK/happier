@@ -3,6 +3,7 @@ import { View } from 'react-native';
 
 import type { HappierUiTheme } from '../../environment/types.js';
 import type { HappierLayoutChangeEvent } from '../portableTypes.js';
+import { readHappierVisibleLayoutWidth } from '../layout/pageMetrics.js';
 import { HappierText } from '../text/Text.js';
 import { HappierProgress } from '../content/Foundation.js';
 import {
@@ -190,7 +191,10 @@ export function HappierDataTable(props: HappierDataRowsProps) {
       testID={props.testID}
       role="table"
       accessibilityLabel={props.label}
-      onLayout={(event: HappierLayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
+      onLayout={(event: HappierLayoutChangeEvent) => {
+        const visibleWidth = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+        if (visibleWidth !== null) setWidth(visibleWidth);
+      }}
     >
       <View aria-hidden pointerEvents="none" importantForAccessibility="no-hide-descendants"
         style={{ position: 'absolute', opacity: 0, flexDirection: 'row', left: 0, top: 0 }}>
