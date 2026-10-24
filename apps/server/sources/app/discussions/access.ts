@@ -346,7 +346,14 @@ export async function resolveDiscussionContextsInTx(tx: Tx, params: Readonly<{
     return contexts;
 }
 
-/** Narrow before paging using only reachability; shared policy subsequently admits every row. */
+/**
+ * Narrow ordinary ORM lists before paging; shared policy subsequently admits every row.
+ * Keep this relation filter alongside discussionCandidateSql: Prisma cannot embed a
+ * raw predicate in findMany, while attention/Doc/key-readiness queries need correlated
+ * EXISTS inside SQL before their LIMIT. Resolving IDs first would add a query and an
+ * inventory-sized IN list; translating arbitrary Prisma filters would add a second
+ * query compiler. Both adapters only discover candidates; neither grants access.
+ */
 export function discussionCandidateWhere(accountId: string): Prisma.DiscussionWhereInput {
     return { OR: [
         { ownerAccountId: accountId },
