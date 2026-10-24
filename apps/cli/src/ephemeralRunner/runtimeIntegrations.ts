@@ -639,6 +639,7 @@ export async function createProductionEphemeralRunnerApplication(input: Readonly
       const trustRoots = resolvePeerMediationTrustRoots(featureSnapshot, Date.now());
       let activeBrokerTurnId: string | null = null;
       const brokerEvidence = createSessionBrokerApplicationEvidence({
+        sessionId: binding.sessionId, pid: process.pid,
         readActiveTurnId: () => activeBrokerTurnId,
         isCurrent: () => !runtimeEnded && !postMaterializationSignal.aborted,
       });

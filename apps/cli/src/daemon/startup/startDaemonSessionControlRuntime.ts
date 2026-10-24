@@ -30,7 +30,7 @@ import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification
 import { getSharedTerminalProcessRegistry } from '../local/services/inventory/terminalRegistry';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { issueMcpRequestAuthCapability } from '@/mcp/runtime/issueMcpRequestAuthCapability';
-import { createSessionBrokerApplicationEvidence } from '@/providers/broker/sessionBrokerApplicationEvidence';
+import { createSessionBrokerApplicationEvidence, recordSessionBrokerApplicationEvidenceRead } from '@/providers/broker/sessionBrokerApplicationEvidence';
 import { readMcpRequestAuthFailureCode, readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 import { createDaemonRunnerPluginMcp } from '../agentRuntime/runnerPluginMcp';
 import { createGuardLeftBehindActionExecutor } from '../guard/actions';
@@ -17712,9 +17712,18 @@ export async function startDaemonSessionControlRuntime(
             }
           }
           if (request.operation.kind === 'provider_broker.refusal.read') {
+            const turnId = request.operation.turnId;
+            const activeTurnMatches = trackedSession?.activeTurnId === turnId;
+            const evidence = trackedSession?.teamCredentialBrokerEvidence;
+            // The existing active-turn gate can settle before the evidence owner
+            // is reached. Record that same decision without another read.
+            if (!activeTurnMatches || !evidence) {
+              recordSessionBrokerApplicationEvidenceRead({ sessionId, turnId, pid: runner.pid,
+                processStartTimeMs: runner.processStartTimeMs, outcome: 'miss',
+                reason: trackedSession && !activeTurnMatches ? 'turn_mismatch' : 'no_evidence' });
+            }
             return { ok: true as const, result: { kind: 'provider_broker.refusal' as const,
-              denial: trackedSession?.activeTurnId === request.operation.turnId
-                ? trackedSession.teamCredentialBrokerEvidence?.readDenial(request.operation.turnId) ?? null : null } };
+              denial: activeTurnMatches ? evidence?.readDenial(turnId) ?? null : null } };
           }
           if (request.operation.kind === 'provider_broker.binding.open') {
             const tracked = trackedSession;
@@ -17799,6 +17808,7 @@ export async function startDaemonSessionControlRuntime(
                   beginBrokerRequest: () => {
                     if (operation.consumer?.kind === 'execution_run') return undefined;
                     const evidence = tracked.teamCredentialBrokerEvidence ??= createSessionBrokerApplicationEvidence({
+                      sessionId, pid: runner.pid, processStartTimeMs: runner.processStartTimeMs,
                       readActiveTurnId: () => tracked.activeTurnId ?? null,
                       isCurrent: () => params.pidToTrackedSession.get(tracked.pid) === tracked,
                     });

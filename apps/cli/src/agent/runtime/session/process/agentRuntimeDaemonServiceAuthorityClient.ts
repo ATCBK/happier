@@ -45,6 +45,25 @@ import { logger } from '@/ui/logger';
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
 
+export function recordRunnerTeamCredentialRefusalRead(input: Readonly<{
+  authority: AgentRuntimeDaemonServiceAuthorityExpectedInput;
+  turnId: string;
+  outcome: 'hit' | 'miss' | 'failed';
+  reason?: 'no_evidence' | 'read_failed' | 'unsupported';
+}>): void {
+  try {
+    logger.infoFile('[provider-broker-application]', {
+      stage: 'runner-refusal-read',
+      sessionId: input.authority.sessionId,
+      turnId: input.turnId,
+      pid: input.authority.runner.pid,
+      processStartTimeMs: input.authority.runner.processStartTimeMs,
+      outcome: input.outcome,
+      ...(input.reason ? { reason: input.reason } : {}),
+    });
+  } catch { /* Diagnostics cannot change the refusal read outcome. */ }
+}
+
 export async function readCurrentRunnerTeamCredentialBrokerDenial(
   input: Readonly<{
     authority: AgentRuntimeDaemonServiceAuthorityExpectedInput;
@@ -52,18 +71,28 @@ export async function readCurrentRunnerTeamCredentialBrokerDenial(
     signal?: AbortSignal;
   }>,
 ): Promise<SessionRuntimeTeamCredentialDenialDetailsV1 | null> {
-  const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
-    authority: input.authority,
-    signal: input.signal,
-    createRequest: token => ({
-      v: 1,
-      context: { token, sessionId: input.authority.sessionId },
-      operation: { kind: 'provider_broker.refusal.read', requestId: randomUUID(), turnId: input.turnId },
-    }),
-  });
-  return response.ok && response.result.kind === 'provider_broker.refusal'
-    ? response.result.denial
-    : null;
+  let diagnostic: Readonly<{
+    outcome: 'hit' | 'miss' | 'failed';
+    reason?: 'no_evidence' | 'read_failed';
+  }> = { outcome: 'failed', reason: 'read_failed' };
+  try {
+    const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
+      authority: input.authority,
+      signal: input.signal,
+      createRequest: token => ({
+        v: 1,
+        context: { token, sessionId: input.authority.sessionId },
+        operation: { kind: 'provider_broker.refusal.read', requestId: randomUUID(), turnId: input.turnId },
+      }),
+    });
+    if (!response.ok || response.result.kind !== 'provider_broker.refusal') return null;
+    diagnostic = response.result.denial
+      ? { outcome: 'hit' }
+      : { outcome: 'miss', reason: 'no_evidence' };
+    return response.result.denial;
+  } finally {
+    recordRunnerTeamCredentialRefusalRead({ authority: input.authority, turnId: input.turnId, ...diagnostic });
+  }
 }
 
 /** The existing Session capability selects the policy's Account and source. */

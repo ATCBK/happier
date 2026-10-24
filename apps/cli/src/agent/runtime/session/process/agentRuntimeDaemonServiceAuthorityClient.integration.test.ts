@@ -15,6 +15,8 @@ import {
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { sanitizeNativeAgentSessionBoundaryError } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
+import { logger } from '@/ui/logger';
+import * as privateBearerFile from '@/daemon/privateBearerFile';
 import { prepareRunnerDaemonPluginServices } from './runnerDaemonPluginServices';
 import { encodeRunnerDaemonPluginServiceWireValueV1 } from './agentRuntimeDaemonPluginServicesProtocol';
 import {
@@ -26,6 +28,7 @@ import {
   attestCurrentRunnerAgentSessionOpen,
   isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition,
   openCurrentRunnerTeamCredentialProviderBinding,
+  readCurrentRunnerTeamCredentialBrokerDenial,
   RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE,
   resolveCurrentAgentRuntimeDaemonTurnContributions,
 } from './agentRuntimeDaemonServiceAuthorityClient';
@@ -101,6 +104,54 @@ async function createTestAuthority(input: Readonly<{
 }
 
 describe('current Agent runtime daemon service authority client', () => {
+  it.each(['hit', 'miss', 'failed', 'cancelled', 'logger_failed'] as const)(
+    'records a payload-free runner refusal read once without additional authority reads or RPCs (%s)',
+    async outcome => {
+      const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-runner-refusal-read-'));
+      roots.push(happyHomeDir);
+      const command = 'happier runner';
+      const runner = { pid: process.pid, processStartTimeMs: 1_717_171_717_000,
+        processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:runner-a' };
+      processIdentityMock.mockResolvedValue({ pid: process.pid, processStartTimeMs: runner.processStartTimeMs, command });
+      runnerIdentityMock.mockReturnValue({ status: 'known', comparableId: runner.snapshotIdentity });
+      const authority = await createTestAuthority({ happyHomeDir, runner });
+      await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31_001, capability: 'A'.repeat(43) });
+      const denial = { v: 1, resourceId: 'PRIVATE_RESOURCE_ID', reasonCode: 'resource_forbidden' } as const;
+      const cancellation = new AbortController();
+      const fetchMock = vi.fn(async () => {
+        if (outcome === 'cancelled') {
+          cancellation.abort(new Error('PRIVATE_CANCELLATION'));
+          throw cancellation.signal.reason;
+        }
+        return new Response(JSON.stringify(outcome === 'failed'
+          ? { ok: false, error: { code: 'private_failure', message: 'PRIVATE_RESPONSE_BODY' } }
+          : { ok: true, result: { kind: 'provider_broker.refusal', denial: outcome === 'miss' ? null : denial } }),
+        { status: 200, headers: { 'content-type': 'application/json' } });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {
+        if (outcome === 'logger_failed') throw new Error('PRIVATE_LOG_FAILURE');
+      });
+      const privateReads = vi.spyOn(privateBearerFile, 'readPrivateBearerFile');
+      processIdentityMock.mockClear();
+      try {
+        const read = readCurrentRunnerTeamCredentialBrokerDenial({ authority, turnId: 'turn-1', signal: cancellation.signal });
+        if (outcome === 'cancelled') await expect(read).rejects.toThrow('PRIVATE_CANCELLATION');
+        else await expect(read).resolves.toEqual(outcome === 'miss' || outcome === 'failed' ? null : denial);
+        expect(log.mock.calls.filter(([message]) => message === '[provider-broker-application]')).toEqual([
+          ['[provider-broker-application]', { stage: 'runner-refusal-read', sessionId: 'session-1', turnId: 'turn-1',
+            pid: runner.pid, processStartTimeMs: runner.processStartTimeMs,
+            outcome: outcome === 'failed' || outcome === 'cancelled' ? 'failed' : outcome === 'miss' ? 'miss' : 'hit',
+            ...(outcome === 'failed' || outcome === 'cancelled' ? { reason: 'read_failed' }
+              : outcome === 'miss' ? { reason: 'no_evidence' } : {}) }],
+        ]);
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(privateReads).toHaveBeenCalledTimes(1);
+        expect(processIdentityMock).not.toHaveBeenCalled();
+      } finally { privateReads.mockRestore(); log.mockRestore(); }
+    },
+  );
+
   it.each(['preparation', 'invocation', 'caller', 'invocation-with-caller'] as const)(
     'cancels runner service %s through the real daemon transport',
     async phase => {

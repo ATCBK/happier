@@ -9,6 +9,7 @@ import type { ProviderBrokerOpenResponseV1 } from '@happier-dev/protocol';
 import {
   MACHINE_ALPN,
   MACHINE_HTTP_LOCAL_CAPABILITY_HEADER,
+  IrohError,
 } from '@happier-dev/iroh-native/node';
 import {
   providerBrokerRouteGrantExpectedBindingV1 as authorityBinding,
@@ -30,6 +31,9 @@ import { SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/
 
 type BrokerReleasePhase = 'public_listener_withdrawal' | 'private_control_dial'
   | 'delete_dispatched' | 'response_received' | 'private_control_close';
+type BrokerReleaseOutcome = 'released' | 'target_gone' | 'abandoned';
+type BrokerReleaseReason = 'acknowledged' | 'target_endpoint_changed' | 'control_dial_failed'
+  | 'release_budget_expired' | 'delete_failed' | 'delete_rejected';
 const diagnosticIdSchema = z.uuid();
 const carrierAdmissionDiagnosticCodeSchema = z.union([
   ProviderBrokerAdmissionFailureCodeV1Schema,
@@ -156,6 +160,13 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
             v: 1, resourceId: payload.resourceId, reasonCode: body.error.code,
             ...(body.error.usageLimit ? { usageLimit: body.error.usageLimit } : {}),
           }));
+          else if (payload.v === 1 && payload.consumer.kind === 'session') {
+            try {
+              logger.infoFile('[provider-broker-application]', { stage: 'evidence_capture',
+                sessionId: payload.consumer.sessionId, turnId: null, pid: process.pid,
+                outcome: 'skipped', reason: 'session_not_bound' });
+            } catch { /* Diagnostics cannot change the carrier refusal. */ }
+          }
           throw new MachineCarrierError(freshOpen.reasonCode, 'Provider broker authority refresh was rejected.', {
             kind: 'http_refusal',
             responseBody: JSON.stringify(body),
@@ -243,10 +254,8 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
       await tunnel.close().catch(() => undefined);
       throw error;
     }
-    let retired = false;
+    let releaseSettled = false;
     let retireInFlight: Promise<void> | null = null;
-    let controlClose: (() => Promise<void>) | null = null;
-    let controlRequestId: string | null = null;
     let closeInFlight: Promise<void> | null = null;
     const close = (): Promise<void> => {
       releasing = true;
@@ -257,11 +266,11 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
       return closeInFlight;
     };
     const retire = (): Promise<void> => {
-      if (retired && !controlClose) return Promise.resolve();
+      if (releaseSettled) return Promise.resolve();
       releasing = true;
       retireInFlight ??= (async () => {
-        const requestId = controlRequestId ?? randomUUID();
-        let phase: BrokerReleasePhase = controlClose ? 'private_control_close' : 'public_listener_withdrawal';
+        const requestId = randomUUID();
+        let phase: BrokerReleasePhase = 'public_listener_withdrawal';
         const recordPhase = (next: BrokerReleasePhase): void => {
           phase = next;
           try {
@@ -270,80 +279,102 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
             // Diagnostics cannot change retirement or resource custody.
           }
         };
-        const closeControl = async (): Promise<void> => {
+        const recordFailure = (error: unknown): void => {
           try {
-            await controlClose!();
-          } catch (error) {
-            throw new ProviderBrokerReleaseError({ phase: 'private_control_close', targetMachineId: payload.target.machineId, requestId, error });
-          }
+            logger.debug('[provider-broker-release] Boundary failure', new ProviderBrokerReleaseError({
+              phase, targetMachineId: payload.target.machineId, requestId, error,
+            }));
+          } catch { /* Diagnostics cannot change retirement or resource custody. */ }
         };
+        // Withdrawing the only published listener is mandatory. A failed local
+        // withdrawal remains retryable and must still refuse runner shutdown.
+        recordPhase('public_listener_withdrawal');
         try {
-          // Native release can fail after the target acknowledged retirement.
-          // Retain that exact private handle until close succeeds; retrying it
-          // must not repeat the DELETE or dial another control channel.
-          if (controlClose) {
-            recordPhase('private_control_close');
-            await closeControl();
-            controlClose = null;
-            controlRequestId = null;
-          }
-          if (retired) return;
+          await close();
+        } catch (error) {
+          throw new ProviderBrokerReleaseError({ phase, targetMachineId: payload.target.machineId, requestId, error });
+        }
+        let outcome: BrokerReleaseOutcome = 'abandoned';
+        let reasonCode: BrokerReleaseReason = 'control_dial_failed';
+        let control: Awaited<ReturnType<DaemonMachineIrohRuntime['openHttpTunnel']>> | null = null;
+        // One existing endpoint budget covers dial and DELETE; no phase owns
+        // a shorter application deadline and an ended Session needs no new grant.
+        const releaseSignal = AbortSignal.timeout(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs);
+        try {
           // Never reuse the published bearer listener for control work. The
           // retained signed authority identifies only the existing claim; V2
           // explicitly narrows this unpublished channel to release before the
           // target can read its catalog or acquire a consumer.
-          recordPhase('public_listener_withdrawal');
-          await close();
           const releaseHandshake = IrohProviderBrokerHandshakeSchema.parse({
             v: payload.v, kind: 'provider_broker', authority,
             ...(payload.v === 2 ? { intent: 'release' } : {}),
           });
-          const releaseSignal = AbortSignal.timeout(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs);
           recordPhase('private_control_dial');
-          const control = await awaitMachineCarrierTunnelOpen(input.runtime.openHttpTunnel({
+          control = await awaitMachineCarrierTunnelOpen(input.runtime.openHttpTunnel({
             alpn: MACHINE_ALPN, remoteEndpointId: payload.target.endpointId,
             flow: 'provider_broker', handshake: releaseHandshake,
             handshakeProvider: async () => releaseHandshake,
           }, endpoint), releaseSignal);
-          controlClose = control.close;
-          controlRequestId = requestId;
-          try {
-            if (control.remoteEndpointId !== payload.target.endpointId) {
-              throw new MachineCarrierError('transport_identity_mismatch', 'Authenticated provider broker endpoint identity changed.');
-            }
-            recordPhase('delete_dispatched');
-            const response = await (input.fetchImpl ?? fetch)(
-              `http://127.0.0.1:${control.localPort}${PROVIDER_BROKER_PRIVATE_CLOSE_PATH}`,
-              {
-                method: 'DELETE',
-                headers: {
-                  authorization: `Bearer ${authority.payload.v === 2
-                    ? encodeProviderBrokerAuthorityV2(SignedProviderBrokerRouteGrantV2Schema.parse(authority))
-                    : encodeProviderBrokerAuthorityV1(SignedProviderBrokerRouteGrantV1Schema.parse(authority))}`,
-                  [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: control.localCapability,
-                  [PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER]: requestId,
-                  connection: 'close',
-                },
-                redirect: 'error',
-                signal: releaseSignal,
-              },
-            );
-            recordPhase('response_received');
-            if (response.status !== 204) {
-              throw new MachineCarrierError(
-                'broker_close_rejected',
-                'Provider broker target did not acknowledge stream retirement.',
-              );
-            }
-            retired = true;
-          } finally {
-            await closeControl();
-            controlClose = null;
-            controlRequestId = null;
+          if (control.remoteEndpointId !== payload.target.endpointId) {
+            outcome = 'target_gone';
+            reasonCode = 'target_endpoint_changed';
+            throw new MachineCarrierError('transport_identity_mismatch', 'Authenticated provider broker endpoint identity changed.');
           }
+          recordPhase('delete_dispatched');
+          reasonCode = 'delete_failed';
+          const response = await (input.fetchImpl ?? fetch)(
+            `http://127.0.0.1:${control.localPort}${PROVIDER_BROKER_PRIVATE_CLOSE_PATH}`,
+            {
+              method: 'DELETE',
+              headers: {
+                authorization: `Bearer ${authority.payload.v === 2
+                  ? encodeProviderBrokerAuthorityV2(SignedProviderBrokerRouteGrantV2Schema.parse(authority))
+                  : encodeProviderBrokerAuthorityV1(SignedProviderBrokerRouteGrantV1Schema.parse(authority))}`,
+                [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: control.localCapability,
+                [PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER]: requestId,
+                connection: 'close',
+              },
+              redirect: 'error',
+              signal: releaseSignal,
+            },
+          );
+          recordPhase('response_received');
+          if (response.status !== 204) {
+            reasonCode = 'delete_rejected';
+            throw new MachineCarrierError(
+              'broker_close_rejected',
+              'Provider broker target did not acknowledge stream retirement.',
+            );
+          }
+          outcome = 'released';
+          reasonCode = 'acknowledged';
         } catch (error) {
-          if (error instanceof ProviderBrokerReleaseError) throw error;
-          throw new ProviderBrokerReleaseError({ phase, targetMachineId: payload.target.machineId, requestId, error });
+          // Native verifies the peer before publishing a local tunnel, so its
+          // canonical identity refusal is the same proof as the check above.
+          if (error instanceof IrohError && error.code === 'identity_mismatch') {
+            outcome = 'target_gone';
+            reasonCode = 'target_endpoint_changed';
+          }
+          if (releaseSignal.aborted || error instanceof Error && error.name === 'TimeoutError') reasonCode = 'release_budget_expired';
+          recordFailure(error);
+        } finally {
+          if (control) {
+            recordPhase('private_control_close');
+            try {
+              await control.close();
+            } catch (error) {
+              // Native runtime retains failed closers for its own shutdown.
+              // A local control-handle failure cannot repeat remote retirement.
+              recordFailure(error);
+            }
+          }
+          // Home admits each effect and revalidates retained broker claims.
+          // After withdrawal, remote cleanup is terminal even if unreachable;
+          // neither a live runner Stop nor retained dead-runner cleanup redials.
+          releaseSettled = true;
+          try {
+            logger.infoFile('[provider-broker-release]', { phase, targetMachineId: payload.target.machineId, requestId, outcome, reasonCode });
+          } catch { /* Diagnostics cannot change the terminal outcome. */ }
         }
       })().finally(() => {
         retireInFlight = null;

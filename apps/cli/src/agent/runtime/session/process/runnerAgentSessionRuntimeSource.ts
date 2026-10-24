@@ -54,6 +54,7 @@ import {
     isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition,
     openCurrentRunnerTeamCredentialProviderBinding,
     readCurrentRunnerTeamCredentialBrokerDenial,
+    recordRunnerTeamCredentialRefusalRead,
     resolveCurrentAgentRuntimeDaemonTurnContributions,
 } from './agentRuntimeDaemonServiceAuthorityClient';
 import { loadRetainedAgentRuntimeLeaf } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
@@ -1125,7 +1126,11 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 pluginMcp: pluginMcp.port,
                 mcpRequestAuth,
                 async readTeamCredentialDenial(params) {
-                    if (!hasSessionTeamCredentialBinding || params.sessionId !== expectedAuthority.sessionId) return null;
+                    if (!hasSessionTeamCredentialBinding || params.sessionId !== expectedAuthority.sessionId) {
+                        recordRunnerTeamCredentialRefusalRead({ authority: expectedAuthority,
+                            turnId: params.turnId, outcome: 'miss', reason: 'unsupported' });
+                        return null;
+                    }
                     return await readCurrentRunnerTeamCredentialBrokerDenial({
                         authority: expectedAuthority,
                         turnId: params.turnId,

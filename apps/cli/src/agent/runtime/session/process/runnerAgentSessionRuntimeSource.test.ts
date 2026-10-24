@@ -106,6 +106,7 @@ import {
 import {
     AgentRuntimeDaemonServiceRequestV1Schema,
 } from './agentRuntimeDaemonServiceProtocol';
+import { logger } from '@/ui/logger';
 import type {
     RunnerManagedProviderCustodyScopeV1,
 } from './runnerManagedServicesCustody';
@@ -413,6 +414,31 @@ describe('runner Agent session runtime source', () => {
             executeProviderSessionFollow: vi.fn(),
             retire: vi.fn(),
         });
+    });
+
+    it.each([false, true])('records an unsupported refusal read without private reads or dispatch (logging failed=%s)', async loggingFailed => {
+        const source = await createRunnerAgentSessionRuntimeSource({
+            happyHomeDir: '/tmp/happier-runner-source', publicReleaseRing: 'stable',
+            authorityFilePath: '/tmp/happier-runner-source/authority.json',
+        });
+        expect(source).not.toBeNull();
+        const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {
+            if (loggingFailed) throw new Error('PRIVATE_LOG_FAILURE');
+        });
+        mocks.readAuthority.mockClear();
+        mocks.readPrivateBearerFile.mockClear();
+        try {
+            await expect(source!.daemonTurnContributionsBridge!.readTeamCredentialDenial!({
+                sessionId: 'session-1', turnId: 'turn-1',
+            })).resolves.toBeNull();
+            expect(mocks.dispatch).not.toHaveBeenCalled();
+            expect(mocks.readAuthority).not.toHaveBeenCalled();
+            expect(mocks.readPrivateBearerFile).not.toHaveBeenCalled();
+            expect(log.mock.calls.filter(([message]) => message === '[provider-broker-application]')).toEqual([
+                ['[provider-broker-application]', { stage: 'runner-refusal-read', sessionId: 'session-1', turnId: 'turn-1',
+                    pid: process.pid, processStartTimeMs: 1, outcome: 'miss', reason: 'unsupported' }],
+            ]);
+        } finally { log.mockRestore(); await source!.retire?.(); }
     });
 
     it.each(['agent_runtime_daemon_service_forbidden', 'private_dispatch_value'])('retains only a safe private MCP dispatch cause across the runner port (%s)', async code => {

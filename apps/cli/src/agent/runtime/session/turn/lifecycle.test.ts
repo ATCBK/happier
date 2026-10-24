@@ -8,6 +8,7 @@ import { SessionTurnMutationV1Schema, type SessionTurnMutationV1 } from '@happie
 
 import { createSessionTurnLifecycle } from './lifecycle';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { logger } from '@/ui/logger';
 
 let nextRuntimeEventSequence = 0;
 
@@ -22,6 +23,79 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('createSessionTurnLifecycle', () => {
+    it.each([false, true])('records payload-free enrichment outcomes without extra evidence reads or mutation writes (logging failed=%s)', async loggingFailed => {
+        const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => { if (loggingFailed) throw new Error('File logging unavailable'); });
+        let reads = 0;
+        const mutations: SessionTurnMutationV1[] = [];
+        try {
+            for (const scenario of ['applied', 'evidence_absent', 'read_failed', 'cancellation', 'non_team_failure'] as const) {
+                const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'logged-session',
+                    enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+                    ...(scenario === 'non_team_failure' ? {} : { readTeamCredentialDenial: async () => {
+                        reads++;
+                        if (scenario === 'read_failed') throw new Error('secret evidence read payload');
+                        return scenario === 'applied' ? { v: 1 as const, resourceId: 'private-resource', reasonCode: 'resource_forbidden' as const } : null;
+                    } }),
+                });
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'logged-session', turnId: scenario, emittedAtMs: 1 }));
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ sessionId: 'logged-session', turnId: scenario, emittedAtMs: 2,
+                    ...(scenario === 'cancellation' ? { kind: 'turn-cancelled', cause: 'user' } : {
+                        kind: 'turn-failed', diagnostic: { code: 'codex_app_server_turn_failed', severity: 'error', message: 'private native payload' },
+                    }) }));
+                await lifecycle.drainAcceptedLifecycle();
+            }
+            const context = { stage: 'failure_enrichment', sessionId: 'logged-session', pid: process.pid };
+            expect(log.mock.calls.filter(([, record]) => record && typeof record === 'object'
+                && 'stage' in record && record.stage === 'failure_enrichment').map(([, record]) => record)).toEqual([
+                { ...context, turnId: 'applied', outcome: 'applied' },
+                { ...context, turnId: 'evidence_absent', outcome: 'skipped', reason: 'evidence_absent' },
+                { ...context, turnId: 'read_failed', outcome: 'skipped', reason: 'evidence_absent' },
+                { ...context, turnId: 'cancellation', outcome: 'skipped', reason: 'cancellation' },
+                { ...context, turnId: 'non_team_failure', outcome: 'skipped', reason: 'non_team_failure' },
+            ]);
+            expect(reads).toBe(3); // One per eligible failure; no cancellation or diagnostic probes.
+            expect(mutations.map(mutation => mutation.action)).toEqual(['begin', 'fail', 'begin', 'fail', 'begin', 'fail', 'begin', 'cancel', 'begin', 'fail']);
+        } finally { log.mockRestore(); }
+    });
+
+    it.each(['accepted', 'mutation_failed', 'marker_failed', 'no_publisher', 'logger_failed'] as const)(
+        'records exact begin/terminal publication with %s custody', async scenario => {
+            const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => { if (scenario === 'logger_failed') throw new Error('File logging unavailable'); });
+            let writes = 0;
+            let markers = 0;
+            try {
+                const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'logged-session',
+                    ...(scenario === 'no_publisher' ? {} : { enqueueSessionTurnMutation: async () => {
+                        writes++;
+                        if (scenario === 'mutation_failed') throw new Error('secret persistence payload');
+                    } }),
+                }, onAcceptedTurnLifecycle: async marker => {
+                    markers++;
+                    if (scenario === 'marker_failed' && marker.event !== 'task_started') throw new Error('secret marker payload');
+                } });
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'logged-session', turnId: 'logged-turn', emittedAtMs: 1 }));
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: 'logged-session', turnId: 'logged-turn', emittedAtMs: 2 }));
+                await lifecycle.drainAcceptedLifecycle();
+                const context = { stage: 'turn_publication', sessionId: 'logged-session', turnId: 'logged-turn', pid: process.pid };
+                const records = log.mock.calls.filter(([, record]) => record && typeof record === 'object'
+                    && 'stage' in record && record.stage === 'turn_publication').map(([, record]) => record);
+                expect(records).toEqual(scenario === 'no_publisher' ? [
+                    { ...context, action: 'begin', outcome: 'skipped', reason: 'no_publisher' },
+                    { ...context, action: 'complete', outcome: 'skipped', reason: 'no_publisher' },
+                ] : scenario === 'mutation_failed' ? [
+                    { ...context, action: 'begin', outcome: 'failed', reason: 'mutation_failed' },
+                    { ...context, action: 'complete', outcome: 'skipped', reason: 'begin_not_accepted' },
+                ] : [
+                    { ...context, action: 'begin', outcome: 'accepted' },
+                    { ...context, action: 'complete', outcome: scenario === 'marker_failed' ? 'failed' : 'accepted',
+                        ...(scenario === 'marker_failed' ? { reason: 'marker_failed' } : {}) },
+                ]);
+                expect(writes).toBe(scenario === 'no_publisher' ? 0 : scenario === 'mutation_failed' ? 1 : 2);
+                expect(markers).toBe(scenario === 'no_publisher' ? 0 : scenario === 'mutation_failed' ? 1 : 2);
+            } finally { log.mockRestore(); }
+        },
+    );
+
     it.each(['accepted', 'unavailable'] as const)('keeps confirmed open usable when local mutation custody is %s', async custody => {
         const mutations: unknown[] = [];
         const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'confirmed-session',
