@@ -220,7 +220,6 @@ import { ConnectedServiceRefreshCoordinator } from '../connectedServices/refresh
 import { authorizeConnectedServiceRuntimeAuthFailureSource } from '../connectedServices/runtimeAuth/handleConnectedServiceRuntimeAuthFailureForSession';
 import { RuntimeAuthRecoveryScheduler } from '../connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
 import { ConnectedServiceTemporaryThrottleRetryScheduler } from '../connectedServices/runtimeAuth/temporaryThrottleRetryScheduler';
-import { computeConnectedServiceAccessTokenFingerprint } from '../connectedServices/refresh/credentialFreshness/tokenFingerprint';
 import { resolveQuotaProbeFreshProof } from '../connectedServices/quotas/proof/quotaProbeFreshProof';
 import { buildConnectedServiceAuthGroupCommittedGenerationFact } from '../connectedServices/sessionAuthSwitch/connectedServiceAuthSwitchOutcome';
 import {
@@ -13971,7 +13970,7 @@ describe('startDaemonSessionControlRuntime', () => {
             now: () => 2_000, randomBytes: (length) => new Uint8Array(length), discoveryEnabled: false, runtimeQuotaSnapshots: runtimeStore,
         });
         const bindings = { v: 2 as const, bindingsByServiceId: unbound ? {} : { [serviceId]: { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' } } };
-        const environment = unbound ? {} : { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId, profileId: 'work', credentialRevision }]) };
+        const environment: Record<string, string> = unbound ? {} : { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId, profileId: 'work', credentialRevision }]) };
         const runtime = await startDaemonSessionControlRuntime({ machineId: 'native-proof-machine', credentials, api: api as never,
             connectedServicesMaterializationBaseDir: '/tmp/native-proof', getConnectedServiceRefreshCoordinator: () => null,
             getConnectedServiceQuotasCoordinator: () => coordinator,
@@ -14018,9 +14017,11 @@ describe('startDaemonSessionControlRuntime', () => {
                     snapshot: { serviceId, activeAccountId: 'provider-user', ...(org ? { providerOrganizationId: org } : {}) },
                 }));
                 const snapshot = runtimeStore.getSnapshotEntry({ serviceId, profileId: 'work' })!.snapshot;
-                const identity = { serviceId, profileId: 'work', groupId: null, groupGeneration: null,
+                // The proof port is typed by the legacy service id; this fixture keeps its qualified key value.
+                const proofServiceId = serviceId as Parameters<typeof coordinator.resolveQuotaProbeFreshProof>[0]['serviceId'];
+                const identity = { serviceId: proofServiceId, profileId: 'work', groupId: null, groupGeneration: null,
                     providerAccountId: 'provider-user', materialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access') };
-                expect(coordinator.resolveQuotaProbeFreshProof({ serviceId, profileId: 'work',
+                expect(coordinator.resolveQuotaProbeFreshProof({ serviceId: proofServiceId, profileId: 'work',
                     expectedAppliedIdentity: identity, snapshotAppliedIdentity: identity, snapshot })).toEqual({ status: 'proof', proofKind: 'quota_probe_fresh' });
             } else expect(runtimeStore.getSnapshotEntry({ serviceId, profileId: 'work' })).toBeNull();
             expect(runtime.providerAccountUsageStore.resolveBySource(source) !== null).toBe(accepted && Boolean(org));

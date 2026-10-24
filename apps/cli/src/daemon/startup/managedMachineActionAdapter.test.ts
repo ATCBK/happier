@@ -261,7 +261,7 @@ describe('daemon managed Machine Action factory', () => {
         const app = createActionExecutor({ ...createCliActionDeps(executorParams),
             isApprovalExecutionOriginCurrent: currentness,
             approvalRequestApprovedReplay: async ({ artifactId, request, signal }) => {
-                expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+                expect(request.v === 2 && requiresExactDaemonApprovalReplay(request)).toBe(true);
                 return await daemonReplay.replayApprovedApprovalRequest({ artifactId, ...(signal ? { signal } : {}), callerAuthority: 'present_user' });
             },
         });
@@ -1447,10 +1447,10 @@ describe('daemon managed Machine Action factory', () => {
             acquireRuntimeRegistryLease: async () => ({ registry: native.runtimeRegistry, source: 'active', durableRevision: 1, release: async () => {} }),
             observeActionExecution: request => operations.observeExecution({ ...request, execute: operation => request.execute({
                 ...operation,
-                operationAcceptance: { ...operation.operationAcceptance, accept: result => {
+                ...(operation.operationAcceptance ? { operationAcceptance: { ...operation.operationAcceptance, accept: result => {
                     operation.operationAcceptance?.accept(result);
                     outer.abort();
-                } },
+                } } } : {}),
             }) }),
         });
         await expect(managed({ actionId: 'machines.managed.delete', input: { homeId: machine.homeId, managedId: machine.id,

@@ -21,6 +21,7 @@ import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
 import { DurableWorkflowCoordinatorStore, createProductionWorkflowRunCoordinator } from './production';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { classifyWorkflowAbort, workflowInvocationKey } from './coordinator';
 import { executeClaimedRun } from '../automation/automationRunExecutor';
 import { createWorkflowRunStorageTestkit } from './workflowRunStorage.testkit';
@@ -77,7 +78,7 @@ describe('durable review coordinator', () => {
     const nativeRunId = 'panel-native-run';
     // Only the native execution transport is replaced; Action admission, the
     // production coordinator, durable store, crypto and Account reader are real.
-    const nativeBoundary = {
+    const nativeBoundary: Partial<ActionExecutorDeps> = {
       executionRunCheckProtocolV2: async () => ({ ok: true }),
       executionRunStart: async (_sessionId, request) => {
         if (typeof request.localInputId !== 'string') throw new Error('Missing native input identity');
@@ -89,7 +90,7 @@ describe('durable review coordinator', () => {
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response', status: 'running', startedAtMs: 1,
         inputTurns: { occurrenceId: 'occurrence', last: { turnId: 'turn', inputIds: [localInputId], state: 'completed',
           result: { kind: 'json', value } } } } }),
-    } satisfies Partial<ActionExecutorDeps>;
+    };
     const coordinate = createProductionWorkflowRunCoordinator({ token: 'token', accountId, machineId: 'machine', storage: boundary,
       resolveAccountEncryption: async () => ({ kind: 'available', witness: encryption.witness }),
       resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
@@ -112,7 +113,8 @@ describe('durable review coordinator', () => {
       definitions: { get: async () => { throw new Error('Accepted Panel needs no definition lookup'); } }, storage: boundary });
     const page = await reader.execute({ actionId: 'workflow.run.invocations.list', input: { runId, includeContent: true },
       context: { surface: 'ui', authority: 'present_user' } });
-    const held = page.invocationDetails?.find(row => row.progress.invocationPath.blockId === 'synthesis');
+    const held = WorkflowActionOutputSchemasV1['workflow.run.invocations.list'].parse(page).invocationDetails
+      ?.find(row => row.progress.invocationPath.blockId === 'synthesis');
     expect(held?.index.lifecycle).toBe('waiting_for_review');
     if (!held) throw new Error('Missing Panel synthesis');
     if (held.progress.result === undefined) throw new Error('Missing Panel result');

@@ -12,7 +12,7 @@ it('attests the current development Gateway source for a peer without acquiring 
     const fixture = await createAdmittedPluginRuntimeFixture({ happyHomeDir: homeDir,
       runtimeOptions: { pluginIds: [identity.pluginId] } });
     try {
-      const contribution = fixture.registry.contributes.providers.find(entry =>
+      const contribution = (fixture.registry.contributes.providers ?? []).find(entry =>
         entry.identity.pluginId === identity.pluginId && entry.identity.localId === identity.localId);
       if (!contribution?.definition.managedRuntime) throw new Error('Expected the real Gateway declaration');
       const runtime = await fixture.registry.acquireManagedProviderRuntime?.(identity);

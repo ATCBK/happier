@@ -325,12 +325,15 @@ describe('workflow input materialization', () => {
     expect(Buffer.byteLength(materialized.text, 'utf8')).toBeLessThanOrEqual(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
     const selected = materialized.values[0];
     expect(selected).toMatchObject({ goal: context.goal, usage: context.usage, truncated: true });
-    if (!selected || typeof selected !== 'object' || Array.isArray(selected) || !Array.isArray(selected.turns)) {
+    // Array.isArray does not narrow a readonly JSON array, so read the record field explicitly.
+    const selectedTurns = selected && typeof selected === 'object' && !Array.isArray(selected)
+      ? (selected as Readonly<Record<string, unknown>>).turns : undefined;
+    if (!Array.isArray(selectedTurns)) {
       throw new Error('Expected selected Session context');
     }
-    expect(selected.turns.length).toBeGreaterThan(0);
-    expect(selected.turns).toEqual(context.turns.slice(-selected.turns.length));
-    const withOneOlderTurn = { ...context, turns: context.turns.slice(-selected.turns.length - 1), truncated: true };
+    expect(selectedTurns.length).toBeGreaterThan(0);
+    expect(selectedTurns).toEqual(context.turns.slice(-selectedTurns.length));
+    const withOneOlderTurn = { ...context, turns: context.turns.slice(-selectedTurns.length - 1), truncated: true };
     const largerPrompt = `${document.text}\n\n${renderWorkflowPromptContext(references.flatMap((reference, index) =>
       projectWorkflowPromptContext({ reference, value: index === 0 ? withOneOlderTurn : materialized.values[index]! })))}`;
     expect(Buffer.byteLength(largerPrompt, 'utf8')).toBeGreaterThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);

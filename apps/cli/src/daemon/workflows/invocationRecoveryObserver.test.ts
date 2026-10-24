@@ -168,7 +168,7 @@ describe('exact Workflow recovery observation', () => {
       // Session/Machine projection replacing the producer under test.
       const prepared = await owner.prepare(request);
       expect(prepared.existing).toMatchObject({ sessionId, machineId, directory });
-      const ready = owner.materialize(prepared, { ...request, input: 'Give an opinion',
+      const ready = owner.materialize(prepared, { ...request, input: { text: 'Give an opinion', references: [], attachments: [], values: [] },
         beforeInputAdmission: async () => {}, onInputAccepted: async () => { throw new Error('Materialization must not accept input'); },
         workspace: { machineId, directory, checkoutRootPath: directory } });
       if (scenario === 'current') {

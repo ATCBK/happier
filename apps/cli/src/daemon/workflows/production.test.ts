@@ -605,7 +605,9 @@ describe('production workflow coordinator', () => {
             : { replyOutcome: { kind: 'answer' as const, result: { sessionId, messageId: 'exact-result' } } }) };
       } }), credentials,
         ...(concurrentRound ? { resolveExistingSessionConversation: async ({ sessionId }) => ({ sessionId, machineId, directory: '/repo' }) } : {}),
-        ...(projectsRound ? { action: { executor: createActionExecutor({ workflowAction: args => runOwner.execute(args) } as ActionExecutorDeps),
+        // Round projection reaches only the Run-scoped Workflow Actions this owner serves.
+        ...(projectsRound ? { action: { executor: createActionExecutor({ workflowAction: args =>
+          runOwner.execute(args as Parameters<typeof runOwner.execute>[0]) } as ActionExecutorDeps),
           buildContext: async execution => buildWorkflowActionContext(execution),
           observeRun: async () => { throw new Error('Round projection does not launch a Run'); } },
         } : {}),

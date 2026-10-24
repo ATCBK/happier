@@ -8,15 +8,19 @@ vi.mock('@happier-dev/iroh-native/node', async importOriginal => ({
   loadIrohNodeNative: () => ({ available: false, message: 'private-native-loader-detail' }),
 }));
 
+type NativeIrohModule = NonNullable<ReturnType<Parameters<typeof prepareDaemonMachineIrohRuntime>[0]['readRuntimeOptions']>['native']>;
+
 describe('daemon native runtime startup decision', () => {
   it.each(['created', 'standard_only', 'startup_failed', 'native_unavailable'] as const)('records %s once without native details', async branch => {
     // Native endpoint creation/status is the OS boundary; startup policy and factory stay real.
-    const native = {
+    const native: Pick<NativeIrohModule, 'createEndpoint' | 'getEndpointStatus' | 'shutdownEndpoint'> = {
       createEndpoint: async () => {
         if (branch !== 'created') throw new Error('private-native-startup-detail');
-        return { endpointHandle: 'endpoint', endpointId: 'a'.repeat(64) };
+        return { endpointHandle: 'endpoint', endpointId: 'a'.repeat(64), relayPolicy: 'disabled', relayMode: 'disabled',
+          capProfile: 'machineBulk', relayUrls: [] };
       },
-      getEndpointStatus: async () => ({ active: true, endpointId: 'a'.repeat(64), relayUrls: [], directAddresses: [] }),
+      getEndpointStatus: async () => ({ endpointHandle: 'endpoint', active: true, endpointId: 'a'.repeat(64), relayPolicy: 'disabled',
+        relayMode: 'disabled', capProfile: 'machineBulk', relayUrls: [], directAddresses: [] }),
       shutdownEndpoint: async () => {},
     };
     const log = vi.spyOn(logger, 'infoFile');
@@ -30,7 +34,7 @@ describe('daemon native runtime startup decision', () => {
             relayConfig: { relayPolicy: 'disabled', relayUrls: [] },
             // Only this partial native/OS boundary is consumed by the real factory.
             ...(branch === 'native_unavailable' ? {} : {
-              native: native as ReturnType<Parameters<typeof prepareDaemonMachineIrohRuntime>[0]['readRuntimeOptions']>['native'],
+              native: native as NativeIrohModule,
             }) };
         } });
       expect(log.mock.calls.filter(([label]) => label === '[DAEMON RUN] Native Machine Iroh runtime decision')).toEqual([

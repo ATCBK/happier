@@ -1158,7 +1158,8 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
           request: input.request, providerSessionId: input.providerSessionId } });
       if (request.operation.kind !== 'session.open.attest') throw new Error('wrong_attestation_operation');
       attestationPhases.push(request.operation.phase);
-      const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, retainedAgent: binding, runner,
+      const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, retainedAgent: binding,
+        runner: { ...runner, snapshotIdentity: 'fixture-runner' },
         ...request.operation, updateMarker: async () => true });
       if (!recorded) throw new Error('native_mode_attestation_refused');
     },
@@ -1370,7 +1371,7 @@ it.each(['before-native-admission', 'active'] as const)('persists a delayed nati
   const refusedWrites: Array<Readonly<{ operation: string; parentAttempt: number; currentAttempt: number }>> = [];
   const storage = { execute: async (operation: WorkflowRunStorageTestkitOperation) => {
     if ('parentAttempt' in operation && operation.parentAttempt !== currentAttempt) {
-      refusedWrites.push({ operation: operation.operation, parentAttempt: operation.parentAttempt, currentAttempt });
+      refusedWrites.push({ operation: String(operation.operation), parentAttempt: Number(operation.parentAttempt), currentAttempt });
       throw Object.assign(new Error('currentness_conflict'), { response: { status: 409, data: { error: 'currentness_conflict' } } });
     }
     const result = await kit.execute(operation);

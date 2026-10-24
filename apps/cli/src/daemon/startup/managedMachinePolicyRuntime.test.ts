@@ -11,7 +11,8 @@ import { executeManagedMachinePolicyAction } from './managedMachinePolicyAction'
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
-import { UpdateBodySchema, type Update } from '@happier-dev/protocol';
+import { UpdateBodySchema } from '@happier-dev/protocol';
+import type { Update } from '@/api/types';
 import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { ApiMachineClient } from '@/api/apiMachine';
 

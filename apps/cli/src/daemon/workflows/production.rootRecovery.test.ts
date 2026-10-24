@@ -171,7 +171,7 @@ describe('Workflow root recovery', () => {
       const result = WorkflowActionOutputSchemasV1['workflow.run.invocations.retry'].parse(await h.reader.execute({
         actionId: 'workflow.run.invocations.retry', input: { runId, invocation: { recordId: currentRootId },
           expectedRevision: h.storage.run().revision, causalInvocationIds: retry.causalInvocationIds,
-          conversation: 'fresh_conversation', input: { kind: 'original' } }, context }));
+          conversation: 'fresh_agent', input: { kind: 'original' } }, context }));
       currentRootId = result.invocation.id;
       if (legacyCheckpoint) {
         const current = WorkflowActionOutputSchemasV1['workflow.run.get'].parse(await h.reader.execute({
