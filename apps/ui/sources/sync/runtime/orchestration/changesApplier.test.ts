@@ -970,6 +970,30 @@ describe('changesApplier', () => {
         expect(invalidateScmStatusForSession).toHaveBeenCalledWith('s2');
     });
 
+    it('refreshes the exact changed Artifact ids once before checkpointing', async () => {
+        const refreshArtifacts = vi.fn(async (_artifactIds: readonly string[]) => {});
+        const changes = [
+            buildChange({ cursor: 1, kind: 'artifact', entityId: 'artifact-b' }),
+            buildChange({ cursor: 2, kind: 'artifact', entityId: 'artifact-a' }),
+            buildChange({ cursor: 3, kind: 'artifact', entityId: 'artifact-b' }),
+        ];
+
+        const result = await applyPlannedChangeActions({
+            planned: planSyncActionsFromChanges(changes),
+            credentials,
+            isSessionMessagesLoaded: () => false,
+            invalidate: { artifacts: refreshArtifacts },
+            invalidateMessagesForSession: async () => {},
+            invalidateScmStatusForSession: () => {},
+            applyTodoSocketUpdates: async () => {},
+            kvBulkGet: async () => ({ values: [] }),
+        });
+
+        expect(refreshArtifacts).toHaveBeenCalledOnce();
+        expect(refreshArtifacts).toHaveBeenCalledWith(['artifact-a', 'artifact-b']);
+        expect(result).toMatchObject({ status: 'complete', safeAdvanceCursor: '3' });
+    });
+
     it('invalidates todos for refresh-feature KV plan', async () => {
         const invalidateTodos = vi.fn(async () => {});
         const kvBulkGet = vi.fn(async () => ({ values: [] as Array<{ key: string; value: string | null; version: number }> }));

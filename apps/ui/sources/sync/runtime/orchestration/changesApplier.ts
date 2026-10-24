@@ -55,7 +55,8 @@ export async function applyPlannedChangeActions(params: {
         profile?: () => Promise<void>;
         machines?: () => Promise<void>;
         machinePools?: () => Promise<void>;
-        artifacts?: () => Promise<void>;
+        /** Refresh exactly the Artifact rows named by this durable Account-change page. */
+        artifacts?: (artifactIds: readonly string[]) => Promise<void>;
         friends?: () => Promise<void>;
         friendRequests?: () => Promise<void>;
         feed?: () => Promise<void>;
@@ -204,7 +205,13 @@ export async function applyPlannedChangeActions(params: {
             }
         });
     }
-    if (planned.invalidate.artifacts) tasks.push(() => params.invalidate.artifacts?.() ?? Promise.resolve());
+    if (planned.invalidate.artifacts) {
+        const artifactIds = Array.from(new Set(planned.changes
+            .filter(change => change.kind === 'artifact')
+            .map(change => change.entityId)
+            .filter(Boolean))).sort();
+        tasks.push(() => params.invalidate.artifacts?.(artifactIds) ?? Promise.resolve());
+    }
     if (planned.invalidate.friends) {
         tasks.push(() => params.invalidate.friends?.() ?? Promise.resolve());
         tasks.push(() => params.invalidate.friendRequests?.() ?? Promise.resolve());
