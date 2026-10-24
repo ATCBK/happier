@@ -26,6 +26,7 @@ function failure(code: string): Error & { code: string } { return Object.assign(
 export function createProjectAccountRowsSync(options: Readonly<{
     scope: ServerAccountScope; transport: ProjectAccountRowsTransport; cipher: ProjectAccountRowCipherV1;
     isCurrent(): boolean; apply(snapshot: ProjectAccountRowsSnapshot): void;
+    onRefreshFailure?(error: unknown): void;
     readRecency?(ref: WorkspaceRefV1): number | undefined;
     writeRecency?(ref: WorkspaceRefV1, timestamp: number): Promise<void>;
     readLegacyLabel?(key: string): string | undefined;
@@ -85,7 +86,11 @@ export function createProjectAccountRowsSync(options: Readonly<{
             return observe(result.rows);
         })();
         refreshInFlight = task;
-        try { return await task; } finally { if (refreshInFlight === task) refreshInFlight = null; }
+        try { return await task; }
+        catch (error: unknown) {
+            if (options.isCurrent()) options.onRefreshFailure?.(error);
+            throw error;
+        } finally { if (refreshInFlight === task) refreshInFlight = null; }
     }
     function rowFor(key: ProjectAccountRowKeyV1) { const id = buildProjectAccountRowPhysicalKeyV1(key); return opened.find(item => buildProjectAccountRowPhysicalKeyV1(item.row.key) === id); }
     function mutation(payload: ProjectAccountRowPayloadV1 | null, key: ProjectAccountRowKeyV1) {
