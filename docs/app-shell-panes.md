@@ -7,7 +7,9 @@ has its own visibility owner; hiding a page's main column does not collapse navi
 ## Owners and callers
 
 - `apps/ui/sources/components/appShell/panes/model/appPaneReducer.ts` owns scoped pane state.
-  `AppPaneProvider` persists it in the device-local `appPaneScopesV1` setting.
+  `AppPaneProvider` persists each changed scope through `sync/domains/state/filePaneUiState.ts`
+  and the existing device KV adapter (`persistenceStorage.ts`). Open tabs, per-tab view state,
+  draft checkpoints and main-column visibility are state, outside the settings document.
 - `AppPaneScopeHost` is the composition boundary for Sessions, Projects, Workflows and app pages.
   It resolves effective main visibility and arrangement once, then supplies `PaneColumnsHost`.
   `AppScopePaneHost`, `DetailsPaneHost` and `DetailsPaneSlotHost` forward destination-owned data.
@@ -17,6 +19,13 @@ has its own visibility owner; hiding a page's main column does not collapse navi
   own the independent navigation column.
 - Plugin UI's `presentation/layout/resize` owns resize math, pointer reading and the accessible
   handle. Host pane adapters, SplitCanvas and collection rails consume this owner.
+
+Session/Project remembered mobile surfaces and Project checkout selections use
+`sync/domains/state/navigationUiState.ts` over the same keyed device KV owner, with exact-key
+subscriptions. Surface keys retain their Account/Home qualification; checkout keys retain their
+Home qualification. The Settings loader imports 0.2's Session-surface map once before removing
+its old carrier. Existing current records win on a partial-copy retry, and a refused copy retains
+the source for a later read. The three Project maps are 0.3-only and have no Settings conversion.
 
 ## Main column visibility
 
@@ -96,7 +105,17 @@ the rail in the tail only for the one page on screen at the trailing edge (not E
 of a split) and budgets its layout with the empty-tail width, so both placements resolve the same widths.
 `AppShellTailSlot` keeps one container per column, so changing places moves it without remounting.
 Overlay, in-main and hidden presentations and the details drawers stay in the page. On the canvas the
-column, rail and their headers and lists take the plane's paint.
+rail takes the plane's paint and the docked panel is a sheet of its own: content paint, the page's corner
+radius, an 8 px canvas gap from the page and the window inset beneath it, drawn inside the column's own
+width so it opens, closes and resizes with it. The rail's active action of that open panel is its tab: the
+panel's material from the rail's inner edge, rounded away from the panel (`PaneActionRailContext`
+`panelAttached`); elsewhere the active action keeps its edge marker.
+
+Every sheet's rounded corners leave pixels the sheet does not paint. `appShellMaterialPlane.tsx` owns the
+shell's sheet geometry and `AppShellSheetCorners`, which coats those cutouts once with the neighbouring
+plane (masked to the outside of the curve, never behind a translucent sheet), so the desktop app's native
+window material never shows at a corner. The tail paints no plane of its own: the rail coats its column
+and the window inset is its own strip.
 
 `PaneHeader` owns the pane header band (title, identity, facts, Back, close, an optional overline and a
 phone navigation band); `DetailsTabHeader` is the one adaptive content/fit adapter over it, used by Session
@@ -109,6 +128,43 @@ the private presentation-host hook) and the shade's opacity is that distance ove
 bottom pane and popovers are isolated from the main scope; outside a scope a header draws no shade.
 
 ## Openers and Actions
+
+### Right rail placement
+
+The right-sidebar catalog supplies each tab's default placement. Session essentials lead the rail:
+Info, Work and People, followed by Changes, Files and Terminal. Project and Discussion rails consume
+their own scoped catalog entries. Selection is separate from presentation order: an absent or stale
+Session selection still opens Changes when available.
+
+`mobileSurfacePinning.ts` owns effective placement for the rail, overflow, customizer and preview.
+Catalog `auto` resolves to pinned only for known positive content; empty or unknown content resolves
+to overflow. An active automatic tab keeps its rail slot. Explicit pinned, overflow or hidden
+preferences win; choosing Automatic removes that item's override. Preferences never store `auto`.
+Info permits pinned or overflow, so a saved hidden value resolves to its legal catalog default.
+Reset clears only the edited surface, preserving composer and other placement preferences.
+
+Automatic built-ins read scalar facts from their existing resource owners. Services and Board reuse
+received exact-scope summaries first; a mounted Session may acquire one missing scalar per resource,
+without opening a pane, fetching bodies or starting a watch. Projects only consume already-held
+facts. Problems and References passively select the held File controller; Scripts uses the existing
+Work projection. Optional plugin counts use the contextual Resource lifecycle described in
+[Plugin platform](plugin-platform.md).
+
+Computer is a machine-group launcher rather than a selectable retained tab.
+`useOpenSessionComputerScreen` owns its structural availability, opening and disabled reason across
+the rail, header/menu, presence line and transcript references. A retained offline Machine keeps
+the launcher disabled; missing viewer or Machine identity omits it. Opening still uses the mounted
+Session presentation owner and grants no capture or control consent.
+
+`RetainedPanelSurface hiddenMode="activity"` opts into React Activity suspension after first open:
+hidden effects disconnect while local editor state survives. Never-opened content stays absent.
+The existing default retention and explicit Freeze policy remain available for their current
+consumers. Info's body and disclosure composition opt in through this same surface owner.
+
+A hidden retained surface (`display: none`, a hidden Activity) reports width 0 to every `onLayout` below it.
+Measuring consumers admit a reported width only through `readHappierVisibleLayoutWidth`
+(`@happier-dev/plugin-ui/presentation/pageMetrics`), which returns `null` for a hidden box, so they keep their
+last visible measurement until a real resize. Do not hand-write `width > 0` guards or recompose for a zero.
 
 Openers request a destination kind through the existing pane adapter. An implicit open does not
 move an already-open tab. Details retain their existing preview/pinned and split-workspace owners.
