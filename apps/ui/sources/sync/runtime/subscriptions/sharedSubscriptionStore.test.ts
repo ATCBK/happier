@@ -15,6 +15,44 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('reconciles a retained read with current publications at commit without another read', async () => {
+        let current = 1;
+        let held = false;
+        let finishRead!: (value: number) => void;
+        const pending = new Promise<number>(resolve => { finishRead = resolve; });
+        const snapshotClient = vi.fn(() => held ? pending : Promise.resolve(current));
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            retainState: true, defaultSnapshotClient: snapshotClient,
+            refresh: async ({ snapshotClient: read }) => {
+                const received = await read();
+                return (latest: number) => Math.max(latest, received);
+            },
+            applySnapshot: (_state: number, snapshot: number) => snapshot,
+        });
+        const observed: number[] = [];
+        const release = store.subscribe('session', () => observed.push(store.getState('session')));
+        const unrelated = vi.fn();
+        const releaseUnrelated = store.observe('other', unrelated);
+        try {
+            await vi.waitFor(() => expect(store.getState('session')).toBe(1));
+            observed.length = 0;
+            held = true;
+            store.invalidate('session');
+            finishRead(1);
+            // The read reducer has returned; its subscription commit is still queued.
+            await Promise.resolve();
+            for (let value = 2; value <= 76; value++) store.publish('session', value);
+            current = 76;
+            held = false;
+            await vi.waitFor(() => expect(store.isRefreshing('session')).toBe(false));
+            expect(snapshotClient).toHaveBeenCalledTimes(2);
+            expect(store.getState('session')).toBe(76);
+            expect(observed).toEqual(Array.from({ length: 75 }, (_, index) => index + 2));
+            expect(unrelated).not.toHaveBeenCalled();
+        } finally { release(); releaseUnrelated(); store.reset(); }
+    });
+
     it('shares a one-shot acquired read until its last mounted owner retires', async () => {
         const calls: AbortSignal[] = [];
         let finish = () => {};

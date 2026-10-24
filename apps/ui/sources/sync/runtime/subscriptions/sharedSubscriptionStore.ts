@@ -6,6 +6,12 @@ export type SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient = never
 
 export type SharedSubscriptionReadAcquisition = Readonly<{ readOnce(): Promise<void>; dispose(): void }>;
 
+type SharedSubscriptionStateUpdate<TState> = (current: TState) => TState;
+
+function isStateUpdate<TState>(value: TState | SharedSubscriptionStateUpdate<TState>): value is SharedSubscriptionStateUpdate<TState> {
+    return typeof value === 'function';
+}
+
 type AcquiredRead = {
     refCount: number;
     controller: AbortController;
@@ -73,7 +79,8 @@ export type SharedSubscriptionStoreConfig<
     /** Seed the watch cursor from the immediate read before parking. */
     watchAfterRefresh?: boolean;
     beginRefresh?: (state: TState, input: TInput, nowMs: () => number) => TState;
-    refresh: (params: SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient>) => Promise<TState>;
+    /** State-dependent reconciliation runs synchronously against current state at commit. */
+    refresh: (params: SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient>) => Promise<TState | SharedSubscriptionStateUpdate<TState>>;
     failRefresh?: (state: TState, input: TInput, nowMs: () => number, error: unknown) => TState;
     /** Retain useful content while exposing the loss of live observation. */
     failWatch?: (state: TState, input: TInput) => TState;
@@ -257,15 +264,16 @@ export function createSharedSubscriptionStore<
             setState(entry, config.beginRefresh(entry.state, entry.input, entry.nowMs));
         }
         const promise = (async () => { try {
+            const state = entry.state;
             const next = await config.refresh({
                 input: entry.input,
-                state: entry.state,
+                state,
                 snapshotClient: entry.snapshotClient,
                 nowMs: entry.nowMs,
                 signal: abortController?.signal,
             });
             if (!abortController?.signal.aborted) {
-                setState(entry, next);
+                setState(entry, isStateUpdate(next) ? next(entry.state) : next);
             }
         } catch (error) {
             if (!abortController?.signal.aborted && config.failRefresh) {
