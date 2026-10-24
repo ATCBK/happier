@@ -1135,6 +1135,11 @@
       "types": "./dist/sessions/messages/sessionMessageRefV1.d.ts",
       "default": "./dist/sessions/messages/sessionMessageRefV1.js"
     },
+    "./sessions/messages/sessionMessageInvocationV1": {
+      "happier-source": "./src/sessions/messages/sessionMessageInvocationV1.ts",
+      "types": "./dist/sessions/messages/sessionMessageInvocationV1.d.ts",
+      "default": "./dist/sessions/messages/sessionMessageInvocationV1.js"
+    },
     "./sessions/messages/sessionMessageReplyV1": {
       "happier-source": "./src/sessions/messages/sessionMessageReplyV1.ts",
       "types": "./dist/sessions/messages/sessionMessageReplyV1.d.ts",
