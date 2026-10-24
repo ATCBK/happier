@@ -19,9 +19,14 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { captureSavedSecretReferenceRevisionsInContext } from './apiSavedSecretCatalog';
 import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { createScopedResolutionSingleFlight, type ScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 export type PromptLibraryAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type PromptLibraryRowMutationResponseV1 = ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>;
+const catalogReads = createScopedResolutionSingleFlight<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>>();
+const rowReads = createScopedResolutionSingleFlight<ReturnType<typeof PromptLibraryRowReadResponseV1Schema.parse>>();
 export class PromptLibraryRowOperationError extends Error {
     constructor(readonly code: string, readonly cause?: unknown) { super(code); this.name = 'PromptLibraryRowOperationError'; }
 }
@@ -56,14 +61,29 @@ function failure(error: unknown, signal?: AbortSignal): PromptLibraryCatalogSnap
     if (error instanceof core.$ZodError) return { status: 'unavailable', reason: 'invalid-stored-content' };
     return { status: 'unavailable', reason: 'unreachable' };
 }
-async function readRows(context: PromptLibraryAccountContext, signal?: AbortSignal) {
-    const response = await context.request(PROMPT_LIBRARY_ROWS_ROUTE_V1, { method: 'GET', signal }, { retry: 'none' });
-    context.assertCurrent();
-    if (!response.ok) throw new PromptLibraryRowOperationError(response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
-    const parsed = PromptLibraryRowsListResponseV1Schema.parse(await response.json());
-    context.assertCurrent();
-    return parsed;
+function readCatalogResource<T>(context: PromptLibraryAccountContext, path: string, parse: (value: unknown) => T,
+    reads: ScopedResolutionSingleFlight<T>, signal?: AbortSignal): Promise<T> {
+    return withActionAccountRequestSignal(context, signal, async signal => {
+        context.assertCurrent();
+        throwIfAborted(signal);
+        const consume = async (response: Response) => {
+            if (!response.ok) throw new PromptLibraryRowOperationError(response.status === 401 ? 'unauthorized'
+                : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
+            return parse(await response.json());
+        };
+        const transport = context.readTransport;
+        const binding = transport?.key;
+        const parsed = transport && binding
+            ? await reads.run(path, sharedSignal => transport.read(path, { method: 'GET', signal: sharedSignal }, { retry: 'none' }, consume),
+                { scope: transport.scope ? [transport.scope, binding] : binding, signal })
+            : await consume(await context.request(path, { method: 'GET', signal }, { retry: 'none' }));
+        throwIfAborted(signal);
+        context.assertCurrent();
+        return parsed;
+    });
+}
+function readRows(context: PromptLibraryAccountContext, signal?: AbortSignal) {
+    return readCatalogResource(context, PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema.parse, catalogReads, signal);
 }
 type PromptLibraryReadPublication = Readonly<{
     onReady?: (projection: PromptLibraryCatalogProjection, isAccountCurrent: () => boolean) => void;
@@ -152,13 +172,8 @@ export type PromptLibraryRecordWriteInput = Readonly<{ record: PromptLibraryReco
 /** Raw destination read for reference census; it never activates or cleans retained sources. */
 export async function readPromptLibraryRowInContext(context: PromptLibraryAccountContext, key: PromptLibraryCatalogKeyV1,
     signal?: AbortSignal) {
-    const response = await context.request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(key)}`, { method: 'GET', signal }, { retry: 'none' });
-    context.assertCurrent();
-    if (!response.ok) throw new PromptLibraryRowOperationError(response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
-    const row = PromptLibraryRowReadResponseV1Schema.parse(await response.json());
-    context.assertCurrent();
-    return row;
+    return readCatalogResource(context, `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(key)}`,
+        PromptLibraryRowReadResponseV1Schema.parse, rowReads, signal);
 }
 
 /** Read only demanded active rows, with the same Account admission and envelope decoder as the catalog. */
@@ -228,6 +243,15 @@ export function writePromptLibraryRecordInContext(context: PromptLibraryAccountC
             }, { retry: 'none' });
         } catch (error) {
             throw new PromptLibraryRowOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error);
+        } finally {
+            // A subsequent read must not join a pre-write request, even when
+            // the issued mutation's response is lost or cannot be admitted.
+            const transport = context.readTransport;
+            if (transport) {
+                const scope = transport.scope ? [transport.scope, transport.key] : transport.key;
+                catalogReads.invalidate(scope);
+                rowReads.invalidate(scope);
+            }
         }
         const parsed = PromptLibraryRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
         if (!parsed.success) throw new PromptLibraryRowOperationError(response.ok ? 'outcome_unknown' : `prompt_library_row_http_${response.status}`);

@@ -15,6 +15,9 @@ import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/librar
 import { applyPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue,
   resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -33,6 +36,57 @@ afterEach(async () => {
 });
 
 describe('Prompt catalog captured Account mutation publication', () => {
+  it('shares a pending row across captures without borrowing cancellation or retaining the settled response', async () => {
+    const boundary = createPromptLibraryCatalogBoundary();
+    let held = createDeferred<void>();
+    let reads = 0;
+    const path = `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/folders`;
+    const fixture = await createPlainArtifactHomeFixture('https://shared-prompt-row.test', { handleRequest: async (route, init) => {
+      const response = await boundary.handle(route, init);
+      if (route === path && (init?.method ?? 'GET') === 'GET') {
+        reads += 1;
+        await held.promise;
+      }
+      return response;
+    } });
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const { readPromptLibraryRowInContext, writePromptLibraryRecordInContext } = await import('./apiPromptLibraryCatalog');
+    const caller = new AbortController();
+    const firstAccount = await captureLazyActionAccountContext(fixture.home.id, caller.signal);
+    const secondAccount = await captureLazyActionAccountContext(fixture.home.id);
+    const first = readPromptLibraryRowInContext(firstAccount, 'folders');
+    const firstOutcome = first.catch(error => error);
+    const second = readPromptLibraryRowInContext(secondAccount, 'folders');
+    const pending = [first, second];
+    try {
+      await vi.waitFor(() => expect(reads).toBeGreaterThan(0));
+      caller.abort();
+      held.resolve();
+      expect(await firstOutcome).toBeInstanceOf(Error);
+      expect(await second).toMatchObject({ status: 'present', revision: 1 });
+      expect(reads).toBe(1);
+      held = createDeferred<void>();
+      const beforeWrite = readPromptLibraryRowInContext(secondAccount, 'folders');
+      pending.push(beforeWrite);
+      await vi.waitFor(() => expect(reads).toBe(2));
+      expect(await writePromptLibraryRecordInContext(secondAccount, {
+        record: { key: 'folders', value: { v: 1, folders: [{ id: 'new', name: 'New' }] } }, expectedRevision: 1,
+      })).toMatchObject({ status: 'updated', revision: 2 });
+      const afterWrite = readPromptLibraryRowInContext(secondAccount, 'folders');
+      pending.push(afterWrite);
+      await vi.waitFor(() => expect(reads).toBe(3));
+      held.resolve();
+      expect(await beforeWrite).toMatchObject({ status: 'present', revision: 1 });
+      expect(await afterWrite).toMatchObject({ status: 'present', revision: 2 });
+      expect(await readPromptLibraryRowInContext(secondAccount, 'folders')).toMatchObject({ status: 'present', revision: 2 });
+      expect(reads).toBe(4);
+    } finally {
+      held.resolve();
+      await Promise.allSettled(pending);
+      firstAccount.dispose(); secondAccount.dispose();
+      await fixture.dispose();
+    }
+  });
   it('keeps finite Action catalog reads out of retained Settings and history maintenance', async () => {
     const accountId = 'account-finite-prompt-catalog';
     const sourceReads: string[] = [];
