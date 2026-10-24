@@ -16,9 +16,9 @@ import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests } from '.
 import { listTranscriptApprovalArtifactsForSession } from '../../../../ui/sources/sync/domains/artifacts/approvalArtifacts';
 import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '../../../../ui/sources/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 
-const CODEX_AGENT = CODEX_MANIFEST.contributes.agents?.[0];
-const CLAUDE_AGENT = CLAUDE_MANIFEST.contributes.agents?.[0];
-if (!CODEX_AGENT || !CLAUDE_AGENT) throw new Error('First-party Agent manifests must contribute their Agent');
+// Admit the shipped manifest Agents first so fixture variants spread a typed contribution.
+const CODEX_AGENT = PluginAgentContributionV2Schema.parse(CODEX_MANIFEST.contributes.agents?.[0]);
+const CLAUDE_AGENT = PluginAgentContributionV2Schema.parse(CLAUDE_MANIFEST.contributes.agents?.[0]);
 
 describe('MCP approval origin to stored transcript review', () => {
   it.each([

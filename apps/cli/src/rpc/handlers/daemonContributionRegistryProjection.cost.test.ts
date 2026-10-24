@@ -96,7 +96,7 @@ describe('bundled daemon contribution describe cost', () => {
                 request: { cwd: fixture.happyHomeDir, backendPreference: { kind: 'prefer', backendId } },
                 workingDirectory: fixture.happyHomeDir,
                 registry,
-                onNonRepository: () => ({ success: false }),
+                onNonRepository: (): ScmStatusSnapshotResponse => ({ success: false }),
                 runWithBackend: async ({ context, selection }) => {
                     if (!selection.backend.statusSnapshot) throw new Error('Expected the authored status operation');
                     retained.invokeStatus = () => selection.backend.statusSnapshot!({ context, request: { cwd: fixture.happyHomeDir } });

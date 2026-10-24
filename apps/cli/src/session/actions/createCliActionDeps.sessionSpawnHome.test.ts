@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os';
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { deriveSessionCreationTagV1, SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerSessionCreationTargetPreparationRpc } from '@/session/creation/registerSessionCreationTargetPreparationRpc';
@@ -43,7 +43,7 @@ describe('Session spawn Home admission', () => {
     // Home admission must also reach the actual spawn owner's capability gate.
     // A Home HTTP absence is a genuine boundary refusal; no native Session is created.
     vi.spyOn(axios, 'get').mockResolvedValue({ status: 404, data: {} });
-    const spawnInput = { ...input,
+    const spawnInput = { ...input, creationKey: SessionCreationKeyV1Schema.parse(creationKey),
       sessionCreationTag: deriveSessionCreationTagV1({ callerCreationNamespace: 'plugin:acme.channels', creationKey }),
       actionCaller: { kind: 'plugin' as const, pluginId: 'acme.channels' }, signal: lifetime.signal };
     await expect(deps.sessionSpawnNew(spawnInput)).resolves.toMatchObject({
