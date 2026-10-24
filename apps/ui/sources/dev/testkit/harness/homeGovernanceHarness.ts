@@ -419,6 +419,9 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 record.answers.set('/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
             }
             record.answers.set(`GET ${AUTHORING_MEMORY_ROUTE_V1}`, { body: AuthoringMemoryListResponseV1Schema.parse({ rows: [] }) });
+            // Workflow library summaries ask only for one structural page's
+            // definition ids; an unseeded Home has no Automation rows.
+            record.answers.set('POST /v3/automations/query', { body: { automations: [], nextCursor: null } });
             if ((options.accountEncryptionMode ?? 'plain') === 'plain') {
                 record.answers.set(`POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: createPlainProjectAccountRowListFixture() });
             }
