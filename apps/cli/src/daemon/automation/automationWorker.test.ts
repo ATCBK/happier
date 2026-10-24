@@ -599,6 +599,43 @@ describe('automationWorker', () => {
     }
   });
 
+  it('honours claim Retry-After through the worker scheduler and cancels its pending retry on stop', async () => {
+    vi.useFakeTimers();
+    let worker: ReturnType<typeof startAutomationWorker> | undefined;
+    try {
+      const now = Date.now();
+      process.env.HAPPIER_SERVER_URL = 'https://api.example.test';
+      process.env.HAPPIER_WEBAPP_URL = 'https://app.example.test';
+      process.env.HAPPIER_HOME_DIR = join(os.tmpdir(), `happier-retry-after-${now}-${Math.random()}`);
+      reloadCapacityConfiguration();
+      mockGet.mockReset().mockResolvedValue({ data: { assignments: [], settings: DEFAULT_WORKER_SETTINGS } });
+      mockPost.mockReset().mockRejectedValue({ response: { status: 429, headers: { 'retry-after': '600' } } });
+      worker = startCapacityAutomationWorker({ token: 'token-1', credentials: { token: 'token-1', encryption: null },
+        machineId: 'machine-1', env: { NODE_ENV: 'test' } });
+      await worker.refreshAssignments();
+      worker.handleServerUpdate({ id: 'retry-after-wake', seq: 1, createdAt: now, body: {
+        t: 'automation-run-updated', runId: 'retry-after-run', automationId: null, state: 'queued', scheduledAt: now,
+        startedAt: null, finishedAt: null, updatedAt: now, machineId: null, targetMachineId: 'machine-1',
+      } } satisfies Update);
+      await vi.advanceTimersByTimeAsync(0);
+      await settleRequestDispatch();
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await settleRequestDispatch();
+      expect(mockPost).toHaveBeenCalledTimes(2);
+      worker.stop();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(mockPost).toHaveBeenCalledTimes(2);
+    } finally {
+      worker?.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('reconciles claimable direct runs even when there are no Automation assignments', async () => {
     vi.useFakeTimers();
     try {

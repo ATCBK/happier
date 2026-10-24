@@ -62,11 +62,18 @@ describe('nextAutomationBackoffMs', () => {
     })).toBe(30_000);
   });
 
-  it('never waits past the permanent cadence for an oversized Retry-After', () => {
+  it('honours a server Retry-After longer than the permanent failure cadence', () => {
     expect(nextAutomationRetryDelayMs({
       failureCount: 0,
       error: { response: { status: 503, headers: { 'retry-after': '86400' } } },
-    })).toBe(300_000);
+    })).toBe(86_400_000);
+  });
+
+  it('keeps the normal backoff floor when the server requests a shorter wait', () => {
+    expect(nextAutomationRetryDelayMs({
+      failureCount: 3,
+      error: { response: { status: 429, headers: { 'retry-after': '1' } } },
+    })).toBe(4_000);
   });
 
   it('keeps unclassifiable failures on the liveness backoff curve', () => {

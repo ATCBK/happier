@@ -44,11 +44,7 @@ export function nextAutomationRetryDelayMs(params: {
   }
   const backoff = nextAutomationBackoffMs(params.failureCount);
   if (classification.retryAfterMs === undefined) return backoff;
-  // An authoritative server wait outranks the worker's own curve, but the
-  // worker still never polls faster than its backoff and never idles longer
-  // than the cadence it already uses for a hopeless endpoint.
-  return Math.min(
-    PERMANENT_RETRY_DELAY_MS,
-    Math.max(backoff, classification.retryAfterMs),
-  );
+  // An authoritative server wait outranks the worker's own curve, while the
+  // normal backoff remains the minimum delay.
+  return Math.max(backoff, classification.retryAfterMs);
 }
