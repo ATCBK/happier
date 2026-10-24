@@ -60,6 +60,7 @@ import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback'
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { PaneHeaderSlotProvider, PaneHeaderSlotScope, usePublishedPaneHeaderContent } from '@/components/appShell/panes/paneHeaderSlot';
+import { PaneHeaderScrollKey } from '@/components/appShell/panes/paneHeaderScroll';
 import { PaneHeaderActions } from '@/components/appShell/panes/PaneHeaderActions';
 import { getRightSidebarTabLabel } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { AppRightSidebarTabSurface, useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
@@ -965,6 +966,7 @@ const SessionCockpitFullscreenSurface = React.memo((props: Readonly<{
 function SessionCockpitSurfaceHeader(props: Readonly<{ slotKey: string; title: string; testID: string }>) {
     const published = usePublishedPaneHeaderContent(props.slotKey);
     return (
+        <PaneHeaderScrollKey scrollKey={props.slotKey}>
         <PaneHeader
             size="large"
             testID={props.testID}
@@ -972,5 +974,6 @@ function SessionCockpitSurfaceHeader(props: Readonly<{ slotKey: string; title: s
             line={published?.line ?? null}
             actions={<PaneHeaderActions published={published} title={props.title} testID={props.testID} />}
         />
+        </PaneHeaderScrollKey>
     );
 }

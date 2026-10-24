@@ -35,20 +35,66 @@ export function resolvePaneHeaderShadeOpacity(distancePx: number): number {
  * nothing to report to. A nested or secondary scroller inside a scoped body sits in
  * `PaneHeaderScrollIsolation` (or simply does not report), so it never claims the pane's shade.
  */
-export function PaneHeaderScrollScope(props: Readonly<{ children: React.ReactNode }>) {
-    const [channel] = React.useState<PaneHeaderScrollChannel>(() => {
-        const opacity = new Animated.Value(0);
-        let last = 0;
+export function PaneHeaderScrollScope(props: Readonly<{
+    children: React.ReactNode;
+    /**
+     * The pair has no header of its own here (an embedded Session inside a peek, a phone in landscape): its
+     * scroller reports to the scope around it, whose header it is the body of. Toggling it keeps the tree.
+     */
+    passThrough?: boolean;
+}>) {
+    const outer = React.useContext(PaneHeaderScrollContext);
+    const [channel] = React.useState(createPaneHeaderScrollChannel);
+    return <PaneHeaderScrollContext.Provider value={props.passThrough ? outer : channel}>{props.children}</PaneHeaderScrollContext.Provider>;
+}
+
+function createPaneHeaderScrollChannel(): PaneHeaderScrollChannel {
+    const opacity = new Animated.Value(0);
+    let last = 0;
+    return {
+        opacity,
+        reportTopDistance: (distancePx: number) => {
+            const next = resolvePaneHeaderShadeOpacity(distancePx);
+            if (next === last) return;
+            last = next;
+            opacity.setValue(next);
+        },
+    };
+}
+
+type PaneHeaderScrollChannels = Readonly<{ channelFor(key: string): PaneHeaderScrollChannel }>;
+
+const PaneHeaderScrollChannelsContext = React.createContext<PaneHeaderScrollChannels | null>(null);
+
+/**
+ * For a pane whose one header serves several retained tab bodies (the right sidebar, a phone cockpit
+ * surface): each tab keeps its own channel, keyed like its header slot, so a hidden tab's scroller never
+ * moves the shown tab's shade, and returning to a tab shows the shade its retained offset left.
+ */
+export function PaneHeaderScrollChannelsProvider(props: Readonly<{ children: React.ReactNode }>) {
+    const [channels] = React.useState<PaneHeaderScrollChannels>(() => {
+        const byKey = new Map<string, PaneHeaderScrollChannel>();
         return {
-            opacity,
-            reportTopDistance: (distancePx: number) => {
-                const next = resolvePaneHeaderShadeOpacity(distancePx);
-                if (next === last) return;
-                last = next;
-                opacity.setValue(next);
+            channelFor(key) {
+                let channel = byKey.get(key);
+                if (!channel) {
+                    channel = createPaneHeaderScrollChannel();
+                    byKey.set(key, channel);
+                }
+                return channel;
             },
         };
     });
+    return <PaneHeaderScrollChannelsContext.Provider value={channels}>{props.children}</PaneHeaderScrollChannelsContext.Provider>;
+}
+
+/**
+ * Binds a subtree to one tab's channel: the tab's body (its scroller reports there) or the header while
+ * that tab is the one shown (its shade reads there). Outside a channels provider it isolates.
+ */
+export function PaneHeaderScrollKey(props: Readonly<{ scrollKey: string | null; children: React.ReactNode }>) {
+    const channels = React.useContext(PaneHeaderScrollChannelsContext);
+    const channel = channels && props.scrollKey !== null ? channels.channelFor(props.scrollKey) : null;
     return <PaneHeaderScrollContext.Provider value={channel}>{props.children}</PaneHeaderScrollContext.Provider>;
 }
 

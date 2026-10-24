@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { PaneHeaderContentLineSegment } from '@happier-dev/plugin-ui';
 
 import type { IconName } from '@/components/ui/icons/Icon';
+import { PaneHeaderScrollChannelsProvider, PaneHeaderScrollKey } from '@/components/appShell/panes/paneHeaderScroll';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 
 /**
@@ -114,16 +115,22 @@ const PaneHeaderSlotKeyContext = React.createContext<string | null>(null);
 /**
  * The pane that owns a header (the right sidebar, the phone cockpit screen): its tabs publish their
  * live line and trailing action here, and the one `PaneHeader` reads the active tab's entry. A tab's
- * re-render updates only the header, never the pane.
+ * re-render updates only the header, never the pane. Each tab also keeps its own scroll-shade channel,
+ * which the header binds with `PaneHeaderScrollKey` under the same key (the continuous value never
+ * passes through this store).
  */
 export function PaneHeaderSlotProvider(props: Readonly<{ children: React.ReactNode }>) {
     const [store] = React.useState(createPaneHeaderSlotStore);
-    return <PaneHeaderSlotStoreContext.Provider value={store}>{props.children}</PaneHeaderSlotStoreContext.Provider>;
+    return <PaneHeaderSlotStoreContext.Provider value={store}>
+        <PaneHeaderScrollChannelsProvider>{props.children}</PaneHeaderScrollChannelsProvider>
+    </PaneHeaderSlotStoreContext.Provider>;
 }
 
-/** Names the tab whose content is rendered below it, so what it publishes lands on that tab's header. */
+/** Names the tab whose content is rendered below it, so what it publishes (and its scroll) lands on that tab's header. */
 export function PaneHeaderSlotScope(props: Readonly<{ slotKey: string; children: React.ReactNode }>) {
-    return <PaneHeaderSlotKeyContext.Provider value={props.slotKey}>{props.children}</PaneHeaderSlotKeyContext.Provider>;
+    return <PaneHeaderSlotKeyContext.Provider value={props.slotKey}>
+        <PaneHeaderScrollKey scrollKey={props.slotKey}>{props.children}</PaneHeaderScrollKey>
+    </PaneHeaderSlotKeyContext.Provider>;
 }
 
 /**

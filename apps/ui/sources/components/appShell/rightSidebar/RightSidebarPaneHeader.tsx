@@ -4,6 +4,7 @@ import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
 import { usePublishedPaneHeaderContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { PaneHeaderActions } from '@/components/appShell/panes/PaneHeaderActions';
+import { PaneHeaderScrollKey } from '@/components/appShell/panes/paneHeaderScroll';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 
 import type { RightSidebarTabDefinition } from './rightSidebarBuiltinTabs';
@@ -43,6 +44,8 @@ export function RightSidebarPaneHeader(props: Readonly<{
         ? { ...publishedLine, segments: [props.context, ...(publishedLine?.segments ?? [])] }
         : publishedLine;
     return (
+        // The shade under the band follows the shown tab's own scroller.
+        <PaneHeaderScrollKey scrollKey={tab.id}>
         <PaneHeader
             testID={props.testID}
             mainRestoreChip={showMainChip}
@@ -54,5 +57,6 @@ export function RightSidebarPaneHeader(props: Readonly<{
             size={props.size}
             onClose={props.onClose}
         />
+        </PaneHeaderScrollKey>
     );
 }
