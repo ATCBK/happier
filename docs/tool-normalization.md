@@ -393,3 +393,26 @@ The canonical rule:
 
 - Prefer fixing drift in **CLI V2 normalization**.
 - Only extend the app fallback normalization when you must keep older stored shapes renderable.
+
+
+## Inline tool-result media in 0.3 development
+
+Claude SDK messages and accepted terminal transcript items use the Session media
+service to publish inline tool-result images. The Claude transcript owner reads
+raw image blocks before its bounded semantic projection removes image bytes and
+duplicate native Read metadata. Both readers derive media local ids from the
+existing provider-fact identity and tool-call id.
+
+The host media adapter reuses the ACP content extractor and the central
+`sendAgentSessionMediaCommitted` storage bridge. The existing workspace persister
+owns file placement, content validation, budgets and failed-commit cleanup;
+transcript messages carry only media references and metadata. Tool-result media
+does not grant filesystem access to paths supplied by a plugin. Existing
+source-root registration remains the authority for generated local files.
+
+Terminal browsing stays read-only and byte-free. Only the retained runner's
+accepted-item projection can request media materialization. It carries the
+admitted source and provider-fact reference, and the Claude source owner rereads
+that exact native row under the existing source cursor checks. Rejected or
+trimmed page items do not publish files or transcript rows. Session access,
+plugin occurrence, cancellation and retirement remain host-owned.
