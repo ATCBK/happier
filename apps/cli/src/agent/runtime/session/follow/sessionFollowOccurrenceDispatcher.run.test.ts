@@ -19,10 +19,55 @@ import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activi
 
 afterEach(() => vi.restoreAllMocks());
 
-it('keeps unavailable and cancelled exact Account sources pending without discovering other follows', async () => {
-  const reads = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { follows: [] } });
+it('reads only exact Session Run follows and retains the selection on every continuation', async () => {
+  const sourceSessionId = 'c111111111111111111111111';
+  const selected = ['first-run', 'later-run'].map(runId => ({
+    source: { kind: 'execution_run' as const, sessionId: sourceSessionId, runId }, following: true,
+    persistent: true, policy: { preset: 'important' as const },
+  }));
+  const unrelated = Array.from({ length: 1000 }, (_, index) => ({
+    source: { kind: 'workflow_run' as const, runId: `unrelated-${index}` }, following: true,
+    persistent: true, policy: { preset: 'important' as const },
+  }));
+  const queries: { source: unknown; cursor: string | null }[] = [];
+  let returnedRows = 0;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const request = new URL(String(url));
+    expect(request.pathname).toBe('/v2/account/session-follows');
+    const source = request.searchParams.get('source');
+    const cursor = request.searchParams.get('cursor');
+    queries.push({ source: source ? JSON.parse(source) : null, cursor });
+    const follows = source ? [selected[cursor === null ? 0 : 1]!] : [...unrelated, ...selected];
+    returnedRows += follows.length;
+    return { status: 200, data: { follows,
+      ...(source && cursor === null ? { continuation: 'selected-next' } : {}) } };
+  });
   const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409,
     data: { ok: false, v: 1, error: 'source_unavailable' } });
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://run-follow.test',
+    machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => true, dispatchPersonal: async () => { throw new Error('Unavailable source has no personal effect'); } });
+  try {
+    await dispatcher.dispatchAccountSourceRange({ sourceSessionId });
+    expect(returnedRows).toBe(2);
+    expect(queries).toEqual([
+      { source: { kind: 'session', sessionId: sourceSessionId }, cursor: null },
+      { source: { kind: 'session', sessionId: sourceSessionId }, cursor: 'selected-next' },
+    ]);
+    expect(posts.mock.calls.map(([, body]) => body)).toEqual(selected.map(({ source }) => ({ v: 1, source })));
+  } finally { dispatcher.dispose(); }
+});
+
+it('does not re-demand an unavailable source during ten idle minutes or 100 unrelated arrivals, and reads its later occurrence once', async () => {
+  vi.useFakeTimers();
+  const reads = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { follows: [] } });
+  let available = false;
+  const posts = vi.spyOn(axios, 'post').mockImplementation(async () => available
+    ? { status: 200, data: { ok: true, v: 1, original: { source: { kind: 'workflow_run', runId: 'unavailable-run' }, revision: 2 },
+      event: { kind: 'finished' }, routes: [] } }
+    : { status: 409, data: { ok: false, v: 1, error: 'source_unavailable' } });
   const effects = vi.fn();
   const lifetime = new AbortController();
   const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
@@ -36,12 +81,23 @@ it('keeps unavailable and cancelled exact Account sources pending without discov
       { v: 1, source: { kind: 'workflow_run', runId: 'unavailable-run' } },
       { v: 1, source: { kind: 'discussion', discussionId: 'unavailable-discussion' } },
     ]);
+    expect(reads).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(posts).toHaveBeenCalledTimes(2);
+    expect(reads).not.toHaveBeenCalled();
+    for (let index = 0; index < 100; index++) {
+      await dispatcher.dispatchAccountSourceRange({ sourceSessionId: `c${String(index).padStart(24, '0')}` });
+    }
+    expect(posts).toHaveBeenCalledTimes(2);
+    available = true;
+    await dispatcher.dispatchAccountSourceRange({ workflowRunIds: ['unavailable-run'] });
+    expect(posts).toHaveBeenCalledTimes(3);
+    expect(posts.mock.calls[2]?.[1]).toEqual({ v: 1, source: { kind: 'workflow_run', runId: 'unavailable-run' } });
     lifetime.abort();
     await dispatcher.dispatchAccountSourceRange({ workflowRunIds: ['cancelled-run'] });
-    expect(posts).toHaveBeenCalledTimes(2);
+    expect(posts).toHaveBeenCalledTimes(3);
     expect(effects).not.toHaveBeenCalled();
-    expect(reads).not.toHaveBeenCalled();
-  } finally { dispatcher.dispose(); }
+  } finally { dispatcher.dispose(); vi.useRealTimers(); }
 });
 
 it('rechecks only changed Account Run sources without listing unrelated follows, retaining the final personal proof', async () => {

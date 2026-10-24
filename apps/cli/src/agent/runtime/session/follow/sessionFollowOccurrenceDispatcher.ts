@@ -46,6 +46,7 @@ import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEven
 import { captureSemanticSessionFollowRuleSourceEvidence } from './sessionFollowRuleSourceEvidence';
 import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
+import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { matchSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { SessionFollowRuleInvalidation } from './sessionFollowRuleCache';
 import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
@@ -250,8 +251,11 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     let cursor: string | undefined;
     do {
       if (!await current() || !await input.isPersonalCurrent()) return;
-      const response = await axios.get(`${input.serverHttpBaseUrl}/v2/account/session-follows`, {
-        headers: { Authorization: `Bearer ${input.credentials.token}` }, ...(cursor ? { params: { cursor } } : {}),
+      const request = resolveSessionFollowActionRequest('follow.list', { direction: 'following', receiver: { kind: 'account' },
+        ...(filter.sourceSessionId ? { source: { kind: 'session', sessionId: filter.sourceSessionId } } : {}),
+        ...(cursor ? { cursor } : {}) });
+      const response = await axios.get(`${input.serverHttpBaseUrl}${request.path}`, {
+        headers: { Authorization: `Bearer ${input.credentials.token}` },
         signal: input.signal, validateStatus: () => true,
       });
       const page = response.status === 200 ? ListAccountSessionFollowsResponseV1Schema.safeParse(response.data) : null;
@@ -294,26 +298,32 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       if (!receiverSessionId && (!('sourcePublisher' in occurrence) || occurrence.sourcePublisher.machineId !== input.machineId)) {
         checkpoint(diagnostic, 'currentness', 'held', { reason: 'source_publisher_mismatch' }); return;
       }
-      checkpoint(diagnostic, 'rules', 'started');
-      const opened = await rules.read();
-      if (opened.status !== 'available') { checkpoint(diagnostic, 'rules', 'held', { reason: opened.reason }); return; }
-      if (!await current()) { checkpoint(diagnostic, 'rules', 'held', { reason: 'account_not_current' }); return; }
-      checkpoint(diagnostic, 'source', 'started');
-      const [accountEncryption, source] = await Promise.all([
-        fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
-        fetchSessionById({ token: input.credentials.token, sessionId: occurrence.sourceSessionId,
-          serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
-      ]);
-      if (!source || source.archivedAt !== null && source.archivedAt !== undefined || !await current()) {
-        checkpoint(diagnostic, 'source', 'held', { reason: !source ? 'source_unavailable'
-          : source.archivedAt != null ? 'source_archived' : 'account_not_current' }); return;
-      }
-      checkpoint(diagnostic, 'facts', 'started');
-      const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption,
-        row: source, serverId: input.serverId, nowMs: Date.now(),
-        accountId: input.accountId, serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
-        filters: opened.rules.filter(rule => rule.definition.enabled).map(rule => rule.definition.filter) });
-      if (!facts) { checkpoint(diagnostic, 'facts', 'held', { reason: 'source_facts_unavailable' }); return; }
+      const prepareRuleSource = async () => {
+        checkpoint(diagnostic, 'rules', 'started');
+        const opened = await rules.read();
+        if (opened.status !== 'available') { checkpoint(diagnostic, 'rules', 'held', { reason: opened.reason }); return null; }
+        if (!await current()) { checkpoint(diagnostic, 'rules', 'held', { reason: 'account_not_current' }); return null; }
+        checkpoint(diagnostic, 'source', 'started');
+        const [accountEncryption, source] = await Promise.all([
+          fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
+          fetchSessionById({ token: input.credentials.token, sessionId: occurrence.sourceSessionId,
+            serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
+        ]);
+        if (!source || source.archivedAt !== null && source.archivedAt !== undefined || !await current()) {
+          checkpoint(diagnostic, 'source', 'held', { reason: !source ? 'source_unavailable'
+            : source.archivedAt != null ? 'source_archived' : 'account_not_current' }); return null;
+        }
+        checkpoint(diagnostic, 'facts', 'started');
+        const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption,
+          row: source, serverId: input.serverId, nowMs: Date.now(),
+          accountId: input.accountId, serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
+          filters: opened.rules.filter(rule => rule.definition.enabled).map(rule => rule.definition.filter) });
+        if (!facts) { checkpoint(diagnostic, 'facts', 'held', { reason: 'source_facts_unavailable' }); return null; }
+        return { opened, facts };
+      };
+      // The admitted original owns preparation demand. Share the same fresh
+      // facts within this request map, never across operations or refusals.
+      let ruleSource: Awaited<ReturnType<typeof prepareRuleSource>> | undefined;
       // A request map is a currentness fence, never one aggregate semantic occurrence.
       const originals: (SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence)[] = 'sourceMessage' in occurrence ? [occurrence]
         : occurrence.sourceRequests.requests.flatMap(request => {
@@ -337,6 +347,9 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           personalRequestPassComplete = false;
           continue;
         } // Unsupported/denied is pending, not an empty route set.
+        ruleSource ??= await prepareRuleSource();
+        if (!ruleSource) return;
+        const { opened, facts } = ruleSource;
         const evaluated = evaluateSessionFollowRuleOccurrenceV1({ accountId: input.accountId, evaluator: 'sourcePublisher' in original ? 'source' : 'receiver',
           production: 'sourcePublisher' in original ? 'source' : 'recovery', sourceSessionId: original.sourceSessionId, evidence, currentFacts: facts,
           rules: opened.rules.filter(rule => !rule.inception || ordinary.originalCreatedAt !== undefined
@@ -713,7 +726,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           match: homeId !== null || rule.definition.filter.homeServerIds.includes(input.serverId)
             ? matchSessionListFilterV1(rule.definition.filter, {
               serverId, kind: 'session', workspaceContext: { normalizeServerId: id => id === input.serverId ? serverId : id },
-            }) : 'unavailable' as const,
+            }, 'daemonRule') : 'unavailable' as const,
         }));
         candidates = known.filter(candidate => candidate.match !== 'miss').map(candidate => candidate.rule);
         const unresolved = known.filter(candidate => candidate.match === 'unavailable').map(candidate => candidate.rule);
@@ -731,7 +744,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
               filters: unresolved.map(rule => rule.definition.filter) });
             // A known miss suppresses discovery only. Unknown facts retain the
             // receiver, and actual dispatch still proves rules and source fresh.
-            if (facts) candidates = candidates.filter(rule => matchSessionListFilterV1(rule.definition.filter, facts) !== 'miss');
+            if (facts) candidates = candidates.filter(rule => matchSessionListFilterV1(rule.definition.filter, facts, 'daemonRule') !== 'miss');
           }
         }
       }

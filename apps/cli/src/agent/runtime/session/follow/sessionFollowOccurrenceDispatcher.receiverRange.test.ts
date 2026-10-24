@@ -19,6 +19,55 @@ import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecyc
 
 afterEach(() => vi.restoreAllMocks());
 
+it('prepares no private rule or source facts for refused occurrences and reads fresh facts after source recovery', async () => {
+  const sourceSessionId = 'c111111111111111111111111';
+  const source = createSessionRecordFixture({ id: sourceSessionId, ownerAccountId: 'account-1', encryptionMode: 'plain',
+    dataEncryptionKey: null, archivedAt: null, metadata: JSON.stringify({ path: '/work', host: 'host', machineId: 'machine' }) });
+  const reads: string[] = [];
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200,
+      data: { assigned: false, direct: false, team: false, group: false } };
+    if (path === `/v2/sessions/${sourceSessionId}`) return { status: 200, data: { session: source } };
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  let available = false;
+  const routes = vi.spyOn(axios, 'post').mockImplementation(async url => {
+    expect(new URL(String(url)).pathname).toBe(`/v2/sessions/${sourceSessionId}/follows/occurrence-routes`);
+    return available ? { status: 200, data: { ok: true, v: 1, sourceSessionId, routes: [] } }
+      : { status: 409, data: { ok: false, v: 1, error: 'source_unavailable' } };
+  });
+  const lifetime = new AbortController();
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://follow-refusal.test',
+    machineId: 'machine', installationId: 'installation', signal: lifetime.signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => false, dispatchPersonal: async () => { throw new Error('No personal route was admitted'); } });
+  const occurrence = (seq: number) => SessionFollowRuleSourceOccurrenceV1Schema.parse({ sourceSessionId,
+    sourcePublisher: { machineId: 'machine', publisherGeneration: '1', committedFenceMs: 1 },
+    sourceMessage: { seq, localId: `original-${seq}` }, evidence: { v: 1, ownerAccountId: 'account-1',
+      event: { kind: 'finished' }, facts: { serverId: 'home', kind: 'session' } } });
+  try {
+    for (let seq = 1; seq <= 20; seq++) await dispatcher.dispatch(occurrence(seq));
+    expect(routes).toHaveBeenCalledTimes(20);
+    expect(reads, 'a refused original must not demand rule configuration, decryption or private filter facts').toEqual([]);
+    available = true;
+    expect(await dispatcher.dispatch(occurrence(21))).toEqual({});
+    expect(reads).toContain('/v2/account/session-follow-rules');
+    expect(reads.filter(path => path === `/v2/sessions/${sourceSessionId}`)).toHaveLength(1);
+    // A second admitted original still rereads source authority, not a retained fact snapshot.
+    expect(await dispatcher.dispatch(occurrence(22))).toEqual({});
+    expect(reads.filter(path => path === `/v2/sessions/${sourceSessionId}`)).toHaveLength(2);
+    lifetime.abort();
+    await dispatcher.dispatch(occurrence(23));
+    expect(routes).toHaveBeenCalledTimes(22);
+  } finally { dispatcher.dispose(); }
+});
+
 it('does no rule inventory reads for 50 manager source arrivals without receiver rules in a 1000-Session Account', async () => {
   const destinationSessionId = 'c222222222222222222222222';
   const sessions = new Map(Array.from({ length: 1000 }, (_, index) => {
@@ -310,7 +359,14 @@ it.each(['rules', 'source_ranges'] as const)('identifies a pending and refused r
   } finally { release(); await pending; dispatcher.dispose(); }
 });
 
-it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the observed original through fresh-rule discovery or overlapping receiver recovery, retaining unreadable ranges (%s)', async entry => {
+it.each([
+  { entry: 'receiver', restriction: 'none' }, { entry: 'source', restriction: 'none' },
+  { entry: 'overlapping-receiver', restriction: 'none' },
+  { entry: 'source', restriction: 'section' }, { entry: 'source', restriction: 'other-home-section' },
+  { entry: 'source', restriction: 'section-moved' },
+  { entry: 'source', restriction: 'missing-section' }, { entry: 'source', restriction: 'future-core' },
+  { entry: 'source', restriction: 'future-extension' },
+] as const)('admits only freshly matching rule originals while retaining discovery candidates ($entry, $restriction)', async ({ entry, restriction }) => {
   const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
   const authoredLocalId = 'private-authored-follow-source-id';
   const sourceSessionId = 'c111111111111111111111111';
@@ -318,7 +374,12 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
   const token = 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
   const rule = { ruleId: 'new-rule', version: 0, receiver: { kind: 'session' as const, sessionId: destinationSessionId },
     inception: { accountChangeCursor: 5, createdAt: 100 },
-    content: { t: 'plain' as const, v: { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }),
+    content: { t: 'plain' as const, v: { v: 1 as const, enabled: true, filter: {
+      ...normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }),
+      ...(restriction.includes('section') ? { sections: { include: [{ serverId: restriction === 'other-home-section' ? 'other-home' : 'home', sectionId: 'section-a' }], exclude: [] } } : {}),
+      ...(restriction === 'future-core' ? { futureCore: { value: 'narrow' } } : {}),
+      ...(restriction === 'future-extension' ? { extensions: { 'acme.future': { kind: 'future', value: true } } } : {}),
+    },
       policy: { preset: 'important' as const } } } };
   const source = { ...createSessionNotificationContextFixture(sourceSessionId), encryptionMode: 'plain', dataEncryptionKey: null,
     metadata: JSON.stringify({ path: '/work', host: 'host', machineId: 'source-machine' }), ownerAccountId: 'account-1',
@@ -331,6 +392,7 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
   let sourceLists = 0;
   const afterSequences: number[] = [];
   const pending: unknown[] = [];
+  let placementReads = 0;
   vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname;
@@ -338,6 +400,14 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     if (path === '/v1/account/encryption/currentness') return { status: 200,
       data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
+    if (path === '/v2/session-organization') {
+      placementReads++;
+      if (restriction === 'missing-section') return { status: 503, data: { error: 'unavailable' } };
+      return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [],
+        folderAssignments: [{ sessionId: sourceSessionId,
+          folderId: restriction === 'section-moved' && placementReads > 1 ? 'section-b' : 'section-a' }],
+        tags: [], tagAssignments: [], orderEntries: [], labels: [] } } };
+    }
     if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
       data: { sessions: [], hasNext: false, nextCursor: null } };
     if (path === '/v2/account/session-follow-rules') {
@@ -390,6 +460,11 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     await dispatch();
     expect(pending).toEqual([]);
     readable = true;
+    if (restriction !== 'none') {
+      const discovered = await dispatcher.readReceiverSessionIds(sourceSessionId);
+      expect(discovered).toEqual(restriction === 'other-home-section' ? [] : [destinationSessionId]);
+      placementReads = 0;
+    }
     const available = await (async () => {
       if (entry !== 'overlapping-receiver') return dispatch();
       const observation = { sourceSessionId, destinationSessionId, relation: 'follower' as const, policy: { preset: 'important' as const },
@@ -403,6 +478,14 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
       finally { releaseSource(); }
       return (await Promise.all([latest, older]))[0];
     })();
+    const refuses = ['other-home-section', 'missing-section', 'section-moved', 'future-core', 'future-extension'].includes(restriction);
+    if (refuses) {
+      expect(pending).toEqual([]);
+      expect(placementReads).toBe(restriction === 'section-moved' ? 2 : restriction === 'missing-section' ? 1 : 0);
+      return;
+    }
+    // Source discovery and ordered receiver recovery each prove the current placement.
+    expect(placementReads).toBe(restriction === 'section' ? 2 : 0);
     expect(afterSequences).toEqual([1]);
     if (entry === 'receiver') expect(available).toMatchObject({ coveredEvents: [{ sourceSessionId, kind: 'goal_changed' }] });
     expect(pending).toHaveLength(1);
