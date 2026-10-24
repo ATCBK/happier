@@ -13,6 +13,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { logger } from '@/utils/logger';
 import {
   createConnectedAccountTeamCredentialSourceSnapshot,
   createConnectedPoolMemberTeamCredentialSourceSnapshot,
@@ -64,6 +65,12 @@ export function subscribeTeamCredentialDirectMaterialSourceChanges(
 }
 
 type HomeDomainAction = NonNullable<ActionExecutorDeps['homeDomainAction']>;
+
+export type TeamCredentialDirectMaterialWakeReason =
+  | 'request' | 'startup' | 'source-snapshot'
+  | 'registry-applied' | 'registry-invalidated'
+  | 'account-connect' | 'account-reconnect' | 'account-changes'
+  | 'account-page-limit' | 'account-cursor-gone';
 
 function isActionFailure(value: unknown): value is Readonly<{ ok: false }> {
   return typeof value === 'object' && value !== null && 'ok' in value && value.ok === false;
@@ -126,6 +133,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
   token: string;
   accountId: string;
   signal?: AbortSignal;
+  isAccountChangesObserverCurrent?: () => boolean;
   homeDomainAction: HomeDomainAction;
   establishedRuntimeOwner: Pick<QualifiedConnectedAccountEstablishedRuntimeOwner, 'readMaterialSnapshot'>;
   listAccounts(service: QualifiedConnectedAccountRef['service'], signal: AbortSignal): Promise<Readonly<{
@@ -136,7 +144,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
   serverUrl?: string;
 }>): Readonly<{
   census(input: TeamCredentialDirectMaterialCensusInputV1, signal?: AbortSignal): Promise<TeamCredentialDirectMaterialCensusOutputV1>;
-  reconcile(input?: TeamCredentialDirectMaterialReconcileInputV1, signal?: AbortSignal): Promise<TeamCredentialDirectMaterialReconcileOutputV1>;
+  reconcile(input?: TeamCredentialDirectMaterialReconcileInputV1, signal?: AbortSignal, wakeReason?: TeamCredentialDirectMaterialWakeReason): Promise<TeamCredentialDirectMaterialReconcileOutputV1>;
 }> {
   const resolveConnectedSnapshot = async (
     source: Extract<TeamCredentialSourceBindingV1, { kind: 'connected_account' }>,
@@ -174,158 +182,182 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
         ...(signal ? { signal } : {}),
       });
     },
-    async reconcile(target, signal) {
+    async reconcile(target, signal, wakeReason = 'request') {
       signal = signal && params.signal ? AbortSignal.any([signal, params.signal]) : signal ?? params.signal;
-      const resources = await listOwnedResources({
-        accountId: params.accountId,
-        homeDomainAction: params.homeDomainAction,
-        ...(signal ? { signal } : {}),
-      }).then((listed) => target
-        ? listed.filter((resource) => resource.teamId === target.teamId && resource.id === target.resourceId)
-        : listed);
-      let prepared = 0;
-      const failures: TeamCredentialDirectMaterialReconcileOutputV1['failures'][number][] = [];
-      // The service inventory is one read for this pass, even when resources,
-      // pool members or preparation pages share it. Material and its currentness
-      // remain fresh per preparation; no inventory survives into the next pass.
+      const observerCurrent = params.isAccountChangesObserverCurrent?.() === true;
+      const readsIssued = { teamPages: 0, resourcePages: 0, qualifiedAccountLists: 0,
+        qualifiedGroupReads: 0, preparationPages: 0, censusPages: 0 };
       const accountsByService = new Map<string, Promise<Readonly<{
         accounts: readonly QualifiedConnectedAccountProfileV4[];
       }>>>();
-      const listAccounts = (service: QualifiedConnectedAccountRef['service'], currentSignal: AbortSignal) => {
-        const key = buildQualifiedPluginContributionKey(service);
-        let listed = accountsByService.get(key);
-        if (!listed) {
-          listed = params.listAccounts(service, currentSignal);
-          accountsByService.set(key, listed);
-        }
-        return listed;
+      const readGroup: typeof params.readGroup = (source, currentSignal) => {
+        readsIssued.qualifiedGroupReads++;
+        return params.readGroup(source, currentSignal);
       };
-      for (const resource of resources) {
-        signal?.throwIfAborted();
-        const source = resource.source!;
-        let members: readonly TeamCredentialSourceMemberV1[];
-        if (source.kind === 'connected_account') {
-          members = [connectedMember(source.target.account)];
-        } else if (source.kind === 'connected_pool') {
-          const group = await params.readGroup(source, signal ?? new AbortController().signal);
-          if (!group || group.incarnation !== source.poolIncarnation) continue;
-          members = group.members.filter((member) => member.enabled).map((member) => connectedMember({
-            service: source.target.service,
-            accountId: member.connectedAccountId,
-          }));
-        } else {
-          members = [{
-            kind: 'provider_credential_slot',
-            connectionId: source.connectionId,
-            credentialSlotId: source.credentialSlotId,
-          }];
-        }
-        for (const member of members) {
-          const sourceMemberKey = computeTeamCredentialSourceMemberKeyV1(member);
-          const result = await reconcileTeamCredentialDirectMaterial({
-            teamId: resource.teamId,
-            resourceId: resource.id,
-            sourceMemberKey,
-            fetchPreparation: (request) => fetchTeamCredentialDirectMaterialPreparation({
-              token: params.token,
-              ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-              ...request,
-            }),
-            resolveSourceSnapshot: async ({
-              source: currentSource,
-              sourceMember,
-              sourceCredentialIncarnation,
-              signal: currentSignal,
-            }) => {
-              const effectiveSignal = currentSignal ?? new AbortController().signal;
-              if (currentSource.kind === 'connected_account' && sourceMember.kind === 'connected_account') {
-                const account = currentSource.target.account;
-                const listed = await listAccounts(account.service, effectiveSignal);
-                return await resolveConnectedSnapshot(currentSource, account, listed.accounts, effectiveSignal);
-              }
-              if (currentSource.kind === 'provider_connection' && sourceMember.kind === 'provider_credential_slot') {
-                return await params.resolveProviderSource(currentSource, effectiveSignal);
-              }
-              if (currentSource.kind !== 'connected_pool' || sourceMember.kind !== 'connected_account') return null;
-              const group = await params.readGroup(currentSource, effectiveSignal);
-              const groupMember = group?.members.find((candidate) => (
-                candidate.connectedAccountId === sourceMember.connectedAccountId && candidate.enabled
-              ));
-              if (
-                !group
-                || group.incarnation !== currentSource.poolIncarnation
-                || !groupMember
-                || !sourceCredentialIncarnation
-              ) return null;
-              const account = { service: currentSource.target.service, accountId: sourceMember.connectedAccountId };
-              const listed = await listAccounts(account.service, effectiveSignal);
-              const profile = listed.accounts.find((candidate) => candidate.ref.accountId === account.accountId);
-              if (!profile || profile.status !== 'connected') return null;
-              const material = await params.establishedRuntimeOwner.readMaterialSnapshot({ account, signal: effectiveSignal });
-              return createConnectedPoolMemberTeamCredentialSourceSnapshot({
+      try {
+        const resources = await listOwnedResources({
+          accountId: params.accountId,
+          homeDomainAction: request => {
+            if (request.actionId === 'teams.list') readsIssued.teamPages++;
+            else readsIssued.resourcePages++;
+            return params.homeDomainAction(request);
+          },
+          ...(signal ? { signal } : {}),
+        }).then((listed) => target
+          ? listed.filter((resource) => resource.teamId === target.teamId && resource.id === target.resourceId)
+          : listed);
+        let prepared = 0;
+        const failures: TeamCredentialDirectMaterialReconcileOutputV1['failures'][number][] = [];
+        // The service inventory is one read for this pass, even when resources,
+        // pool members or preparation pages share it. Material and its currentness
+        // remain fresh per preparation; no inventory survives into the next pass.
+        const listAccounts = (service: QualifiedConnectedAccountRef['service'], currentSignal: AbortSignal) => {
+          const key = buildQualifiedPluginContributionKey(service);
+          let listed = accountsByService.get(key);
+          if (!listed) {
+            readsIssued.qualifiedAccountLists++;
+            listed = params.listAccounts(service, currentSignal);
+            accountsByService.set(key, listed);
+          }
+          return listed;
+        };
+        for (const resource of resources) {
+          signal?.throwIfAborted();
+          const source = resource.source!;
+          let members: readonly TeamCredentialSourceMemberV1[];
+          if (source.kind === 'connected_account') {
+            members = [connectedMember(source.target.account)];
+          } else if (source.kind === 'connected_pool') {
+            const group = await readGroup(source, signal ?? new AbortController().signal);
+            if (!group || group.incarnation !== source.poolIncarnation) continue;
+            members = group.members.filter((member) => member.enabled).map((member) => connectedMember({
+              service: source.target.service,
+              accountId: member.connectedAccountId,
+            }));
+          } else {
+            members = [{
+              kind: 'provider_credential_slot',
+              connectionId: source.connectionId,
+              credentialSlotId: source.credentialSlotId,
+            }];
+          }
+          for (const member of members) {
+            const sourceMemberKey = computeTeamCredentialSourceMemberKeyV1(member);
+            const result = await reconcileTeamCredentialDirectMaterial({
+              teamId: resource.teamId,
+              resourceId: resource.id,
+              sourceMemberKey,
+              fetchPreparation: (request) => {
+                readsIssued.preparationPages++;
+                return fetchTeamCredentialDirectMaterialPreparation({
+                  token: params.token,
+                  ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+                  ...request,
+                });
+              },
+              resolveSourceSnapshot: async ({
                 source: currentSource,
-                sourceAccount: account,
+                sourceMember,
                 sourceCredentialIncarnation,
-                memberEnabled: true,
-                material,
-                authenticationKind: 'manual',
-                isPersistedSourceCurrent: async () => {
-                  const currentGroup = await params.readGroup(currentSource, effectiveSignal);
-                  return currentGroup?.incarnation === currentSource.poolIncarnation
-                    && currentGroup.members.some((candidate) => (
-                      candidate.connectedAccountId === sourceMember.connectedAccountId && candidate.enabled
-                    ));
-                },
-              });
-            },
-            upsert: async (item) => {
-              const response = await upsertTeamCredentialDirectMaterial({
-                token: params.token,
-                teamId: resource.teamId,
-                resourceId: resource.id,
-                body: { items: [item] },
-                ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-                ...(signal ? { signal } : {}),
-              });
-              const result = response.results[0];
-              return result?.status === 'stored'
-                ? { ok: true as const }
-                : { ok: false as const, reason: result?.reason ?? 'source_changed' };
-            },
-            withdrawPublication: async (body) => {
-              await withdrawTeamCredentialDirectMaterial({
-                token: params.token,
-                teamId: resource.teamId,
-                resourceId: resource.id,
-                body,
-                ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-                ...(signal ? { signal } : {}),
-              });
-              return { ok: true };
-            },
-            ...(signal ? { signal } : {}),
-          });
-          prepared += result.prepared;
-          if (!result.ok) failures.push({ sourceMemberKey, reason: result.reason });
+                signal: currentSignal,
+              }) => {
+                const effectiveSignal = currentSignal ?? new AbortController().signal;
+                if (currentSource.kind === 'connected_account' && sourceMember.kind === 'connected_account') {
+                  const account = currentSource.target.account;
+                  const listed = await listAccounts(account.service, effectiveSignal);
+                  return await resolveConnectedSnapshot(currentSource, account, listed.accounts, effectiveSignal);
+                }
+                if (currentSource.kind === 'provider_connection' && sourceMember.kind === 'provider_credential_slot') {
+                  return await params.resolveProviderSource(currentSource, effectiveSignal);
+                }
+                if (currentSource.kind !== 'connected_pool' || sourceMember.kind !== 'connected_account') return null;
+                const group = await readGroup(currentSource, effectiveSignal);
+                const groupMember = group?.members.find((candidate) => (
+                  candidate.connectedAccountId === sourceMember.connectedAccountId && candidate.enabled
+                ));
+                if (
+                  !group
+                  || group.incarnation !== currentSource.poolIncarnation
+                  || !groupMember
+                  || !sourceCredentialIncarnation
+                ) return null;
+                const account = { service: currentSource.target.service, accountId: sourceMember.connectedAccountId };
+                const listed = await listAccounts(account.service, effectiveSignal);
+                const profile = listed.accounts.find((candidate) => candidate.ref.accountId === account.accountId);
+                if (!profile || profile.status !== 'connected') return null;
+                const material = await params.establishedRuntimeOwner.readMaterialSnapshot({ account, signal: effectiveSignal });
+                return createConnectedPoolMemberTeamCredentialSourceSnapshot({
+                  source: currentSource,
+                  sourceAccount: account,
+                  sourceCredentialIncarnation,
+                  memberEnabled: true,
+                  material,
+                  authenticationKind: 'manual',
+                  isPersistedSourceCurrent: async () => {
+                    const currentGroup = await readGroup(currentSource, effectiveSignal);
+                    return currentGroup?.incarnation === currentSource.poolIncarnation
+                      && currentGroup.members.some((candidate) => (
+                        candidate.connectedAccountId === sourceMember.connectedAccountId && candidate.enabled
+                      ));
+                  },
+                });
+              },
+              upsert: async (item) => {
+                const response = await upsertTeamCredentialDirectMaterial({
+                  token: params.token,
+                  teamId: resource.teamId,
+                  resourceId: resource.id,
+                  body: { items: [item] },
+                  ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+                  ...(signal ? { signal } : {}),
+                });
+                const result = response.results[0];
+                return result?.status === 'stored'
+                  ? { ok: true as const }
+                  : { ok: false as const, reason: result?.reason ?? 'source_changed' };
+              },
+              withdrawPublication: async (body) => {
+                await withdrawTeamCredentialDirectMaterial({
+                  token: params.token,
+                  teamId: resource.teamId,
+                  resourceId: resource.id,
+                  body,
+                  ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+                  ...(signal ? { signal } : {}),
+                });
+                return { ok: true };
+              },
+              ...(signal ? { signal } : {}),
+            });
+            prepared += result.prepared;
+            if (!result.ok) failures.push({ sourceMemberKey, reason: result.reason });
+          }
         }
+        let remaining = 0;
+        for (const resource of resources) {
+          let cursor: string | undefined;
+          do {
+            readsIssued.censusPages++;
+            const page = await fetchTeamCredentialDirectMaterialCensus({
+              token: params.token,
+              teamId: resource.teamId,
+              resourceId: resource.id,
+              ...(cursor ? { cursor } : {}),
+              ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+              ...(signal ? { signal } : {}),
+            });
+            remaining += page.recipients.filter((recipient) => recipient.readiness !== 'ready').length;
+            cursor = page.nextCursor ?? undefined;
+          } while (cursor);
+        }
+        return { prepared, remaining, failures };
+      } finally {
+        // One payload-free join per pass, including failed/cancelled passes.
+        // Counts cover this owner's read boundaries, not nested material reads.
+        logger.debug('[DAEMON RUN] Team credential direct-material pass', {
+          wakeReason, observerCurrent, selectedServiceCount: accountsByService.size, readsIssued,
+        });
       }
-      let remaining = 0;
-      for (const resource of resources) {
-        let cursor: string | undefined;
-        do {
-          const page = await fetchTeamCredentialDirectMaterialCensus({
-            token: params.token,
-            teamId: resource.teamId,
-            resourceId: resource.id,
-            ...(cursor ? { cursor } : {}),
-            ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-            ...(signal ? { signal } : {}),
-          });
-          remaining += page.recipients.filter((recipient) => recipient.readiness !== 'ready').length;
-          cursor = page.nextCursor ?? undefined;
-        } while (cursor);
-      }
-      return { prepared, remaining, failures };
     },
   });
 }

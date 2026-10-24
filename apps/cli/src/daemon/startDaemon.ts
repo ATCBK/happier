@@ -265,6 +265,7 @@ import { createDaemonConnectedAccountPurposeBindingRuntime } from './connectedSe
 import {
   createDaemonTeamCredentialDirectMaterialReconciler,
   subscribeTeamCredentialDirectMaterialSourceChanges,
+  type TeamCredentialDirectMaterialWakeReason,
 } from './connectedServices/directMaterial/daemonTeamCredentialDirectMaterialReconciler';
 import { createHttpTeamCredentialDirectMaterialClient } from './connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
@@ -609,7 +610,7 @@ export async function startDaemon(
     let connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null = null;
     let teamCredentialDirectMaterialChangeCleanup: (() => void) | null = null;
     let teamCredentialDirectMaterialAccountChangeCleanup: (() => void) | null = null;
-    let reconcileTeamCredentialDirectMaterialAfterSourceChange = (): void => {};
+    let reconcileTeamCredentialDirectMaterialAfterSourceChange = (_reason: TeamCredentialDirectMaterialWakeReason): void => {};
     let daemonServerWorkScheduler: DaemonServerWorkScheduler | null = null;
     let apiMachineForSessions: ApiMachineClient | null = null;
     const postWorkflowMessage: NonNullable<import('./workflows/production').WorkflowProductionExecutionDeps['postWorkflowMessage']> = async (publication, options) => {
@@ -1687,11 +1688,11 @@ export async function startDaemon(
       },
       onDurableRegistryApplied: () => {
         pluginRegistryProjectionInvalidation.invalidateProjection();
-        reconcileTeamCredentialDirectMaterialAfterSourceChange();
+        reconcileTeamCredentialDirectMaterialAfterSourceChange('registry-applied');
       },
       onRuntimeProjectionInvalidated: () => {
         pluginRegistryProjectionInvalidation.invalidateProjection();
-        reconcileTeamCredentialDirectMaterialAfterSourceChange();
+        reconcileTeamCredentialDirectMaterialAfterSourceChange('registry-invalidated');
       },
       managedProviderOperationAuthority,
       qualifiedConnectedAccountEstablishedRuntimeOwner:
@@ -1828,6 +1829,7 @@ export async function startDaemon(
           accountId: externalActionAccountId,
           signal: homeTransportCancellation.signal,
           homeDomainAction,
+          isAccountChangesObserverCurrent: () => apiMachine?.hasCurrentAccountChangesObserver() === true,
           establishedRuntimeOwner: establishedConnectedAccountRuntimeOwner,
           async listAccounts(service, signal) {
             return await listQualifiedConnectedAccountsV4({ token: credentials.token, service, signal });
@@ -1928,15 +1930,16 @@ export async function startDaemon(
         const reconcileIfEnabled = async (
           target?: Parameters<typeof reconciler.reconcile>[0],
           signal?: AbortSignal,
+          wakeReason?: TeamCredentialDirectMaterialWakeReason,
         ) => {
           const snapshot = serverFeaturesSnapshotStore.getSnapshot();
           if (
             snapshot?.status !== 'ready'
             || readServerEnabledBit(snapshot.features, 'teams.credentialResources') !== true
           ) return { prepared: 0, remaining: 0, failures: [] };
-          return await reconciler.reconcile(target, signal);
+          return await reconciler.reconcile(target, signal, wakeReason);
         };
-        const reconcileDirectMaterialBestEffort = () => void reconcileIfEnabled(undefined).catch((error) => logger.debug(
+        const reconcileDirectMaterialBestEffort = (wakeReason: TeamCredentialDirectMaterialWakeReason) => void reconcileIfEnabled(undefined, undefined, wakeReason).catch((error) => logger.debug(
             '[DAEMON RUN] Team credential direct-material reconciliation failed (non-fatal)',
             { error: serializeAxiosErrorForLog(error) },
           ));
@@ -1946,9 +1949,9 @@ export async function startDaemon(
         // Team grant, recipient and connected-service facts arrive through the
         // AccountChange wake attached with the machine client below.
         teamCredentialDirectMaterialChangeCleanup = subscribeTeamCredentialDirectMaterialSourceChanges(
-          reconcileDirectMaterialBestEffort,
+          () => reconcileDirectMaterialBestEffort('source-snapshot'),
         );
-        reconcileDirectMaterialBestEffort();
+        reconcileDirectMaterialBestEffort('startup');
     }
     machineRpcRouteAttachments.attachConnectedAccountDaemonRuntime(
       connectedAccountDaemonRuntime,
@@ -4128,7 +4131,7 @@ export async function startDaemon(
           teamCredentialDirectMaterialAccountChangeCleanup?.();
           teamCredentialDirectMaterialAccountChangeCleanup = attemptedApiMachine
             ? attemptedApiMachine.onManagedProviderRetainedCurrentnessInvalidation(
-                () => reconcileTeamCredentialDirectMaterialAfterSourceChange(),
+                change => reconcileTeamCredentialDirectMaterialAfterSourceChange(`account-${change.source}`),
               )
             : null;
           pluginWebhookWakeCleanup?.();

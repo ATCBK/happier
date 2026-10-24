@@ -9,6 +9,7 @@ import {
   type TeamCredentialResourceSummaryV1,
 } from '@happier-dev/protocol/teams';
 import type { TeamCredentialSourceSnapshot } from '@/providers/broker/teamCredentialSourceSnapshot';
+import { logger } from '@/utils/logger';
 
 vi.mock('./teamCredentialDirectMaterialHttp', () => ({
   fetchTeamCredentialDirectMaterialCensus: vi.fn(async () => ({ recipients: [], nextCursor: null })),
@@ -175,9 +176,13 @@ describe('daemon Team credential direct-material reconciler', () => {
         resources, viewer: { manageCredentials: false, offerOwnCredential: true }, nextCursor: null,
       });
     });
-    const listAccounts = vi.fn(async () => ({ accounts: [] }));
+    const listAccounts = vi.fn(async (_service: { pluginId: string; localId: string }) => ({ accounts: [] }));
+    let observerCurrent = true;
+    const passLog = vi.spyOn(logger, 'debug');
+    const passRecords = () => passLog.mock.calls.filter(([message]) => message === '[DAEMON RUN] Team credential direct-material pass');
     const owner = createDaemonTeamCredentialDirectMaterialReconciler({
       token: 'token', accountId: ACCOUNT_ID, homeDomainAction, listAccounts,
+      isAccountChangesObserverCurrent: () => observerCurrent,
       // Unavailable accounts must never reach material admission; the real
       // reconciliation path below stops at the HTTP account-list boundary.
       establishedRuntimeOwner: { readMaterialSnapshot: async () => { throw new Error('Unexpected material read'); } },
@@ -205,9 +210,14 @@ describe('daemon Team credential direct-material reconciler', () => {
     const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges(() => { passes.push(owner.reconcile()); });
     try {
       // Establish that the fixture actually reaches every owned source.
-      await owner.reconcile();
+      await owner.reconcile(undefined, undefined, 'startup');
       expect(homeDomainAction).toHaveBeenCalledTimes(2);
       expect(listAccounts).toHaveBeenCalledTimes(5);
+      expect(passRecords()).toEqual([['[DAEMON RUN] Team credential direct-material pass', {
+        wakeReason: 'startup', observerCurrent: true, selectedServiceCount: 5,
+        readsIssued: { teamPages: 1, resourcePages: 1, qualifiedAccountLists: 5,
+          qualifiedGroupReads: 0, preparationPages: 20, censusPages: 20 },
+      }]]);
       homeDomainAction.mockClear(); listAccounts.mockClear();
       for (let index = 0; index < 25; index++) {
         commitActiveNotificationChannelCatalog({ ...incumbent, catalog: { status: 'ready', revision: index, channels: [], diagnostics: [] } });
@@ -219,6 +229,7 @@ describe('daemon Team credential direct-material reconciler', () => {
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(0);
       expect(listAccounts).toHaveBeenCalledTimes(0);
+      expect(passRecords()).toHaveLength(1);
 
       commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog, revision: 2 } });
       await Promise.all(passes);
@@ -236,16 +247,44 @@ describe('daemon Team credential direct-material reconciler', () => {
       // One refused service read must not be repeated for each resource in a
       // pass, and must be attempted afresh by the next reconciliation.
       listAccounts.mockRejectedValue(new Error('service unavailable'));
-      const refused = await owner.reconcile();
+      observerCurrent = false;
+      const refused = await owner.reconcile(undefined, undefined, 'account-changes');
       expect(refused.failures).toHaveLength(20);
       expect(listAccounts).toHaveBeenCalledTimes(20);
+      expect(passRecords().at(-1)?.[1]).toEqual({
+        wakeReason: 'account-changes', observerCurrent: false, selectedServiceCount: 5,
+        readsIssued: { teamPages: 1, resourcePages: 1, qualifiedAccountLists: 5,
+          qualifiedGroupReads: 0, preparationPages: 20, censusPages: 20 },
+      });
       listAccounts.mockResolvedValue({ accounts: [] });
       await owner.reconcile();
       expect(listAccounts).toHaveBeenCalledTimes(25);
+      expect(passRecords()).toHaveLength(6);
+      listAccounts.mockImplementation(async service => {
+        if (service.localId === 'source-0') throw new Error('service unavailable');
+        return { accounts: [] };
+      });
+      await owner.reconcile();
+      expect(listAccounts).toHaveBeenCalledTimes(30);
+      expect(passRecords()).toHaveLength(7);
+      expect(passRecords().at(-1)?.[1]).toMatchObject({
+        selectedServiceCount: 5, readsIssued: { qualifiedAccountLists: 5 },
+      });
+      // A failed administration read is still one attributed pass; no payload
+      // or error detail may leak into this bounded cost record.
+      homeDomainAction.mockRejectedValueOnce(new Error('private transport detail'));
+      await expect(owner.reconcile(undefined, undefined, 'account-reconnect')).rejects.toThrow('private transport detail');
+      expect(passRecords()).toHaveLength(8);
+      expect(passRecords().at(-1)?.[1]).toEqual({
+        wakeReason: 'account-reconnect', observerCurrent: false, selectedServiceCount: 0,
+        readsIssued: { teamPages: 1, resourcePages: 0, qualifiedAccountLists: 0,
+          qualifiedGroupReads: 0, preparationPages: 0, censusPages: 0 },
+      });
     } finally {
       unsubscribe();
       await Promise.all(passes);
       resetActiveAccountSettingsSnapshotForTests();
+      passLog.mockRestore();
     }
   });
 
