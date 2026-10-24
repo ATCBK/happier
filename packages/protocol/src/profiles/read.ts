@@ -472,7 +472,7 @@ export async function loadAiLaunchProfileArtifacts(raw: unknown, store: Readonly
   read: (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => Promise<ArtifactSharingResourceV1 | null>;
   readMany?: (artifactIds: readonly string[], options?: Readonly<{ signal?: AbortSignal }>) =>
     Promise<readonly (ArtifactSharingResourceV1 | null)[]>;
-  list?: (options: Readonly<{ limit: number; cursor?: string; signal?: AbortSignal }>) => Promise<Readonly<{
+  list?: (options: Readonly<{ limit: number; kind?: string; cursor?: string; signal?: AbortSignal }>) => Promise<Readonly<{
     items: readonly ArtifactSharingResourceV1[]; nextCursor?: string;
   }>>;
 }>, signal?: AbortSignal): Promise<ReadonlyMap<string, ArtifactSharingResourceV1>> {
@@ -490,8 +490,10 @@ export async function loadAiLaunchProfileArtifacts(raw: unknown, store: Readonly
     let cursor: string | undefined;
     do {
       signal?.throwIfAborted();
-      // FIN's Artifact list owns the 500-row page boundary (not a collection cap).
-      const page = await store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+      // The canonical Artifact selector owns indexed demand and witnessed legacy
+      // header discovery; Profiles never needs an unrelated classified inventory.
+      const page = await store.list({ kind: 'launch-profile.v1', limit: 500,
+        ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
       for (const item of page.items) {
         if (item.header.kind === 'launch-profile.v1' && ['view', 'edit', 'admin'].includes(item.access ?? '')) ids.add(item.artifactId);
       }

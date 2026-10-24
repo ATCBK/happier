@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AIBackendProfileSchema } from './backendProfileSchema.js';
 import { LaunchProfileV2Schema } from './v2/schema.js';
 import { normalizeBackendTargetKeyV2Input } from '../backends/targets/backendTargetRefV2.js';
+import { listArtifactHeadersV1 } from '../artifacts/artifactListSelectionV1.js';
 
 import {
   isLaunchProfileV2,
@@ -419,6 +420,70 @@ describe('readAiLaunchProfileCollection', () => {
       { id: 'shared', artifactId: 'shared', shared: true, viewOnly: true, revision: { headerVersion: 1, bodyVersion: 2 } },
     ]);
     expect(readAiLaunchProfileCollection([], { artifactsById: new Map(), includeShared: true }).entries).toEqual([]);
+  });
+
+  it('discovers shared launch profiles with one indexed header query and no unrelated bodies among 35000 artifacts', async () => {
+    const shared = ['shared-first', 'shared-last'].map((artifactId, index) => ({
+      artifactId, access: 'view' as const, header: { kind: 'launch-profile.v1' },
+      createdAt: 1, updatedAt: 35002 - index * 35001,
+    }));
+    const unrelated = Array.from({ length: 35000 }, (_, index) => ({
+      artifactId: `document-${index}`, access: 'view' as const, header: { kind: 'document.v1' },
+      createdAt: 1, updatedAt: 35001 - index,
+    }));
+    const all = [shared[0]!, ...unrelated, shared[1]!];
+    const bodies: string[] = [];
+    let headerQueries = 0;
+    let unrelatedHeaders = 0;
+    const result = await loadAiLaunchProfileArtifacts([{ artifactId: 'referenced' }, { artifactId: 'referenced' }], {
+      read: async () => { throw new Error('Exact body set must use one readMany'); },
+      readMany: async ids => {
+        bodies.push(...ids);
+        return ids.map(artifactId => ({ artifactId, access: artifactId === 'referenced' ? 'owner' as const : 'view' as const,
+          header: { kind: 'launch-profile.v1' }, body: '{}' }));
+      },
+      list: options => listArtifactHeadersV1({ options, encodeCursor: item => item.artifactId,
+        // Substitute only the physical header transport; selection and Profile discovery stay real.
+        readPage: async selection => {
+          headerQueries++;
+          const candidates = selection?.kinds?.includes('launch-profile.v1') ? shared : all;
+          const start = selection?.cursor ? candidates.findIndex(row => row.artifactId === selection.cursor) + 1 : 0;
+          const items = candidates.slice(start, start + (selection?.limit ?? 500));
+          unrelatedHeaders += items.filter(item => item.header.kind !== 'launch-profile.v1').length;
+          return { items, hasUnclassified: false, kindCoverage: { status: 'complete', unclassifiedCount: 0 },
+            ...(start + items.length < candidates.length ? { nextCursor: items.at(-1)!.artifactId } : {}) };
+        },
+      }),
+    });
+    expect([...result.keys()]).toEqual(['referenced', 'shared-first', 'shared-last']);
+    expect(bodies).toEqual(['referenced', 'shared-first', 'shared-last']);
+    expect({ headerQueries, unrelatedHeaders }).toEqual({ headerQueries: 1, unrelatedHeaders: 0 });
+  });
+
+  it('retains a shared legacy launch profile beyond the first unclassified header page through the canonical selector', async () => {
+    const legacy = Array.from({ length: 1001 }, (_, index) => ({
+      artifactId: `legacy-${index}`, access: 'view' as const,
+      header: { kind: index === 1000 ? 'launch-profile.v1' : 'document.v1' }, createdAt: 1, updatedAt: 1001 - index,
+    }));
+    let legacyQueries = 0;
+    const bodies: string[] = [];
+    const result = await loadAiLaunchProfileArtifacts([], {
+      read: async artifactId => { bodies.push(artifactId); return legacy.find(row => row.artifactId === artifactId) ?? null; },
+      list: options => listArtifactHeadersV1({ options, encodeCursor: item => item.artifactId,
+        readPage: async selection => {
+          const source = selection?.kinds ? [] : legacy;
+          if (selection?.unclassified) legacyQueries++;
+          const start = selection?.cursor ? source.findIndex(row => row.artifactId === selection.cursor) + 1 : 0;
+          const items = source.slice(start, start + (selection?.limit ?? 500));
+          return { items, hasUnclassified: true, kindCoverage: {
+            status: 'partial', unclassifiedCount: legacy.length, reason: 'unclassified_legacy_rows',
+          }, ...(start + items.length < source.length ? { nextCursor: items.at(-1)!.artifactId } : {}) };
+        },
+      }),
+    });
+    expect([...result.keys()]).toEqual(['legacy-1000']);
+    expect(bodies).toEqual(['legacy-1000']);
+    expect(legacyQueries).toBe(3);
   });
 
   it('preserves valid legacy, slim, malformed, and future entries without rewriting them', () => {
