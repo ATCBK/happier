@@ -475,7 +475,10 @@ export async function observeSessionFollowSourceRoutes(input: Readonly<{
                 || source.publisherGeneration.toString() !== publisher.publisherGeneration
                 || !await readExactCurrentPublisherAuthorityInTx(tx, {
                 accountId: input.accountId, sessionId: source.id, machineId: publisher.machineId,
-                committedFence: new Date(publisher.committedFenceMs),
+                // A committed original can wait behind source traversal while
+                // this same publisher heartbeats. Validate its registration,
+                // not the notification's superseded liveness timestamp.
+                publisherGeneration: source.publisherGeneration,
             }, input.accountId, source.id)) return denied;
         } else {
             // Receiver recovery uses its current Account authority, not a fabricated foreign publisher proof.

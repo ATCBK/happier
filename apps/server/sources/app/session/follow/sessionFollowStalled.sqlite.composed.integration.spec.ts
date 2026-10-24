@@ -234,13 +234,19 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 } });
             }
             const presence = createSessionPublisherPresence();
+            let sourceSocket: ReturnType<typeof createAuthenticatedFakeSocket> | undefined;
             if (entry === 'source') {
-                const sourceSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
+                sourceSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
                 expect(await presence.registerPublisher({ socket: sourceSocket,
                     binding: { accountId: account.id, sessionId: source.id, machineId: machine.id },
                     completeActivitySnapshot: { state: 'idle', activeCount: 0 } })).toMatchObject({ status: 'registered' });
-                cleanups.push(() => presence.forgetDisconnectedPublisher({ socket: sourceSocket }));
+                const registeredSourceSocket = sourceSocket;
+                cleanups.push(() => presence.forgetDisconnectedPublisher({ socket: registeredSourceSocket }));
             }
+            const heartbeatSourcePublisher = async () => {
+                if (!sourceSocket) throw new Error('No source publisher was registered');
+                expect(await presence.touchPublisher({ socket: sourceSocket })).toMatchObject({ status: 'touched' });
+            };
             const binding = { accountId: account.id, sessionId: destination.id, machineId: machine.id };
             const nsp = { server: createSocketRoomDiscoveryHarness(async () => []) };
             let publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID(), nsp });
@@ -284,9 +290,11 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             const requests: { url: string; status: number }[] = [];
             const admissionFault = { originalSeq: null as number | null, boundary: 'admission' as 'admission' | 'routes',
                 timeoutAfterCommitSeq: null as number | null };
-            const rulesReadBarrier: { beforeRead?: () => Promise<void> } = {};
+            const routeReadBarrier: { beforeRead?: () => Promise<void> } = {};
             app.addHook('preHandler', async (request, reply) => {
-                if (request.method === 'GET' && request.url === '/v2/account/session-follow-rules') await rulesReadBarrier.beforeRead?.();
+                if (request.method === 'POST' && request.url === `/v2/sessions/${source.id}/follows/occurrence-routes`) {
+                    await routeReadBarrier.beforeRead?.();
+                }
                 const body = request.body;
                 const delivery = body && typeof body === 'object' && 'followDeliveryV1' in body
                     ? SessionFollowInputV1Schema.safeParse(body.followDeliveryV1) : null;
@@ -520,7 +528,8 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 await Promise.allSettled(acknowledgements);
             };
             return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending, machine,
-                dispatchReceiverPending, admissionFault, admissionOutcomes, rulesReadBarrier, requests, sourceChanged, recoveries };
+                dispatchReceiverPending, admissionFault, admissionOutcomes, routeReadBarrier, heartbeatSourcePublisher,
+                requests, sourceChanged, recoveries };
         };
         const appendReply = async (text: string, turnId: string) => {
             await appendTurnInput(turnId);
@@ -1033,23 +1042,30 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq: 7 }) }),
         ]);
         original.admissionFault.originalSeq = null;
-        // Source notifications and receiver recovery share the captured Account
-        // cache. A delayed 7-only notification must not retire a concurrent range
-        // that has already observed all persisted originals through 11.
-        let releaseRules!: () => void;
-        const rulesGate = new Promise<void>(resolve => { releaseRules = resolve; });
-        let readingRules = false;
-        original.rulesReadBarrier.beforeRead = async () => { readingRules = true; await rulesGate; };
+        // A delayed 7-only notification must not retire a concurrent range
+        // that has already observed all persisted originals through 11. Hold
+        // its real route read: a manager without private rules needs no refresh.
+        let releaseRoutes!: () => void;
+        const routesGate = new Promise<void>(resolve => { releaseRoutes = resolve; });
+        let readingRoutes = false;
+        original.routeReadBarrier.beforeRead = async () => {
+            if (readingRoutes) return;
+            readingRoutes = true;
+            await routesGate;
+        };
         const listsBefore = original.requests.filter(request => request.url.endsWith('/follows/sessions')).length;
         const newestRecovery = original.dispatchReceiverPending();
-        await vi.waitFor(() => expect(readingRules).toBe(true));
-        const olderRecovery = original.dispatchReceiverPending(olderObservations);
+        let olderRecovery: Promise<unknown> | undefined;
         try {
+            await vi.waitFor(() => expect(readingRoutes).toBe(true));
+            olderRecovery = original.dispatchReceiverPending(olderObservations);
             await vi.waitFor(() => expect(original.requests.filter(request => request.url.endsWith('/follows/sessions')).length)
                 .toBe(listsBefore + 2));
-        } finally { releaseRules(); }
-        await Promise.all([newestRecovery, olderRecovery]);
-        original.rulesReadBarrier.beforeRead = undefined;
+        } finally {
+            releaseRoutes();
+            await Promise.all([newestRecovery, olderRecovery]);
+            original.routeReadBarrier.beforeRead = undefined;
+        }
         const suffix = await original.prepare('natural', 16384, true, 'admitted');
         expect(suffix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null))
             .toEqual([8, 9, 10, 11]);
@@ -1064,6 +1080,43 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             .toMatchObject({ deliveredTranscriptSeq: 11 });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);
+    });
+
+    it('wakes an idle Everything manager once when its source heartbeats after publishing the occurrence', async () => {
+        const f = await fixture('in_progress', { preset: 'important' });
+        await f.follow({ preset: 'everything' });
+        // No receiver publisher/foreground turn is registered. Only the source
+        // publisher and ordinary Account dispatcher can deliver the wake.
+        const original = await f.originals(false, 'source');
+        const seq = 2;
+        const localId = randomUUID();
+        await db.sessionMessage.create({ data: { sessionId: f.source.id, seq, localId, messageRole: 'event',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: localId,
+                data: TranscriptRawAgentEventV1Schema.parse({ type: 'ready', completedTurnId: 'worker-turn' }) } } },
+            transcriptObservationProvenance: { kind: 'non_dependent', source: 'external' } } });
+        await db.session.update({ where: { id: f.source.id }, data: { seq, latestReadyEventSeq: seq, latestTurnStatus: 'completed' } });
+        let heartbeats = 0;
+        original.routeReadBarrier.beforeRead = async () => {
+            if (heartbeats++ > 0) return;
+            // The real transport boundary races with a heartbeat from the same
+            // registered publisher; generation and Machine custody stay current.
+            await original.heartbeatSourcePublisher();
+        };
+        await original.dispatchPending();
+        const pending = await db.sessionPendingMessage.findMany({ where: { sessionId: f.destination.id } });
+        expect(pending.map(row => readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt)?.followDeliveryV1),
+            JSON.stringify(original.requests)).toEqual([expect.objectContaining({ delivery: 'wake',
+                event: { kind: 'finished' }, original: expect.objectContaining({ sourceMessage: expect.objectContaining({ seq }) }) })]);
+        expect((await db.session.findUniqueOrThrow({ where: { id: f.destination.id } })).latestTurnId).toBeNull();
+        // Replayed source hints rejoin the existing original's Pending custody.
+        await original.dispatchPending();
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(1);
+        await original.replacePublisher();
+        const prepared = await original.prepare('natural', 16384, true, 'admitted');
+        expect(prepared?.representedFollowLocalInputIds).toEqual([pending[0]!.localId]);
+        await original.accept(prepared!);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: seq });
     });
 
     it('recovers CONT29 completion past a host-admitted quiet original without a foreground input', async () => {

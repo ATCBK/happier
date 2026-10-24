@@ -475,6 +475,16 @@ describe('Session Follow source routes', () => {
             expect(JSON.stringify(body)).not.toContain('private-rule');
             expect(body.routes.every((route: object) => !('rule' in route) && !('accountId' in route))).toBe(true);
             expect(await db.sessionFollowEdge.findMany({ where: { sourceSessionId: source.id } })).toEqual(edgesBefore);
+            // Source notifications can outlive a heartbeat, but never their
+            // registered publisher. A foreign/legacy touch must still refuse.
+            const renewedFence = new Date(fence.getTime() + 1);
+            await db.session.update({ where: { id: source.id }, data: { lastActiveAt: renewedFence } });
+            expect((await app.inject({ method: 'POST', url, payload })).json())
+                .toEqual({ ok: false, v: 1, error: 'forbidden' });
+            await db.session.update({ where: { id: source.id }, data: { publisherGenerationLastActiveAt: renewedFence } });
+            const afterHeartbeat = await app.inject({ method: 'POST', url, payload });
+            expect(afterHeartbeat.statusCode, afterHeartbeat.body).toBe(200);
+            expect(afterHeartbeat.json()).toEqual(body);
             const receiverPayload = { v: 1, destinationSessionId: foreignDestination.id,
                 sourceMessage: payload.sourceMessage };
             const receiverResult = await foreignApp.inject({ method: 'POST', url, payload: receiverPayload });
@@ -525,7 +535,6 @@ describe('Session Follow source routes', () => {
             for (const invalid of [
                 { ...payload, sourcePublisher: { ...publisher, machineId: randomUUID() } },
                 { ...payload, sourcePublisher: { ...publisher, publisherGeneration: '2' } },
-                { ...payload, sourcePublisher: { ...publisher, committedFenceMs: publisher.committedFenceMs + 1 } },
                 { ...payload, sourceMessage: { localId: 'original', seq: 3 } },
                 { ...payload, sourceMessage: { localId: 'missing', seq: 2 } },
             ]) expect((await app.inject({ method: 'POST', url, payload: invalid })).json()).toEqual({ ok: false, v: 1, error: 'forbidden' });
