@@ -63,6 +63,8 @@ export type HappierLocalDateTimeFieldProps = Readonly<{
 }>;
 
 const TIME_FIELD_WIDTH = 132;
+/** A whole `YYYY-MM-DD` beside the picker button; narrower, the time wraps below. */
+const DATE_FIELD_MIN_WIDTH = 168;
 const PICKER_BUTTON_WIDTH = 40;
 
 /**
@@ -96,7 +98,7 @@ export function HappierLocalDateTimeField(
         theme={theme}
         style={
           mode === 'date'
-            ? { flex: 1, minWidth: 0 }
+            ? { flexGrow: 1, flexShrink: 1, flexBasis: DATE_FIELD_MIN_WIDTH, minWidth: DATE_FIELD_MIN_WIDTH }
             : { width: TIME_FIELD_WIDTH }
         }
       >
@@ -152,7 +154,8 @@ export function HappierLocalDateTimeField(
 
   return (
     <View style={{ gap: theme.spacing.medium }}>
-      <View style={{ flexDirection: 'row', gap: theme.spacing.medium }}>
+      {/* A column too narrow for both fields puts the time under the date instead of clipping the date. */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.medium }}>
         {part('date')}
         {part('time')}
       </View>
