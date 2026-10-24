@@ -15,8 +15,9 @@ import type { SessionSubagentActiveExecutionRunState } from '../types';
 import { createVisibleMessagesResolverFromDescriptor } from './visibleMessageDescriptors';
 import { resolveProjectedAgentUiBehaviorEntry } from '@/agents/registry/agentUiBehaviorProjection';
 import { readExecutionRunIdFromToolPayload } from '../../participants/deriveExecutionRunPollingRefreshKey';
+import { isHostAuthoredInputMeta } from '../../input/hostAuthoredInput';
 
-/** Run replies live in a sidechain; committed participant questions live in the parent transcript. */
+/** Run sidechains and historical parent questions share one person-message projection. */
 export function resolveExecutionRunVisibleMessages(params: Readonly<{
     runId: string;
     messages: readonly Message[];
@@ -26,16 +27,24 @@ export function resolveExecutionRunVisibleMessages(params: Readonly<{
     const ids = new Set(focusedMessages.flatMap(message => [message.id, message.realID].filter(Boolean)));
     const localIds = new Set(focusedMessages.map(message => message.localId).filter(Boolean));
     const questions = params.messages.filter(message => {
-        if (message.kind !== 'user-text' || ids.has(message.id) || (message.realID && ids.has(message.realID))
+        if (message.kind !== 'user-text' || isHostAuthoredInputMeta(message.meta) || ids.has(message.id) || (message.realID && ids.has(message.realID))
             || (message.localId && localIds.has(message.localId))) return false;
         const recipient = readParticipantRecipientRoutingIdentityV1(message.meta, 'stored');
         return recipient?.kind === 'execution_run' && recipient.runId === params.runId;
     });
-    if (questions.length === 0) return focusedMessages;
     // On the Run's own transcript the question is simply the person's message: its "To: <Run>" envelope only
     // repeats the page it is on, so the projection drops it and the row reads as an ordinary person message.
+    // Normalize rows already present in the focused projection too: deduplication must not decide presentation.
+    const focused = focusedMessages.filter(message => message.kind !== 'user-text' || !isHostAuthoredInputMeta(message.meta)).map(message => {
+        if (message.kind !== 'user-text') return message;
+        const recipient = readParticipantRecipientRoutingIdentityV1(message.meta, 'stored');
+        return recipient?.kind === 'execution_run' && recipient.runId === params.runId
+            ? withoutParticipantEnvelope(message) : message;
+    });
+    if (questions.length === 0) return focused.length === focusedMessages.length
+        && focused.every((message, index) => message === focusedMessages[index]) ? focusedMessages : focused;
     const asPersonMessages = questions.map(message => withoutParticipantEnvelope(message));
-    return [...focusedMessages, ...asPersonMessages].sort(compareTranscriptMessagesOldestFirst);
+    return [...focused, ...asPersonMessages].sort(compareTranscriptMessagesOldestFirst);
 }
 
 function withoutParticipantEnvelope(message: Message): Message {

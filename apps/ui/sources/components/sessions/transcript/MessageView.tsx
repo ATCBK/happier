@@ -46,7 +46,7 @@ import { TranscriptEventRow } from '@/components/sessions/transcript/events/Tran
 import { projectWorkerCardDelivery } from '@/components/sessions/transcript/events/followWorkerCardDelivery';
 import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
-import { isHostAuthoredInputMeta } from '@/components/sessions/transcript/events/hostAuthoredInput';
+import { isHostAuthoredInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
 import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';

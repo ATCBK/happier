@@ -56,7 +56,7 @@ import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { SessionMessageAccountByline } from '@/components/sessions/transcript/SessionMessageAccountByline';
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
-import { isHostAuthoredInputMeta } from '@/components/sessions/transcript/events/hostAuthoredInput';
+import { isHostAuthoredInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { UserMessageBubble, userMessageBubbleAlignerStyle, userMessageBubbleContentPadding } from '@/components/sessions/transcript/UserMessageBubble';
