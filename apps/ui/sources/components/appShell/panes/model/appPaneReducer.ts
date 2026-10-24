@@ -113,9 +113,9 @@ export type AppPaneAction =
         openAs?: DetailsTabOpenMode;
         restoreSourceOnRehydrate?: boolean;
     }>
-    | { type: 'setDetailsTabState'; scopeId: string; tabKey: string; nextState: unknown }
-    | { type: 'patchDetailsTabState'; scopeId: string; tabKey: string; patch: Readonly<Record<string, unknown>> }
-    | { type: 'pinDetailsTab'; scopeId: string; tabKey: string }
+    | { type: 'setDetailsTabState'; scopeId: string; tabKey: string; nextState: unknown; persist?: boolean }
+    | { type: 'patchDetailsTabState'; scopeId: string; tabKey: string; patch: Readonly<Record<string, unknown>>; persist?: boolean }
+    | { type: 'pinDetailsTab'; scopeId: string; tabKey: string; persist?: boolean }
     | { type: 'unpinDetailsTab'; scopeId: string; tabKey: string }
     | { type: 'closeDetails'; scopeId: string }
     | Readonly<{
