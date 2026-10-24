@@ -137,13 +137,19 @@ describe('creation environment stage', () => {
         let installing = false;
         let nowMs = Date.now();
         const startedAt = nowMs;
+        const pairingExpiresAtMs = startedAt + 15 * 60_000;
+        let operationRuntime: ReturnType<typeof createHostActionOperationRuntime> | undefined;
+        let work: Promise<unknown> | undefined;
         const server = createServer((request, response) => {
             response.setHeader('Content-Type', 'application/json');
             if (request.url?.endsWith('/controller/current')
                 && (scenario.startsWith('install-') ? installing && (scenario === 'install-expire' || unavailableReads === 0) : retained.enrolledMachineId
                     && (scenario === 'expire' || scenario === 'recover' && unavailableReads === 0))) {
                 unavailableReads++;
-                if ((scenario === 'expire' || scenario === 'install-expire') && unavailableReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
+                if (unavailableReads === 2) {
+                    if (scenario === 'expire') nowMs = pairingExpiresAtMs + 1;
+                    if (scenario === 'install-expire') nowMs = startedAt + 10 * 60_000 + 1;
+                }
                 response.writeHead(503);
                 response.end(JSON.stringify({ error: 'database_connection_unavailable' }));
                 return;
@@ -192,7 +198,7 @@ describe('creation environment stage', () => {
             reloadConfiguration();
             const pairing = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
                 publicKey: Buffer.alloc(32, 3).toString('base64'), homeServerIdentityId: homeId,
-                pairing: { secretB64Url: Buffer.alloc(32, 4).toString('base64url'), createdAtMs: nowMs, expiresAtMs: nowMs + 15 * 60_000 },
+                pairing: { secretB64Url: Buffer.alloc(32, 4).toString('base64url'), createdAtMs: startedAt, expiresAtMs: pairingExpiresAtMs },
                 supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: homeId };
             const completion = { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
                 homeServerIdentityId: homeId, machineId: 'enrolled-guest', encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: homeId };
@@ -233,10 +239,9 @@ describe('creation environment stage', () => {
             vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
             const acquisition = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl, homeId, controller,
                 ...accountInputs, runtimeRegistry: native.runtimeRegistry, homeTarget });
-            const operations = createHostActionOperationRuntime({ machineId: controller.machineId, resolveAccountId: async () => 'owner',
+            const operations = operationRuntime = createHostActionOperationRuntime({ machineId: controller.machineId, resolveAccountId: async () => 'owner',
                 generateOperationId: () => `controller-home-${scenario}` });
             const actionInput = { ...input, selection: { ...input.selection, homeId } };
-            let work: Promise<unknown> | undefined;
             const executor = createActionExecutor({ managedMachineAction: async ({ actionId, input, context }) =>
                 await acquisition.execute(actionId, input, { requestId: 'creation', signal: context.signal,
                     context: { ...context, operationOwnerUpdate: { update(value) {
@@ -287,6 +292,9 @@ describe('creation environment stage', () => {
                 expect(deliveries.length).toBeGreaterThan(1);
             }
         } finally {
+            // Join the real retry/task lifetime before restoring shared boundaries.
+            await operationRuntime?.handlers.cancel({ operationId: `controller-home-${scenario}` });
+            if (work) await Promise.allSettled([work]);
             vi.restoreAllMocks();
             vi.unstubAllEnvs();
             if (oldHome === undefined) delete process.env.HAPPIER_HOME_DIR;
@@ -1336,6 +1344,7 @@ describe('managed acquisition durable custody', () => {
         const startedAt = Date.now();
         let nowMs = startedAt;
         const clock = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+        const warning = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
         // Real HTTP producer, installer/task runner and operation store. Only
         // the unavailable native process boundary comes from nativeFixture.
         const server = createServer((request, response) => {
@@ -1387,6 +1396,14 @@ describe('managed acquisition durable custody', () => {
                     ...(category === 'status' ? { status: 500, code: 'P2024' } : category === 'schema' ? { status: 200 } : { code: 'ECONNRESET' }) },
             } } });
             expect(JSON.stringify(result)).not.toMatch(/private-|database diagnostic/);
+            expect(warning).toHaveBeenCalledWith('[MANAGED MACHINE] Controller request failed', {
+                managedId: retained.id,
+                operationId: `typed-currentness-${category}`,
+                path: '/v1/machines/managed/controller/current',
+                category,
+                httpStatus: category === 'transport' ? null : category === 'status' ? 500 : 200,
+            });
+            expect(JSON.stringify(warning.mock.calls)).not.toMatch(/private-|database diagnostic/);
             const legacy = await operations.handlers.get({ operationId: `typed-currentness-${category}` });
             if (result.kind !== 'found' || legacy.kind !== 'found') throw new Error('Operation read did not retain its terminal failure');
             expect(legacy.operation.error).toEqual({ errorCode: result.operation.error!.errorCode, error: result.operation.error!.error });

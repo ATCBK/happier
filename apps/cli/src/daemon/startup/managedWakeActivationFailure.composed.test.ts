@@ -24,11 +24,13 @@ import { artifactsRoutes } from '../../../../server/sources/app/api/routes/artif
 import { registerAccountEncryptionRoutes } from '../../../../server/sources/app/api/routes/account/registerAccountEncryptionRoutes';
 import { registerAccountSecurityRoutes } from '../../../../server/sources/app/api/routes/auth/registerAccountSecurityRoutes';
 import { registerManagedMachineRoutes } from '../../../../server/sources/app/machines/managed/managedRoutes';
+import { machinesRoutes } from '../../../../server/sources/app/api/routes/machines/machinesRoutes';
 import { createReleaseLessDeclarationV1 } from '../../../../server/sources/app/plugins/availability/currentDeclaration';
 import { logger as serverLogger } from '../../../../server/sources/utils/logging/log';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { configuration } from '@/configuration';
+import { ApiClient } from '@/api/api';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/ui/logger';
 import { updateSettings } from '@/persistence';
@@ -66,11 +68,14 @@ it('does not create an unused-power operation from the real Home census before g
         resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
         desired: 'start', retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: true } });
     const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+    const credentials = { token, encryption: null };
     const serverUrl = 'https://retention-home.example';
     const app = createAuthenticatedTestApp({ authentication: 'real' });
-    registerManagedMachineRoutes(app);
+    machinesRoutes(app);
+    registerAccountEncryptionRoutes(app);
     await app.ready();
     const restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+    const api = await ApiClient.create(credentials);
     const operations = createHostActionOperationRuntime({ machineId: controller.id, resolveAccountId: async () => owner.id });
     const adapter = createDaemonManagedMachineActionAdapter({ credentials: { token, encryption: null }, machineId: controller.id,
         serverId: configuration.activeServerId, serverBaseUrl: serverUrl, installationIdentity: null,
@@ -84,6 +89,7 @@ it('does not create an unused-power operation from the real Home census before g
     let censusRead: (() => void) | undefined;
     let censusError: unknown;
     const runtime = createDaemonManagedMachinePolicyRuntime({
+        loadMachine: (id, signal) => runWithServerHttpBaseUrl(serverUrl, () => api.getMachine(id, { signal })),
         readCensus: async signal => {
             try {
                 const census = await readManagedMachinePolicyCensus({ ...censusInput, signal });
@@ -105,7 +111,11 @@ it('does not create an unused-power operation from the real Home census before g
         expect((await readManagedMachinePolicyCensus(censusInput)).machines[0]!.enrolledMachineId).toBeUndefined();
         await notify();
         expect(await operations.handlers.listV2({})).toEqual({ items: [], nextCursor: null });
-        const guest = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: 'fixture',
+        const guest = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, active: true,
+            metadata: encodePlainMachineStoredContent({ host: 'retention-fixture', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/retention', happyHomeDir: '/home/retention/.happier' }),
+            daemonState: encodePlainMachineStoredContent({ status: 'running', startedAt: 1 }),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
             installationId: randomUUID() } });
         await db.managedMachine.update({ where: { id: managed.id }, data: { enrolledMachineId: guest.id } });
         await notify();

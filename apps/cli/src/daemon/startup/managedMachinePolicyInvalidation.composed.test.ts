@@ -78,7 +78,9 @@ it('consumes a committed managed-row invalidation for its controller without wak
         expect(censuses).toHaveLength(1);
         changes = [{ ...produced, kind: 'machine', entityId: controller.id, hint: null }];
         await sync();
-        expect(censuses).toHaveLength(2);
+        // The controller's own publication can retire an incumbent, but cannot
+        // schedule work when there is no outstanding policy to reauthorize.
+        expect(censuses).toHaveLength(1);
 
         const viewer = await db.account.create({ data: { encryptionMode: 'plain' } });
         const replacement = await db.machine.create({ data: { id: randomUUID(), accountId: account.id,
@@ -112,7 +114,7 @@ it('consumes a committed managed-row invalidation for its controller without wak
         replacementClient.onManagedMachinePolicyInvalidated(() => { replacementWakes += 1; });
         try {
             await sync();
-            expect(censuses).toHaveLength(3);
+            expect(censuses).toHaveLength(1);
             await sync(replacementClient);
             expect(replacementWakes).toBe(1);
         } finally { await replacementClient.shutdown(); }

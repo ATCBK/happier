@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 import type { ApiMachineClient } from '@/api/apiMachine';
+import type { Machine } from '@/api/types';
 import type { ManagedControllerV1, ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ManagedMachineControllerError } from '@/machines/managed/controllerErrors';
 import { logger } from '@/ui/logger';
@@ -42,6 +43,8 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     apiMachine?: Pick<ApiMachineClient, 'onUpdate' | 'onConnectionStateChange' | 'onManagedMachinePolicyInvalidated'>;
     /** Local controller prerequisites only; census and native admission still decide authority. */
     isAvailable?: () => boolean;
+    /** The incumbent authenticated Machine reader opens published registration readiness. */
+    loadMachine?: (machineId: string, signal: AbortSignal) => Promise<Machine | null>;
     readCensus(signal: AbortSignal): Promise<ManagedMachinePolicyCensus>;
     executePolicy: ReturnType<typeof createDaemonManagedMachineActionAdapter>['executePolicy'];
     onSettled?: () => void;
@@ -52,6 +55,8 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     const active = new Map<string, { signature: PolicySchedulingFacts; cancel: AbortController; task: Promise<void> }>();
     let stopped = false;
     let changed = false;
+    let schedulingRequested = false;
+    let enrolledMachineIds = new Set<string>();
     let pump: Promise<void> | null = null;
     const abortPolicy = (managedId: string, cancel: AbortController, reasonCode:
         'retention_satisfied' | 'policy_replaced' | 'policy_target_missing' | 'controller_unavailable'
@@ -60,7 +65,8 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
         try { logger.warnLocalFile('[managed-policy.abort]', { managedId, reasonCode }); } catch { /* Diagnostic only. */ }
         cancel.abort(reason);
     };
-    const reconcile = (census: ManagedMachinePolicyCensus) => {
+    const reconcile = async (census: ManagedMachinePolicyCensus, scheduleNew: boolean) => {
+        enrolledMachineIds = new Set(census.machines.flatMap(machine => machine.enrolledMachineId ? [machine.enrolledMachineId] : []));
         const current = new Set<string>();
         for (const machine of census.machines) {
             const canceledCleanup = machine.creationState === 'canceled' && machine.desired === 'delete' && machine.desiredWhen === 'now';
@@ -73,8 +79,8 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ? { kind: 'accepted-input-start', target }
                 : machine.retention.kind !== 'until-delete' ? { kind: 'retention' } : null;
             if (!purpose) continue;
-            // Unused retention needs the enrolled guest's positive activity
-            // evidence. Native allocation alone is still creation, not idle.
+            // Unused retention needs the guest's registered daemon, then its
+            // positive activity evidence. Enrollment alone is still creation.
             // A reviewed deadline or an already-submitted effect retains its
             // own lifecycle, including reconciliation before enrollment.
             if (purpose.kind === 'retention' && machine.retention.kind === 'unused'
@@ -108,6 +114,25 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 continue;
             }
             if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
+            // Controller publications only recheck an incumbent's currentness.
+            // They cannot admit new work, including after that work has failed.
+            if (!scheduleNew) continue;
+            if (purpose.kind === 'retention' && machine.retention.kind === 'unused' && !machine.submittedNativeEffect) {
+                let guest: Machine | null | undefined;
+                try {
+                    guest = machine.enrolledMachineId ? await params.loadMachine?.(machine.enrolledMachineId, lifetime.signal) : null;
+                } catch (error) {
+                    lifetime.signal.throwIfAborted();
+                    params.onUnavailable?.(error);
+                    continue;
+                }
+                lifetime.signal.throwIfAborted();
+                // ApiMachine publishes running only after core RPC registration.
+                // Presence alone (or a retained running state while offline) is insufficient.
+                if (!guest || guest.id !== machine.enrolledMachineId || guest.active !== true
+                    || guest.revokedAt != null || guest.replacedByMachineId
+                    || guest.daemonState?.status !== 'running') continue;
+            }
             const cancel = new AbortController();
             const onStop = () => abortPolicy(machine.id, cancel, 'policy_runtime_stopped', lifetime.signal.reason);
             lifetime.signal.addEventListener('abort', onStop, { once: true });
@@ -130,13 +155,17 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
         }
         for (const [id, entry] of active) if (!current.has(id)) abortPolicy(id, entry.cancel, 'policy_target_missing');
     };
-    const notifyChanged = () => {
+    const notifyChanged = (currentnessOnly = false) => {
         if (stopped) return;
+        if (currentnessOnly && active.size === 0) return;
         changed = true;
+        if (!currentnessOnly) schedulingRequested = true;
         if (pump) return;
         pump = (async () => {
             while (changed && !stopped) {
                 changed = false;
+                const scheduleNew = schedulingRequested;
+                schedulingRequested = false;
                 try {
                     if (params.isAvailable?.() === false) {
                         for (const [id, entry] of active) abortPolicy(id, entry.cancel, 'controller_unavailable');
@@ -144,7 +173,7 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                     }
                     const census = await params.readCensus(lifetime.signal);
                     lifetime.signal.throwIfAborted();
-                    reconcile(census);
+                    await reconcile(census, scheduleNew);
                 } catch (error) {
                     // A failed read does not withdraw an admitted origin.
                     // Keep its held Ask/native owner; a successful census or
@@ -156,9 +185,13 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     };
     const subscriptions: Array<() => void> = [];
     if (params.apiMachine) {
-        subscriptions.push(params.apiMachine.onManagedMachinePolicyInvalidated(notifyChanged));
+        subscriptions.push(params.apiMachine.onManagedMachinePolicyInvalidated(change => {
+            if (change?.kind === 'machines' && !change.machineIds.some(id => enrolledMachineIds.has(id))) return;
+            notifyChanged(change?.kind === 'currentness');
+        }));
         subscriptions.push(params.apiMachine.onUpdate(update => {
             const body = update.body;
+            if (body.t === 'update-machine' && enrolledMachineIds.has(body.machineId)) notifyChanged();
             // ApiMachine discovers targeted work. Any change to an origin
             // already held here must also retire it after withdrawal/retargeting.
             if ((body.t === 'pending-changed' || body.t === 'automation-run-updated')

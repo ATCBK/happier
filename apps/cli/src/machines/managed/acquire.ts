@@ -22,6 +22,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/actions/pro
 import { AcquireResultV1Schema, type AcquireResultV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { reconcileManagedMachine, resolveManagedRoleCredentialAuthorizations } from './reconcile';
 import { reconcileManagedIntent, prepareManagedRetentionPolicy, type ManagedGuestActivityTransport } from './managedIntentReconciler';
+import { logger } from '@/ui/logger';
 
 import { ManagedMachineControllerError, ManagedMachineNativeRefusal } from './controllerErrors';
 export { ManagedMachineControllerError, ManagedMachineNativeRefusal, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
@@ -78,14 +79,27 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
         }
         return projection;
     }
-    function requestFailure(path: string, category: ManagedControllerRequestFailureDetailsV1['category'], status?: number, code?: string) {
+    function readManagedId(body: unknown): string | undefined {
+        return body && typeof body === 'object' && 'managedId' in body && typeof body.managedId === 'string'
+            ? body.managedId : undefined;
+    }
+    function requestFailure(path: string, category: ManagedControllerRequestFailureDetailsV1['category'], status?: number, code?: string, managedId?: string) {
         const base = { kind: 'managedControllerRequest' as const, path, category, ...(status === undefined ? {} : { status }) };
         const withCode = ManagedControllerRequestFailureDetailsV1Schema.safeParse({ ...base, code });
         const details = withCode.success ? withCode.data : ManagedControllerRequestFailureDetailsV1Schema.parse(base);
+        const operationId = options.context?.operationAcceptance?.operationId;
+        logger.warn('[MANAGED MACHINE] Controller request failed', {
+            managedId: managedId ?? null,
+            ...(operationId ? { operationId } : {}),
+            path: details.path,
+            category: details.category,
+            httpStatus: details.status ?? null,
+        });
         return new ManagedMachineControllerError(details.code
             ?? (status !== undefined && [404, 405, 501].includes(status) ? 'admission_unavailable' : 'managed_controller_request_failed'), status, details);
     }
     async function request<T>(path: string, body: unknown, headers: Readonly<Record<string, string>>, schema: { parse(data: unknown): T }, signal?: AbortSignal | null): Promise<T> {
+        const managedId = readManagedId(body);
         const response = await axios.post<unknown>(`${input.serverUrl.replace(/\/+$/, '')}${path}`, body, {
             headers: { ...headers, 'Content-Type': 'application/json' },
             signal: signal ?? undefined, validateStatus: () => true,
@@ -93,7 +107,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
             // Rejected HTTP responses use the same code/status parser; transport
             // failures retain their machine-readable code without request details.
             if (axios.isAxiosError<unknown>(error) && error.response) return error.response;
-            throw requestFailure(path, 'transport', undefined, axios.isAxiosError(error) ? error.code : undefined);
+            throw requestFailure(path, 'transport', undefined, axios.isAxiosError(error) ? error.code : undefined, managedId);
         });
         if (response.status < 200 || response.status >= 300) {
             const failure = ManagedErrorV1Schema.safeParse(response.data);
@@ -104,10 +118,10 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
                 'code' in data ? data.code : undefined,
                 'error' in data ? data.error : undefined,
             ].find((value): value is string => typeof value === 'string' && /^[a-z][a-z0-9_-]*$/i.test(value)) : undefined;
-            throw requestFailure(path, 'status', response.status, failure.success ? failure.data.code : serverCode);
+            throw requestFailure(path, 'status', response.status, failure.success ? failure.data.code : serverCode, managedId);
         }
         try { return schema.parse(response.data); }
-        catch { throw requestFailure(path, 'schema', response.status); }
+        catch { throw requestFailure(path, 'schema', response.status, undefined, managedId); }
     }
     async function post<T>(path: string, body: unknown, schema: { parse(data: unknown): T }, signal: AbortSignal | null | undefined = options.signal): Promise<T> {
         const run = () => postOnce(path, body, schema, signal);
@@ -150,7 +164,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
             return await request(path, body, authorization.headers, schema, signal);
         } catch (error) {
             if (error instanceof ManagedMachineControllerError) throw error;
-            throw requestFailure(path, 'currentness');
+            throw requestFailure(path, 'currentness', undefined, undefined, readManagedId(body));
         }
     }
     function correlation(machine: ManagedMachineV1): ManagedControllerCurrentnessV1 {
@@ -189,7 +203,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
             // An unreadable authority is not evidence that the admitted row changed.
             // Preserve safe Home refusals, never transport diagnostics or request data.
             throw error instanceof ManagedMachineControllerError ? error
-                : requestFailure('/v1/machines/managed/controller/current', 'currentness');
+                : requestFailure('/v1/machines/managed/controller/current', 'currentness', undefined, undefined, machine.id);
         }
     }
     async function isCurrent(machine: ManagedMachineV1, nativeRole?: 'inspect'): Promise<boolean> {
@@ -258,7 +272,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
                 headers = resolveExternalActionServerRequestHeaders({ context: options.context, effectActionId: action,
                     method: 'POST', path, body, daemonToken: input.token, serverIdentityId: input.homeId,
                     privateKey: input.externalActionMachineRequestPrivateKey, installationId: input.controller.installationId });
-            } catch { throw requestFailure(path, 'currentness'); }
+            } catch { throw requestFailure(path, 'currentness', undefined, undefined, captured.machine.id); }
             if (!headers.ok) throw new ManagedMachineControllerError('admission_unavailable');
             return (await request(path, body, headers.headers, ManagedControllerMachineOutputV1Schema, null)).machine;
     }

@@ -343,6 +343,8 @@ describe('unused Stop through guest drain and controller operation custody', () 
         let reads = 0;
         const runtime = createDaemonManagedMachinePolicyRuntime({
             // Census and the fixture's guest/native transports are the only replaced boundaries.
+            loadMachine: async id => ({ id, encryptionMode: 'plain', active: true, metadata: null, metadataVersion: 0,
+                daemonState: { status: 'running' }, daemonStateVersion: 1 }),
             readCensus: async () => { reads++; return { machines: [test.readMachine()], targets: [] }; },
             executePolicy: async request => operations.observeExecution({ actionId: 'machines.managed.power.set', input: {},
                 actionRequestId: 'policy-stop', execute: async operation => ({ ok: true,
@@ -1133,6 +1135,28 @@ describe('managed native intent through the accepted Action', () => {
             await operations.handlers.cancel({ operationId: `activity-${kind}` });
             await observed.catch(() => undefined);
             await work?.catch(() => undefined);
+        }
+    });
+    it('does not reread guest activity for unrelated Account currentness wakes during a settled minute', async () => {
+        const test = setup({ kind: 'busy', reasons: ['finite'] });
+        test.setMachine({ desiredWhen: 'after-idle' });
+        const lifetime = new AbortController();
+        let wakes = 0;
+        let parked!: () => void;
+        const parking = new Promise<void>(resolve => { parked = resolve; });
+        test.waitForChange.mockImplementation(async () => {
+            if (wakes++ < 60) return 'currentness';
+            await parking;
+            return 'activity';
+        });
+        const work = test.run(lifetime.signal).catch(error => error);
+        try {
+            await vi.waitFor(() => expect(test.waitForChange).toHaveBeenCalledTimes(61));
+            expect(test.readActivity).toHaveBeenCalledTimes(1);
+        } finally {
+            lifetime.abort();
+            parked();
+            await work;
         }
     });
     it.each(['control', 'policy'] as const)('associates the real %s operation with its admitted row before native effects', async (source) => {

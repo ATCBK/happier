@@ -4147,6 +4147,8 @@ export async function startDaemon(
             attemptedManagedMachinePolicyRuntime = createDaemonManagedMachinePolicyRuntime({
               apiMachine: attemptedApiMachineForSessions,
               isAvailable: () => readCurrentManagedPolicyController() !== null,
+              loadMachine: (id, signal) => runWithServerHttpBaseUrl(managedPolicyServerHttpBaseUrl,
+                () => api.getMachine(id, { signal })),
               readCensus: readCurrentManagedMachinePolicies,
               executePolicy: managedMachinePolicyAdapter.executePolicy,
               onUnavailable: error => logger.debug('[DAEMON RUN] Managed policy execution unavailable', error),

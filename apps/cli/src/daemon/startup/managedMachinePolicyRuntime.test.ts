@@ -115,7 +115,7 @@ describe('daemon managed policy census transport', () => {
             expect(held?.aborted).toBe(true);
         } finally { await runtime.stop(); await apiMachine.shutdown(); }
     });
-    it('defers unused retention until enrollment without deferring a reviewed deadline or canceled creation cleanup', async () => {
+    it('defers unused retention until guest readiness without deferring a reviewed deadline or canceled creation cleanup', async () => {
         const key = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
         let machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'home', custodianAccountId: 'owner',
             controller: { machineId: 'controller', installationId: 'installation' },
@@ -136,6 +136,8 @@ describe('daemon managed policy census transport', () => {
         });
         const list = async () => ActionOperationListV1ResponseSchema.parse(await operations.handlers.listV2({})).items;
         const runtime = createDaemonManagedMachinePolicyRuntime({
+            loadMachine: async id => ({ id, encryptionMode: 'plain', active: true, metadata: null, metadataVersion: 0,
+                daemonState: { status: 'running' }, daemonStateVersion: 1 }),
             readCensus: signal => readManagedMachinePolicyCensus({ homeId: 'home', controller: machine.controller,
                 custodianAccountId: 'owner', privateKey: key.secretKey, token: 'owner-token', serverUrl: 'https://home.example', signal }),
             executePolicy: adapter.executePolicy,

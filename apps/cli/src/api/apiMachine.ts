@@ -498,6 +498,10 @@ export type ApiMachineDaemonStatePublicationOptions = Readonly<{
 
 export type MachinePublicationOutcome = 'published' | 'unchanged' | 'suppressed';
 
+/** Host-local classification; Machine activity is not a new policy scheduling fact. */
+export type ManagedMachinePolicyInvalidation = Readonly<{ kind: 'currentness' }>
+    | Readonly<{ kind: 'machines'; machineIds: readonly string[] }>;
+
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
@@ -642,7 +646,7 @@ export class ApiMachineClient {
     private accountProjectRowsChangeListeners = new Set<(change: AccountProjectRowsChangeNotification) => void | Promise<void>>();
     private automationEventSourcesInvalidationListeners = new Set<() => void | Promise<void>>();
     private pluginWebhookInvalidationListeners = new Set<() => void | Promise<void>>();
-    private managedMachinePolicyInvalidationListeners = new Set<() => void | Promise<void>>();
+    private managedMachinePolicyInvalidationListeners = new Set<(change?: ManagedMachinePolicyInvalidation) => void | Promise<void>>();
     private pendingSessionActivationHintListeners = new Set<(
         hint: PendingSessionActivationHintNotification,
     ) => void | Promise<void>>();
@@ -2459,15 +2463,15 @@ export class ApiMachineClient {
     }
 
     /** Controller-specific managed rows and accepted-work hints from the existing transport. */
-    onManagedMachinePolicyInvalidated(listener: () => void | Promise<void>): () => void {
+    onManagedMachinePolicyInvalidated(listener: (change?: ManagedMachinePolicyInvalidation) => void | Promise<void>): () => void {
         this.managedMachinePolicyInvalidationListeners.add(listener);
         return () => { this.managedMachinePolicyInvalidationListeners.delete(listener); };
     }
 
-    private async notifyManagedMachinePolicyInvalidated(signal?: AbortSignal): Promise<void> {
+    private async notifyManagedMachinePolicyInvalidated(signal?: AbortSignal, change?: ManagedMachinePolicyInvalidation): Promise<void> {
         for (const listener of this.managedMachinePolicyInvalidationListeners) {
             signal?.throwIfAborted();
-            await listener();
+            await listener(change);
         }
     }
 
@@ -5498,9 +5502,16 @@ export class ApiMachineClient {
                 || hasWebhookAdmissionChange || hasTeamChange) {
                 await this.notifyPluginWebhookInvalidated(signal);
             }
-            if (reason !== 'live'
-                || hasRelevantMachineChange || hasManagedPolicyChange || hasTeamChange) {
+            if (reason !== 'live' || hasManagedPolicyChange || hasTeamChange) {
                 await this.notifyManagedMachinePolicyInvalidated(signal);
+            } else {
+                const machineIds = changes.filter(change => change.kind === 'machine' && change.entityId !== this.machine.id)
+                    .map(change => change.entityId);
+                if (machineIds.length) await this.notifyManagedMachinePolicyInvalidated(signal, { kind: 'machines', machineIds });
+                // A controller Machine change can retire held native/currentness
+                // work (including a moved controller). Its own operation/activity
+                // publications cannot create a new automatic policy operation.
+                if (hasRelevantMachineChange) await this.notifyManagedMachinePolicyInvalidated(signal, { kind: 'currentness' });
             }
             signal.throwIfAborted();
             if (this.projectionSchedulingClosed || !this.isActiveTransportGeneration(transportGeneration)) return;

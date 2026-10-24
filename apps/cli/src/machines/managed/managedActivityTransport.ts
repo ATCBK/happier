@@ -41,7 +41,7 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
         privateKey: input.externalActionMachineRequestPrivateKey,
     } : undefined;
     const machineId = machine.enrolledMachineId;
-    let changed = false;
+    let changed: false | 'activity' | 'currentness' = false;
     let failure: unknown;
     let wake: (() => void) | undefined;
     let ready!: () => void;
@@ -66,7 +66,8 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
             // it contains no entity payload. Re-read currentness on that edge.
             if (parsed.success && (parsed.data.body.t === 'account-change'
                 || (parsed.data.body.t === 'update-machine' && parsed.data.body.machineId === machineId))) {
-                changed = true;
+                changed = parsed.data.body.t === 'account-change' && changed !== 'activity'
+                    ? 'currentness' : 'activity';
                 wake?.();
             }
         };
@@ -79,7 +80,7 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
         try {
             await connect();
             // Reconnect is also an invalidation, not a stale cached decision.
-            changed = true;
+            changed = 'activity';
             wake?.();
             ready();
             await Promise.race([closed, disconnected]);
@@ -121,11 +122,19 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
             await connected;
             signal?.throwIfAborted();
             if (failure) throw failure;
-            if (changed) { changed = false; return; }
-            await new Promise<void>((resolve, reject) => {
+            if (changed) { const result = changed; changed = false; return result; }
+            return await new Promise<'activity' | 'currentness'>((resolve, reject) => {
                 const onAbort = () => { cleanup(); reject(signal?.reason); };
                 const cleanup = () => { wake = undefined; signal?.removeEventListener('abort', onAbort); };
-                wake = () => { cleanup(); failure ? reject(failure) : resolve(); };
+                wake = () => {
+                    cleanup();
+                    if (failure) reject(failure);
+                    else {
+                        const result = changed || 'activity';
+                        changed = false;
+                        resolve(result);
+                    }
+                };
                 signal?.addEventListener('abort', onAbort, { once: true });
                 if (signal?.aborted) onAbort();
                 else if (changed || failure) wake();
