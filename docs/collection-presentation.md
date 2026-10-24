@@ -6,6 +6,115 @@ This page describes **0.3 development source**. It promotes implemented owners, 
 
 ## Model and presentation
 
+In 0.3 development source, serializable membership uses Protocol's
+`collections/filter/fieldRegistryV1.ts` and `entityListFilterV1.ts`. Session work
+keeps its existing flat `SessionListFilterV1` record; Workflow definitions and
+Discussions have their own typed records. Each field declares `list` and/or
+`daemonRule` support. The registry compiles the selected conditions once for
+held facts, with known miss taking precedence over unavailable, then match.
+Compilation and matching own no loading, polling, plugin activation or Resource
+demand. A stored unknown condition remains unavailable until its evaluator is
+restored or the person explicitly removes it. Current writes use closed schemas.
+
+Plugin pages reach the same pure evaluator, typed field factory and held-value
+adapter through `@happier-dev/plugin-ui/components` (`CollectionFilter`). Custom
+fields use admitted scalar, set, boolean or time values, rather than executable
+plugin predicates. Absolute Updated bounds have strict before/after and inclusive
+between semantics; there is no relative-time refresh loop. This describes source
+ownership, not release availability or completed host-header integration.
+
+### Settings column adapters
+
+Settings domain folders expose `*ColumnAdapter.ts` bindings (Team/Home administration
+use plural `*ColumnAdapters.ts`). Their shared slot-only binding lives at
+`apps/ui/sources/components/settings/shell/settingsCollectionAdapter.ts`.
+Each accepts held, privacy-projected domain facts and produces the existing
+`CollectionRowContent` identity, title, one context line and trailing slots.
+Status rendering is explicitly icon-only; counts preserve unknown versus zero.
+Child keys and expanded/collapsed rollup facts remain separate from row content,
+so the existing collection model retains hierarchy, selection and navigation.
+
+Each binding supplies a Protocol P6 field registry. Connected services uses
+qualified Service/Status, Skills uses Source/Machine, and MCP uses Status/Runs on.
+Missing facts and unknown conditions remain unavailable, including exclusions;
+known empty sets miss positive selections. Source identities are not parsed from
+labels, and Machine reach is supplied by the existing Reach projection. These
+adapters do not load data, probe a Machine, acquire quota demand, persist filters
+or introduce a second evaluator. Shared described-row density, condition-editor
+rendering and page composition remain their public presentation owners' work;
+the existence of an adapter is not whole-page fidelity or release evidence.
+
+The same public `CollectionFilter` surface exports `conditionModelFromFilter`
+and `applyCollectionConditionEdit`. The pure model projects registry selections
+into Field / operator / values rows and available fields, operators and values.
+Optional presentation bindings supply localized field labels and held dynamic
+value options; they cannot enable an unsupported evaluator. Row identifiers are
+derived presentation identities, never persisted conditions. Add, change, remove
+and explicit clear return the entity's typed filter through its registry's
+selection owner and canonical value schemas. Include and exclude remain separate
+`is` / `is_not` rows; unrelated edits retain opaque stored narrowing. Removing its
+unavailable row or clearing all conditions is an explicit removal. This model
+does not load options, match facts, render controls or change a storage format.
+
+A value option may carry `values`, a grouped selection vector. Its `value` is
+then only the presentation choice key; the generic picker applies the vector
+through the same edit function and checks whether all its values are selected.
+The Session Status fields provide Working / Needs you / Failed / Idle / Offline
+groups from the canonical Work-filter owner, for both include and exclude.
+Presentation bindings can label or disable these groups without redefining their
+vectors. Existing partial raw-state selections remain raw selections; projecting
+the editor does not expand them or persist a group key.
+
+In the current development source, value options also accept `count?: number`.
+This is a frequency in the list's already-held ordinary corpus, not a prediction
+for unseen server pages or the result of adding that option to the other local
+conditions. Include and exclude lists show the same occurrence frequency; grouped
+choices count each entity once. `CollectionConditionBindings.valueCounts` binds
+`{ fieldId, options: [{ value, count? }] }` by choice identity, without changing the
+registry's selection vectors. Missing local evidence omits a count rather than
+inventing zero or fetching facts.
+
+The shared editor's optional `onValuePickerChange` reports
+`{ fieldId, options: [{ value, values? }] }` only while that value list is open;
+Back, dismissal and unmount release it with `null`. Merely opening Add filter,
+rebinding labels or receiving counts does not renew demand. Sessions routes this
+demand to its existing retained pane projection, which admits one count-fact
+object per changed ordinary Session/Run while demanded, updates retained keyed
+contributions, and preserves equal count-result references. Mirrors, attention
+supplements and Run-step context are not extra subjects. Team/Group, tag and
+subtree choices without held evaluable facts have no count. The editor neither
+loads facts nor subscribes to rows; drawing the counts remains the presentation
+consumer's responsibility.
+
+The same compiled-option owner serves Workflows, Discussions and Settings-column
+headers. `compileCollectionConditionValueCountOptions` isolates each choice
+through its registry; `collectionConditionValueCountsFromFacts` takes a lazy
+`readHeldFacts` callback and an optional previous count result. Closed demand and
+unsupported fields never invoke the callback. Generic headers use their existing
+pre-local-filter fact owners, not new queries; Discussion attention remains
+unknown for held summaries without an already-joined attention fact. Changed
+facts with equal counts reuse the prior result and unchanged option objects.
+
+`useCollectionSavedViewsControl` in the same public components surface owns the
+controlled picker and temporary naming presentation used by Triage. Its caller
+supplies admitted display items, mutation callbacks, acceptance outcomes and a
+stable captured-authority `scope`. Changing that scope retires a private naming
+draft; a late accepted callback cannot change the next authority's presentation.
+Triage retains its Account-KV saved views and Account-wide selected view; host
+collection spaces keep definitions in Account `collectionSpacesV1` and selection
+in this device's Account-scoped `collectionSpaceV1`. Sharing the picker does not
+merge those persistence contracts. Space mutations use the existing settings
+operation writer's typed `collection_space` intent and CAS rebase, preserving
+unrelated winning edits.
+
+Session/Run Status consumes the same P4 Work result as each row. Raw states stay
+in their canonical Session or Workflow vocabulary; the registry does not convert
+Run states into Session states. The incumbent grouped Work choices also apply
+to Runs through that result's bucket/tone, while a partial raw-state selection
+retains its exact meaning. Missing admitted status stays unavailable, including
+negative conditions. Acknowledging a Run failure does not change its Failed
+identity merely because its presentation becomes neutral.
+
 [`useHappierCollection`](../packages/plugin-ui/src/presentation/collection/useCollection.ts), exported from `@happier-dev/plugin-ui/components`, composes grouping, order, filter, window completeness, focus, selection, expanded keys, route-controlled `openKey`, visit memory and drafts. Multiple selection reuses the existing [`multiSelection.ts`](../packages/plugin-ui/src/presentation/collection/multiSelection.ts) store/reducer. The model calls `onOpenChange`; it does not navigate or persist domain items.
 
 Initial landing is optional: when the consumer supplies visit memory, items are ready and the measured mode is split, the model chooses the last visited available item, otherwise the first. Overview indexes may omit this policy. A draft uses a separate key and title store; it is not silently persisted as a real item.
@@ -106,6 +215,8 @@ without duplicating it in the table. Triage uses its existing lens edit and moun
 
 ## Layout and host bindings
 
+In 0.3 development source, a page sheet (`HappierPageSheet`) is the host's in-flow card: the palette's `sheet` fill is the card fill, and its optional `sheetEdge` carries the card's lip and grounding (W3 on light; Happier core resolves it once in `resolveThemeCardEdge`, and a host without it draws the flat hairline). Core `ItemGroup` page sections draw the same palette with no core-only override. Row hairlines use `rowDivider` and run from the row's text edge to the sheet's trailing edge (`happierPageRowDividerInset`, logical start/end), in core rows and public list rows alike. A section that indexes entities lies flat (`surface="none"`): no card fill, finish, lip or grounding, with the same text-inset hairlines.
+
 In 0.3 development source, a page-scrolling List Collection owns its sheet inset. Standalone palette-backed page Tables use that same stage inset, including when they recompose as a narrow List. A Table already inside `HappierPageSheet` consumes that sheet's edge rather than adding another inset. Section headings and row-leading marks share the page's optical text edge. A custom page scroller constrains the column but does not add a second inset around the Collection body; Grid, Board and pane-owned scrolling retain their own anatomy.
 
 A populated resting Table owns its themed enclosure on the existing stage. Measured narrow-screen and beside-detail compositions return to the List without another wrapper or a second row/focus owner. The Artifacts browser's List choice consumes this responsive Table; its columns label the actual Name, Kind, Source and Edited facts. On a populated phone library, the existing count follows the search and view controls rather than repeating an introduction above them.
@@ -123,6 +234,16 @@ Board callers can select `boardLayout="stacked"` for domain-approved phone secti
 [`HappierListDetailLayout`](../packages/plugin-ui/src/presentation/collection/ListDetailLayout.tsx) owns split geometry and publishes the measured mode through [`collectionLayout.tsx`](../packages/plugin-ui/src/presentation/collection/collectionLayout.tsx). Consumers read `useHappierCollectionLayout` or `useHappierCollectionIndexView`; they do not mirror layout mode into another state/context.
 
 The app's [`SettingsCollectionLayout`](../apps/ui/sources/components/settings/shell/SettingsCollectionLayout.tsx) binds that geometry to the nested route stack and keeps its detail stack mounted across wide/narrow composition. It is an adapter over the shared owner, not another split engine. Host motion comes through the Plugin UI presentation host; plugins do not acquire Reanimated or app-internal navigation dependencies to reproduce it.
+
+In 0.3 development source, Connected-services names use the qualified descriptor's
+localized title, then a readable retained service identity; colliding titles carry
+the actual plugin identity. A name never establishes installation or execution
+availability. Skills use [`skillSource.ts`](../apps/ui/sources/components/settings/skills/skillSource.ts)
+for the same source fact across collection and detail. Its registry names come
+from held Account catalog and applied plugin metadata, indexed by source id or
+exact source URL. Missing metadata keeps the repository/host fallback, rather
+than inventing a source name. The parent supplies each row's name; this binding
+subscribes to existing facts without starting a catalog/registry or Machine read.
 
 A settings collection's rail takes its width from a role, never a page-local number: `SettingsCollectionLayout` reads `railWidth: 'standard' | 'detailed'` from `HAPPIER_COLLECTION_RAIL_WIDTH_PX` in [`pageMetrics.ts`](../packages/plugin-ui/src/presentation/layout/pageMetrics.ts) (`standard` for one-line rows, `detailed` for rows that carry a description or facts line). The role is host-internal: no plugin draws a settings collection's rail. Every settings collection takes a role; no page keeps a number.
 
@@ -149,7 +270,53 @@ The Machines page has two doors over the same components. Settings → Machines 
 
 Each door sets `MachinesDoorProvider` ([`machinesDoor.tsx`](../apps/ui/sources/components/machines/page/machinesDoor.tsx)); rail-door route entries set it themselves so a workspace-hosted body and the Expo route resolve the same door. Every machine-page link is built by `machinePageHref` in [`machineCollectionModel.ts`](../apps/ui/sources/components/settings/machines/collection/machineCollectionModel.ts) for the current door. Surfaces outside Settings (Boards, System status, session info, runs, New Session, managed creation, Git installables, Home) link through the rail door; configuration pages (add, defaults, this computer, pools, recipes) exist only in the Settings door. All machines' List | Grid choice is the declared device-local setting `machines.indexView` (`machinesIndexViewV1`), changed by the page control or `settings.set`. Each machine's resource summary — the popover rows, the list column, All machines' metric cells and card tiles, and the New Session picker's memory fact — is drawn only by [`MachineSummaryStrip`](../apps/ui/sources/components/machines/summary/MachineSummaryStrip.tsx) over plan 20's summary hooks (values, tone and lines are never re-derived in UI), through the shared chart, meter and ring owners; a structural test keeps drawing libraries out of `components/machines/**`. Its style and shown metrics are the device-local Appearance settings `appearance.machineSummaryStyle` and `appearance.machineSummaryMetrics` (an empty list is kept: names only). Every open surface mounts one batched `useMachineResourceLiveDemand`; rows subscribe per machine.
 
+In 0.3 development, opening the Machines popover and observing recovery update
+the existing keyed device UI-state projection, scoped to the exact Account and
+Home. These observations do not publish Settings changes. The old
+`machinesRailSeenV1` setting is copied out before removal. Its record lacks an
+Account identity, so its retained unscoped cursor cannot acknowledge any scoped
+fleet; each Account/Home begins unseen until this device opens its popover.
+
 ## Sessions and Workflow Runs
+
+In unreleased 0.3 development source, Protocol's
+[`Session awareness presenter`](../packages/protocol/src/sessions/awareness/presentationV1.ts)
+owns the Session display state. The existing Work adapter consumes that answer
+and C1's admitted attention type independently. An unseen primary failure can
+therefore remain rose while a concurrent approval still has its own review
+control. Failure updates and mentions do not become Inbox Needs-you; manager-handled
+and non-blocking requests retain C1's quiet treatment. Stopped requires an
+observed process-terminal fact, and usage-limited requires the current typed
+blocking issue rather than a recovery countdown or a successful control acknowledgement.
+
+Session failure acknowledgement reuses the private read cursor. The server's
+[`personal projection`](../apps/server/sources/app/session/personal/projection.ts)
+batch reads the exact current failed turn's committed transcript end anchor and
+publishes nullable `viewer.latestFailureSeq`; the personal attention owner compares
+that fixed sequence with `lastViewedSessionSeq`. Missing evidence is not a new
+failure. Later unrelated messages do not restamp it, and opening a request peek
+does not advance the cursor. The CLI's native, prompt-failure and strict-resume
+terminal paths share the failure-marker receipt owner. This describes current
+source ownership, not completed loaded-runtime or provider certification.
+
+The same public `HappierWorkStatusPresentation` family carries domain `state`,
+existing bucket/tone/word, C1 `attentionType` (nullable when not admitted), and an
+optional public icon token. Plugin UI renders those supplied facts; it does not
+classify Session lifecycle or Inbox admission. The strict Session surface transport
+accepts that same shape. Server-produced coordinator summaries provide actual
+`finished` and strongest `attentionPrimary` alongside their existing counts;
+filtered or collapsed child rows never supply a fabricated completion denominator.
+
+Workflow Runs use their current failure's `finishedAt` identity and the nullable
+`AutomationRun.attentionSeenFailureAt` marker, not the operational Run revision.
+Only the owner Account receives that failure notice and may acknowledge the exact
+observed failure through `workflow.run.read_state.set`. Team/Artifact viewers keep
+the Failed history but neither receive this private notice nor write the marker.
+Custody and attention revision changes cannot revive an acknowledged occurrence;
+independent invocation review remains actionable. Request peeks explicitly disable
+failure acknowledgement. See [Actions](actions.md) for the write contract. The new
+column still requires the target database's canonical migration deployment before
+loaded-runtime verification; source implementation is not a deployment claim.
 
 In 0.3 development source, Work Board column lines and pinned counts read membership and status summaries, not card titles or bodies. Active Board detail reads only its member kinds and retains its last-known cards while unfocused; returning to it projects current facts. Workflow summary consumers share one Account-lifetime request owner. The Board Artifact projection joins exact in-flight body reads and publishes readable neighbors independently; invalidating one Board does not reread every demanded body. Needs-you demand mounts the canonical Inbox producer without changing the Board descendants' topology.
 
@@ -157,11 +324,137 @@ The Boards index renders names from Artifact headers before Board bodies settle;
 
 In 0.3 development source, [`SessionsList`](../apps/ui/sources/components/sessions/shell/SessionsList.tsx) owns the mixed Sessions/Workflow Runs list, including the Workflows column's Runs view and `/workflows/runs`. `SessionListFilterV1` owns Show and Started by; the same Run predicate serves Board filter membership. The existing Account-scoped Workflow read windows supply Runs, and the existing parent-work nesting owner attaches step Sessions beneath their Run instead of presenting them as independent roots.
 
+Session Project identity comes from Protocol's
+[`accepted-association resolver`](../packages/protocol/src/workspaces/workspaceRefResolutionV1.ts).
+An admitted row's opaque `projectKey` is qualified by its Home and does not wait
+for private checkout or display data. Keyless rows keep their exact Machine/folder
+group while the opened census is unavailable, rather than entering a pending
+Project bucket. The existing Project snapshot supplies private display facts;
+grouping adds no repository discovery or per-row read. Private checkout inference
+requires the opened Home and viewer Account plus genuine Session owner authority;
+readable recipient rows do not borrow the viewer's private census. Released rows
+without an immutable owner id may use the canonical legacy owner projection, not
+missing access fields or a display owner. Published Project keys remain usable
+independently of those private facts.
+
+Saved ordinary sibling positions and scopes survive page/filter omissions;
+the loaded window is not deletion evidence. Syntax normalization and the existing
+pinned-membership rule remain separate. Keyless checkout order uses the retained
+opaque FNV encoding rather than publishing raw paths; that predecessor-compatible
+encoding is not collision-free and does not change exact in-memory checkout identity.
+
+The shared [`Project display owner`](../apps/ui/sources/sync/domains/workspaces/projectGroupDisplay.ts)
+selects the baseline by accepted-ref creation time and qualified id, never by
+reachability, activity or visible row order. Project title overrides belong to
+the Project organization row. Header Rename/Reset uses the revision-qualified
+`projects.organization.update` Action, preserving the other organization fields;
+it does not rename that baseline checkout.
+
+Display does not depend on a Project header remaining visible. Accepted rows read
+that same Home-qualified display index in Sections, Pinned and Recent. A keyless
+row carries its already-admitted exact-group name (for example, Home folder) from
+the base list projection through filing and Recent; this transient display fact
+does not create a Project association or consult private checkout data. The shared
+display reader supplies both row context and single/bulk Move menus. A published
+Project key takes precedence even while its private display remains unavailable.
+
+The nonvisual Session row-context owner consumes that selected baseline rather
+than electing another. It compares admitted Machine and checkout ids, not labels
+or matching-looking paths; unknown checkout identity is not a default checkout.
+A displayed parent may establish the same Home/Machine/checkout context, but
+cannot hide a different Project or Machine. Disabling optional visual context
+retains the original Project/Machine/branch facts for accessible row identity.
+The canonical nesting projection supplies those admitted parent ids on the
+transient list item, so bulk and deferred mounted rows use the same authority.
+Parent metadata loss, detachment and flat attention mirrors do not inherit stale
+Machine/checkout facts; the child's execution workspace remains unchanged.
+
+The existing favicon resolver shares results and pending work by exact scoped
+Machine/path. Its hook accepts a fixed source and admitted reachability: an
+offline source has a stable fallback and makes no request, while an actual
+source change or reconnect can refresh through that same result owner. Initial
+copies reuse the cache. `useWorkspaceFavicon({ demand: false, ...source })`
+passively observes that same resource and stable result reference without
+resolving or retaining pending work; its default `demand: true` owns the read.
+`SessionListRowContextPresentation.projectFaviconSource` supplies the row
+Project's accepted baseline as `{serverId,machineId,workspacePath}` or `null`,
+including flat attention occurrences. It never substitutes the row's execution
+checkout or its display group's Project; optional context visibility does not
+retire this authored identity source.
+The list renderer must choose one demand per visible Project source (the header
+when present, otherwise a visible base/promoted Project mark), with other
+base/Needs-you/Working marks passive; that row binding remains integration work.
+Passive-only marks do not load a source.
+A new source cannot briefly display the old source's icon, and retiring the
+last demanding reader cancels its pending request. This adds no
+candidate probing, timed negative cache or polling.
+
+In 0.3 development source, Session checkout context carries a **last-observed**
+branch, not guaranteed-fresh Git state. Checkout preparation retains the actual
+realized `branchName`, never substitutes the requested `baseRef`, and the birth
+adapter maps it into private `SessionOwnerWorkspaceV1.branch`: a string names the
+observed branch, `null` proves detached/no branch, and absence means unavailable.
+The existing Account-mode owner envelope and authorized compact/warm-cache
+projections retain that distinction; branch text is not a server-visible row
+column. An already-demanded Session snapshot in
+[`ScmRepositoryService`](../apps/ui/sources/scm/scmRepositoryService.ts) may update
+it through the existing Account-scoped metadata writer after a real change,
+with owner, Home and exact checkout revalidation. Equal or unavailable
+observations do not enter the writer. A changed observation uses the writer's
+ordinary mutation read; this adds no SCM probe, watcher or polling, and makes no
+loaded-runtime verification claim.
+
+The development Session list separates an entity from its displayed occurrences. A Session has a base occurrence and may have one flat Needs-you or Working shortcut. The canonical index identity owner supplies those keys; subscriptions, navigation targets and mutations still address the qualified Session. Nesting applies to base rows. Both keeps the base and shortcut, Top suppresses only a promoted base without visible children, and In place creates no shortcuts. Shelf membership follows the mounted traversal and appends arrivals; severity and activity timestamps do not reorder it. The previous presented index supplies retained order, while current admitted rows supply live facts and immediately withdraw inaccessible or deleted entities. Header eligibility counts can therefore differ from held membership.
+
+The existing public multi-selection reducer accepts an optional occurrence-to-entity
+projection. Visible order, range anchors and keyboard focus address occurrences;
+selection membership and counts address distinct entities. Consumers without
+mirrored rows keep the original one-key-per-entity behavior. Session drag payloads
+remain qualified entities while origin geometry identifies the initiating copy.
+
+An active pointer or keyboard carry retains occurrence positions, not stale row
+facts or revoked membership. At the entity runtime's effect-dispatch boundary,
+the list releases that presentation freeze before an optimistic Section mutation
+publishes. Row placement, full Section counts and failure rollback then follow
+the same live organization projection; the captured source and Account authority
+remain with the pending effect until settlement. The Scheduled/Drafts support
+cell uses the existing measured-row registry only to exclude its rectangle from
+drop admission. It is not an entity or a target, and pointer movement does not
+remeasure it.
+
 The development filter also carries qualified Project include/exclude selections, canonical awareness statuses and `underSessionId`. Its shared predicate returns match, miss or unavailable: a locked Project never satisfies an exclusion, and absent producer facts never become proof of a match. Under delegates to the existing server-owned subtree query and has a distinct query-cache identity; an ordinary list page cannot answer it. Session lists and Boards apply local Project/status facets after authorized structural membership. Current Session listing rows project their existing owner Account: “Started by me” requires protected origin `none` and that owner equal to the viewer Account. Names, Bot labels and daemon fields never establish it. Older Homes or cold placeholders retain ordinary list compatibility, but missing ownership/origin facts remain unavailable for rule matching. Follow rule preview uses that same predicate, reports explicit complete/partial/unavailable coverage, and never enrolls its matches. Private persistence, Account-mode conversion and source delivery have their own development integration checks; filter or preview success alone does not certify them.
 
 In 0.3 development, a restricted Session-runtime credential may explicitly list **Under itself** through that same server proof. The result includes its root and readable managed descendants, traversing unreadable intermediates without disclosing them. The server rechecks the runtime binding, graph membership and access before returning the page. These are read-only shared Session projections; Account-private Follow, read/attention state, pins and owner metadata are excluded. Another root, an unscoped Account list and private Account filter facets remain refused. A worker's encrypted content remains locked without its own admitted key; the coordinator's key is never reused for it.
 
 The Run arm of [`SessionItem`](../apps/ui/sources/components/sessions/shell/SessionItem.tsx) uses the shared row geometry and Work status treatment. It reads authoritative admission starter and private authored-step progress, not inferred origin or public invocation counts. Contextual search indexes private title and Where through the same list search owner; it does not read exact Run detail or transcripts. Partial Run windows remain partial after local filtering. A selected Home not served by the active Account window also keeps the List and Board incomplete; mounting a Home alone does not justify pruning its saved Run positions. There is no separate Workflow History renderer or Triggered tab; Started by selects trigger-origin Runs.
+
+### Session sections (0.3 development)
+
+Account sections project the existing opened organization folder definitions and
+assignments. Their Home-qualified addresses distinguish equal local ids across
+Homes; section membership spans Projects and Machines within that Account. The
+existing full-assignment snapshot supplies membership independently of loaded
+Session bodies. The admitted projection records coverage only after a successful
+`includeAllFolderAssignments` response, not an exact/partial request or the older
+Home's missing-route compatibility fallback. Scoped updates preserve that evidence;
+Account retirement clears it. An unloaded or lead-displayed member still belongs
+to its section. Empty copy requires known zero membership; unavailable coverage
+is not zero. Archive all reads exact membership through the same snapshot owner.
+
+Section selection uses the controlled `SessionSection` projection from the
+organization domain, with no picker-owned loader. Names and icons use the shared
+Protocol display reader, including retained 0.2 folder content and locked states.
+Its optional UI-only legacy context carries admitted ancestor displays and the
+existing normalized workspace context for breadcrumb/same-name disambiguation.
+Locked or missing ancestors remain unavailable; this context never selects where
+a Session executes and does not expand the strict public Action result.
+The folder record's `sortKey` supplies section order. Existing folder transport and
+the legacy importer retain identity and membership; they are not another section
+store. See [Actions](actions.md) for mutation, removal and mixed-version semantics.
+Creating a section writes only that new definition after the last valid fractional
+key (or at the first key if none exists). Unrelated locked displays and retained
+null, duplicate or invalid sibling keys stay untouched; creation is not an order
+repair. Explicit section reorder retains its separate repair contract.
 
 ### Inbox attention sources (0.3 development)
 
