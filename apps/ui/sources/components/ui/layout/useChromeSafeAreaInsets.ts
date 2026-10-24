@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Platform, useWindowDimensions } from 'react-native';
+import { Platform } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import * as safeAreaContext from 'react-native-safe-area-context';
 import type { EdgeInsets } from 'react-native-safe-area-context';
 
@@ -118,7 +119,7 @@ function resolveNativeSafeAreaInsets(
 
 export function useChromeSafeAreaInsets(): EdgeInsets {
     const isDesktopOverlayWindow = isDesktopActivityOverlayWindowContext();
-    const dimensions = useWindowDimensions();
+    const dimensions = usePresentationWindowDimensions();
     const insets = safeAreaContext.useSafeAreaInsets();
     const nativeFallback = React.useMemo<EdgeInsets>(() => {
         if (Platform.OS === 'web') {

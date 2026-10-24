@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
-import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 
 import { Text } from '@/components/ui/text/Text';
 import { CodeLinesView, type CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
@@ -272,7 +273,7 @@ function FileContentPanelInner({
         offsetRef: codeScrollOffsetRef,
     }), []);
     const intraLineDiff = useIntraLineWordDiffConfig();
-    const { width: viewportWidth } = useWindowDimensions();
+    const { width: viewportWidth } = usePresentationWindowDimensions();
     const effectiveWrapLines = wrapLines ?? true;
     const effectiveShowLineNumbers = showLineNumbers ?? true;
     const effectiveShowPrefix = showPrefix ?? effectiveShowLineNumbers;

@@ -12,6 +12,7 @@ import type { DiffHunkInfo, DiffViewerHunks } from '../diffViewerTypes';
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
     useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+    Dimensions: { get: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }) },
   }),
 );
 vi.mock('react-native-unistyles', async () =>

@@ -1,6 +1,7 @@
 import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
-import { Platform, useWindowDimensions, View } from 'react-native';
+import { Platform, View } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
@@ -78,7 +79,7 @@ function areDiffReviewCommentsViewerPropsEqual(
 }
 
 function DiffReviewCommentsViewerInner(props: DiffReviewCommentsViewerProps) {
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight } = usePresentationWindowDimensions();
     const wrapLinesSetting = useSetting('wrapLinesInDiffs');
     const showLineNumbersSetting = useSetting('showLineNumbers');
     const effectiveWrapLines = props.wrapLines ?? (wrapLinesSetting !== false);

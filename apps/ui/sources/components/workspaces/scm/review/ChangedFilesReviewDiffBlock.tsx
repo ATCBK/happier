@@ -1,7 +1,8 @@
 import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
-import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
@@ -283,7 +284,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const wrapLines = useSetting('wrapLinesInDiffs');
     const showLineNumbers = useSetting('showLineNumbers');
     const { lineThreshold: virtualizationLineThreshold, byteThreshold: virtualizationByteThreshold } = useInlineDiffVirtualizationThresholds();
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight } = usePresentationWindowDimensions();
     const maxVirtualizedHeight = resolveInlineDiffVirtualizedMaxHeight(windowHeight);
     const effectiveWrapLines = wrapLines !== false;
     const effectiveShowLineNumbers = showLineNumbers !== false;

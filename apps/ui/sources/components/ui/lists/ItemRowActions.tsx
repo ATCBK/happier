@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Pressable, useWindowDimensions, type GestureResponderEvent, Platform } from 'react-native';
+import { View, Pressable, type GestureResponderEvent, Platform } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ITEM_ROW_ACTIONS_COMPACT_THRESHOLD_PX, type ItemAction } from '@/components/ui/lists/itemActions';
 import { Popover, type PopoverPlacement, type PopoverPortalOptions } from '@/components/ui/popover';
@@ -108,7 +109,7 @@ const DEFAULT_ACTION_CONTROL_SIZE = 28;
 export function ItemRowActions(props: ItemRowActionsProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const { width: windowWidth } = useWindowDimensions();
+    const { width: windowWidth } = usePresentationWindowDimensions();
     const widthForCompact =
         typeof props.layoutWidthPx === 'number'
         && Number.isFinite(props.layoutWidthPx)

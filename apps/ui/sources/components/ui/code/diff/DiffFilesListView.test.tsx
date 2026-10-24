@@ -40,6 +40,7 @@ installCodeDiffCommonModuleMocks({
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             useWindowDimensions: () => ({ width: 1200, height: 800 }),
+            Dimensions: { get: () => ({ width: 1200, height: 800, scale: 1, fontScale: 1 }) },
         });
     },
     text: async () => {

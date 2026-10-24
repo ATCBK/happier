@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Platform, View, ViewStyle, StyleProp, TextStyle, useWindowDimensions, type AccessibilityState, type LayoutChangeEvent } from 'react-native';
+import { Platform, View, ViewStyle, StyleProp, TextStyle, type AccessibilityState, type LayoutChangeEvent } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Popover, type PopoverAnchor, type PopoverPlacement } from '@/components/ui/popover';
@@ -298,7 +299,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const maxWidthCap = props.maxWidthCap ?? (matchTriggerWidth ? 1024 : DROPDOWN_MENU_MAX_WIDTH_PX);
     // A menu is as tall as its content and the window allow (the Popover clamps to the room on its
     // side); it never cuts a list off at a fixed height. A caller's explicit cap still wins.
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight } = usePresentationWindowDimensions();
     const maxHeightCap = props.maxHeightCap ?? windowHeight;
     const placementMinSpace = props.maxHeightCap ?? POPOVER_PREFERRED_ROOM_PX;
     const emptyLabel = props.emptyLabel === undefined ? t('common.noMatches') : props.emptyLabel;

@@ -11,6 +11,7 @@ vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
         useWindowDimensions: () => ({ width: 1024, height: 900, scale: 1, fontScale: 1 }),
+        Dimensions: { get: () => ({ width: 1024, height: 900, scale: 1, fontScale: 1 }) },
     });
 });
 vi.mock('react-native-reanimated', async () => {

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { PaneHeaderScrollIsolation } from '@/components/appShell/panes/paneHeaderScroll';
-import { BackHandler, Keyboard, Platform, StyleSheet as RNStyleSheet, View, type StyleProp, type ViewProps, type ViewStyle, useWindowDimensions } from 'react-native';
+import { BackHandler, Keyboard, Platform, StyleSheet as RNStyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 import { usePopoverBoundaryRef } from './PopoverBoundary';
 import { usePopoverScrollSourceRef } from './PopoverScrollSource';
 import { requireRadixDismissableLayer } from '@/utils/web/radixCjs';
@@ -47,7 +47,7 @@ import {
 } from '@/keyboard/focusReturn';
 import { resolveHappierPopoverPlacement } from '@happier-dev/plugin-ui/presentation';
 import { resolvePopoverSideMaxHeight } from './resolvePopoverHeightStyle';
-import { useDeviceType } from '@/utils/platform/responsive';
+import { useDeviceType, usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { BaseModal } from '@/modal/components/BaseModal';
 import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
@@ -344,7 +344,7 @@ export function Popover(props: PopoverProps) {
 }
 
 function PhonePopoverSheet(props: PopoverProps) {
-    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+    const { width: windowWidth, height: windowHeight } = usePresentationWindowDimensions();
     const insets = useChromeSafeAreaInsets();
     const maxHeight = Math.min(props.maxHeightCap ?? windowHeight, Math.max(0, windowHeight - insets.top - insets.bottom));
     const closeSheet = () => props.onRequestClose?.();
@@ -438,7 +438,7 @@ function AnchoredPopover(props: PopoverProps) {
     // particular popover should instead be constrained to the viewport.
     const boundaryRef = boundaryRefProp === undefined ? boundaryFromContext : boundaryRefProp;
     const followScrollRef = followScrollRefProp === undefined ? scrollSourceFromContext : followScrollRefProp;
-    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+    const { width: windowWidth, height: windowHeight } = usePresentationWindowDimensions();
     // Without an explicit cap a popover takes whatever room its side offers (content scrolls inside it);
     // the room a side must offer to be preferred stays the usual menu height.
     const maxHeightCap = maxHeightCapProp ?? windowHeight;

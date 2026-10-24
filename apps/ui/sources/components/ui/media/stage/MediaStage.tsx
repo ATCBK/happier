@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { FlatList, PixelRatio, Platform, Pressable, View, useWindowDimensions, type ViewToken } from 'react-native';
+import { FlatList, PixelRatio, Platform, Pressable, View, type ViewToken } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedReaction,
@@ -36,7 +36,7 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { t } from '@/text';
-import { useDeviceType } from '@/utils/platform/responsive';
+import { useDeviceType, usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { canOpenFileInDefaultApp, saveFileUri } from '@/sync/runtime/files/saveFileBytes';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
@@ -621,7 +621,7 @@ function StageGalleryStrip(props: Readonly<{
 export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
   const { theme } = useUnistyles();
   const gallery = useMediaStageGallery(props.items, props.initialIndex);
-  const window = useWindowDimensions();
+  const window = usePresentationWindowDimensions();
   const insets = useChromeSafeAreaInsets();
   const phone = useDeviceType() === 'phone';
   const reducedMotion = useReducedMotionPreference();

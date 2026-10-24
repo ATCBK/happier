@@ -18,6 +18,7 @@ vi.mock('react-native', async () => {
       scale: 1,
       fontScale: settings.osFontScale,
     }),
+    Dimensions: { get: () => ({ width: 1024, height: 768, scale: 1, fontScale: settings.osFontScale }) },
   });
 });
 

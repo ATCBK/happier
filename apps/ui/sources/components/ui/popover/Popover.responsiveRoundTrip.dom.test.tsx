@@ -11,6 +11,10 @@ installPopoverCommonModuleMocks({
         ...await vi.importActual<typeof import('react-native-web')>('react-native-web'),
         // Physical dimensions are the boundary; placement, portals, sheet and motion stay real.
         useWindowDimensions: () => ({ ...viewport, scale: 1, fontScale: 1 }),
+        Dimensions: {
+            get: () => ({ ...viewport, scale: 1, fontScale: 1 }),
+            addEventListener: () => ({ remove: () => {} }),
+        },
     }),
 });
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

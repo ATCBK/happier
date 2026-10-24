@@ -1,7 +1,7 @@
 import { PaneMainRestoreChip, usePaneMainRestoreChipVisible } from './mainColumn/PaneMainColumnControls';
 import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 import * as React from 'react';
-import { Platform, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
+import { Platform, View, type StyleProp, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1, happierPageTextMetrics, useHappierMaterialColorResolver, useHappierTextPresentation } from '@happier-dev/plugin-ui/presentation';
 import type { PluginUiDetailsPanePresentation } from '@happier-dev/plugin-ui/advanced';
@@ -19,7 +19,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useLocalSetting } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { useHeaderHeight } from '@/utils/platform/responsive';
+import { useHeaderHeight, usePresentationWindowDimensions } from '@/utils/platform/responsive';
 
 import type { PaneHeaderLine, PaneHeaderLineSegment } from './paneHeaderSlot';
 import { PaneHeaderShade } from './paneHeaderScroll';
@@ -54,7 +54,7 @@ const LARGE_FACTS_LINES = 2;
 function useFactsLineHeight(large: boolean): number {
     const uiFontScale = useLocalSetting('uiFontScale');
     const { metricScale } = useHappierTextPresentation({ textScale: uiFontScale });
-    const { fontScale } = useWindowDimensions();
+    const { fontScale } = usePresentationWindowDimensions();
     const hostScale = Platform.OS === 'web' ? 1 : fontScale;
     const lineHeight = large ? happierPageTextMetrics('pageDescription').lineHeight : HEADER_BAND_SUBTITLE_TEXT.lineHeight;
     return lineHeight * metricScale * hostScale;

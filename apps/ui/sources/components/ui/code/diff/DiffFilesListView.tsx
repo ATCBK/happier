@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
-import { Pressable, View, Platform, useWindowDimensions } from 'react-native';
+import { Pressable, View, Platform } from 'react-native';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { VirtualizedList } from '@/components/ui/lists/virtualized/VirtualizedList';
@@ -165,10 +166,21 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
     const controlColor = paintColor(theme.colors.surface.elevated ?? theme.colors.surface.base);
     const shouldUseVirtualizedList = virtualizeFileList === true
         && !(virtualizedListLayout === 'intrinsic' && Platform.OS !== 'web');
+    // A bounded list is the pane's scrolling body (a commit, a stash, a review): it drives the header's shade.
+    // An intrinsic list sits inside other content (a transcript card, a Markdown block) and never does.
+    const paneHeaderScroll = usePaneHeaderScrollSink();
+    const paneHeaderSink = shouldUseVirtualizedList && virtualizedListLayout === 'bounded' ? paneHeaderScroll : null;
+    const handleScroll = React.useMemo(() => paneHeaderSink === null ? onScroll
+        : (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            paneHeaderSink.reportTopDistance(event.nativeEvent.contentOffset.y);
+            onScroll?.(event);
+        }, [onScroll, paneHeaderSink]);
+    // A list mounting in a retained tab starts at its top, whatever that tab's earlier body left.
+    React.useLayoutEffect(() => { paneHeaderSink?.reportTopDistance(0); }, [paneHeaderSink]);
     const [focusedFileKey, setFocusedFileKey] = React.useState<string | null>(null);
     const listRef = React.useRef<VirtualizedListRef | null>(null);
 
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight } = usePresentationWindowDimensions();
     const { lineThreshold: virtualizationLineThreshold, byteThreshold: virtualizationByteThreshold } = useInlineDiffVirtualizationThresholds();
 
     const maxVirtualizedHeight = resolveInlineDiffVirtualizedMaxHeight(windowHeight);

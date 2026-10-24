@@ -14,11 +14,11 @@ import {
     Platform,
     StyleSheet,
     View,
-    useWindowDimensions,
     type StyleProp,
     type ViewStyle,
 } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { usePresentationWindowDimensions } from '@/utils/platform/responsive';
 
 import {
     normalizeHappierCodeLanguage,
@@ -316,7 +316,7 @@ function PluginUiPrivateDiffViewer(props: Extract<HappierDiffViewerRequest, { un
     const configuredWrapLines = useSetting('wrapLinesInDiffs');
     const configuredLineNumbers = useSetting('showLineNumbers');
     const thresholds = useInlineDiffVirtualizationThresholds();
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight } = usePresentationWindowDimensions();
     const virtualized = resolveInlineDiffVirtualization({
         unifiedDiff: props.unifiedDiff,
         oldText: null,

@@ -1,12 +1,35 @@
 import { Dimensions, Platform } from 'react-native';
-import { useWindowDimensions } from 'react-native';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { calculateDeviceDimensions, determineDeviceType, calculateHeaderHeight } from './deviceCalculations';
 import { isRunningOnMac } from './platform';
 import { isWebMobileHost } from './webMobileHeuristics';
 
 // Re-export calculation functions for use in other components
 export { calculateDeviceDimensions, determineDeviceType, calculateHeaderHeight };
+
+/** Window geometry is presentation work; retained background workflows stay connected separately. */
+export function usePresentationWindowDimensions() {
+    const presented = useLayoutPresentationActive();
+    const [, invalidate] = useReducer((revision: number) => revision + 1, 0);
+    // Dimensions remains the authority, including the first render after a retained pane is revealed.
+    const dimensions = Dimensions.get('window');
+    const { width, height, scale, fontScale } = dimensions;
+    useLayoutEffect(() => {
+        if (!presented) return;
+        const onChange = () => {
+            const next = Dimensions.get('window');
+            if (next.width !== width || next.height !== height || next.scale !== scale || next.fontScale !== fontScale) {
+                invalidate();
+            }
+        };
+        const subscription = Dimensions.addEventListener('change', onChange);
+        // Close the render-to-subscription window using the same platform authority.
+        onChange();
+        return () => subscription.remove();
+    }, [presented, width, height, scale, fontScale]);
+    return dimensions;
+}
 
 // Get header height based on platform, device type, and orientation (wrapper for backward compatibility)
 export function getHeaderHeight(isLandscape: boolean, deviceType: 'phone' | 'tablet'): number {
@@ -32,7 +55,7 @@ export function getDeviceType(): 'phone' | 'tablet' {
 
 // Hook to get device type (reactive to dimension changes)
 export function useDeviceType(): 'phone' | 'tablet' {
-    const { width, height } = useWindowDimensions();
+    const { width, height } = usePresentationWindowDimensions();
     const webMobileHost = isWebMobileHost();
     const fallbackDims = Dimensions.get('window');
     const fallbackWidth = (fallbackDims as any)?.width;
@@ -86,7 +109,7 @@ export function useIsTablet(): boolean {
 
 // Hook to detect landscape orientation
 export function useIsLandscape(): boolean {
-    const { width, height } = useWindowDimensions();
+    const { width, height } = usePresentationWindowDimensions();
     return width > height;
 }
 

@@ -8,7 +8,6 @@ import { getDeviceType, useDeviceType } from './responsive';
 
 const screenState = vi.hoisted(() => ({
     platformOS: 'web' as 'ios' | 'android' | 'web',
-    hookDims: { width: 800, height: 700 },
     staticDims: { width: 800, height: 700 },
 }));
 
@@ -30,12 +29,6 @@ vi.mock('react-native', async () => {
                         fontScale: 1,
                     }),
                 },
-                useWindowDimensions: () => ({
-                    width: screenState.hookDims.width,
-                    height: screenState.hookDims.height,
-                    scale: 2,
-                    fontScale: 1,
-                }),
             }
     );
 });
@@ -49,7 +42,6 @@ describe('useDeviceType (stability)', () => {
     afterEach(() => vi.unstubAllGlobals());
     beforeEach(() => {
         screenState.platformOS = 'web';
-        screenState.hookDims = { width: 800, height: 700 };
         screenState.staticDims = { width: 800, height: 700 };
     });
 
@@ -68,29 +60,20 @@ describe('useDeviceType (stability)', () => {
                 ? query === '(pointer: fine)' || query === '(hover: hover)'
                 : query === '(pointer: coarse)' || query === '(hover: none)' }),
         });
-        screenState.hookDims = { width, height };
         screenState.staticDims = { width, height };
         const screen = await renderScreen(<DeviceTypeLabel />);
         expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe(expected);
         expect(getDeviceType()).toBe(expected);
     });
 
-    it('keeps the last valid deviceType when useWindowDimensions returns zero temporarily', async () => {
+    it.each([
+        { width: 0, height: 0 },
+        { width: Number.NaN, height: Number.NaN },
+    ])('keeps the last valid deviceType when platform dimensions are temporarily invalid: $width', async invalid => {
         const screen = await renderScreen(<DeviceTypeLabel />);
         expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe('tablet');
 
-        screenState.hookDims = { width: 0, height: 0 };
-        await screen.update(<DeviceTypeLabel />);
-
-        expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe('tablet');
-    });
-
-    it('falls back to Dimensions.get when hook dimensions are temporarily invalid', async () => {
-        const screen = await renderScreen(<DeviceTypeLabel />);
-        expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe('tablet');
-
-        screenState.hookDims = { width: 0, height: 0 };
-        screenState.staticDims = { width: 800, height: 700 };
+        screenState.staticDims = invalid;
         await screen.update(<DeviceTypeLabel />);
 
         expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe('tablet');
@@ -100,7 +83,6 @@ describe('useDeviceType (stability)', () => {
         const screen = await renderScreen(<DeviceTypeLabel />);
         expect(screen.findByProps({ 'data-testid': 'deviceType' }).children[0]).toBe('tablet');
 
-        screenState.hookDims = { width: 390, height: 844 };
         screenState.staticDims = { width: 390, height: 844 };
         await screen.update(<DeviceTypeLabel />);
 
