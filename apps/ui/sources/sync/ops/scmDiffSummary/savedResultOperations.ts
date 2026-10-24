@@ -1,7 +1,9 @@
 import {
   ScmDiffSummaryResultListResponseSchema, ScmDiffSummaryResultClearInputSchema,
   ScmDiffSummaryResultClearResponseSchema,
+  ScmDiffSummaryResultFailureSchema,
   type ScmDiffSummaryResultListResponse, type ScmDiffSummaryResultClearInput,
+  type ScmDiffSummaryResultListInput,
   type ScmDiffSummaryResultClearResponse, type ScmDiffSummaryResultFailure,
 } from '@happier-dev/protocol/scm';
 import { invokeUiScmAction, type UiScmActionExecutor, type UiScmActionFailure } from '@/sync/ops/scm/scmActionInvocation';
@@ -18,7 +20,7 @@ export function createScmDiffSummarySavedResultOperations(params: Readonly<{
   const unavailable = (error: unknown): ScmDiffSummaryResultFailure => ({ success: false, errorCode: 'result_unavailable',
     error: error instanceof Error ? error.message : 'The captured Account or owning machine is unavailable.' });
   return {
-    async list(): Promise<ScmDiffSummaryResultListResponse> {
+    async list(input: ScmDiffSummaryResultListInput = {}): Promise<ScmDiffSummaryResultListResponse> {
       if (!current()) return unavailable(null);
       try {
         let executor = params.actionExecutor;
@@ -34,14 +36,15 @@ export function createScmDiffSummarySavedResultOperations(params: Readonly<{
             });
           } });
         }
-        const raw = await invokeUiScmAction({ actionId: 'scm.diffSummary.result.list', input: {},
+        const raw = await invokeUiScmAction({ actionId: 'scm.diffSummary.result.list', input,
           schema: ScmDiffSummaryResultListResponseSchema, executor, shouldContinue: current,
           context: { externalActionTarget: { kind: 'machine', machineId: params.machineId },
             ...(params.serverId ? { serverId: params.serverId } : {}), ...(params.accountId ? { expectedAccountId: params.accountId } : {}),
             ...(params.signal ? { signal: params.signal } : {}) } });
         if (!current()) return unavailable(null);
-        const parsed = ScmDiffSummaryResultListResponseSchema.safeParse(raw);
-        return parsed.success ? parsed.data : unavailable(new Error('The saved-result inventory could not be validated.'));
+        if (raw.success) return raw;
+        const failure = ScmDiffSummaryResultFailureSchema.safeParse(raw);
+        return failure.success ? failure.data : unavailable(new Error(raw.error));
       } catch (error) { return unavailable(error); }
     },
     async clear(input: ScmDiffSummaryResultClearInput): Promise<ScmDiffSummaryResultClearResponse | UiScmActionFailure> {

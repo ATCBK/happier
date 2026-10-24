@@ -150,11 +150,21 @@ export const ScmDiffSummarySevenDayCostSchema = lazyZodSchema(() => z.strictObje
   sinceMs: z.number().check(z.int(), z.nonnegative()), untilMs: z.number().check(z.int(), z.nonnegative()),
 }));
 export type ScmDiffSummarySevenDayCost = z.infer<typeof ScmDiffSummarySevenDayCostSchema>;
-export const ScmDiffSummaryResultListInputSchema = lazyZodSchema(() => z.strictObject({}));
+export const ScmDiffSummaryResultListInputSchema = lazyZodSchema(() => z.strictObject({
+  query: z.optional(z.strictObject({ cwd: z.string().check(z.minLength(1)),
+    // Null explicitly requests repository-owned results; omission leaves Session selection to ACLs.
+    sessionId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+    comparisons: z.optional(z.array(z.strictObject({ source: ScmDiffSummarySourceSchema,
+      comparisonId: z.optional(z.string().check(z.minLength(1))), outputs: z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1)),
+    }))),
+  })),
+  includeUsage: z.optional(z.boolean()),
+}));
+export type ScmDiffSummaryResultListInput = z.infer<typeof ScmDiffSummaryResultListInputSchema>;
 export const ScmDiffSummaryResultListResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
   z.strictObject({ success: z.literal(true), results: z.array(ScmDiffSummarySavedResultItemSchema),
     count: z.number().check(z.int(), z.nonnegative()), bytes: z.number().check(z.int(), z.nonnegative()),
-    sevenDayCost: ScmDiffSummarySevenDayCostSchema,
+    sevenDayCost: z.optional(ScmDiffSummarySevenDayCostSchema),
   }), ScmDiffSummaryResultFailureSchema,
 ]));
 export type ScmDiffSummaryResultListResponse = z.infer<typeof ScmDiffSummaryResultListResponseSchema>;

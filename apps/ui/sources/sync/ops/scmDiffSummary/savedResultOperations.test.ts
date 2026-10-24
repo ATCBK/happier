@@ -29,6 +29,20 @@ beforeEach(async () => { rpc.mockReset(); await harness.reset(); });
 afterEach(() => standardCleanup());
 
 describe('machine saved result operations', () => {
+  it('requests narrow restoration separately from settings usage through the real Action schema', async () => {
+    const requests: unknown[] = [];
+    const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({ scmActionExecute: async ({ input }) => {
+      requests.push(input);
+      return listed;
+    } }));
+    const ops = createScmDiffSummarySavedResultOperations({ machineId: 'machine', shouldContinue: () => true, actionExecutor });
+    const query = { cwd: '/repo', sessionId: 'session', comparisons: [
+      { comparisonId: 'comparison', source: { kind: 'workingTree' as const }, outputs: ['walkthrough' as const] },
+    ] };
+    expect(await ops.list({ query })).toMatchObject({ success: true });
+    expect(await ops.list({ includeUsage: true })).toMatchObject({ success: true });
+    expect(requests).toEqual([{ query }, { includeUsage: true }]);
+  });
   it('preserves a disabled Clear outcome before machine deletion', async () => {
     const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionEnabled: () => false,
       scmActionExecute: async () => { throw new Error('Disabled Clear reached Machine transport'); } }));

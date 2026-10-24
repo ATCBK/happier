@@ -41,6 +41,26 @@ export const ScmComparisonSourceProtocolSchema = defineProtocolUnion([
 export type ScmComparisonSource = ProtocolSchemaOutput<typeof ScmComparisonSourceProtocolSchema> & Readonly<{ [key: string]: ProtocolJsonValue }>;
 export const ScmComparisonSourceSchema: z.ZodMiniType<ScmComparisonSource, ProtocolSchemaInput<typeof ScmComparisonSourceProtocolSchema>> = asProtocolZod(ScmComparisonSourceProtocolSchema);
 
+/** Selector matching shared by saved-result queries and comparison view selection. */
+export function scmComparisonSourceMatches(selector: ScmComparisonSource, source: ScmComparisonSource,
+  basis?: Readonly<{ baseOid?: string; headOid?: string }>): boolean {
+  switch (selector.kind) {
+    case 'workingTree': return source.kind === 'workingTree';
+    case 'session': return source.kind === 'session' && selector.sessionId === source.sessionId;
+    case 'turnCheckpoint': return source.kind === 'turnCheckpoint'
+      && Boolean(selector.turnId || selector.checkpointReceiptId)
+      && (!selector.turnId || source.turnId === selector.turnId)
+      && (!selector.checkpointReceiptId || source.checkpointReceiptId === selector.checkpointReceiptId)
+      && (!selector.evidenceMode || selector.evidenceMode === (source.evidenceMode ?? 'reconciled'));
+    case 'branch': return source.kind === 'branch' && source.head === selector.head && source.base === selector.base;
+    case 'commit': return source.kind === 'commit' && source.commit === selector.commit && (source.parent ?? null) === (selector.parent ?? null);
+    case 'pullRequest': return source.kind === 'pullRequest' && source.locator.providerId === selector.locator.providerId
+      && source.locator.repository === selector.locator.repository && source.locator.number === selector.locator.number
+      && (!selector.locator.baseOid || selector.locator.baseOid === (basis ? basis.baseOid : source.locator.baseOid))
+      && (!selector.locator.headOid || selector.locator.headOid === (basis?.headOid ?? source.locator.headOid));
+  }
+}
+
 const range = z.strictObject({ startLine: z.number().check(z.int(), z.nonnegative()), lineCount: z.number().check(z.int(), z.nonnegative()) });
 export const ScmChangeOccurrenceSchema = lazyZodSchema(() => z.strictObject({
   id: identity, alias: identity, path: identity, previousPath: z.optional(identity),

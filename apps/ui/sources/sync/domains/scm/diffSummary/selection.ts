@@ -1,5 +1,6 @@
 import type { ScmComparison, ScmComparisonSource, ScmComparisonView, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs } from '@happier-dev/protocol/scm';
 import type { ScmDiffSummaryState } from './state';
+import { scmComparisonSourceMatches } from '@happier-dev/protocol/scm/comparison';
 
 type SourceSelector = (ScmComparisonSource | ScmReviewComparisonSelector) & Readonly<{ comparisonId?: string }>;
 
@@ -53,25 +54,18 @@ export function scmReviewComparisonOfCaptured(comparison: Readonly<{ id: string;
 }
 export function scmReviewComparisonMatchesSource(comparison: SourceSelector, source: ScmComparisonSource,
     captured?: Pick<ScmComparison, 'endpoints' | 'pullRequest'>): boolean {
-    switch (comparison.kind) {
-        case 'workingTree': return source.kind === 'workingTree';
-        case 'session': return source.kind === 'session'
-            && (!('sessionId' in comparison) || comparison.sessionId === source.sessionId);
-        case 'turnCheckpoint': {
-            const requestedMode = 'evidence' in comparison ? comparison.evidence : 'evidenceMode' in comparison ? comparison.evidenceMode : undefined;
-            return source.kind === 'turnCheckpoint'
-            && Boolean(comparison.turnId || comparison.checkpointReceiptId)
-            && (!comparison.turnId || source.turnId === comparison.turnId)
-            && (!comparison.checkpointReceiptId || source.checkpointReceiptId === comparison.checkpointReceiptId)
-            && (!requestedMode || requestedMode === (source.evidenceMode ?? 'reconciled'));
-        }
-        case 'branch': return source.kind === 'branch' && source.head === comparison.head && source.base === comparison.base;
-        case 'commit': return source.kind === 'commit' && source.commit === comparison.commit && (source.parent ?? null) === (comparison.parent ?? null);
-        case 'pullRequest': return source.kind === 'pullRequest' && source.locator.providerId === comparison.locator.providerId
-            && source.locator.repository === comparison.locator.repository && source.locator.number === comparison.locator.number
-            && (!comparison.locator.baseOid || comparison.locator.baseOid === (captured ? captured.pullRequest?.baseOid : source.locator.baseOid))
-            && (!comparison.locator.headOid || comparison.locator.headOid === (captured?.endpoints.after ?? source.locator.headOid));
-    }
+    const viewEvidence = 'evidence' in comparison ? comparison.evidence : undefined;
+    const sourceEvidence = 'evidenceMode' in comparison ? comparison.evidenceMode : undefined;
+    const evidenceMode = viewEvidence === 'checkpoint' || viewEvidence === 'agent_reported' ? viewEvidence
+        : sourceEvidence === 'checkpoint' || sourceEvidence === 'agent_reported' || sourceEvidence === 'reconciled' ? sourceEvidence : undefined;
+    const selector: ScmComparisonSource = comparison.kind === 'session' ? { kind: 'session' as const,
+        sessionId: 'sessionId' in comparison && typeof comparison.sessionId === 'string' ? comparison.sessionId : source.kind === 'session' ? source.sessionId : '' }
+        : comparison.kind === 'turnCheckpoint' ? { kind: 'turnCheckpoint' as const,
+            ...(comparison.turnId ? { turnId: comparison.turnId } : {}),
+            ...(comparison.checkpointReceiptId ? { checkpointReceiptId: comparison.checkpointReceiptId } : {}),
+            ...(evidenceMode ? { evidenceMode } : {}) }
+        : comparison;
+    return scmComparisonSourceMatches(selector, source, captured ? { baseOid: captured.pullRequest?.baseOid, headOid: captured.endpoints.after } : undefined);
 }
 /** Current output selection uses published results too: addOutputs need not change the initial request. */
 export function selectSessionScmWalkthroughKey(state: ScmDiffSummaryState, sessionId: string,
