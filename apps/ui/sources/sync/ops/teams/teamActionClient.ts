@@ -63,9 +63,8 @@ export function resetTeamActionClientForTests(): void {
  * the Artifact's own recorded Action id, surface, authority, Account and Home
  * against this scope before it hands a result back, so an approval executed for
  * another intent, another Account or another Home is ignored rather than
- * mistaken for this one's answer. A read intent never gets a continuation: a
- * read that needed approval is a registry defect, and replaying one as a result
- * would let a refused read look like it returned data.
+ * mistaken for this one's answer. Reads instead retain their original invocation
+ * through the shared Action executor's approval waiter below.
  */
 function buildTeamActionApprovalRegistration<TValue>(input: Readonly<{
     artifactId: string;
@@ -77,7 +76,6 @@ function buildTeamActionApprovalRegistration<TValue>(input: Readonly<{
     onFailed?: (code: string, failure?: ActionExecuteFailure) => void;
 }>): ActionApprovalRegistration {
     if (!input.onSucceeded && !input.onFailed) return input.artifactId;
-    if (getActionSpec(input.actionId).sideEffectClass === 'read') return input.artifactId;
     const actionId = input.actionId;
     return createActionApprovalContinuation<unknown, typeof actionId>({
         artifactId: input.artifactId,
@@ -161,7 +159,16 @@ export async function runTeamAction<TValue>(params: Readonly<{
     executorOptions?: Parameters<typeof scopedHomeActionExecutor>[1];
 }>): Promise<TeamActionOutcome<TValue>> {
     const actionRequestId = randomUUID();
-    const result = await scopedHomeActionExecutor(params.scope, params.executorOptions)(params.actionId, params.input, {
+    // Settings Ask applies to reads too. Keep the original read/result recipient
+    // with the incumbent approval owner rather than throwing away its result as
+    // a deferred mutation. The snapshot loader still owns demand currentness.
+    const read = getActionSpec(params.actionId).sideEffectClass === 'read';
+    const signal = params.signal ?? (read ? new AbortController().signal : undefined);
+    const executorOptions = read && signal ? {
+        ...params.executorOptions,
+        hostActionApprovalLifetime: { actionId: params.actionId, signal, surface: 'ui' as const },
+    } : params.executorOptions;
+    const result = await scopedHomeActionExecutor(params.scope, executorOptions)(params.actionId, params.input, {
         surface: 'ui',
         authority: 'present_user',
         serverId: params.scope.serverId,
@@ -169,7 +176,7 @@ export async function runTeamAction<TValue>(params: Readonly<{
         ...(params.approval === 'surface_confirmed'
             ? { presentUserConfirmation: { actionId: params.actionId } }
             : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
+        ...(signal ? { signal } : {}),
     });
 
     const outcome = classifyHomeActionOutcome(result, params.actionId);

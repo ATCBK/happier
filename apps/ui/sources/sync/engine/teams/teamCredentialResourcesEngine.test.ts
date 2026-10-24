@@ -8,8 +8,9 @@ import {
 } from '@happier-dev/protocol/teams';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import { standardCleanup } from '@/dev/testkit';
+import { createDeferred, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -83,6 +84,90 @@ afterEach(async () => {
 });
 
 describe('Team credential resource observations', () => {
+    it('delivers each approved 50-Team application set to its still-mounted catalog without redispatch', async () => {
+        await home.requireUiApproval(scope.serverId, 'teams.credentials.entitled.list');
+        const addresses = Array.from({ length: 50 }, (_, index) => createTeamAddress(scope.serverId, `team-${index}`)!);
+        const application = {
+            agentTargetKey: 'agent:happier.agent.codex/codex',
+            implementationIdentity: { pluginId: 'happier.provider.test', localId: 'test' },
+            endpointTemplateId: 'responses', protocol: 'openai-responses',
+        } as const;
+        home.answer(scope.serverId, DISCOVER, { select: input => ({ body: {
+            resources: addresses.map(target => ({
+                ...catalogResource(`${target.teamId}-${typeof input === 'object' && input !== null && 'application' in input ? 'app' : 'generic'}`),
+                teamId: target.teamId,
+            })), nextCursor: null, failures: [],
+        } }) });
+        const releases = addresses.flatMap(target => [
+            observeTeamCredentialResourceCatalog(scope, target),
+            observeTeamCredentialResourceCatalog(scope, target, application),
+        ]);
+        try {
+            await waitForHomeGovernance(() => expect(home.artifacts(scope.serverId).list()).toHaveLength(2));
+            expect(home.requestsFor(DISCOVER)).toHaveLength(0);
+            for (const artifact of home.artifacts(scope.serverId).list()) {
+                expect(await decideApprovalAsInbox(scope.serverId, artifact.id, 'approve')).toMatchObject({ ok: true });
+            }
+            await waitForHomeGovernance(() => {
+                for (const target of addresses) for (const app of [undefined, application]) {
+                    expect(getTeamCredentialResourceCatalogSnapshot(scope, target, app)?.status).not.toBe('loading');
+                }
+            });
+            for (const target of addresses) for (const app of [undefined, application]) {
+                expect(getTeamCredentialResourceCatalogSnapshot(scope, target, app))
+                    .toMatchObject({ status: 'ready', stale: false,
+                        data: [{ id: `${target.teamId}-${app ? 'app' : 'generic'}` }], error: null });
+            }
+            expect(home.artifacts(scope.serverId).list()).toHaveLength(2);
+            const requests = home.requestsFor(DISCOVER);
+            expect(requests).toHaveLength(2);
+            expect(requests.map(request => request.input)).toEqual(expect.arrayContaining([
+                { teamIds: addresses.map(target => target.teamId) },
+                { teamIds: addresses.map(target => target.teamId), application },
+            ]));
+        } finally { releases.forEach(release => release()); }
+    });
+
+    it.each(['reject', 'cancel'] as const)('keeps a %s approval as the exact refusal for every Team in the set', async decision => {
+        await home.requireUiApproval(scope.serverId, 'teams.credentials.entitled.list');
+        const addresses = Array.from({ length: 50 }, (_, index) => createTeamAddress(scope.serverId, `team-${index}`)!);
+        const releases = addresses.map(target => observeTeamCredentialResourceCatalog(scope, target));
+        try {
+            await waitForHomeGovernance(() => expect(home.artifacts(scope.serverId).list()).toHaveLength(1));
+            const artifact = home.artifacts(scope.serverId).list()[0]!;
+            expect(await decideApprovalAsInbox(scope.serverId, artifact.id, decision)).toMatchObject({ ok: true });
+            await waitForHomeGovernance(() => {
+                for (const target of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, target)?.status).not.toBe('loading');
+            });
+            for (const target of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, target))
+                .toMatchObject({ status: 'error', data: null,
+                    error: { kind: 'forbidden', retryable: false,
+                        code: decision === 'reject' ? 'approval_rejected' : 'approval_canceled' } });
+            expect(home.requestsFor(DISCOVER)).toHaveLength(0);
+            expect(home.artifacts(scope.serverId).list()).toHaveLength(1);
+        } finally { releases.forEach(release => release()); }
+    });
+
+    it('does not revive a catalog when its final observer leaves before the approved response', async () => {
+        await home.requireUiApproval(scope.serverId, 'teams.credentials.entitled.list');
+        const response = createDeferred<void>();
+        home.answer(scope.serverId, DISCOVER, { body: { resources: [], nextCursor: null, failures: [] }, respondAfter: response.promise });
+        const release = observeTeamCredentialResourceCatalog(scope, address);
+        try {
+            await waitForHomeGovernance(() => expect(home.artifacts(scope.serverId).list()).toHaveLength(1));
+            const artifact = home.artifacts(scope.serverId).list()[0]!;
+            const decision = decideApprovalAsInbox(scope.serverId, artifact.id, 'approve');
+            await waitForHomeGovernance(() => expect(home.requestsFor(DISCOVER)).toHaveLength(1));
+            release();
+            response.resolve();
+            await decision;
+            await waitForHomeGovernance(() => expect(JSON.parse(home.artifacts(scope.serverId).readPlainBody(artifact.id)!))
+                .toMatchObject({ status: 'executed' }));
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, address)).toMatchObject({ data: null, stale: true });
+            expect(home.requestsFor(DISCOVER)).toHaveLength(1);
+        } finally { release(); response.resolve(); }
+    });
+
     it('publishes a complete recipient catalog only after following continuation', async () => {
         const first = catalogResource('resource-1');
         const second = catalogResource('resource-2');

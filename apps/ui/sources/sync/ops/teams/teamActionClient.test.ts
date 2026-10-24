@@ -5,6 +5,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 import {
     homeDomainFailureCode,
@@ -33,6 +34,25 @@ afterEach(() => {
 });
 
 describe('runTeamAction', () => {
+    it('returns an approved roster read to the original caller after another Home is focused', async () => {
+        const homeA = await addHome();
+        const homeB = await addHome('https://home-b.example');
+        await harness.requireUiApproval(homeA, 'teams.groups.list');
+        harness.answer(homeA, GROUPS_PATH, { body: { items: [], nextCursor: 'next-group-page' } });
+        const pending = runTeamAction({
+            scope: createServerAccountScope(homeA, 'account')!, actionId: 'teams.groups.list',
+            input: { v: 1, teamId: 'team-1', archived: 'active' }, parse: value => PageSchema.parse(value),
+        });
+        await waitForHomeGovernance(() => expect(harness.artifacts(homeA).list()).toHaveLength(1));
+        expect(harness.requestsFor(GROUPS_PATH)).toHaveLength(0);
+        const artifactId = harness.artifacts(homeA).list()[0]!.id;
+        await setActiveServerId(homeB, { scope: 'device' });
+        expect(await decideApprovalAsInbox(homeA, artifactId, 'approve')).toMatchObject({ ok: true });
+        await expect(pending).resolves.toEqual({ kind: 'succeeded', value: { items: [], nextCursor: 'next-group-page' } });
+        expect(harness.requestsFor(GROUPS_PATH).map(request => request.serverId)).toEqual([homeA]);
+        expect(harness.artifacts(homeA).list()).toHaveLength(1);
+    });
+
     it('reads material-safe readiness through the captured Home transport', async () => {
         const serverId = await addHome();
         const observation = { status: 'not_ready', reason: 'preparation_pending', counts: { pending: 1 } };
@@ -152,6 +172,17 @@ describe('runTeamAction', () => {
 });
 
 describe('Home domain Action failure decoding', () => {
+    it('preserves the canonical expired-approval refusal without disclosing an unvalidated detail bag', () => {
+        expect(homeDomainFailureFromActionFailure({
+            errorCode: 'approval_stale', details: { reason: 'credential_expired' },
+        }, 'teams.credentials.entitled.list')).toEqual({
+            kind: 'forbidden', retryable: false, code: 'approval_stale', details: { reason: 'credential_expired' },
+        });
+        expect(homeDomainFailureFromActionFailure({
+            errorCode: 'approval_stale', details: { reason: 'credential_expired', undeclared: true },
+        }, 'teams.credentials.entitled.list')).not.toHaveProperty('details');
+    });
+
     it('inverts the family port encoding without inventing a second vocabulary', () => {
         expect(homeDomainFailureFromActionFailure({ errorCode: 'home_unreachable' }))
             .toEqual({ kind: 'unreachable', retryable: true, code: null });

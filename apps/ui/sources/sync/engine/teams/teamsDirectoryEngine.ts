@@ -609,8 +609,9 @@ const credentialResourcesLoader = createScopedSnapshotLoader<TeamCredentialResou
         try {
             outcome = await listTeamCredentialResources({ scope, address, search, filter });
         } catch {
-            // A read is never dangerous, so the front door has no approval to
-            // defer here; anything thrown is a transport fault, not an answer.
+            // Ask-first reads settle through the Action owner. A thrown fault
+            // is not a Home answer and must not revive an abandoned observer.
+            if (!loadContext.isCurrent()) return;
             applyTeamCredentialResourcesFailure({
                 scope,
                 address,
