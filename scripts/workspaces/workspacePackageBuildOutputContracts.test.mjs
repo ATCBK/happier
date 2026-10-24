@@ -21,6 +21,7 @@ for (const packagePath of [
     const outputRoot = mkdtempSync(join(tmpdir(), `${basename(packagePath)}-staged-dist-`));
     try {
       const result = spawnSync(build.command, build.args, {
+        ...(build.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         cwd: join(repoRoot, packagePath),
         encoding: 'utf8',
         env: {
@@ -44,6 +45,7 @@ test('packages/privacy-kit build honors the workspace staged output directory', 
   const outputRoot = mkdtempSync(join(tmpdir(), 'privacy-kit-staged-dist-'));
   try {
     const result = spawnSync(build.command, build.args, {
+      ...(build.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       cwd: join(repoRoot, packagePath),
       encoding: 'utf8',
       env: {

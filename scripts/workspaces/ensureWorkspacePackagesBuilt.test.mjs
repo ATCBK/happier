@@ -174,7 +174,18 @@ test('finite workspace worker streams active-package progress before compiler co
   for (const fail of [false, true]) await t.test(fail ? 'failure retains the active package' : 'success retires the active package', async () => {
     let accept;
     const connected = new Promise(resolve => { accept = resolve; });
-    const server = createServer(socket => accept(socket));
+    // Input repair may require the owner's trailing pass; only hold its first compiler.
+    let released = false;
+    let compilerCount = 0;
+    const heldSockets = [];
+    const server = createServer(socket => {
+      compilerCount += 1;
+      if (released) socket.end('release');
+      else {
+        heldSockets.push(socket);
+        accept(socket);
+      }
+    });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
     // Hold only the genuine compiler process. The finite worker, native leases,
@@ -198,25 +209,28 @@ writeFileSync(join(process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR,'index.js'),'ex
       onPackageBuildStart(context) { active.add(context.packageName); events.push('start'); reportStart(true); },
       async onPackageBuildDone(context) { await Promise.resolve(); active.delete(context.packageName); events.push('done'); },
     }).then(result => ({ result }), error => ({ error }));
-    const socket = await connected;
     let timer;
     try {
+      await Promise.race([connected, completion.then(({ error }) => {
+        throw error ?? new Error('compiler completed without connecting to its fixture server');
+      })]);
       const observed = await Promise.race([started, new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]);
       assert.equal(observed, true, 'start must reach the caller while its compiler is still blocked');
       assert.deepEqual([...active], ['@happier-dev/example']);
     } finally {
       clearTimeout(timer);
-      socket.end('release');
+      released = true;
+      for (const socket of heldSockets) socket.end('release');
       const terminal = await completion;
       await new Promise(resolve => server.close(resolve));
       if (fail) {
         assert.equal(terminal.error?.code, 'EEXIT');
         assert.deepEqual([...active], ['@happier-dev/example']);
-        assert.deepEqual(events, ['start']);
+        assert.deepEqual(events, Array.from({ length: compilerCount }, () => 'start'));
       } else {
         assert.deepEqual(terminal.result?.built, ['@happier-dev/example']);
         assert.deepEqual([...active], []);
-        assert.deepEqual(events, ['start', 'done']);
+        assert.deepEqual(events, Array.from({ length: compilerCount }, () => ['start', 'done']).flat());
       }
     }
   });
