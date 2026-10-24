@@ -35,6 +35,9 @@ describe('public digitalocean machine provisioner', () => {
   it('admits the full cold manifest with host confirmation for native effects', () => {
     const result = parsePluginManifest(exports.PLUGIN_MANIFEST);
     expect(result, result.ok ? undefined : JSON.stringify(result.diagnostics)).toMatchObject({ ok: true });
+    expect(exports.PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toMatchObject([
+      { id: 'digitalocean-account', ui: { category: 'cloud-machines' } },
+    ]);
   });
   it('publishes labelled native choices without treating a monthly rate as a cap', async () => {
     const sizes = ['s5-1vcpu-1gb', 's-1vcpu-1gb'].map(slug => ({

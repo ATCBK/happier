@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { ConnectedAccountUiProjectionEntryV1Schema } from './connectedAccountUiProjectionV1.js';
+import { ConnectedAccountUiProjectionEntryV1Schema, projectConnectedAccountDescriptorV1 } from './connectedAccountUiProjectionV1.js';
+import { PluginConnectedAccountDescriptorContributionV2Schema } from './pluginConnectedAccountAuthenticationV2.js';
 
 describe('ConnectedAccountUiProjectionEntryV1', () => {
+  it('projects optional Cloud machines presentation from an external descriptor without granting availability', () => {
+    const raw = { id: 'cloud', title: 'Acme Cloud', ui: { category: 'cloud-machines' }, authentication: {
+      defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] }],
+    } };
+    const declared = PluginConnectedAccountDescriptorContributionV2Schema.safeParse(raw);
+    expect(declared.success).toBe(true);
+    if (!declared.success) return;
+    const projected = projectConnectedAccountDescriptorV1({ descriptor: declared.data, pluginId: 'acme.cloud', serviceId: 'cloud',
+      provenance: 'external', sourceKind: 'installed', availability: { state: 'blocked', reason: 'configuration-required' }, diagnostics: [] });
+    expect(ConnectedAccountUiProjectionEntryV1Schema.parse(projected)).toMatchObject({ ui: { category: 'cloud-machines' },
+      availability: { state: 'blocked', reason: 'configuration-required' } });
+    expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse({ ...raw, ui: { category: 'cloud-machines', execute: 'hook' } }).success).toBe(false);
+  });
   it('preserves every serializable authentication mode and configuration form fact', () => {
     const input = {
       id: 'bitbucket-account', serviceId: 'bitbucket', pluginId: 'happier.scm.forge.bitbucket', provenance: 'external', sourceKind: 'bundled',

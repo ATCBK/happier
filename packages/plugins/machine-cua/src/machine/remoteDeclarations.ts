@@ -97,6 +97,6 @@ const nativeMode = { id: 'native', kind: 'manual', title: 'Existing native setup
     fields: [], configuration: { scope: 'account', changeBehavior: 'reconnect', fields: [{ id: 'nativeHome',
         title: 'Native Cua home directory', schema: { type: 'string', minLength: 1 }, required: true, secret: false }] } } as const;
 export const remoteAccounts = {
-    'cloud-native': { declaration: { title: CUA_ACCOUNT_NAMES.cloud, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cloud') },
-    'cua-account': { declaration: { title: CUA_ACCOUNT_NAMES.cua, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cua') },
+    'cloud-native': { declaration: { title: CUA_ACCOUNT_NAMES.cloud, ui: { category: 'cloud-machines' as const }, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cloud') },
+    'cua-account': { declaration: { title: CUA_ACCOUNT_NAMES.cua, ui: { category: 'cloud-machines' as const }, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cua') },
 };

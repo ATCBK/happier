@@ -35,6 +35,11 @@ async function coordinatorRoles() {
 }
 
 describe('Crabbox lazy family authoring', () => {
+  it('places its coordinator account in the cloud-machine setup category', () => {
+    expect(CRABBOX_PLUGIN.manifest.contributes.connectedAccountDescriptors).toMatchObject([
+      { id: 'coordinator', ui: { category: 'cloud-machines' } },
+    ]);
+  });
   it('publishes native variant fields that the shared Action input owner can render and require', () => {
     const options = CRABBOX_PLUGIN.manifest.contributes.actions?.find(action => action.id === 'options');
     // Localized text resolution is a presenter boundary; real declaration

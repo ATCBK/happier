@@ -15,6 +15,7 @@ describe('plugin SDK connected account descriptor manifest surface', () => {
         key: 'plugins.example.connectedAccount.title',
         fallback: 'Example account',
       },
+      ui: { category: 'cloud-machines' },
       authentication: {
         defaultModeId: 'device',
         modes: [{
@@ -60,6 +61,7 @@ describe('plugin SDK connected account descriptor manifest surface', () => {
     });
 
     expect(descriptor.id).toBe('example-connected-account');
+    expect(descriptor.ui).toEqual({ category: 'cloud-machines' });
     expect(descriptor.authentication.defaultModeId).toBe('device');
     expect(descriptor.authentication.modes.map(({ id, kind }) => ({ id, kind }))).toEqual([
       { id: 'manual', kind: 'manual' },

@@ -86,7 +86,7 @@ export const PLUGIN = definePlugin({
   ], optional: [] },
   systemTools: { 'ssh-keyscan': { title: 'OpenSSH host key scanner', executableNames: ['ssh-keyscan'] } },
   connectedAccountDescriptors: { [ACCOUNT_ID]: {
-    declaration: { title: 'Boat account', authentication: { defaultModeId: 'token', modes: [{
+    declaration: { title: 'Boat account', ui: { category: 'cloud-machines' }, authentication: { defaultModeId: 'token', modes: [{
       id: 'token', kind: 'manual', title: 'API key', outcomeReconciliation: 'none',
       directExport: { contractVersion: CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 },
       fields: [{ id: 'token', title: 'API key', schema: { type: 'string', minLength: 1 }, secret: true }],

@@ -47,7 +47,7 @@ describe('Boat machine provisioner contract', () => {
     expect(parsed, parsed.ok ? undefined : JSON.stringify(parsed.diagnostics)).toMatchObject({ ok: true });
     expect(PLUGIN_MANIFEST.id).toBe('happier.machine.boat');
     expect(PLUGIN_MANIFEST.contributes.machineProvisioners).toMatchObject([{ id: 'boat', resourceIdPath: 'sandboxId' }]);
-    expect(PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toMatchObject([{ id: 'boat-account' }]);
+    expect(PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toMatchObject([{ id: 'boat-account', ui: { category: 'cloud-machines' } }]);
     expect(JSON.stringify(PLUGIN_MANIFEST)).not.toContain('apiKey');
   });
 

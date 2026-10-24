@@ -263,6 +263,8 @@ export const PluginConnectedAccountDescriptorContributionV2Schema = lazyZodSchem
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
   description: z.optional(PluginLocalizedStringV2Schema),
+  /** Presentation only; omission retains the host's existing service classification. */
+  ui: z.optional(z.strictObject({ category: z.literal('cloud-machines') })),
   authentication: PluginConnectedAccountAuthenticationV2Schema,
   usageIdentity: z.optional(z.strictObject({
     providerId: z.optional(ProviderAccountUsageRecordKeyV1Schema.shape.providerId),

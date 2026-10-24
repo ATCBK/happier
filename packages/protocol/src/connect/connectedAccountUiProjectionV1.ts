@@ -24,6 +24,7 @@ export const ConnectedAccountUiProjectionEntryV1Schema = lazyZodSchema(() => z.s
   sourceKind: z.string().check(z.trim(), z.minLength(1)),
   title: ProjectedLocalizedTextSchema,
   description: z.optional(ProjectedLocalizedTextSchema),
+  ui: PluginConnectedAccountDescriptorContributionV2Schema.shape.ui,
   authentication: PluginConnectedAccountAuthenticationV2Schema,
   capabilities: z.array(z.string()),
   usageIdentity: PluginConnectedAccountDescriptorContributionV2Schema.shape.usageIdentity,
@@ -56,6 +57,7 @@ export function projectConnectedAccountDescriptorV1(input: Readonly<{
   const { descriptor, ...facts } = input;
   return { ...facts, id: descriptor.id, title: descriptor.title,
     ...(descriptor.description ? { description: descriptor.description } : {}),
+    ...(descriptor.ui ? { ui: descriptor.ui } : {}),
     authentication: descriptor.authentication, capabilities: descriptor.capabilities ?? [],
     ...(descriptor.usageIdentity ? { usageIdentity: descriptor.usageIdentity } : {}),
     ...(descriptor.recoveryCredits ? { recoveryCredits: descriptor.recoveryCredits } : {}),

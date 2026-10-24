@@ -13,6 +13,12 @@ describe('brand mark', () => {
 });
 
 describe('native process disclosure', () => {
+  it('places both native cloud account choices in the cloud-machine setup category', () => {
+    expect(PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toMatchObject([
+      { id: 'cloud-native', ui: { category: 'cloud-machines' } },
+      { id: 'cua-account', ui: { category: 'cloud-machines' } },
+    ]);
+  });
   it('declares the HOME value supplied to every Cua process', () => {
     expect(PLUGIN_MANIFEST.hostAccess?.required).toContainEqual(expect.objectContaining({
       capability: 'process',

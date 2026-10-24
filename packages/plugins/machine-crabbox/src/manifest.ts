@@ -73,6 +73,7 @@ export const CRABBOX_PLUGIN = definePlugin({
   connectedAccountDescriptors: { coordinator: {
     declaration: {
       title: 'Crabbox coordinator',
+      ui: { category: 'cloud-machines' },
       authentication: {
         defaultModeId: 'token', modes: [{ id: 'token', kind: 'manual',
           directExport: { contractVersion: CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 }, outcomeReconciliation: 'none',
