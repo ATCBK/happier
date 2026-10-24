@@ -2352,6 +2352,12 @@ and retains the origin for unrelated triggers. Human archives remain originless;
 Session creation origin does not identify who caused a later archive. This is
 a 0.3 development transport correction, with no new Action input or stored format.
 
+Original CLI archive and unarchive Actions use that Home record service directly.
+An inactive Session remains archivable by its authorized Account after its worker
+grant is withdrawn or the worker daemon becomes unavailable. Home still rejects
+an active archive; the existing archive service then requests Stop through its
+normal runtime admission before retrying. This is current 0.3 development behavior.
+
 Session PR-comment and CI-failure triggers use the Channels binding writer to
 attach an authenticated GitHub pull-request endpoint to the scoped Automation.
 Native SCM credential selection, connection creation/reuse and principal resolution

@@ -818,6 +818,15 @@ Foreign Machine Use admits only the existing Team-model worker compatibility
 projection; it does not admit generic or competing-source projection of the
 custodian catalog. That Team slice neither reads custodian settings nor borrows
 custodian compatibility consent; the requesting Account supplies its own consent.
+Personal picker, current-selection, source-browse and refresh requests from the
+UI use the existing Account Action carrier when the selected worker belongs to
+another Account. The shared Provider Action adapter proves the exact Machine
+and seals the requester's Account custody to its installation key; an absent key
+refuses before raw projection dispatch. The worker's existing Account projection
+owner reads the admitted requester catalog rather than the custodian's private
+catalog. Same-Account workers and Team worker-compatibility reads retain their
+existing paths. This is a 0.3 development contract, not a claim of loaded
+cross-Account picker verification.
 The CLI preserves a typed Home target refusal instead of reporting unavailable
 authentication.
 
@@ -984,6 +993,15 @@ from picker eligibility: an explicit invalidation, observer gap, failed read or
 refusal withdraws eligibility until a successful reread. Retained choices do not
 authorize credential use; launch, broker open and each request still recheck the
 current grant, resource and source through their existing owners.
+The new-Session model picker's existing Refresh also reloads this Team catalog,
+alongside native/configuration and Provider observations. Favorites runs that
+shared refresh once across its Agent collectors.
+In development source, a selected Team Connected Account binding (brokered or
+direct), or a Team Provider model for the current Agent, uses this Team catalog
+instead of native model discovery. The shared model preflight hook suppresses
+the native request and its cached rows/failure state; native and Account
+selections retain native probing. The CLI still refuses Team operation probes
+without admitted Session authority, and browsing never materializes Team credentials.
 The runtime's entitled-catalog read derives its applications from the worker's
 leased Agent requirements and uses the same paginated Session catalog transport
 as launch normalization. The composed recipient Pool → Action/CLI spawn →
@@ -1108,6 +1126,18 @@ Agents that discard the HTTP body. Daemon runners use their existing private
 service channel; temporary-computer runners read the same host evidence owner
 in process. A successful fresh admission clears that turn's refusal, and a
 late response cannot attach it to a successor. Cancellation stays cancellation.
+The same file logger records capture attribution, the daemon evidence-read
+decision, the runner's private-read outcome, failed-turn enrichment and
+begin/terminal publication.
+These records carry only Session/host-turn ids, available PID-generation facts
+and closed stage/outcome codes. They distinguish capture attribution skips,
+missing evidence, turn or PID-generation mismatch, unsupported runner reads,
+failed reads and failed mutation or marker custody without logging the
+refusal body, selected resource, Agent diagnostic or exception text. Publication
+acceptance means local durable custody and any installed marker notification succeeded; it
+does not prove Home applied the mutation. These observations add no admission,
+evidence or upstream requests. Loaded-runtime replay remains necessary to
+identify which link failed in a particular incident.
 The existing Agent-body classifier remains an ingress for Agents that preserve
 the typed envelope. The local native callback carries the
 refusal without opening a remote stream; cancellation and unexpected callback
