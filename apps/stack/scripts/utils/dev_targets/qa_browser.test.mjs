@@ -488,12 +488,13 @@ test('QA browser CDP readiness can complete beyond the former default cutoff', a
   assert.equal(probes, 2);
 });
 
-test('QA browser restores a dropped SSH forward while retaining its worker and CDP address', async () => {
+test('QA browser restores a dropped SSH forward even when its first replacement fails before readiness', async () => {
   const signalSource = new EventEmitter();
   let finishWorker;
   const worker = { stdin: new PassThrough(), completion: new Promise(resolve => { finishWorker = resolve; }) };
   worker.stdin.on('data', () => finishWorker({ code: 0 }));
   const forwards = [];
+  let abortedReadinessProbes = 0;
   let dropForward;
   let ready;
   const result = runQaBrowserSession({ target: { name: 'absent', platform: 'posix', ssh: 'absent', repoDir: '/mirror', cliHomeDir: '/fixture' },
@@ -507,11 +508,20 @@ test('QA browser restores a dropped SSH forward while retaining its worker and C
       }
       const child = { completion: new Promise(resolve => { dropForward = resolve; }) };
       forwards.push({ args, child });
+      // The old remote SSH peer can still hold its reverse listener after the
+      // client loses transport. A replacement then exits 255 before CDP works.
+      if (forwards.length === 2) setImmediate(() => dropForward({ code: 255 }));
       return child;
     },
     stopProcess: async () => { dropForward({ code: 0 }); },
-    fetchImpl: async url => {
+    fetchImpl: async (url, { signal }) => {
       if (forwards.length === 2) {
+        return await new Promise((_, reject) => signal.addEventListener('abort', () => {
+          abortedReadinessProbes++;
+          reject(signal.reason);
+        }, { once: true }));
+      }
+      if (forwards.length === 3) {
         assert.equal(url, `${ready.cdpHttpUrl}/json/version`, 'automation retains the same CDP endpoint');
         assert.equal(worker.stdin.readableLength, 0, 'transport recovery must not close the browser worker');
         signalSource.emit('SIGINT');
@@ -520,8 +530,11 @@ test('QA browser restores a dropped SSH forward while retaining its worker and C
     },
   });
   await result;
-  assert.equal(forwards.length, 2);
-  assert.deepEqual(forwards[1].args, forwards[0].args, 'both SOCKS and CDP bindings survive recovery');
+  assert.equal(forwards.length, 3);
+  assert.equal(abortedReadinessProbes, 1, 'a failed recovery attempt must release its pending HTTP probe');
+  for (const forward of forwards.slice(1)) {
+    assert.deepEqual(forward.args, forwards[0].args, 'both SOCKS and CDP bindings survive recovery');
+  }
 });
 
 test('QA browser exits when its SSH forward dies during a pending CDP health request', async () => {

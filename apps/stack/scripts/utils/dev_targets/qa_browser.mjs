@@ -398,24 +398,41 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
       while (!workerFinished && !cancelled) {
         tunnel = spawnProcess(`browser-forward:${sessionName}`, 'ssh', forwardArgs, forwardEnv,
           { silent: true, persistOutput: false });
+        const forward = tunnel;
+        const readinessAbort = new AbortController();
+        const readinessSignal = AbortSignal.any([signal, readinessAbort.signal]);
+        let readinessExit;
         // HTTP can remain pending after its SSH stream disappears. Observe
         // transport completion throughout readiness, as during the live session.
-        await Promise.race([
-          (async () => {
-            while (true) {
-              signal.throwIfAborted();
-              if (tunnel?.exitCode != null || tunnel?.signalCode != null) throw new Error('[dev-targets] QA browser SSH forward exited before readiness');
-              try {
-                const response = await fetchImpl(`http://127.0.0.1:${localPort}/json/version`, { signal });
-                if (response.ok && (await response.json()).webSocketDebuggerUrl) return;
-              } catch { /* Forward establishment is observed before declaring readiness. */ }
-              await delay(100, undefined, { signal });
-            }
-          })(),
-          tunnel.completion.then(result => {
-            throw new Error(`[dev-targets] QA browser SSH forward exited before readiness (${result?.code ?? result?.signal})`);
-          }),
-        ]);
+        try {
+          await Promise.race([
+            (async () => {
+              while (true) {
+                readinessSignal.throwIfAborted();
+                try {
+                  const response = await fetchImpl(`http://127.0.0.1:${localPort}/json/version`, { signal: readinessSignal });
+                  if (response.ok && (await response.json()).webSocketDebuggerUrl) return;
+                } catch { /* Forward establishment is observed before declaring readiness. */ }
+                await delay(100, undefined, { signal: readinessSignal });
+              }
+            })(),
+            forward.completion.then(result => {
+              readinessExit = result;
+              throw new Error(`[dev-targets] QA browser SSH forward exited before readiness (${result?.code ?? result?.signal})`);
+            }),
+          ]);
+        } catch (error) {
+          // Recovery can reach a still-held remote reverse listener before its
+          // old SSH peer observes transport loss. Keep the established browser
+          // lifetime and bindings while the same owner restores its forward.
+          if (readiness && readinessExit?.code === 255 && !workerFinished && !cancelled) {
+            process.stderr.write('[dev-targets] QA browser SSH forward recovery failed before readiness; restoring its CDP and SOCKS listeners\n');
+            continue;
+          }
+          throw error;
+        } finally {
+          readinessAbort.abort();
+        }
         if (!readiness) {
           readiness = { stackName, sessionName, target: target.name, localFallback: false,
             cdpUrl: `ws://127.0.0.1:${localPort}${ready.debuggerPath}`, cdpHttpUrl: `http://127.0.0.1:${localPort}`,
