@@ -4,18 +4,14 @@ import { runLimaGuestCommand } from '@happier-dev/cli-common/machineLima';
 import { buildLinuxInotifyScript } from '../../provision/linux-inotify.mjs';
 
 import { validateManagedLimaInstanceName } from './profiles.mjs';
+import { REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN } from './guest_toolchain.mjs';
+export { REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN } from './guest_toolchain.mjs';
 
 const PROFILES = new Set(['happier', 'installer', 'bare']);
 const SIMPLE_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 function readPinnedBunVersion() {
   return readFileSync(new URL('../../provision/.bun-version', import.meta.url), 'utf8').trim();
 }
-
-export const REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN = Object.freeze([
-  Object.freeze({ command: 'node', label: 'Node.js' }),
-  Object.freeze({ command: 'npm', label: 'npm' }),
-  Object.freeze({ command: 'rg', label: 'ripgrep (rg)' }),
-]);
 
 function requireProvisionProfile(value) {
   const profile = String(value ?? '').trim();

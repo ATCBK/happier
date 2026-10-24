@@ -5,6 +5,7 @@ heavyweight_memory_floor_kib() {
   case "$1" in
     validation) heavyweight_policy_floor='6291456' ;;
     native-source-test) heavyweight_policy_floor='2097152' ;;
+    native-custody) heavyweight_policy_floor='2097152' ;;
     source-bundle) heavyweight_policy_floor='10485760' ;;
     source-web-export) heavyweight_policy_floor='34603008' ;;
     dependency-install) heavyweight_policy_floor='6291456' ;;
@@ -393,6 +394,9 @@ native_command_policy_finish() {
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'native-source-test' ]; }; then
     policy_heavyClass='native-source-test'
   fi
+  if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'native-custody' ]; }; then
+    policy_heavyClass='native-custody'
+  fi
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'source-bundle' ]; }; then
     policy_heavyClass='source-bundle'
   fi
@@ -444,7 +448,7 @@ native_command_policy_finish() {
   if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/server' ]; } && { [ "$policy_config" = 'vitest.config.ts' ] || [ "$policy_config" = 'vitest.dbcontract.config.ts' ] || [ "$policy_config" = 'vitest.externalSessionMaterialize.integration.config.ts' ] || [ "$policy_config" = 'vitest.integration.config.ts' ] || [ "$policy_config" = 'vitest.ui.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
-  if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ]; }; then
+  if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ] || [ "$policy_heavyClass" = 'native-custody' ]; }; then
     policy_localCompile='1'
   fi
   if { [ "$policy_kind" = source-test ] || [ "$policy_component" = apps/cli ]; } && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then
@@ -684,6 +688,14 @@ resolve_native_command_policy() {
         /*) native_normalize_path "$native_manager_cwd" ;;
         *) native_normalize_path "$policy_component/$native_manager_cwd" ;;
       esac
+      if [ -n "$policy_workspace" ]; then
+        # Resolve workspace identity once through the manifest owner, then
+        # classify the actual payload at that directory as usual.
+        native_result=$(
+          eval "${explicit_remote_environment-}"
+          node "${projection_command_policy:-$repo_root/apps/stack/scripts/utils/dev_targets/remote_commands.mjs}" --binary-cwd "$repo_root" "$native_result" pnpm --filter "$policy_workspace" exec "$@"
+        ) || return $?
+      fi
       # Positional custody restores caller cwd overrides after recursion.
       set -- "${explicit_relative_cwd_set-0}" "${explicit_relative_cwd-}" "$@"
       explicit_relative_cwd_set=1; explicit_relative_cwd=$native_result
