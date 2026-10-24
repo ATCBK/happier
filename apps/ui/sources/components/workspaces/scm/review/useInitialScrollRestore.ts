@@ -20,6 +20,9 @@ export function useInitialScrollRestore(input: Readonly<{
         if (typeof initial !== 'number' || !Number.isFinite(initial) || initial <= 0) return;
         hasScheduledRef.current = true;
         cancelledRef.current = false;
+        // The caller may retain the saved offset before its new viewport has moved.
+        // Only movement observed after scheduling supersedes that restoration.
+        const trackedTopBeforeRestore = input.latestScrollTopRef.current;
 
         const schedule: (cb: FrameRequestCallback) => number =
             typeof (globalThis as any).requestAnimationFrame === 'function'
@@ -41,7 +44,7 @@ export function useInitialScrollRestore(input: Readonly<{
             if (attempt >= maxAttempts) return;
 
             // If the user has already scrolled, don't fight them by restoring an old scroll offset.
-            if ((input.latestScrollTopRef.current ?? 0) > 0) {
+            if (!Object.is(input.latestScrollTopRef.current, trackedTopBeforeRestore)) {
                 cancelledRef.current = true;
                 return;
             }

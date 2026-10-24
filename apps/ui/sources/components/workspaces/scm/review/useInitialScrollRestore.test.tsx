@@ -58,6 +58,21 @@ async function advanceRestoreTimers(times = 1): Promise<void> {
 }
 
 describe('useInitialScrollRestore', () => {
+    it('restores a saved position already retained by the scroll tracker on remount', async () => {
+        const scrollTopRef = { current: 300 };
+        const apply = vi.fn(() => true);
+
+        await renderInitialScrollRestoreHarness({
+            initial: 300,
+            latestScrollTopRef: scrollTopRef,
+            applyInitialScrollTop: apply,
+        });
+
+        await advanceRestoreTimers();
+
+        expect(apply.mock.calls).toEqual([[300]]);
+    });
+
     it('restores on mount without jumping again when the persisted seed follows a reader scroll', async () => {
         const scrollTopRef = { current: 0 };
         const apply = vi.fn(() => true);
@@ -98,6 +113,21 @@ describe('useInitialScrollRestore', () => {
         await advanceRestoreTimers();
 
         expect(apply).toHaveBeenCalledTimes(0);
+    });
+
+    it('does not restore after the reader returns to the top before the scheduled restore', async () => {
+        const scrollTopRef = { current: 300 };
+        const apply = vi.fn(() => true);
+        await renderInitialScrollRestoreHarness({
+            initial: 300,
+            latestScrollTopRef: scrollTopRef,
+            applyInitialScrollTop: apply,
+        });
+
+        act(() => { scrollTopRef.current = 0; });
+        await advanceRestoreTimers();
+
+        expect(apply).not.toHaveBeenCalled();
     });
 
     it('retries until apply succeeds or attempts exhausted', async () => {
