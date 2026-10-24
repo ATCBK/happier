@@ -37,6 +37,8 @@ See also [Team lifecycle, policy, and branding](teams.md),
 | Explicit Follow relations, default-rule preferences, Follow entry | `apps/server/sources/app/session/follow/accountFollowService.ts` |
 | Receiver delivery-mute state and decision | `apps/server/sources/app/session/follow/sessionDeliveryMuteService.ts`, using `packages/protocol/src/sessions/follow/sessionDeliveryMuteV1.ts` |
 | Operational awareness projection | `packages/protocol/src/sessions/awareness/projectV1.ts` |
+| Client runtime observations, exact Home and Session scoped | `apps/ui/sources/sync/domains/session/sessionRuntimeObservation.ts`, populated by the existing activity accumulator |
+| Client Session/list publication classification after admission | `apps/ui/sources/sync/store/domains/sessionRuntimePublication.ts`, consumed by the Session store's full-row and scoped-list writers |
 | Discussion mutations, including Agent provenance | `apps/server/sources/app/discussions/mutations.ts` |
 | Discussion grants and recipient keys | `apps/server/sources/app/discussions/accessService.ts`, consuming `app/teams/resourceGrantAccess.ts` |
 
@@ -204,6 +206,29 @@ These three answer different questions and must not be collapsed:
   persisted and owns no unread, Follow, attention or notification decision. See
   [protocol.md](protocol.md#session-awareness-development).
 
+In 0.3 development source, the UI retains admitted runtime observations separately from
+Session content rows, at the exact Home and Session address. After existing admission and
+normalization, the Session publication owner classifies an already-active row's coupled
+`activeAt` / `updatedAt` renewal while every other semantic fact stays equal as a legacy
+liveness carrier. It retains the incoming clock pair before freshness normalization, so a
+debounced older renewal cannot masquerade as a content change after a newer presence
+transition has correctly fenced its activity clock. Socket projections and hydrated/list
+snapshots share this owner: timely carriers refresh the observation without advancing
+content time or replacing the row. An originally unchanged activity clock and actual
+semantic changes retain normal publication. The socket projection preserves absent optional
+facts rather than synthesizing new own `undefined` fields. Patch coalescers batch ordered
+projectors, not pre-normalized rows: the store admits each operation against the preceding
+row and derives publication, membership, index and persistence impact from the final state.
+Net-zero batches retain their original row and root identities. Awareness
+and its existing freshness clock read the observation; actual stop, offline and stale-to-live
+transitions still notify consumers. Equal-time observations are stop-wins. The same compact
+record retains the suppressed full-publication clock so an older in-flight inventory cannot
+overwrite a newer admitted row; pure ephemerals never advance that inventory witness.
+Account resets and Session removal clear the same owner. This is a client projection
+correction, not a new wire format or server fanout cutover: supported older clients still
+require the incumbent durable heartbeat delivery. The socket parser accepts absent or matching
+legacy `sid` aliases and rejects contradictory Session routing identities before projection.
+
 In 0.3 development source, reverse `follow.list` inspection delegates to the Session Follow
 edge owner through the shared Action transport. A caller must currently read the source;
 each returned Session receiver also requires current read access. The complete source-owned
@@ -245,10 +270,29 @@ personal Session occurrence, not a Discussion receiver binding. Removing a
 Discussion participant detaches that Discussion's Follow edge but does not
 disable unrelated personal Session follows or their original notifications.
 
+Session-original route reads in 0.3 development validate the source's current
+publisher generation and Machine custody. A heartbeat from that same publisher
+does not retire a committed occurrence notification while the daemon traverses
+its source range. Publisher replacement, source access, the exact original,
+receiver audience and mute remain current checks. An idle manager therefore
+uses the ordinary policy and Pending wake path without first taking a foreground
+turn to recover the source through receiver-owned authority.
+
 In development source, configured Execution Run and Workflow Run follows read
 the Run's own original through the Follow occurrence-route owner.
 Execution Runs retain their terminal occurrence id, including recovered host
-loss; Workflow Runs retain their revision and typed state. A live Execution Run
+loss; Workflow Runs retain their revision and typed state. An Execution Run source
+has exactly one anchor: its Session, or its Machine for a detached Run with no
+Session. Both use the existing Machine frontier RPC and current source admission;
+a Machine anchor never fabricates a Session or borrows another Run's identity.
+Detached Run admission follows the existing custodian-only Run get/list policy;
+general shared-Machine access does not grant private Run inventory or permit
+its disclosure into a Session with a broader audience.
+Detached semantic Run changes reuse `execution-run-updated` with only Machine
+and Run identity for the custodian Account. The server admits the current
+Machine installation and credential; it neither publishes a detached Session
+roster entry nor fans private source identities out to shared-Machine accounts.
+A live Execution Run
 permission request uses its sorted exact request-id/creation-time pairs as a `needs_you` approval
 original for Session and personal Account receivers. Clearing or replacing that request withdraws
 unstarted delivery through the same source reader and Pending owner; it never
@@ -277,6 +321,21 @@ projection and recede when the owner settles them. Run Follow does not write a
 private Account notice with an independent lifetime, and retired development
 Run notice copies are no longer admitted as Inbox notices. A crash after source
 acceptance can leave the source-backed Inbox state without a channel alert.
+Run **Notify me** controls use the same private Follow row, independently of its
+persistent policy: `run_settled`, `first_needs_you`, or `output_ready` for an exact
+selected output. Several distinct output intents may remain armed together.
+Output readiness is bound to the selected result, comparison, output kind and
+revision; a sibling output or the enclosing Run settling is not that occurrence.
+The source reader captures pending revision baselines and catches up an already
+settled selection when no later-revision boundary was requested. Accepted
+one-shot identities remain in that Follow row as source-backed Inbox receipts
+until opened or cleared; they are no longer active routing interest. Clearing
+receipts with `clearOnceDeliveries: true` does not remove armed intents or change
+the persistent policy. Replacing the armed-intent array preserves unrelated
+fulfilled receipts; explicitly rearming the same intent replaces its receipt.
+`once: null` explicitly clears all Run convenience custody.
+These convenience controls do not author Workflow triggers. Authored Habits
+retain their existing trigger and delivery lifecycle.
 Explicit Run Follow choices suppress the incumbent
 implicit Workflow report, so the two adapters do not send the same original.
 Discussion personal follows retain the exact Discussion message reference and
@@ -421,6 +480,47 @@ envelopes remain unavailable through the existing `keyReadiness: false` state. O
 Session-addressed drafts remain stored and are not read at the new Discussion address.
 
 ### Discussion client data and controls
+
+Development file attachments consume the Session intake, file/folder source model,
+draft manager and inline-token owners. A folder retains relative leaf paths and empty
+directories; Home stores its private physical leaves under the committed message's
+Discussion grants and DEK. Readers do not depend on the sender's Machine. The data
+binding supplies immutable payloads plus process-local sources to the existing
+create/post/reply client, exact verified reads, and a resource-backed adapter for the
+shared file-preview/media owner. Retained bytes and preview lifetimes remain bound
+to the captured Home, Account, Discussion, message, key and current access. Composer,
+thread-row and open/download composition remains with the Discussion UI integration;
+these hooks are not certification of that loaded journey.
+
+The development `discussion.create`, `discussion.post` and `discussion.reply`
+Actions also accept `attachmentSources: [{blobId, path}]`. Each source pairs one
+leaf of the shared file/folder content payload with an absolute path on the
+invoking Machine (`~/` expansion uses the CLI path owner). The authored content
+still supplies the immutable size and SHA-256; changed bytes refuse the upload.
+Folder paths and empty directories use the existing shared payload, with one
+source per file leaf. Source paths remain host operands and never become Home
+storage locators or appear in the committed message.
+
+An Agent's actual host validates its active turn witness or original approved
+replay before opening these files. It signs the exact Home/Account upload
+metadata with its existing installation identity. The upload route checks the
+current Machine/Session binding before byte intake and again in the prepared
+message transaction, then derives the same Agent producer and applies the same
+Discussion access, draft-review and reply-return rules as ordinary publication.
+An external credential alone supplies neither this host attestation nor upload
+authority. No separate attachment writer, credential or staging store is added.
+
+An attachment is not addressing. For an admitted Follow original, final normal/steer
+preparation rereads only the exact question and its admitted reply ancestors through
+the protected cutoff. It materializes files and folder trees on the receiving Machine
+through the target Session's existing encrypted upload, directory finalization and
+issued-handle owner. Empty directories survive without invented file bytes. Existing
+Session native-image verification and file projection then feed the Agent. Pending
+source/disclosure admission is rechecked before and after preparation; unavailable
+bytes, keys or target issuance hold the input rather than dispatching text alone.
+Definition capture that cannot retain an attached input uses its existing
+`unsupported_content` refusal instead of silently capturing an executable text-only
+Workflow.
 
 #### Per-Discussion check-in and composer recipients (r0.3f development)
 
@@ -754,11 +854,18 @@ Current source shares `HappierThreadMessage` and `HappierReplyQuote` from
 `packages/plugin-ui/src/presentation/content/**` between core and external
 plugin adapters. The Doc passage adapter consumes already-opened C5 content;
 an unavailable source carries no cached quote text or navigation callback.
-Discussion controls and regions consume the Account app-shell declaration union,
+Discussion controls, regions and reference declarations consume the Account app-shell declaration union,
 Administration's selected per-plugin execution origin and the daemon's existing
 Composer renderer catalog. They do not infer an execution Machine from the
 Discussion's optional Session anchor. Package and loaded-runtime acceptance
 remain separate from the source contract.
+In development source, a declared plugin reference is searched on that selected
+origin when the picker queries it. The shared Composer document keeps its typed
+identity through public apply, Send and reads as an inert `reference` content
+part. Only closed Account/Session `mention` parts enter participant addressing;
+a reference's label or plugin identity cannot select an executable receiver.
+Addressed input carries those references through the existing Pending structured
+input metadata so the ordinary dispatch owner can resolve current plugin context.
 Development Task anchors and reply targets carry `{ kind: 'task', entry }`, using
 the canonical `TriageEntryRefV1Schema` from Protocol's `tasks/entryRefV1` leaf.
 The reference grants no Task access and selects no configured source connection.
@@ -1174,6 +1281,16 @@ classifier to distinguish an addressed ask from ambient watch custody; the latte
 not advertise an automatic final-answer return.
 Background items use that same owner's `<happier_discussion_context>` block: participant
 content carries its author, while compact Doc cards are labelled `host_reference_metadata`.
+Follow intake includes the already-admitted reply ancestors, oldest first, including the
+quoted source answer for a second-opinion question. It retains their admitted Account or
+Agent Session author facts without opening another Session's private transcript or
+borrowing that Session's human owner's name. Published Workflow ancestors retain their
+actual producer facts as host-reference metadata, not a fabricated person or Session.
+Only the referenced chain at or before the question's cutoff enters this background;
+unrelated history and later peer answers do not. These entries reuse the existing exact
+reads and provider input budget; intake adds no history/depth cap or separate hydrator.
+Doc ancestors keep the compact authored comment/proposal-reason projection, not the
+private Doc body, passage quote or proposal replacement.
 Both carry escaped content marked as data, not instructions.
 Quoted mentions or commands in those items do not become addressed requests.
 Workflow inputs and digests must consume this shared renderer when their
