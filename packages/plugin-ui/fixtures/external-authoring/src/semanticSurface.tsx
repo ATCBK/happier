@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isRecord } from '@happier-dev/plugin-sdk';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import {
@@ -38,12 +38,9 @@ import {
   HappierFloatingFrame as FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
   useHappierCollection, type FrameRect, type HappierTreeNode,
 } from '@happier-dev/plugin-ui/components';
+import { compileExternalReleaseStageFilter, externalReleaseReviews, externalReleaseStageSelection } from './releaseStage.js';
 
-const externalReviews = Object.freeze([
-  Object.freeze({ id: 'current', title: 'Current review' }),
-  Object.freeze({ id: 'terminal', title: 'Terminal review' }),
-  Object.freeze({ id: 'release', title: 'Release review' }),
-]);
+const externalReviews = externalReleaseReviews;
 const externalReviewReferences: readonly TechnicalDetailsLine[] = externalReviews.map((review) => ({
   key: review.id,
   label: review.title,
@@ -140,7 +137,7 @@ function ExternalAuthoringAdvancedPanel() {
  * semantic proof. Its local state belongs to the author; mounting, semantics,
  * querying, and actions remain owned by the SDK Testkit and RNW environment.
  */
-function ExternalAuthoringSemanticSurface() {
+function ExternalAuthoringSemanticSurface(props: Pick<RenderContext, 'launchInput'>) {
   const { locale } = useSurfaceContext();
   const composers = useComposer();
   const [composerHandle, setComposerHandle] = useState<ComposerHandle | null>(null);
@@ -158,8 +155,15 @@ function ExternalAuthoringSemanticSurface() {
   const [widgetExpanded, setWidgetExpanded] = useState(true);
   const [reviewTreeExpanded, setReviewTreeExpanded] = useState(false);
   const [openedReviewKey, setOpenedReviewKey] = useState<string | null>(null);
+  const releaseStage = isRecord(props.launchInput) && typeof props.launchInput.releaseStage === 'string'
+    ? props.launchInput.releaseStage : undefined;
+  const releaseFieldCurrent = !isRecord(props.launchInput) || props.launchInput.releaseFieldCurrent !== false;
+  const matchReleaseStage = useMemo(() => compileExternalReleaseStageFilter(externalReleaseStageSelection(releaseStage), releaseFieldCurrent),
+    [releaseFieldCurrent, releaseStage]);
+  const filterReview = useCallback((review: (typeof externalReviews)[number]) => matchReleaseStage(review) === 'match', [matchReleaseStage]);
   const reviewModel = useHappierCollection({
     items: externalReviews, keyOf: (review) => review.id,
+    filter: filterReview,
     openKey: null, onOpenChange: () => undefined,
   });
   const [reviewScope, setReviewScope] = useState<'current' | 'all'>('current');
@@ -418,7 +422,7 @@ function ExternalAuthoringSurface(context: RenderContext) {
   return target.kind === 'project' || (target.kind === 'app'
     && isRecord(context.launchInput) && isRecord(context.launchInput.checkout))
     ? <ExternalProjectSurface {...context} />
-    : <ExternalAuthoringSemanticSurface />;
+    : <ExternalAuthoringSemanticSurface launchInput={context.launchInput} />;
 }
 
 export const renderExternalAuthoringSemanticSurface = defineUiSurface(

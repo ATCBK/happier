@@ -62,6 +62,23 @@ describe('external author semantic proof', () => {
     externalAuthoringSemanticSurface = await loadExternalAuthoringSemanticSurface();
   });
 
+  it('filters genuine held release stages through the installed plugin page and public adapter without Actions', async () => {
+    let actions = 0;
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'external-release-stage', mountNonce: 'external-release-stage' },
+      authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
+      surface: externalAuthoringSemanticSurface,
+      surfaceContext: createSurfaceContextFixture({ locale: 'en-GB' }),
+      launchInput: { releaseStage: 'ready' },
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async () => { actions += 1; return null; } },
+    });
+    try {
+      expect((await fixture.getAllByRole('radio')).map(row => row.name)).toEqual(['Choose Release review']);
+      expect(actions).toBe(0);
+    } finally { await fixture.dispose(); }
+  });
+
   it('requires the semantic surface to be declared by the loaded author contribution', () => {
     const ui = externalAuthoringPlugin.manifest.contributes.ui;
     expect(() => selectExternalAuthoringSemanticRendererArtifact({
