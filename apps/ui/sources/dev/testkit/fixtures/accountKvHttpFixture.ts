@@ -10,50 +10,54 @@ export function createAccountKvHttpFixture() {
         key: z.string(), value: z.nullable(z.string()), version: z.number().check(z.int()),
     })) });
     const bulkSchema = z.strictObject({ keys: z.array(z.string()) });
+    const handleFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response | null> => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.pathname !== '/v1/kv' && !url.pathname.startsWith('/v1/kv/')) return null;
+        const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+        requests.push({ method, path: url.pathname });
+        const json = (value: unknown, status = 200) => Response.json(value, { status });
+        if (method === 'GET') {
+            if (url.pathname === '/v1/kv') {
+                const prefix = url.searchParams.get('prefix') ?? '';
+                return json({ items: [...rows.values()].filter(row => row.key.startsWith(prefix)) });
+            }
+            const row = rows.get(decodeURIComponent(url.pathname.slice('/v1/kv/'.length)));
+            return json(row ?? { error: 'not_found' }, row ? 200 : 404);
+        }
+        const parsed: unknown = JSON.parse(await new Response(init?.body ?? (input instanceof Request ? input.body : null)).text());
+        if (url.pathname === '/v1/kv/bulk') {
+            const { keys } = bulkSchema.parse(parsed);
+            return json({ values: keys.flatMap(key => rows.has(key) ? [rows.get(key)] : []) });
+        }
+        const { mutations } = mutationsSchema.parse(parsed);
+        const errors = mutations.flatMap(mutation => {
+            const row = rows.get(mutation.key);
+            return mutation.version === (row?.version ?? -1) ? [] : [{ key: mutation.key,
+                error: 'version-mismatch', version: row?.version ?? -1, value: row?.value ?? null }];
+        });
+        if (errors.length) return json({ success: false, errors }, 409);
+        return json({ success: true, results: mutations.map(mutation => {
+            const version = (rows.get(mutation.key)?.version ?? -1) + 1;
+            if (mutation.value === null) rows.delete(mutation.key);
+            else rows.set(mutation.key, { key: mutation.key, value: mutation.value, version });
+            return { key: mutation.key, version };
+        }) });
+    };
     return {
         reset: () => { rows.clear(); requests.length = 0; },
         read: (key: string) => rows.get(key),
         readRequests: () => [...requests],
+        handleFetch,
         handle: async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
             const url = new URL(request.url ?? '/', 'http://fixture.test');
             if (url.pathname !== '/v1/kv' && !url.pathname.startsWith('/v1/kv/')) return false;
-            requests.push({ method: request.method, path: url.pathname });
-            const json = (value: unknown, status = 200) => {
-                response.statusCode = status;
-                response.setHeader('Content-Type', 'application/json');
-                response.end(JSON.stringify(value));
-            };
-            if (request.method === 'GET') {
-                if (url.pathname === '/v1/kv') {
-                    const prefix = url.searchParams.get('prefix') ?? '';
-                    json({ items: [...rows.values()].filter(row => row.key.startsWith(prefix)) });
-                } else {
-                    const row = rows.get(decodeURIComponent(url.pathname.slice('/v1/kv/'.length)));
-                    json(row ?? { error: 'not_found' }, row ? 200 : 404);
-                }
-                return true;
-            }
             let body = '';
             for await (const chunk of request) body += String(chunk);
-            const parsed: unknown = JSON.parse(body);
-            if (url.pathname === '/v1/kv/bulk') {
-                const { keys } = bulkSchema.parse(parsed);
-                json({ values: keys.flatMap(key => rows.has(key) ? [rows.get(key)] : []) });
-                return true;
-            }
-            const { mutations } = mutationsSchema.parse(parsed);
-            const errors = mutations.flatMap(mutation => {
-                const row = rows.get(mutation.key);
-                return mutation.version === (row?.version ?? -1) ? [] : [{ key: mutation.key,
-                    error: 'version-mismatch', version: row?.version ?? -1, value: row?.value ?? null }];
-            });
-            if (errors.length) json({ success: false, errors }, 409);
-            else json({ success: true, results: mutations.map(mutation => {
-                const version = (rows.get(mutation.key)?.version ?? -1) + 1;
-                if (mutation.value === null) rows.delete(mutation.key);
-                else rows.set(mutation.key, { key: mutation.key, value: mutation.value, version });
-                return { key: mutation.key, version };
-            }) });
+            const result = await handleFetch(url, { method: request.method, ...(body ? { body } : {}) });
+            if (!result) return false;
+            response.statusCode = result.status;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(await result.text());
             return true;
         },
     };
