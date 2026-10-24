@@ -70,6 +70,19 @@ host projects returned control events through its existing reducer. In-app engin
 iframe retain their mounted executor. Missing or blank Machine targets are not inferred from a
 Session's default Machine, and forwarding preserves the existing Action approval policy.
 
+In current 0.3 development source, mounted automation dispatch asks the server's live exact-view
+RPC registry rather than treating an absent positive registration hint as proof of unavailability.
+A definitive missing-handler reply, whether from the Home or inside the UI's decoded acknowledgement,
+remains a typed unavailable result. Transport loss after an
+effect-bearing request was issued retains unknown completion; it is not safe to retry as though
+the page action never ran. The mounted responder remains independent of the Diagnostics drawer.
+
+A retained Browser page keeps its runtime owner, automation controller and exact-view reverse
+responder with it when its pane is parked or its route leaves. Presentation visibility still
+pauses presentation-only work; it does not retire the page's executor. Explicit close tears down
+the retained owner, and Home/Account retirement still refuses further Actions. This is a 0.3
+development-source lifetime contract, not evidence that a running UI export contains the change.
+
 Before a Browser view exists, `browser.workspace.open` admits a target through the same Action
 front door. Its closed input names the answering-client workspace, command and Browser target,
 not an arbitrary OS-open URL. The registered workspace owner captures the exact Home/Account
@@ -344,7 +357,10 @@ with the loaded UI, daemon, Agent and model identified.
 - **Desktop capture is a separate factual prerequisite.** The desktop scenarios below set native
   `supports.capture` to true; a host that does not advertise capture has no screenshot reference.
   Recording additionally requires the reverse-capture handler to be registered for that view's
-  machine. Neither capture flag registers a collector automation action.
+  machine. Start resolves that producer through the live RPC registry, not a negative registration
+  hint. The answering UI/native capture command validates actual platform support and the frame;
+  a bound reverse transport alone cannot start a successful recording or produce an artifact.
+  Neither capture flag registers a collector automation action.
 - **Human navigation and diagnostics picking are separate paths.** The address bar and history
   use `browser.control`/`navigation.*`, and element picking uses the diagnostics bridge. Their
   availability does not register `navigate` or picker actions with the automation collector.
