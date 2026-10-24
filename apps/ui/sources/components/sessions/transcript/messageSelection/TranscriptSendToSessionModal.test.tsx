@@ -111,6 +111,20 @@ describe('TranscriptSendToSessionModal', () => {
         standardCleanup();
     });
 
+    it('selects readable existing Sessions only in reference mode without offering creation or sending', async () => {
+        sessionsRef.current = [
+            createSessionFixture({ id: 'readable', serverId: 'server-a', accessLevel: 'view', metadata: createNamedMetadata('Readable') }),
+            createSessionFixture({ id: 'other-home', serverId: 'server-b', metadata: createNamedMetadata('Other home') }),
+        ];
+        const onResolve = vi.fn();
+        const screen = await renderScreen(<TranscriptSendToSessionModal selectionOnly sourceServerId="server-a"
+            onResolve={onResolve} onClose={vi.fn()} />);
+        expect(screen.findAllByTestId('transcript-send-to-session-option-new-session')).toHaveLength(0);
+        expect(screen.findAllByTestId('transcript-send-to-session-option-other-home')).toHaveLength(0);
+        await screen.pressByTestIdAsync('transcript-send-to-session-option-readable');
+        expect(onResolve).toHaveBeenCalledWith({ kind: 'existingSession', serverId: 'server-a', sessionId: 'readable' });
+    });
+
     it('lists the new-session action first, hides the preview, and lists only destinations with a concrete same-server scope', async () => {
         sessionsRef.current = [
             createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),

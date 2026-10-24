@@ -27,7 +27,7 @@ import { t } from '@/text';
 import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
 import { getSessionName, getSessionStatus, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
 
-import { resolveTranscriptSendToSessionTargets } from './resolveTranscriptSendToSessionTargets';
+import { resolveReadableSessionPickerTargets, resolveTranscriptSendToSessionTargets } from './resolveTranscriptSendToSessionTargets';
 import {
     resolveTranscriptSendToSessionModalLayout,
     TRANSCRIPT_SEND_TO_SESSION_MODAL_SIZE,
@@ -37,11 +37,10 @@ import type { SendTranscriptSelectionDestination } from './sendTranscriptSelecti
 import { Icon } from '@/components/ui/icons/Icon';
 
 export type TranscriptSendToSessionModalProps = CustomModalInjectedProps & Readonly<{
-    sourceSessionId: string;
     sourceServerId: string;
-    previewText: string;
     onResolve: (destination: SendTranscriptSelectionDestination | null) => void;
-}>;
+}> & (Readonly<{ selectionOnly: true; sourceSessionId?: never; previewText?: never }>
+    | Readonly<{ selectionOnly?: false; sourceSessionId: string; previewText: string }>);
 
 const styles = StyleSheet.create((theme) => ({
     body: {
@@ -166,6 +165,7 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
     const sessions = useSessions() ?? [];
     const windowDimensions = useWindowDimensions();
     const keyboardHeight = useKeyboardHeight();
+    const title = props.selectionOnly ? t('sessionGettingStarted.title.selectSession') : t('transcript.selection.sendTo.modalTitle');
     const modalLayout = React.useMemo(() => resolveTranscriptSendToSessionModalLayout({
         windowWidth: windowDimensions.width,
         windowHeight: windowDimensions.height,
@@ -173,14 +173,14 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
     }), [keyboardHeight, windowDimensions.height, windowDimensions.width]);
     const chrome = React.useMemo(() => ({
         kind: 'card' as const,
-        title: t('transcript.selection.sendTo.modalTitle'),
-        subtitle: t('transcript.selection.sendTo.modalSubtitle'),
+        title,
+        ...(props.selectionOnly ? {} : { subtitle: t('transcript.selection.sendTo.modalSubtitle') }),
         dimensions: {
             width: TRANSCRIPT_SEND_TO_SESSION_MODAL_WIDTH,
             maxHeightRatio: modalLayout.maxHeightRatio,
             size: TRANSCRIPT_SEND_TO_SESSION_MODAL_SIZE,
         },
-    }), [modalLayout.maxHeightRatio]);
+    }), [modalLayout.maxHeightRatio, props.selectionOnly, title]);
     useModalCardChrome(props.setChrome, chrome);
 
     const sourceServerId = props.sourceServerId.trim();
@@ -203,17 +203,17 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                 session.serverId ?? resolveServerIdForSessionIdFromLocalCache(session.id),
             );
         }
-        return resolveTranscriptSendToSessionTargets({
+        return (props.selectionOnly ? resolveReadableSessionPickerTargets({ serverId: sourceServerId, sessions: candidates }) : resolveTranscriptSendToSessionTargets({
             sourceSessionId: props.sourceSessionId,
             sourceServerId,
             sessions: candidates,
-        }) as ReadonlyArray<TranscriptSendToSessionTarget>;
-    }, [props.sourceSessionId, sessions, sessionListItems, sessionListRowRenderablesByKey, sourceServerId]);
+        })) as ReadonlyArray<TranscriptSendToSessionTarget>;
+    }, [props.selectionOnly, props.sourceSessionId, sessions, sessionListItems, sessionListRowRenderablesByKey, sourceServerId]);
 
     const onResolve = props.onResolve;
     const onClose = props.onClose;
     const options = React.useMemo<ReadonlyArray<SelectionListOption>>(() => [
-        {
+        ...(props.selectionOnly ? [] : [{
             id: NEW_SESSION_DESTINATION_ID,
             testID: 'transcript-send-to-session-option-new-session',
             label: t('transcript.selection.sendTo.newSession'),
@@ -223,7 +223,7 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                     <Icon name="plus-circle" size={20} color={theme.colors.text.secondary} />
                 </View>
             ),
-        },
+        }]),
         ...targets.map((session) => ({
             id: session.id,
             testID: `transcript-send-to-session-option-${session.id}`,
@@ -241,11 +241,11 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
             ),
             rightAccessory: <TranscriptSendToSessionRowMeta session={session} />,
         })),
-    ], [targets, theme.colors.text.secondary]);
+    ], [props.selectionOnly, targets, theme.colors.text.secondary]);
 
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'transcript-send-to-session-root',
-        title: t('transcript.selection.sendTo.modalTitle'),
+        title,
         inputPlaceholder: t('transcript.selection.sendTo.searchPlaceholder'),
         emptyStateLabel: t('transcript.selection.sendTo.noResults'),
         sections: [
@@ -256,7 +256,7 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                 virtualization: 'auto',
             },
         ],
-    }), [options]);
+    }), [options, title]);
 
     return (
         <View testID="transcript-send-to-session-modal-body" style={styles.body}>
@@ -264,7 +264,7 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                 testID="transcript-send-to-session-list"
                 rootStep={rootStep}
                 onSelect={(id) => {
-                    if (id === NEW_SESSION_DESTINATION_ID) {
+                    if (!props.selectionOnly && id === NEW_SESSION_DESTINATION_ID) {
                         onResolve({ kind: 'newSession' });
                         onClose();
                         return;

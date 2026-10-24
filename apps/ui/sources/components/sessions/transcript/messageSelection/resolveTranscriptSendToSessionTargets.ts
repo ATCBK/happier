@@ -50,7 +50,7 @@ function resolveQualifiedSessionTargets(params: Readonly<{
 }>): ReadonlyArray<TranscriptSendToSessionTargetCandidate> {
     const excludedSessionId = normalizeId(params.excludedSessionId);
     const serverId = normalizeId(params.serverId);
-    if (!excludedSessionId || !serverId) return [];
+    if (!serverId) return [];
 
     return params.sessions
         .filter((session) => {
@@ -72,6 +72,7 @@ export function resolveTranscriptSendToSessionTargets(params: Readonly<{
     sourceServerId: string | null | undefined;
     sessions: ReadonlyArray<TranscriptSendToSessionTargetCandidate>;
 }>): ReadonlyArray<TranscriptSendToSessionTargetCandidate> {
+    if (!normalizeId(params.sourceSessionId)) return [];
     return resolveQualifiedSessionTargets({
         excludedSessionId: params.sourceSessionId,
         serverId: params.sourceServerId,
@@ -85,8 +86,17 @@ export function resolveTranscriptReadableSessionTargets(params: Readonly<{
     serverId: string | null | undefined;
     sessions: ReadonlyArray<TranscriptSendToSessionTargetCandidate>;
 }>): ReadonlyArray<TranscriptSendToSessionTargetCandidate> {
+    if (!normalizeId(params.excludedSessionId)) return [];
     return resolveQualifiedSessionTargets({
         ...params,
         accepts: isReadableSession,
     });
+}
+
+/** A no-invoke reference picker has no source Session to exclude. */
+export function resolveReadableSessionPickerTargets(params: Readonly<{
+    serverId: string;
+    sessions: ReadonlyArray<TranscriptSendToSessionTargetCandidate>;
+}>): ReadonlyArray<TranscriptSendToSessionTargetCandidate> {
+    return resolveQualifiedSessionTargets({ ...params, excludedSessionId: '', accepts: isReadableSession });
 }
