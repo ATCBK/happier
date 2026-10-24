@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { HomeAccountRowV1 } from '@happier-dev/protocol/home/governance';
 
+import { CollectionStatusGlyph } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import type { SupportedLanguage } from '@/text';
 import { resolveHomeAccountStatusPresentation } from '@/sync/domains/home/governance/homeAccountAdministration';
@@ -26,4 +27,12 @@ export const HomeAccountStatusPill = React.memo(function HomeAccountStatusPill(
             labelVariant="phrase"
         />
     );
+});
+
+/** The same marker in a collection row's icon-only status slot: a disabled or retired person; an active one is quiet. */
+export const HomeAccountStatusGlyph = React.memo(function HomeAccountStatusGlyph(
+    props: Readonly<{ row: Pick<HomeAccountRowV1, 'status'>; locale?: SupportedLanguage }>,
+) {
+    if (resolveHomeAccountStatusPresentation(props.row.status).label === 'active') return null;
+    return <CollectionStatusGlyph status="off" label={homeAccountStatusLabel(props.row.status)} />;
 });

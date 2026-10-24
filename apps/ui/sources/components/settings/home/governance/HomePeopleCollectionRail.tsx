@@ -17,7 +17,7 @@ import { t, usePreferredLanguage, type SupportedLanguage } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-import { HomeAccountStatusPill } from './HomeAccountStatusPill';
+import { HomeAccountStatusGlyph } from './HomeAccountStatusPill';
 import { homeAdministrationAccountPath } from './homeAdministrationRoutes';
 import { homeRoleLabel } from './homeGovernanceLabels';
 
@@ -51,7 +51,7 @@ const PeopleRailRosterRow = React.memo(function PeopleRailRosterRow(props: Reado
             subtitle={[homeRoleLabel(row.homeRole), person.viewer && person.named ? t('homeGovernance.person.you') : null, person.hint]
                 .filter((part): part is string => part !== null).join(' · ')}
             icon={<PersonMark accountId={row.accountId} avatarUrl={row.profile.avatarUrl ?? null} />}
-            rightElement={row.status === 'active' ? undefined : <HomeAccountStatusPill row={row} locale={props.locale} />}
+            rightElement={row.status === 'active' ? undefined : <HomeAccountStatusGlyph row={row} locale={props.locale} />}
             selected={props.selected}
             density="compact"
             showChevron={false}

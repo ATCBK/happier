@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { homeAccountPickerRowFixture, homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
+import { homeAccountPickerRowFixture, homeAccountRowFixture, homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -68,5 +68,21 @@ describe('People split rail search authority', () => {
         expect(rows()).toHaveLength(0);
         await waitForHomeGovernance(() => expect(rows().map(node => node.props.title)).toEqual(['New Ada']));
         expect(home.requestsFor(SEARCH_PATH)).toHaveLength(beforeRecovery + 1);
+    });
+});
+
+describe('People rail status slot', () => {
+    it('says a disabled person in the icon-only status slot and keeps an active person quiet', async () => {
+        const serverId = await home.addHome({ name: 'Studio', serverUrl: 'https://rail-status.example', accountId: 'account-ada' });
+        home.answer(serverId, '/v1/home/governance/get', { body: homeGovernanceProjectionFixture() });
+        home.answer(serverId, '/v1/home/accounts/list', { body: { items: [
+            homeAccountRowFixture('ada', { status: 'suspended' }), homeAccountRowFixture('grace')], nextCursor: null } });
+        const screen = await renderScreen(<HomePeopleCollectionRail serverId={serverId} selectedAccountId={null} />);
+        const glyphs = () => screen.tree.findAll(node => node.props.accessibilityRole === 'image'
+            && node.props.accessibilityLabel === 'homeGovernance.statusDisabled');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-people-rail-row:grace')).toBeTruthy());
+        expect(glyphs().length).toBeGreaterThan(0);
+        const quiet = screen.tree.findAll(node => node.props.accessibilityRole === 'image');
+        expect(new Set(quiet.map(node => node.props.accessibilityLabel))).toEqual(new Set(['homeGovernance.statusDisabled']));
     });
 });
