@@ -71,16 +71,8 @@ export function normalizeStructuredQuestionPermissionAnswers(input: Readonly<{
     toolInput: unknown;
     answers: QuestionAnswersWire;
 }>): StructuredQuestionAnswersV1 | null {
-    const semantic = buildAgentRequestSemanticSummary({ kind: 'user_action', toolName: input.toolName, toolInput: input.toolInput });
-    if (semantic.questions.length === 0) return null;
-    const questions: InteractionTransientQuestionV1[] = semantic.questions.map((question) => {
-        const common = { id: question.answerKey, prompt: question.question, required: question.required };
-        return question.selection === 'text' || (question.selection === 'single' && question.choices.length === 0)
-            ? { ...common, type: 'text' }
-            : { ...common, type: question.selection === 'multiple' ? 'multipleChoice' : 'singleChoice',
-                allowCustom: question.allowCustom,
-                choices: question.choices.map((choice) => ({ id: choice.value, label: choice.label })) };
-    });
+    const questions = readStructuredQuestionPermissionQuestions(input);
+    if (questions.length === 0) return null;
     const normalized = normalizeQuestionAnswers(questions, input.answers);
     if (!normalized) return null;
     const answers = Object.fromEntries(Object.entries(normalized).map(([id, answer]) => [id,
@@ -90,4 +82,21 @@ export function normalizeStructuredQuestionPermissionAnswers(input: Readonly<{
     ]));
     const parsed = StructuredQuestionAnswersV1Schema.safeParse(answers);
     return parsed.success ? parsed.data : null;
+}
+
+/** The same normalized form drives answers and the manager's question offer. */
+export function readStructuredQuestionPermissionQuestions(input: Readonly<{
+    toolName: string;
+    toolInput: unknown;
+}>): InteractionTransientQuestionV1[] {
+    const semantic = buildAgentRequestSemanticSummary({ kind: 'user_action', toolName: input.toolName, toolInput: input.toolInput });
+    return semantic.questions.map((question) => {
+        const common = { id: question.answerKey, prompt: question.question, required: question.required };
+        return question.selection === 'text' || (question.selection === 'single' && question.choices.length === 0)
+            ? { ...common, type: 'text' }
+            : { ...common, type: question.selection === 'multiple' ? 'multipleChoice' : 'singleChoice',
+                allowCustom: question.allowCustom,
+                choices: question.choices.map((choice) => ({ id: choice.value, label: choice.label,
+                    ...(choice.description ? { description: choice.description } : {}) })) };
+    });
 }
