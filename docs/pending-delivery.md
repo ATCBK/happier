@@ -171,6 +171,17 @@ answer's exact committed message, not the latest assistant text. A strict
 message id; Pending ids, local ids, and turn ids are never message references.
 Normal current access and content-mode checks still precede disclosure.
 
+In 0.3 development, `session.input.result.get` with `projection: 'reply'`
+reads that same original reply custody for agents and CLI callers, including
+queued inputs before transcript materialization. It returns the canonical
+`available`, `none` or `unavailable` projection without loading answer bodies;
+omitting `projection` keeps the existing native input-result read. Plugin
+callers retain their original producer/receipt check before reading progress.
+Single and batch HTTP reads share demanded set acquisition beneath the original
+input owner, preserving Pending precedence and current access/source checks.
+The shared portable SQL binding boundary chunks queries without limiting the
+requested result set. Observation never consumes or changes reply progress.
+
 Inline consumption and late-return release use the original input's authenticated
 CAS. Late recovery runs in the existing owning Machine daemon, using a finite
 indexed page of original inputs on startup, reconnect, or a content-free hint.
@@ -178,6 +189,13 @@ That daemon may acknowledge returned custody, not author outcomes or consume
 them inline. Missing current requester credentials/access leave custody pending;
 hosting a foreign Session does not authorize borrowing another Account's keys.
 Lost acknowledgments rejoin the deterministic returned-input identity.
+
+Receiver check-in requires the current Account snapshot to be network-confirmed.
+The snapshot publisher admits the first network confirmation of a cached revision
+even when its version is unchanged, preserving equal preference values and
+publishing that readiness once. Later equal-version confirmations remain no-ops.
+This lets retained unstarted input pass its existing admission check without
+changing preferences or resending the input.
 
 Daemon-routed Actions settle inline/release through
 `session.message.reply.observe.v1` on the existing authenticated SessionAction
@@ -782,12 +800,13 @@ This section describes development behavior that is not yet a released contract.
 - The resumable inactive composer remains usable while its exact target machine or daemon is offline. Ordinary submissions persist in Pending while the session continues to present its offline status. An input that first requires remote attachment upload or preparation stays in its draft if that step is unavailable; it is not queued with attachments silently omitted.
 - The account preference **Automatic resume after sending** (`sessionInactiveResumePolicy`) has one three-state owner. All ordinary inactive/offline input persists as FIFO `enqueue`. `when_available` additionally arms the exact Session authorization; `online_only` makes at most one user-present UI resume attempt when the exact machine is currently reachable; `manual` only persists the row. The default is `online_only`.
 - Neither `when_available` nor `online_only` changes an ordinary row to `send_now`; that action remains reserved for an explicit immediate-delivery request. If reachability changes or an `online_only` attempt fails, Pending custody remains without authorization for a later unattended start.
+- The user-present public launch request observes the daemon's last physical Stop at invocation. An earlier Processes, Guard or widget Stop does not veto that new request, but a later Stop still retires its launch admission. This is not person Resume intent: native launch still rechecks persisted automatic-resume eligibility and requester custody, and cannot clear a person-Stop hold. Retained internal recovery does not inherit public-request freshness.
 - The banner action **Process when online** re-arms the exact Session authorization. **Retry** uses the existing manual resume action when the machine is reachable. **Keep queued** clears that authorization while preserving FIFO delivery. These actions do not change the account preference or create a second activation path.
 - The server transaction that mutates Pending rows is the only writer of the current activation authorization. The current main-conversation Pending wire accepts `resumeWhenAvailable` as a mutation command, applies it atomically to the existing Session authorization, and never persists it as a second row-level desired state. Execution-run-targeted input cannot author this Session activation command.
 - UI recovery and Agent/MCP/CLI callers share `session.pending.action.set` (`session pending action set` in the CLI). It updates the exact `sessionId`/`localId` through that existing PATCH owner, preserving `requestedAction` when explicitly rearming with `resumeWhenAvailable: true`. The Action uses the ordinary approval policy; managed wake still requires current Manage and its fire-time policy Ask. Reset holds retain their separate witnessed reset-start Action.
 - Activation stays bound to its exact `requestId` and `requestedAt`. Publisher registration and keepalive prove process presence before Agent admission; they preserve the authorization so a later definite startup refusal can still settle it.
 - The Pending activation hint is lossy notification only. The durable server-owned session authorization is authoritative, and the daemon consults it both after a live hint and during one finite reconnect scan.
-- The daemon on the session's exact owning machine is the sole unattended starter for modern activation. It re-reads the session and exact Pending row, applies the existing external-session safeguards, and then uses the existing internal automatic-resume port. Retained `user_request` execution authorization identifies the original input; it is not fresh person Resume intent and cannot clear a person-Stop hold. Only the current Pending invocation, after those reads, can restore a Guard-stopped runner; a cached tuple in background spawn options is not current input demand. Both owning-Account and requester recovery retain that distinction, as does automatic Follow intake. The existing person/manager Resume path remains separate. A temporarily unavailable automatic launch leaves activation waiting rather than reporting a terminal startup failure. This mechanism does not take over an external or Direct session.
+- The daemon on the session's exact owning machine is the sole unattended starter for modern activation. It re-reads the session and exact Pending row, applies the existing external-session safeguards, and then uses the existing internal automatic-resume port. Retained `user_request` execution authorization identifies the original input; it is not fresh person Resume intent and cannot clear a person-Stop hold. On this unattended path, only the current Pending invocation, after those reads, can restore a Guard-stopped runner; a cached tuple in background spawn options is not current input demand. Both owning-Account and requester recovery retain that distinction, as does automatic Follow intake. The existing person/manager Resume path remains separate. A temporarily unavailable automatic launch leaves activation waiting rather than reporting a terminal startup failure. This mechanism does not take over an external or Direct session.
 - Machine or daemon unreachability leaves the authorization waiting. A genuine terminal start failure is recorded as failed and is not retried merely because a daemon reconnects. When the machine is reachable, explicit **Retry** uses the canonical manual resume action; while it is offline, **Process when online** re-arms the exact authorization. There is no periodic polling, unbounded retry loop, or exactly-once delivery guarantee.
 - For an admitted managed wake, the failure writer ignores `runtime_start_failed` while compute is stopped, unknown, lost, or still reconciling a submitted native effect. The authorization and original input remain waiting for the managed policy owner. Its signed reports settle definite Ask or native failures with the managed-start failure codes; ordinary Agent-start failure can settle after compute is observed running.
 - Once compute is observed present and running with no submitted native effect, the controller does not create another Start or Ask for the retained input. An incumbent native reconciliation keeps its existing lifetime until it settles.
