@@ -738,18 +738,21 @@ function buildCodexAppServerTurnFailureIssue(
   error: Error,
   activeTurn: PendingTurn,
 ): CodexAppServerRuntimeIssue {
+  const modelUnavailable = readCodexAppServerTurnFailureDiagnostic(error).providerErrorCode === 'model_not_found';
   return {
     v: 1,
     scope: 'primary_session',
     status: 'failed',
-    code: isCodexAppServerContextWindowExhaustedError(error, { structuredOnly: true })
+    code: modelUnavailable ? 'provider_model_not_found'
+      : isCodexAppServerContextWindowExhaustedError(error, { structuredOnly: true })
       ? 'agent_context_window_exceeded'
       : CODEX_APP_SERVER_TURN_FAILURE_CODE,
     source: resolveCodexRuntimeIssueSource(error),
     occurredAt: Date.now(),
     agentId: 'codex',
     ...(activeTurn.agentTurnId ? { agentTurnId: activeTurn.agentTurnId } : {}),
-    sanitizedPreview: isCodexAppServerWorkspaceRoutingUnauthorizedError(error)
+    sanitizedPreview: modelUnavailable ? 'The selected model is unavailable. Choose another model.'
+      : isCodexAppServerWorkspaceRoutingUnauthorizedError(error)
       ? CODEX_APP_SERVER_WORKSPACE_ROUTING_AUTH_PREVIEW
       : CODEX_APP_SERVER_TURN_FAILURE_PREVIEW,
   };

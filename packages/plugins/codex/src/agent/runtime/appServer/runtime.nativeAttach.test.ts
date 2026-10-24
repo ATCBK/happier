@@ -17,6 +17,27 @@ vi.mock('node:os', async importOriginal => {
 });
 
 describe('native Codex attachment preparation', () => {
+  it('projects a flattened upstream model_not_found through the real native failure wiring', async () => {
+    await withFixture(async ({ openConfiguredSession, emitNotification }) => {
+      const session = await openConfiguredSession();
+      const events: AgentSessionRuntimeEvent[] = [];
+      session.watch(event => events.push(AgentSessionRuntimeEventSchema.parse(event)));
+      await expect(session.send({ inputIds: ['model-probe'], input: { text: 'Reply OK.' },
+        delivery: { kind: 'newTurn', turnId: 'model-probe-turn' } })).resolves.toMatchObject({ status: 'admitted' });
+      emitNotification('turn/completed', { threadId: 'fresh-thread', turn: {
+        id: 'provider-turn-1', status: 'failed', error: { codexErrorInfo: 'other',
+          message: `HTTP 400: ${JSON.stringify({ error: { type: 'invalid_request_error',
+            code: 'model_not_found', param: null, message: 'PRIVATE_PROVIDER_BODY' } })}` },
+      } });
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+        kind: 'turn-failed', turnId: 'model-probe-turn', diagnostic: expect.objectContaining({
+          code: 'provider_model_not_found', message: expect.stringMatching(/choose another model/i),
+        }),
+      })));
+      expect(JSON.stringify(events)).not.toContain('PRIVATE_PROVIDER_BODY');
+    });
+  });
+
   it('maps startup instructions to native developerInstructions on create', async () => {
     await withFixture(async ({ openConfiguredSession, requests }) => {
       await openConfiguredSession();

@@ -9,6 +9,31 @@ import {
 } from './failure.js';
 
 describe('createCodexAppServerTurnFailure', () => {
+    it.each(['PRIVATE_UPSTREAM_DETAIL', "The 'gpt-5.4-mini' model is not supported when using Codex with a ChatGPT account."])(
+        'retains a native flattened model_not_found code without classifying upstream prose: %s', message => {
+        const failure = createCodexAppServerTurnFailure({ value: { turn: { error: {
+            codexErrorInfo: 'other',
+            message: `HTTP 400: ${JSON.stringify({ error: {
+                type: 'invalid_request_error', code: 'model_not_found', param: null,
+                message,
+            } })}`,
+        } } } });
+        expect(failure).toMatchObject({ code: 'provider_model_not_found' });
+        expect(readCodexAppServerTurnFailureDiagnostic(failure).providerErrorCode).toBe('model_not_found');
+        expect(failure).toMatchObject({ runtimeAuthClassification: null });
+        expect(JSON.stringify(failure)).not.toContain('PRIVATE_');
+    });
+
+    it.each([
+        'The selected model is not supported.',
+        'HTTP 400: {"error":{"code":"model_not_found"}',
+        'HTTP 400: {"error":{"code":"invalid_request_error","message":"model_not_found"}}',
+    ])('does not infer a model refusal from prose or malformed envelopes: %s', message => {
+        const failure = createCodexAppServerTurnFailure({ value: { error: { message, codexErrorInfo: 'other' } } });
+        expect(failure).not.toHaveProperty('code');
+        expect(readCodexAppServerTurnFailureDiagnostic(failure).providerErrorCode).toBe('Other');
+    });
+
     it.each([
         { http_connection_failed: { http_status_code: 403 } },
         { httpConnectionFailed: { httpStatusCode: 403 } },

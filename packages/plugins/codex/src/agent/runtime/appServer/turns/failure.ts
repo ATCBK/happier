@@ -76,9 +76,11 @@ type CodexAppServerErrorPayload = Readonly<{
     additionalDetails: string | null;
     codexErrorInfo: string | null;
     httpStatus?: number;
+    providerErrorCode?: 'model_not_found';
 }>;
 
 class CodexAppServerTurnFailure extends Error {
+    declare readonly code?: 'provider_model_not_found';
     readonly failureReason: CodexTurnFailureReason;
     declare readonly providerErrorCode?: string;
     declare readonly httpStatus?: number;
@@ -113,6 +115,7 @@ class CodexAppServerTurnFailure extends Error {
                 : options.isAuthAccountChanged ? 'auth_account_changed'
                     : CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES.find(kind => kind === classification?.kind) ?? 'unclassified_provider_error';
         if (options.providerErrorCode) this.providerErrorCode = options.providerErrorCode;
+        if (options.providerErrorCode === 'model_not_found') this.code = 'provider_model_not_found';
         if (options.httpStatus !== undefined) this.httpStatus = options.httpStatus;
     }
 }
@@ -220,11 +223,24 @@ function readCodexAppServerErrorPayload(value: unknown): CodexAppServerErrorPayl
     const structuredInfo = readRecord(errorInfo);
     const httpFailure = readRecord(structuredInfo?.httpConnectionFailed ?? structuredInfo?.http_connection_failed);
     const httpStatus = httpFailure?.httpStatusCode ?? httpFailure?.http_status_code;
+    // Codex 0.162.1 flattens an upstream 400 JSON error into message and labels
+    // it `other`. Read the envelope's stable code; never classify its prose.
+    let upstreamError = error;
+    if (upstreamError.code !== 'model_not_found' && typeof error.message === 'string') {
+        const start = error.message.indexOf('{');
+        const end = error.message.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            try {
+                upstreamError = readRecord(readRecord(JSON.parse(error.message.slice(start, end + 1)))?.error) ?? error;
+            } catch { /* Malformed provider text supplies no structured evidence. */ }
+        }
+    }
 
     return {
         message: trimStringValue(error.message) ?? (value instanceof Error ? value.message : null),
         additionalDetails: trimStringValue(error.additionalDetails ?? error.additional_details),
         codexErrorInfo: httpFailure ? 'HttpConnectionFailed' : trimStringValue(errorInfo),
+        ...(upstreamError.code === 'model_not_found' ? { providerErrorCode: 'model_not_found' as const } : {}),
         ...(typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599
             ? { httpStatus } : {}),
     };
@@ -303,7 +319,9 @@ export function createCodexAppServerTurnFailure(params: Readonly<{
         profileId: params.sourceAccountIdentity?.profileId ?? null,
         groupId: params.sourceAccountIdentity?.groupId ?? null,
     };
-    const runtimeAuthClassification = payload
+    // A precise model-unavailable code must not become account/plan recovery
+    // merely because its private message happens to match an auth phrase.
+    const runtimeAuthClassification = payload && !payload.providerErrorCode
         ? classifyCodexConnectedServiceAuthFailure({
             providerErrorPath: true,
             error: params.value,
@@ -322,7 +340,7 @@ export function createCodexAppServerTurnFailure(params: Readonly<{
         })
         : null;
     const sanitizedClassification = sanitizeCodexAppServerRuntimeAuthClassification(runtimeAuthClassification);
-    const providerErrorCode = [...CODEX_APP_SERVER_DIAGNOSTIC_ERROR_CODES].find(code =>
+    const providerErrorCode = payload?.providerErrorCode ?? [...CODEX_APP_SERVER_DIAGNOSTIC_ERROR_CODES].find(code =>
         normalizeCodexErrorInfo(code) === normalizeCodexErrorInfo(payload?.codexErrorInfo ?? null));
     return new CodexAppServerTurnFailure(
         CODEX_APP_SERVER_TURN_FAILURE_MESSAGE,
