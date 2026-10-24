@@ -38,7 +38,7 @@ import type { PluginUiArtifactDigestV1, PluginUiArtifactsManifestEntryV2, Plugin
 import { DaemonPluginSettingsWatchRequestSchema, DaemonPluginSettingsWatchResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonPluginSettingsWatchResponse } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { DaemonPluginTargetedSourceDeclarationV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { DaemonPluginTargetedSourceDeclarationV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { DaemonPluginUiResourceDeclarationsByPluginIdV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import {
@@ -1700,7 +1700,7 @@ async function readTargetedContributions(
             if (!declarations || !runtimeRegistry.readPluginOccurrenceId || !runtimeRegistry.readPluginSourceCustody) {
                 return { status: 'unavailable', code: 'plugin_targeted_contributions_unavailable' };
             }
-            const sourceDeclarations = [];
+            const sourceDeclarations: DaemonPluginTargetedSourceDeclarationV1[] = [];
             for (const declaration of declarations) {
                 const contributions = declaration.manifest.contributes.targetedPluginContributions
                     .filter((entry) => entry.target.pluginId === request.pluginId);
@@ -1712,7 +1712,9 @@ async function readTargetedContributions(
                 const actionIds = new Set(contributions.flatMap((entry) => Object.values(entry.operations)));
                 const rendererIds = new Set(contributions.flatMap((entry) => Object.values(entry.surfaces ?? {})
                     .flatMap((surface) => [surface.renderer, ...(surface.fallbackRenderers ?? [])])));
-                sourceDeclarations.push(DaemonPluginTargetedSourceDeclarationV1Schema.parse({
+                // Manifest ingestion already admitted these typed declarations.
+                // Select their references here; the receiver validates the wire.
+                sourceDeclarations.push({
                     manifest: { id: declaration.pluginId, contributes: {
                         actions: declaration.manifest.contributes.actions.filter((entry) => actionIds.has(entry.id)),
                         pluginContributionPoints: [],
@@ -1721,7 +1723,7 @@ async function readTargetedContributions(
                     } },
                     occurrenceId,
                     sourceCustody,
-                }));
+                });
             }
             return { status: 'sourceDeclarations', pluginId: request.pluginId, sourceDeclarations };
         }

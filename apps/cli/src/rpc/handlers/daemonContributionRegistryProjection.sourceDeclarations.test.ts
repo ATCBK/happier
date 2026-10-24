@@ -15,7 +15,35 @@ describe('current Machine source declarations for an Account target', () => {
         const fixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: { pluginIds: [sourceId] } });
         try {
             expect(fixture.registry.readPluginOccurrenceId?.('happier.triage')).toBeNull();
-            const read = async (runtime: ResolvedExecutablePluginRuntimeRegistry) => {
+            let schemaReads = 0;
+            // Observe real schema traversal without changing admitted values or
+            // replacing a parser. Only copied declaration containers hold proxies.
+            function observeSchemaReads<T extends object>(value: T): T {
+                return new Proxy(value, {
+                    get(target, key, receiver) {
+                        if (typeof key === 'string') schemaReads += 1;
+                        const next: unknown = Reflect.get(target, key, receiver);
+                        return next !== null && typeof next === 'object' ? observeSchemaReads(next) : next;
+                    },
+                });
+            }
+            const observedRuntime = {
+                ...fixture.registry,
+                contributes: {
+                    ...fixture.registry.contributes,
+                    pluginDeclarations: fixture.registry.contributes.pluginDeclarations?.map((declaration) => declaration.pluginId !== sourceId
+                        ? declaration
+                        : { ...declaration, manifest: { ...declaration.manifest, contributes: {
+                            ...declaration.manifest.contributes,
+                            actions: declaration.manifest.contributes.actions.map((action) => ({
+                                ...action,
+                                ...(action.inputSchema === undefined ? {} : { inputSchema: observeSchemaReads(action.inputSchema) }),
+                                ...(action.resultSchema === undefined ? {} : { resultSchema: observeSchemaReads(action.resultSchema) }),
+                            })),
+                        } } }),
+                },
+            } satisfies ResolvedExecutablePluginRuntimeRegistry;
+            const readRaw = async (runtime: ResolvedExecutablePluginRuntimeRegistry) => {
                 const handlers = new Map<string, RpcHandler>();
                 registerDaemonContributionRegistryProjectionHandler({
                     registerHandler(method, handler) { handlers.set(method, handler); },
@@ -26,10 +54,18 @@ describe('current Machine source declarations for an Account target', () => {
                 try {
                     response = await handler({ machineId: 'machine-source', pluginId: 'happier.triage', readMode: 'sourceDeclarations' });
                 } catch (error) { throw new Error('Machine source-declaration producer failed before response parsing', { cause: error }); }
-                try { return DaemonPluginUiTargetedContributionsReadResponseSchema.parse(response); }
+                return response;
+            };
+            const decode = (response: unknown) => {
+                try { return DaemonPluginUiTargetedContributionsReadResponseSchema.parse(JSON.parse(JSON.stringify(response))); }
                 catch (error) { throw new Error('Machine source-declaration response parsing failed', { cause: error }); }
             };
-            const response = await read(fixture.registry);
+            const firstRaw = await readRaw(observedRuntime);
+            const secondRaw = await readRaw(observedRuntime);
+            expect({ reads: 2, producerSchemaReads: schemaReads }).toEqual({ reads: 2, producerSchemaReads: 0 });
+            const response = decode(firstRaw);
+            expect(schemaReads).toBeGreaterThan(0);
+            expect(decode(secondRaw)).toEqual(response);
             expect(response.status).toBe('sourceDeclarations');
             if (response.status !== 'sourceDeclarations') throw new Error(`Source read refused: ${response.status}`);
             expect(response.pluginId).toBe('happier.triage');
@@ -67,7 +103,7 @@ describe('current Machine source declarations for an Account target', () => {
                 expect(binding.contributorOccurrenceId).toBe(fixture.registry.readPluginOccurrenceId?.(sourceId));
                 expect(binding.operation.contributor.sourceCustody).toEqual(fixture.registry.readPluginSourceCustody?.(sourceId));
             } finally { observation.dispose(); }
-            expect(await read({ ...fixture.registry, readPluginSourceCustody: undefined })).toEqual({
+            expect(decode(await readRaw({ ...fixture.registry, readPluginSourceCustody: undefined }))).toEqual({
                 status: 'unavailable', code: 'plugin_targeted_contributions_unavailable',
             });
         } finally { await fixture.dispose(); }
