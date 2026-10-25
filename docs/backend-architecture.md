@@ -294,6 +294,12 @@ cleanup rather than repeating native teardown. Voice owns chat and commit
 backends as soon as they are acquired, including while native session opening is
 pending, and releases them before waiting for an active turn to settle.
 
+Resuming a bounded execution run keeps its bounded completion contract. The
+recreated provider occurrence runs through the same intent parsing, terminal
+result and activity publication, marker update, and cleanup as its initial turn.
+A retained resume handle alone does not turn that run into a long-lived run;
+subsequent input to an active bounded turn uses its existing steering queue.
+
 ## Storage and persistence
 ### Database (Prisma)
 Prisma models live in `prisma/schema.prisma`. Key tables:
