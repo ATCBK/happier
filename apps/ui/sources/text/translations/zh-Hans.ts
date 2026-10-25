@@ -3641,6 +3641,17 @@ export const zhHans: TranslationStructure = {
         openSettingsFailed: '无法打开系统设置。',
     },
     pushTroubleshooting: {
+            remoteTest: {
+                title: "发送远程测试",
+                subtitle: "通过连接到此 Home 的机器，向此手机发送真实的推送通知。",
+                notRegistered: "请注册此手机的令牌，然后重试。",
+                noMachine: "请将机器连接到此 Home，以发送远程测试。",
+                accepted: "推送服务已接受测试。这并不确认手机已收到或显示通知。请检查通知。",
+                rejected: "推送服务未确认接受。再次尝试前，请检查通知和注册状态。",
+                invalidCredentials: "推送提供商拒绝了此应用的凭据。请检查 APNs 或 FCM 配置。",
+                unsupported: "请更新所连接机器的 Happier CLI，以发送远程测试。",
+                unconfirmed: "无法确认结果。请求仍可能完成；再次尝试前请检查通知。",
+            },
       status: {
         title: "状态",
         footer: "检查账户设置、系统权限以及服务器注册状态。",

@@ -3548,6 +3548,17 @@ export const ca: TranslationStructure = {
             openSettingsFailed: 'No s\'ha pogut obrir la configuració del sistema.',
         },
         pushTroubleshooting: {
+            remoteTest: {
+                title: "Envia una prova remota",
+                subtitle: "Envia una notificació push real a aquest telèfon mitjançant una màquina connectada a aquest Home.",
+                notRegistered: "Registra el token d’aquest telèfon i torna-ho a provar.",
+                noMachine: "Connecta una màquina a aquest Home per enviar una prova remota.",
+                accepted: "El servei push ha acceptat la prova. Això no confirma que el telèfon l’hagi rebut o mostrat. Revisa les notificacions.",
+                rejected: "El servei push no ha confirmat l’acceptació. Revisa les notificacions i el registre abans de tornar-ho a provar.",
+                invalidCredentials: "El proveïdor push ha rebutjat les credencials d’aquesta app. Revisa la configuració d’APNs o FCM.",
+                unsupported: "Actualitza la CLI de Happier de la màquina connectada per enviar proves remotes.",
+                unconfirmed: "No s’ha pogut confirmar el resultat. La sol·licitud encara es pot completar; revisa les notificacions abans de tornar-ho a provar.",
+            },
             status: {
                 title: 'Estat',
                 footer: 'Comprova l’ajust del compte, el permís del sistema i el registre al servidor.',

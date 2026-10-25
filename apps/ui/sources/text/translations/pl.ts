@@ -3772,6 +3772,17 @@ export const pl: TranslationStructure = {
         openSettingsFailed: 'Nie udało się otworzyć ustawień systemu.',
     },
     pushTroubleshooting: {
+            remoteTest: {
+                title: "Wyślij zdalny test",
+                subtitle: "Wyślij prawdziwe powiadomienie push na ten telefon przez komputer połączony z tym Home.",
+                notRegistered: "Zarejestruj token tego telefonu i spróbuj ponownie.",
+                noMachine: "Połącz komputer z tym Home, aby wysłać zdalny test.",
+                accepted: "Usługa push przyjęła test. Nie potwierdza to odbioru ani wyświetlenia na telefonie. Sprawdź powiadomienia.",
+                rejected: "Usługa push nie potwierdziła przyjęcia. Sprawdź powiadomienia i rejestrację przed ponowną próbą.",
+                invalidCredentials: "Dostawca push odrzucił dane uwierzytelniające tej aplikacji. Sprawdź konfigurację APNs lub FCM.",
+                unsupported: "Zaktualizuj CLI Happier na połączonym komputerze, aby wysyłać zdalne testy.",
+                unconfirmed: "Nie udało się potwierdzić wyniku. Żądanie może się jeszcze zakończyć; sprawdź powiadomienia przed ponowną próbą.",
+            },
       status: {
         title: "Stan",
         footer: "Sprawdza ustawienie konta, uprawnienie systemu i rejestrację na serwerze.",

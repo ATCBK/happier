@@ -3439,6 +3439,17 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             openSettingsFailed: '無法開啟系統設定。',
         },
         pushTroubleshooting: {
+            remoteTest: {
+                title: "傳送遠端測試",
+                subtitle: "透過連線至此 Home 的機器，向此手機傳送真實的推播通知。",
+                notRegistered: "請註冊此手機的權杖，然後重試。",
+                noMachine: "請將機器連線至此 Home，以傳送遠端測試。",
+                accepted: "推播服務已接受測試。這並不確認手機已收到或顯示通知。請檢查通知。",
+                rejected: "推播服務未確認接受。再次嘗試前，請檢查通知和註冊狀態。",
+                invalidCredentials: "推播供應商拒絕了此應用程式的憑證。請檢查 APNs 或 FCM 設定。",
+                unsupported: "請更新所連線機器的 Happier CLI，以傳送遠端測試。",
+                unconfirmed: "無法確認結果。請求仍可能完成；再次嘗試前請檢查通知。",
+            },
             status: {
                 title: '狀態',
                 footer: '檢查帳戶設定、作業系統權限與伺服器註冊狀態。',

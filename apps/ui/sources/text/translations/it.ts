@@ -4087,6 +4087,17 @@ export const it: TranslationStructure = {
         openSettingsFailed: 'Impossibile aprire le impostazioni di sistema.',
     },
     pushTroubleshooting: {
+            remoteTest: {
+                title: "Invia un test remoto",
+                subtitle: "Invia una vera notifica push a questo telefono tramite una macchina connessa a questa Home.",
+                notRegistered: "Registra il token di questo telefono, poi riprova.",
+                noMachine: "Connetti una macchina a questa Home per inviare un test remoto.",
+                accepted: "Il servizio push ha accettato il test. Questo non conferma che il telefono l’abbia ricevuto o mostrato. Controlla le notifiche.",
+                rejected: "Il servizio push non ha confermato l’accettazione. Controlla le notifiche e la registrazione prima di riprovare.",
+                invalidCredentials: "Il provider push ha rifiutato le credenziali di questa app. Controlla la configurazione APNs o FCM.",
+                unsupported: "Aggiorna la CLI Happier della macchina connessa per inviare test remoti.",
+                unconfirmed: "Non è stato possibile confermare il risultato. La richiesta potrebbe ancora completarsi; controlla le notifiche prima di riprovare.",
+            },
       status: {
         title: "Stato",
         footer: "Controlla l’impostazione dell’account, il permesso del sistema e la registrazione sul server.",

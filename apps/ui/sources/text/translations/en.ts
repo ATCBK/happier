@@ -3463,6 +3463,17 @@ export const en = {
             openSettingsFailed: 'Could not open system settings.',
         },
         pushTroubleshooting: {
+            remoteTest: {
+                title: "Send a remote test",
+                subtitle: "Send a real push to this phone through a connected machine on this Home.",
+                notRegistered: "Register this phone’s token, then try again.",
+                noMachine: "Connect a machine on this Home to send a remote test.",
+                accepted: "The push service accepted the test. This does not confirm that your phone received or displayed it. Check your notifications.",
+                rejected: "The push service did not confirm acceptance. Check your notifications and registration before trying again.",
+                invalidCredentials: "The push provider rejected this app’s credentials. Check APNs or FCM configuration.",
+                unsupported: "Update the connected machine’s Happier CLI to send remote tests.",
+                unconfirmed: "The result could not be confirmed. The request may still complete; check your notifications before trying again.",
+            },
             status: {
                 title: 'Status',
                 footer: 'Checks the account setting, OS permission, and server registration state.',

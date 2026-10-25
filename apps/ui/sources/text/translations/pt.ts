@@ -3864,6 +3864,17 @@ export const pt: TranslationStructure = {
         openSettingsFailed: 'Não foi possível abrir as definições do sistema.',
     },
     pushTroubleshooting: {
+            remoteTest: {
+                title: "Enviar teste remoto",
+                subtitle: "Envie uma notificação push real para este telefone através de uma máquina conectada a este Home.",
+                notRegistered: "Registre o token deste telefone e tente novamente.",
+                noMachine: "Conecte uma máquina a este Home para enviar um teste remoto.",
+                accepted: "O serviço push aceitou o teste. Isso não confirma que o telefone o recebeu ou exibiu. Confira suas notificações.",
+                rejected: "O serviço push não confirmou a aceitação. Confira suas notificações e o registro antes de tentar novamente.",
+                invalidCredentials: "O provedor push rejeitou as credenciais deste app. Confira a configuração de APNs ou FCM.",
+                unsupported: "Atualize a CLI do Happier da máquina conectada para enviar testes remotos.",
+                unconfirmed: "Não foi possível confirmar o resultado. A solicitação ainda pode ser concluída; confira suas notificações antes de tentar novamente.",
+            },
       status: {
         title: "Estado",
         footer: "Verifica a configuração da conta, a permissão do sistema e o estado de registro no servidor.",
