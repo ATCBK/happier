@@ -36,6 +36,7 @@ import {
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/selection/v1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import {
   fetchTeamCredentialDirectMaterialPreparation,
@@ -312,7 +313,7 @@ describe('daemon Team credential direct-material reconciler', () => {
         commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog, revision: index + 2,
           catalog: ProviderConnectionsCatalogV1Schema.parse({ ...providerCatalog.catalog,
             modelPickerVisibilityByConnectionId: { pc_a: index % 2 === 0 },
-            modelVisibilityByRef: { [serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: 'pc_a', modelId: 'listed' })]: 'hidden' },
+            modelVisibilityByRef: { [serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'listed' })]: 'hidden' },
             manualModelsByConnectionId: { pc_a: [{ id: `manual-${index}`, addedAt: 1 }] },
             experimentalBindingConfirmations: [{ v: 1, connectionId: 'pc_a', agentTargetKey: 'agent:codex',
               modelId: null, compatibilityFingerprint: 'test', confirmedAt: index }],
@@ -324,7 +325,7 @@ describe('daemon Team credential direct-material reconciler', () => {
       expect(passRecords()).toHaveLength(1);
 
       commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog, revision: 27,
-        catalog: { ...providerCatalog.catalog, secretBindingsByConnectionId: { pc_a: { account: { apiKey: 'secret' } } } } } });
+        catalog: { ...providerCatalog.catalog, secretBindingsByConnectionId: { [ProviderConnectionIdSchema.parse('pc_a')]: { account: { apiKey: 'secret' } } } } } });
       await Promise.all(passes);
       expect(homeDomainAction).toHaveBeenCalledTimes(2);
       expect(listAccounts).toHaveBeenCalledTimes(5);

@@ -1219,13 +1219,13 @@ describe('happier providers command domain', () => {
     await executeProvidersCommand([
       'add-model', 'pc_1', '--models', 'custom-model', '--reasoning-effort-levels', 'low,high',
     ], deps);
-    expect(settings(h.getRaw()).manualModelsByConnectionId.pc_1).toEqual([
+    expect(settings(h.getRaw()).manualModelsByConnectionId[ProviderConnectionIdSchema.parse('pc_1')]).toEqual([
       { id: 'custom-model', addedAt: 100, reasoningEffortLevels: ['low', 'high'] },
     ]);
     await executeProvidersCommand([
       'add-model', 'pc_1', '--models', 'custom-model', '--reasoning-effort-levels', 'medium,max',
     ], deps);
-    expect(settings(h.getRaw()).manualModelsByConnectionId.pc_1).toEqual([
+    expect(settings(h.getRaw()).manualModelsByConnectionId[ProviderConnectionIdSchema.parse('pc_1')]).toEqual([
       { id: 'custom-model', addedAt: 100, reasoningEffortLevels: ['medium', 'max'] },
     ]);
   });

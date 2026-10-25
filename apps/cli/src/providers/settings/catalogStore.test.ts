@@ -387,7 +387,7 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
   vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     expect(new URL(String(url)).pathname).toBe('/v2/account/settings');
     const mutation = AccountSettingsV2UpdateRequestSchema.parse(body);
-    if (mutation.content.t !== 'plain') throw new Error('Plain fixture requires Plain settings');
+    if (!mutation.content || mutation.content.t !== 'plain') throw new Error('Plain fixture requires Plain settings');
     raw = mutation.content.v;
     settingsVersion++;
     return { status: 200, data: { success: true, version: settingsVersion } };

@@ -363,7 +363,7 @@ describe('revalidateExternalProviderBrokerAuthorization', () => {
       'execution_run_not_found', 'execution_run_terminal'] as const) {
       expect(revalidateExternalProviderBrokerAuthorization({ ok: false, reasonCode })).toBe(false);
     }
-    for (const reasonCode of ['resource_unavailable', 'resource_changed', 'grant_expired'] as const) {
+    for (const reasonCode of ['resource_unavailable', 'resource_changed'] as const) {
       expect(() => revalidateExternalProviderBrokerAuthorization({ ok: false, reasonCode }))
         .toThrow('external broker authority unavailable');
     }

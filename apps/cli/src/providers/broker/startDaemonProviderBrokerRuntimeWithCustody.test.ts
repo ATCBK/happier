@@ -19,6 +19,7 @@ import {
   type SignedProviderBrokerRouteGrantV2,
 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 import { ApiClient } from '@/api/api';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -269,7 +270,7 @@ it.each(['network', 500, 403, 404] as const)('composes Team wakes and exact clos
   homeReads.length = 0;
   currentConsumers.delete('ended-at-home');
   await syncTeamChange();
-  expect(homeReads.toSorted()).toEqual(['ended-at-home', 'still-current', 'stream-ended']);
+  expect([...homeReads].sort()).toEqual(['ended-at-home', 'still-current', 'stream-ended']);
   expect(children.get('ended-at-home')).toEqual({ current: false, cleanup: 1 });
   expect(children.get('still-current')).toEqual({ current: true, cleanup: 0 });
   expect(children.get('stream-ended')).toEqual({ current: true, cleanup: 0 });
@@ -339,7 +340,7 @@ it('composes personal stream close with the exact shared gateway selector throug
         initiator: { accountId: 'account', machineId: 'consumer-machine', endpointId: 'a'.repeat(64) },
         target: { custodianAccountId: 'account', machineId: fixture.machineId, endpointId: 'b'.repeat(64) },
         consumer: { kind: 'session', sessionId: 'same-session' }, application,
-        source: { kind: 'account_connection', connectionId,
+        source: { kind: 'account_connection', connectionId: ProviderConnectionIdSchema.parse(connectionId),
           expectedConnectionSecurityFingerprint: fixture.record.connectionSecurityFingerprint,
           expectedManagedRuntimeBindingFingerprint: createProviderManagedRuntimeBindingFingerprintV1({
             implementationIdentity: gateway.identity, purposeBindings: gateway.purposeBindings,
