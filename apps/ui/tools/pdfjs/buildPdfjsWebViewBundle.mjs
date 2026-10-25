@@ -14,10 +14,10 @@ export async function createPdfjsWebViewBundleSource({ expoAppDir }) {
         absWorkingDir: expoAppDir, entryPoints: [entryRelative], bundle: true, write: false,
         format: 'iife', platform: 'browser', target: ['es2020'], minify: true, legalComments: 'none',
         define: { __PDFJS_WORKER_SOURCE__: JSON.stringify(worker) },
-        // This private native document runtime needs the canonical pure matcher,
-        // not React/React Native's complete presentation barrel.
+        // This private native document runtime needs the canonical pure presentation
+        // functions it reaches, not React/React Native's complete presentation barrel.
         alias: {
-            '@happier-dev/plugin-ui/presentation': path.resolve(expoAppDir, '../../packages/plugin-ui/src/presentation/find/matchFindText.ts'),
+            '@happier-dev/plugin-ui/presentation': path.resolve(expoAppDir, 'tools/pdfjs/pluginUiPresentationPure.ts'),
             '@/scm/utils/filePresentation': path.resolve(expoAppDir, 'sources/scm/utils/filePresentation.ts'),
             '@happier-dev/protocol/crypto/base64': path.resolve(expoAppDir, '../../packages/protocol/src/crypto/base64.ts'),
         },

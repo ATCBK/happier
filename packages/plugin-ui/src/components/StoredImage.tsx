@@ -3,7 +3,7 @@ import type { StoredImageRefV1, PluginUiReadStoredImageResultV1 } from '@happier
 import { usePluginHostApi } from '../hostApi/context.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierStoredImage } from '../presentation/content/StoredImage.js';
-import { isHappierAlphaCapableImageMimeType } from '../presentation/media/ImageBacking.js';
+import { isHappierAlphaCapableImageMimeType } from '../presentation/media/imageMimeAlpha.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 import { Icon } from './Icon.js';
 
