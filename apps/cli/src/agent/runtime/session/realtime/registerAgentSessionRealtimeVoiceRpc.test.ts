@@ -213,9 +213,11 @@ describe('Agent-session realtime Voice session RPC', () => {
           : { status: 'started', transport: { kind: 'webrtc', answerSdp: 'answer' }, handle: fixture.handle };
       });
       const preparedInstructionsFor = { serverId: 'server-a', sessionId };
+      let preparationFailure: unknown;
       const handlers = register(fixture.runtime, undefined, {
         getHappierSessionId: () => sessionId,
-        resolvePromptPreparation: ({ signal }) => resolveCliVoicePromptPreparation({
+        resolvePromptPreparation: async ({ signal }) => {
+          try { return await resolveCliVoicePromptPreparation({
           serverId: 'server-a', sessionId, scope: { serverId: 'server-a', accountId: 'account-a', sessionId },
           accountEntries: [], profileEntries: [], signal,
           sessionMetadata: { work: { memoryEnabled: false, promptStack: [
@@ -225,13 +227,17 @@ describe('Agent-session realtime Voice session RPC', () => {
           readArtifact: async () => ({ id: 'persona', header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' },
             revision: { headerVersion: 1, bodyVersion: 1 },
             body: JSON.stringify({ v: 1, markdown: 'Accepted persona', createdAtMs: 1, updatedAtMs: 1 }) }),
-        }),
+          readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' } }),
+          }); } catch (error) { preparationFailure = error; throw error; }
+        },
       });
       const response = handlers.get(SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START)!({
         v: 1, provider: providerRef, applicationAttemptId: `receipt-${outcome}`,
         transport: { kind: 'webrtc', offerSdp: 'offer' },
       });
-      await starting;
+      await Promise.race([starting, response.then(result => {
+        throw new Error(`Preparation settled before native start: ${JSON.stringify(result)}`, { cause: preparationFailure });
+      })]);
       expect(fixture.start.mock.calls[0]?.[0]).toMatchObject({ systemAppendBlocks: ['Accepted persona'] });
       if (outcome === 'superseded') sessionId = 'session-2';
       release();
