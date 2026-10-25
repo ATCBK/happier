@@ -17712,17 +17712,14 @@ export async function startDaemonSessionControlRuntime(
           }
           if (request.operation.kind === 'provider_broker.refusal.read') {
             const turnId = request.operation.turnId;
-            const activeTurnMatches = trackedSession?.activeTurnId === turnId;
             const evidence = trackedSession?.teamCredentialBrokerEvidence;
-            // The existing active-turn gate can settle before the evidence owner
-            // is reached. Record that same decision without another read.
-            if (!activeTurnMatches || !evidence) {
+            if (!evidence) {
               recordSessionBrokerApplicationEvidenceRead({ sessionId, turnId, pid: runner.pid,
                 processStartTimeMs: runner.processStartTimeMs, outcome: 'miss',
-                reason: trackedSession && !activeTurnMatches ? 'turn_mismatch' : 'no_evidence' });
+                reason: 'no_evidence' });
             }
             return { ok: true as const, result: { kind: 'provider_broker.refusal' as const,
-              denial: activeTurnMatches ? evidence?.readDenial(turnId) ?? null : null } };
+              denial: evidence?.readDenial(turnId) ?? null } };
           }
           if (request.operation.kind === 'provider_broker.binding.open') {
             const tracked = trackedSession;

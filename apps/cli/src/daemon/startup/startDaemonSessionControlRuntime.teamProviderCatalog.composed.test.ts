@@ -55,6 +55,31 @@ import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { createSessionBrokerApplicationEvidence } from '@/providers/broker/sessionBrokerApplicationEvidence';
 
+await vi.hoisted(async () => {
+  const path = new URL('../../../../ui/sources/dev/vitestRnShim.ts', import.meta.url).href;
+  const { installVitestRnShim } = await import(path);
+  installVitestRnShim();
+});
+
+// This composed CLI suite consumes the real UI denial presenter. Its native
+// stylesheet boundary uses the same theme fixture as the owning UI testkit.
+vi.mock('react-native-unistyles', async () => {
+  const { createUnistylesMock } = await import('../../../../ui/sources/dev/testkit/mocks/unistyles');
+  return createUnistylesMock();
+});
+vi.mock('expo-updates', async () => {
+  const { createExpoUpdatesMock } = await import('../../../../ui/sources/dev/testkit/mocks/expoUpdates');
+  return createExpoUpdatesMock();
+});
+vi.mock('@shopify/react-native-skia', async () => {
+  const { createReactNativeSkiaMock } = await import('../../../../ui/sources/dev/testkit/mocks/reactNativeSkia');
+  return createReactNativeSkiaMock();
+});
+vi.mock('expo-file-system', async () => {
+  const { createExpoFileSystemFileMock } = await import('../../../../ui/sources/dev/testkit/mocks/expoFileSystem');
+  return createExpoFileSystemFileMock().module;
+});
+
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
   responseStatus: 0, responseBody: null as unknown }));
@@ -162,17 +187,30 @@ it.each(['direct', 'wrapped'] as const)('prepares grantee host input through rea
     h.tracked.teamCredentialBrokerEvidence.beginRequest()?.(denial);
     await expect(readCurrentRunnerTeamCredentialBrokerDenial({ authority: expectedAuthority,
       turnId: 'refusal-read-turn' })).resolves.toEqual(denial);
+    // A captured refusal belongs to its exact turn even after lifecycle tracking
+    // clears or advances. The evidence owner still rejects a different turn.
+    delete h.tracked.activeTurnId;
+    await expect(readCurrentRunnerTeamCredentialBrokerDenial({ authority: expectedAuthority,
+      turnId: 'refusal-read-turn' })).resolves.toEqual(denial);
+    h.tracked.activeTurnId = 'next-turn';
+    await expect(readCurrentRunnerTeamCredentialBrokerDenial({ authority: expectedAuthority,
+      turnId: 'refusal-read-turn' })).resolves.toEqual(denial);
+    await expect(readCurrentRunnerTeamCredentialBrokerDenial({ authority: expectedAuthority,
+      turnId: 'next-turn' })).resolves.toBeNull();
     evidenceCurrent = false;
     await expect(readCurrentRunnerTeamCredentialBrokerDenial({ authority: expectedAuthority,
       turnId: 'refusal-read-turn' })).resolves.toBeNull();
     // One private RPC per demanded supported read; unsupported runners stay local.
-    expect(readRequests).toHaveBeenCalledTimes(4);
+    expect(readRequests).toHaveBeenCalledTimes(7);
     const context = { sessionId: h.sessionId, pid: issued.runner.pid, processStartTimeMs: issued.runner.processStartTimeMs };
     expect(readLog.mock.calls.filter(([label, data]) => label === '[provider-broker-application]'
       && data && typeof data === 'object' && 'stage' in data && data.stage === 'evidence_read').map(([, data]) => data)).toEqual([
       { ...context, stage: 'evidence_read', turnId: 'refusal-read-turn', outcome: 'miss', reason: 'no_evidence' },
-      { ...context, stage: 'evidence_read', turnId: 'previous-turn', outcome: 'miss', reason: 'turn_mismatch' },
+      { ...context, stage: 'evidence_read', turnId: 'previous-turn', outcome: 'miss', reason: 'no_evidence' },
       { ...context, stage: 'evidence_read', turnId: 'refusal-read-turn', outcome: 'hit' },
+      { ...context, stage: 'evidence_read', turnId: 'refusal-read-turn', outcome: 'hit' },
+      { ...context, stage: 'evidence_read', turnId: 'refusal-read-turn', outcome: 'hit' },
+      { ...context, stage: 'evidence_read', turnId: 'next-turn', outcome: 'miss', reason: 'turn_mismatch' },
       { ...context, stage: 'evidence_read', turnId: 'refusal-read-turn', outcome: 'miss', reason: 'pid_mismatch' },
     ]);
     expect(readLog.mock.calls.filter(([label, data]) => label === '[provider-broker-application]'
