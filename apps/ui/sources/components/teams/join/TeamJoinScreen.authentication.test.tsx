@@ -206,8 +206,15 @@ it.each([
     } });
     const credentials = { token: createAccountTokenForTests('new-account', { currentAccount: true }) };
     const authPath = method === 'key_challenge' ? '/v1/auth' : '/v1/auth/email/provision';
-    home.answer(serverId, authPath, { body: method === 'key_challenge' ? credentials : {
-        ...credentials, accountId: 'new-account', teamId: 'team-1',
+    home.answer(serverId, authPath, { select: () => {
+        const record = home.findByServerUrl(origin);
+        if (!record) throw new Error('The provisioning Home must exist');
+        // Provisioning commits the Account before authenticated Sync reads its cursor.
+        record.accountId = 'new-account';
+        record.token = credentials.token;
+        return { body: method === 'key_challenge' ? credentials : {
+            ...credentials, accountId: 'new-account', teamId: 'team-1',
+        } };
     } });
     const screen = await renderScreen(<AuthProvider initialCredentials={initialCredentials}>
         <TeamJoinScreen token={token} homeTarget={identity} />
