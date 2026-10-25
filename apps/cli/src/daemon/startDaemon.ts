@@ -1928,8 +1928,6 @@ export async function startDaemon(
           },
         });
         const reconcileIfEnabled = async (
-          target?: Parameters<typeof reconciler.reconcile>[0],
-          signal?: AbortSignal,
           wakeReason?: TeamCredentialDirectMaterialWakeReason,
           sourceWake?: TeamCredentialDirectMaterialSourceWake,
         ) => {
@@ -1938,9 +1936,9 @@ export async function startDaemon(
             snapshot?.status !== 'ready'
             || readServerEnabledBit(snapshot.features, 'teams.credentialResources') !== true
           ) return { prepared: 0, remaining: 0, failures: [] };
-          return await reconciler.reconcile(target, signal, wakeReason, sourceWake);
+          return await reconciler.reconcile(wakeReason, sourceWake);
         };
-        const reconcileDirectMaterialBestEffort = (wakeReason: TeamCredentialDirectMaterialWakeReason, sourceWake?: TeamCredentialDirectMaterialSourceWake) => void reconcileIfEnabled(undefined, undefined, wakeReason, sourceWake).catch((error) => logger.debug(
+        const reconcileDirectMaterialBestEffort = (wakeReason: TeamCredentialDirectMaterialWakeReason, sourceWake?: TeamCredentialDirectMaterialSourceWake) => void reconcileIfEnabled(wakeReason, sourceWake).catch((error) => logger.debug(
             '[DAEMON RUN] Team credential direct-material reconciliation failed (non-fatal)',
             { error: serializeAxiosErrorForLog(error) },
           ));
