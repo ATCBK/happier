@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "サンドボックス",
+  "machineVercel.description": "ファイルは実行をまたいで保持されます。停止すると実行中のプロセスが終了し、そのメモリは失われます。",
+  "machineVercel.image": "イメージ",
+  "machineVercel.region": "リージョン",
+  "machineVercel.vcpus": "仮想 CPU 数",
+  "machineVercel.timeout": "実行時間の上限（ミリ秒）",
+  "machineVercel.snapshotExpiration": "スナップショットの保持期間（ミリ秒）",
+  "machineVercel.timeoutDescription": "既定は5分です。上限はHobbyが45分、ProとEnterpriseが24時間です。Happierは実行時間を自動延長しません。",
+  "machineVercel.retentionDescription": "0にすると有効期限がなくなります。停止後も保持されたスナップショットには料金が発生します。",
+  "machineVercel.token": "アクセストークン",
+  "machineVercel.teamId": "チーム ID",
+  "machineVercel.projectId": "プロジェクト ID",
+  "machineVercel.account": "Vercel アカウント",
+  "machineVercel.checkStatus": "アカウント接続済み",
+  "machineVercel.checkUnavailable": "Vercel アカウントを利用できません。トークン、チーム、プロジェクトを確認してください。",
+  "machineVercel.confirmTitle": "Vercel サンドボックスを作成しますか？",
+  "machineVercel.confirmBody": "Vercelでは実行中の計算リソースと保持されたスナップショットに料金が発生します。ファイルは実行をまたいで保持できますが、プロセスのメモリは保持できません。",
+  "machineVercel.deleteTitle": "このサンドボックスを削除しますか？",
+  "machineVercel.deleteBody": "このサンドボックスと、このリソースが作成したスナップショットを削除します。削除後にファイルを復元することはできません。"
+}

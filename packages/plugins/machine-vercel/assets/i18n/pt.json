@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "ambiente isolado",
+  "machineVercel.description": "Os arquivos são mantidos entre execuções. A parada encerra os processos em execução e apaga sua memória.",
+  "machineVercel.image": "Imagem",
+  "machineVercel.region": "Região",
+  "machineVercel.vcpus": "CPUs virtuais",
+  "machineVercel.timeout": "Tempo limite de execução (milissegundos)",
+  "machineVercel.snapshotExpiration": "Retenção de snapshots (milissegundos)",
+  "machineVercel.timeoutDescription": "O padrão é 5 minutos. Máximo: 45 minutos no Hobby; 24 horas no Pro e Enterprise. O Happier não prolonga as execuções automaticamente.",
+  "machineVercel.retentionDescription": "Use 0 para não expirar. Os snapshots retidos são cobrados após a parada do ambiente.",
+  "machineVercel.token": "Token de acesso",
+  "machineVercel.teamId": "ID da equipe",
+  "machineVercel.projectId": "ID do projeto",
+  "machineVercel.account": "Conta Vercel",
+  "machineVercel.checkStatus": "Conta conectada",
+  "machineVercel.checkUnavailable": "Conta Vercel indisponível. Verifique o token, a equipe e o projeto.",
+  "machineVercel.confirmTitle": "Criar um ambiente isolado Vercel?",
+  "machineVercel.confirmBody": "A Vercel cobra pelos recursos em execução e pelos snapshots retidos. Os arquivos podem persistir entre execuções; a memória dos processos não.",
+  "machineVercel.deleteTitle": "Excluir este ambiente?",
+  "machineVercel.deleteBody": "Exclui este ambiente e os snapshots que pertencem a ele. Seus arquivos não poderão ser recuperados."
+}

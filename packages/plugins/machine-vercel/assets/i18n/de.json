@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "Sandbox",
+  "machineVercel.description": "Dateien bleiben über mehrere Ausführungen erhalten. Beim Stoppen enden laufende Prozesse und ihr Arbeitsspeicher geht verloren.",
+  "machineVercel.image": "Abbild",
+  "machineVercel.region": "Region",
+  "machineVercel.vcpus": "Virtuelle CPUs",
+  "machineVercel.timeout": "Laufzeitlimit (Millisekunden)",
+  "machineVercel.snapshotExpiration": "Snapshot-Aufbewahrung (Millisekunden)",
+  "machineVercel.timeoutDescription": "Standard: 5 Minuten. Maximum: 45 Minuten mit Hobby; 24 Stunden mit Pro und Enterprise. Happier verlängert Ausführungen nicht automatisch.",
+  "machineVercel.retentionDescription": "0 bedeutet kein Ablaufdatum. Aufbewahrte Snapshots werden auch nach dem Stoppen berechnet.",
+  "machineVercel.token": "Zugriffstoken",
+  "machineVercel.teamId": "Team-ID",
+  "machineVercel.projectId": "Projekt-ID",
+  "machineVercel.account": "Vercel-Konto",
+  "machineVercel.checkStatus": "Konto verbunden",
+  "machineVercel.checkUnavailable": "Vercel-Konto nicht verfügbar. Prüfe Token, Team und Projekt.",
+  "machineVercel.confirmTitle": "Vercel-Sandbox erstellen?",
+  "machineVercel.confirmBody": "Vercel berechnet laufende Rechenleistung und aufbewahrte Snapshots. Dateien können über Ausführungen hinweg erhalten bleiben, der Prozessspeicher nicht.",
+  "machineVercel.deleteTitle": "Diese Sandbox löschen?",
+  "machineVercel.deleteBody": "Löscht diese Sandbox und ihre eigenen Snapshots. Ihre Dateien können danach nicht wiederhergestellt werden."
+}

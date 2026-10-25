@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "entorno aislado",
+  "machineVercel.description": "Los archivos se conservan entre ejecuciones. Al detenerlo, los procesos terminan y se pierde su memoria.",
+  "machineVercel.image": "Imagen",
+  "machineVercel.region": "Región",
+  "machineVercel.vcpus": "CPU virtuales",
+  "machineVercel.timeout": "Tiempo de ejecución (milisegundos)",
+  "machineVercel.snapshotExpiration": "Retención de instantáneas (milisegundos)",
+  "machineVercel.timeoutDescription": "Por defecto, 5 minutos. Máximo: 45 minutos en Hobby; 24 horas en Pro y Enterprise. Happier no amplía las ejecuciones automáticamente.",
+  "machineVercel.retentionDescription": "Usa 0 para que no caduquen. Las instantáneas conservadas se facturan después de detener el entorno.",
+  "machineVercel.token": "Token de acceso",
+  "machineVercel.teamId": "ID del equipo",
+  "machineVercel.projectId": "ID del proyecto",
+  "machineVercel.account": "Cuenta de Vercel",
+  "machineVercel.checkStatus": "Cuenta conectada",
+  "machineVercel.checkUnavailable": "La cuenta de Vercel no está disponible. Comprueba el token, el equipo y el proyecto.",
+  "machineVercel.confirmTitle": "¿Crear un entorno aislado de Vercel?",
+  "machineVercel.confirmBody": "Vercel factura los recursos en ejecución y las instantáneas conservadas. Los archivos pueden persistir entre ejecuciones; la memoria de los procesos no.",
+  "machineVercel.deleteTitle": "¿Eliminar este entorno?",
+  "machineVercel.deleteBody": "Elimina este entorno y las instantáneas que le pertenecen. Sus archivos no podrán recuperarse."
+}

@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "沙箱",
+  "machineVercel.description": "文件会在多次运行之间保留。停止后，正在运行的进程会结束，其内存状态也会丢失。",
+  "machineVercel.image": "镜像",
+  "machineVercel.region": "区域",
+  "machineVercel.vcpus": "虚拟 CPU 数",
+  "machineVercel.timeout": "运行时限（毫秒）",
+  "machineVercel.snapshotExpiration": "快照保留时长（毫秒）",
+  "machineVercel.timeoutDescription": "默认为 5 分钟。Hobby 最长 45 分钟；Pro 和 Enterprise 最长 24 小时。Happier 不会自动延长运行时间。",
+  "machineVercel.retentionDescription": "设为 0 表示永不过期。沙箱停止后，保留的快照仍会产生费用。",
+  "machineVercel.token": "访问令牌",
+  "machineVercel.teamId": "团队 ID",
+  "machineVercel.projectId": "项目 ID",
+  "machineVercel.account": "Vercel 账户",
+  "machineVercel.checkStatus": "账户已连接",
+  "machineVercel.checkUnavailable": "Vercel 账户不可用。请检查令牌、团队和项目。",
+  "machineVercel.confirmTitle": "创建 Vercel 沙箱？",
+  "machineVercel.confirmBody": "Vercel 会对运行中的计算资源和保留的快照计费。文件可在多次运行之间保留，但进程内存不能。",
+  "machineVercel.deleteTitle": "删除此沙箱？",
+  "machineVercel.deleteBody": "删除此沙箱及其拥有的快照。删除后将无法恢复其中的文件。"
+}

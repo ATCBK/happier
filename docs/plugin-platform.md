@@ -1117,6 +1117,43 @@ merely when no eventual Machine can be found. Provider-specific lookup and
 cleanup remain leaf responsibilities. These source contracts do not establish
 released cloud support.
 
+The 0.3 development `machine-vercel` implementation is in progress and is not
+available for managed creation. Its planned leaf consumes this same managed
+acquisition, Connected Account, native transport and retention boundary. The
+planned manual Connected Account mode uses a Vercel access token with team access
+and explicit team/project ids; developer OIDC tokens are not retained credentials.
+The planned host HTTP adapter uses
+`POST /v4/sandboxes` for named persistent creation and
+`GET /v2/sandboxes/{name}?resume=false` for passive reads. Check, options and inspect
+must not execute guest IO or wake a stopped sandbox. Planned recovery retains the
+scoped name and verified creation facts; a missing or expired snapshot cannot
+authorize a replacement purchase. See Vercel's [named sandbox API](https://vercel.com/docs/rest-api/sandboxes/get-a-named-sandbox).
+
+The planned intents are Start, Stop, Resume and Delete, without Suspend. Vercel
+restores files, not processes; the native command carrier must restart the installed
+daemon using the retained guest home and enrollment. The shared owner will probe
+the guest and install the Linux x64 standalone payload. The guest must reach its
+Home outbound over the public internet; a private Home can fail through ordinary
+enrollment. No Vercel-specific reachability owner is added.
+
+The reviewed native timeout has Vercel's five-minute default and plan ceiling
+(45 minutes on Hobby; 24 hours on Pro/Enterprise). It is a VM-run deadline,
+separate from Happier's Keep policy. The planned projection treats timeout as a
+resumable stop only while a usable snapshot remains; it does not preserve an
+in-flight turn. There is no planned automatic extension or rotation. The leaf must
+set snapshot expiration explicitly, rather than inheriting differing API defaults.
+Planned deletion retains exact source-proven snapshot ids before submitting
+`DELETE /v2/sandboxes/{name}?deleteOrphanSnapshots=true`, then observes those ids
+through retained pending custody. Vercel preserves snapshots referenced by another
+sandbox; surviving or unobserved snapshots keep cleanup incomplete. This does not
+authorize unconditional snapshot deletion or project-wide cleanup.
+Vercel bills retained snapshots separately. See [persistence](https://vercel.com/docs/sandbox/concepts/persistent-sandboxes)
+and [runtime limits](https://vercel.com/docs/sandbox/pricing#runtime-limits).
+Same-Machine restoration, confidential enrollment IO and billed-attachment cleanup
+still need the authorized Vercel release journey. These are implementation targets,
+not functional development support, released support or credentialed
+live-validation claims.
+
 In development source, Account erasure, Saved Secret removal, credential deletion,
 Account plugin-data erasure and Account plugin-intent disable consult the same
 [retained-row read owner](../apps/server/sources/app/machines/managed/managedRead.ts).

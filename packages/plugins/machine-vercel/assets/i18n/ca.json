@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "entorn aïllat",
+  "machineVercel.description": "Els fitxers es conserven entre execucions. Aturar-lo finalitza els processos i esborra la seva memòria.",
+  "machineVercel.image": "Imatge",
+  "machineVercel.region": "Regió",
+  "machineVercel.vcpus": "CPU virtuals",
+  "machineVercel.timeout": "Durada de l’execució (mil·lisegons)",
+  "machineVercel.snapshotExpiration": "Conservació de les instantànies (mil·lisegons)",
+  "machineVercel.timeoutDescription": "Per defecte, 5 minuts. Màxim: 45 minuts amb Hobby; 24 hores amb Pro i Enterprise. Happier no amplia les execucions automàticament.",
+  "machineVercel.retentionDescription": "Fes servir 0 perquè no caduquin. Les instantànies conservades es facturen després d’aturar l’entorn.",
+  "machineVercel.token": "Token d’accés",
+  "machineVercel.teamId": "ID de l’equip",
+  "machineVercel.projectId": "ID del projecte",
+  "machineVercel.account": "Compte de Vercel",
+  "machineVercel.checkStatus": "Compte connectat",
+  "machineVercel.checkUnavailable": "El compte de Vercel no està disponible. Comprova el token, l’equip i el projecte.",
+  "machineVercel.confirmTitle": "Vols crear un entorn aïllat de Vercel?",
+  "machineVercel.confirmBody": "Vercel factura els recursos en execució i les instantànies conservades. Els fitxers es poden conservar entre execucions; la memòria dels processos, no.",
+  "machineVercel.deleteTitle": "Vols eliminar aquest entorn?",
+  "machineVercel.deleteBody": "Elimina aquest entorn i les instantànies que li pertanyen. Els seus fitxers no es podran recuperar."
+}

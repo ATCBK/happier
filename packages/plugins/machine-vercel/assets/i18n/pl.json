@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "środowisko izolowane",
+  "machineVercel.description": "Pliki są zachowywane między uruchomieniami. Zatrzymanie kończy działające procesy i usuwa ich pamięć.",
+  "machineVercel.image": "Obraz",
+  "machineVercel.region": "Region",
+  "machineVercel.vcpus": "Wirtualne procesory",
+  "machineVercel.timeout": "Limit czasu działania (milisekundy)",
+  "machineVercel.snapshotExpiration": "Przechowywanie migawek (milisekundy)",
+  "machineVercel.timeoutDescription": "Domyślnie 5 minut. Maksimum: 45 minut w Hobby; 24 godziny w Pro i Enterprise. Happier nie przedłuża uruchomień automatycznie.",
+  "machineVercel.retentionDescription": "Wartość 0 wyłącza wygasanie. Zachowane migawki są płatne także po zatrzymaniu środowiska.",
+  "machineVercel.token": "Token dostępu",
+  "machineVercel.teamId": "ID zespołu",
+  "machineVercel.projectId": "ID projektu",
+  "machineVercel.account": "Konto Vercel",
+  "machineVercel.checkStatus": "Konto połączone",
+  "machineVercel.checkUnavailable": "Konto Vercel jest niedostępne. Sprawdź token, zespół i projekt.",
+  "machineVercel.confirmTitle": "Utworzyć środowisko izolowane Vercel?",
+  "machineVercel.confirmBody": "Vercel nalicza opłaty za działające zasoby obliczeniowe i zachowane migawki. Pliki mogą przetrwać kolejne uruchomienia, ale pamięć procesów nie.",
+  "machineVercel.deleteTitle": "Usunąć to środowisko?",
+  "machineVercel.deleteBody": "Usuwa to środowisko i należące do niego migawki. Jego plików nie będzie można odzyskać."
+}

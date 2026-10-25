@@ -134,11 +134,45 @@ against authorized native resources; this is not released managed Machine suppor
 
 #### Managed sandbox creation (0.3 development)
 
-Docker Sandboxes, Modal and Crabbox integration is under development for 0.3; it is not released managed Machine support. Native allocation alone does not establish that Happier is installed, connected or ready to run a Session.
+Docker Sandboxes, Modal, Vercel Sandbox and Crabbox integration is under development for 0.3; it is not released managed Machine support. Native allocation alone does not establish that Happier is installed, connected or ready to run a Session.
 
 - **Docker Sandboxes:** creating a sandbox alone does not keep it running. Docker documents separate foreground sessions and a detached running mode; the selected native version and guest daemon lifetime must be qualified before managed creation is available. This integration is separate from ordinary Docker containers and Devcontainers. See [Docker's sandbox usage guide](https://docs.docker.com/ai/sandboxes/usage/).
 - **Modal:** creation reviews the existing App, image, CPU, memory and finite native duration together. The duration is not an observed expiry timestamp; an unknown deadline stays unknown. Expiry or termination ends that resource; creating another Sandbox from a snapshot creates a new resource and cannot resume the expired Machine. See [Modal's Sandbox guide](https://modal.com/docs/guide/sandboxes).
 - **Crabbox:** recovery must target the retained lease, backend and namespace. Current development source uses the selected coordinator for cloud backends; direct local-container creation uses native warmup from private non-repository staging and temporary host-owned SSH key delivery. Native lease records remain the recovery authority. Retention flags do not remove native expiry, and ending a lease can release its resource. A setup that copies the authoritative workspace or uploads enrollment credentials is unavailable. Uploaded scripts are not a private credential channel. See the [Crabbox v0.71.0 run contract](https://github.com/openclaw/crabbox/blob/v0.71.0/docs/commands/run.md).
+
+##### Vercel Sandbox
+
+The Vercel integration is in progress for 0.3 and is not available for managed
+creation yet. The planned flow uses a named persistent sandbox and a Vercel
+access token with team access, plus its team and project IDs, through Connected
+Accounts. The guest must reach your Home outbound over the public internet; a
+private or loopback-only Home may fail enrollment. See [Vercel authentication](https://vercel.com/docs/sandbox/concepts/authentication).
+
+The planned creation review includes the image, region, CPU, run timeout and
+snapshot retention. Vercel's default image is `vercel/sandbox/universal:latest`;
+custom images must be prepared for `linux/amd64` in Vercel Container Registry.
+Vercel allocates 2 GB of memory per vCPU, with 1 or an even number of vCPUs and
+plan-specific ceilings.
+See [Vercel images](https://vercel.com/docs/sandbox/concepts/images) and
+[resource limits](https://vercel.com/docs/sandbox/pricing#resource-limits).
+
+The planned controls are Start, Stop, Resume and Delete, without Suspend. In Vercel,
+stopping or reaching the timeout preserves files when snapshotting succeeds,
+while running processes end. Resume starts a fresh VM; the integration must
+restart the enrolled Happier daemon. Inspection must not wake a stopped sandbox
+or create a replacement when a snapshot
+is missing or expired. Vercel's default run timeout is five minutes, with a maximum
+of 45 minutes on Hobby or 24 hours on Pro/Enterprise. Automatic timeout extension
+and sandbox rotation are outside the planned integration. See [Vercel runtime limits](https://vercel.com/docs/sandbox/pricing#runtime-limits).
+
+The planned Keep policy cannot remove the run deadline and requires explicit
+snapshot retention. Retained snapshots can incur storage charges after compute
+stops. Deleting the sandbox alone does not finish cleanup: its owned snapshots
+must also be accounted for. Vercel preserves snapshots another sandbox still
+uses; surviving snapshots or uncertain cleanup must remain visible with possible
+storage charges. Same-Machine recovery and complete cleanup still need qualification
+against an authorized Vercel resource. See
+[Vercel persistence and deletion](https://vercel.com/docs/sandbox/concepts/persistent-sandboxes#delete-a-sandbox).
 
 ### Local self-hosted Relay runtime
 

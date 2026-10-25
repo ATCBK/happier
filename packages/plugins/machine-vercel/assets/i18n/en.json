@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "sandbox",
+  "machineVercel.description": "Files persist across runs. Stopping ends running processes and clears their memory.",
+  "machineVercel.image": "Image",
+  "machineVercel.region": "Region",
+  "machineVercel.vcpus": "vCPUs",
+  "machineVercel.timeout": "Run timeout (milliseconds)",
+  "machineVercel.snapshotExpiration": "Snapshot retention (milliseconds)",
+  "machineVercel.timeoutDescription": "Defaults to 5 minutes. Maximum: 45 minutes on Hobby; 24 hours on Pro and Enterprise. Happier does not extend runs automatically.",
+  "machineVercel.retentionDescription": "Use 0 for no expiry. Retained snapshots are billed after the sandbox stops.",
+  "machineVercel.token": "Access token",
+  "machineVercel.teamId": "Team ID",
+  "machineVercel.projectId": "Project ID",
+  "machineVercel.account": "Vercel account",
+  "machineVercel.checkStatus": "Account connected",
+  "machineVercel.checkUnavailable": "Vercel account unavailable. Check the token, team, and project.",
+  "machineVercel.confirmTitle": "Create a Vercel sandbox?",
+  "machineVercel.confirmBody": "Vercel bills running compute and retained snapshots. Files can persist across runs; process memory cannot.",
+  "machineVercel.deleteTitle": "Delete this sandbox?",
+  "machineVercel.deleteBody": "Deletes this sandbox and its owned snapshots. Its files cannot be recovered after deletion."
+}

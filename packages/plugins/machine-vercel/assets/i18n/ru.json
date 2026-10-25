@@ -1,0 +1,21 @@
+{
+  "machineVercel.kind": "песочница",
+  "machineVercel.description": "Файлы сохраняются между запусками. При остановке работающие процессы завершаются, а их память теряется.",
+  "machineVercel.image": "Образ",
+  "machineVercel.region": "Регион",
+  "machineVercel.vcpus": "Виртуальные процессоры",
+  "machineVercel.timeout": "Время работы (миллисекунды)",
+  "machineVercel.snapshotExpiration": "Срок хранения снимков (миллисекунды)",
+  "machineVercel.timeoutDescription": "По умолчанию 5 минут. Максимум: 45 минут на Hobby; 24 часа на Pro и Enterprise. Happier не продлевает запуски автоматически.",
+  "machineVercel.retentionDescription": "Значение 0 отключает срок действия. Сохранённые снимки оплачиваются и после остановки песочницы.",
+  "machineVercel.token": "Токен доступа",
+  "machineVercel.teamId": "ID команды",
+  "machineVercel.projectId": "ID проекта",
+  "machineVercel.account": "Аккаунт Vercel",
+  "machineVercel.checkStatus": "Аккаунт подключён",
+  "machineVercel.checkUnavailable": "Аккаунт Vercel недоступен. Проверьте токен, команду и проект.",
+  "machineVercel.confirmTitle": "Создать песочницу Vercel?",
+  "machineVercel.confirmBody": "Vercel взимает плату за работающие вычислительные ресурсы и сохранённые снимки. Файлы могут сохраняться между запусками, но память процессов — нет.",
+  "machineVercel.deleteTitle": "Удалить эту песочницу?",
+  "machineVercel.deleteBody": "Удаляет эту песочницу и принадлежащие ей снимки. Её файлы нельзя будет восстановить."
+}
