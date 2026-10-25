@@ -116,15 +116,20 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   const listed = isToolAllowedForSession(allowedIdentifiers, args.toolName, args.input);
   if (args.unlistedTools === 'deny' && !listed) return { decision: 'denied' };
 
+  const actionPermission = resolveProviderPermissionForHappierAction({
+    toolName: args.toolName, input: args.input, permissionMode: effectiveMode,
+  });
+  // An admitted Action ceiling cannot be widened by a legacy tool allowlist.
+  if (effective.authority === 'admittedSessionInputV1' && actionPermission.decision === 'denied') {
+    return { decision: 'denied' };
+  }
+
   // Legacy no_tools names a shared-safe tool allowlist, not the canonical
-  // read-only Action ceiling. Preserve that existing policy before adaptation.
+  // read-only Action ceiling. Preserve it after any admitted Action denial.
   if (rawLower === 'no_tools') {
     return { decision: shouldAlwaysApproveExecutionRunTool(args.toolName) ? 'approved' : 'denied' };
   }
 
-  const actionPermission = resolveProviderPermissionForHappierAction({
-    toolName: args.toolName, input: args.input, permissionMode: effectiveMode,
-  });
   if (actionPermission.decision) return { decision: actionPermission.decision };
 
   if (shouldAlwaysApproveExecutionRunTool(args.toolName)) return { decision: 'approved' };

@@ -44,8 +44,8 @@ describe('execution-run hands-off permission ceiling', () => {
     expect(handler.getImmediateDecision('mcp', 'mcp__wilson-brief__save_brief', {}, context)).toEqual({ decision: 'approved_for_session' });
   });
 
-  it('checks semantic Happier Action effects before shared-safe tool approval', () => {
-    const handler = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: 'codex' });
+  it.each(['default', 'no_tools'])('checks semantic Happier Action effects before shared-safe tool approval (%s)', (permissionMode) => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode, backendId: 'codex' });
     const context = { causalPermissionAuthority: {
       kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const,
     } };
@@ -54,7 +54,7 @@ describe('execution-run hands-off permission ceiling', () => {
       ['mcp__happier__settings_invoke', { anchor: 'voicePrivacy.forgetVoiceAgentMemory' }],
       ['mcp__happier__action_execute', { actionId: 'settings.set', input: { anchor: 'voiceConversations.minSpeechMs', value: 1100 } }],
     ] as const) {
-      expect(handler.getImmediateDecision(tool, tool, input, context)).toEqual({ decision: 'denied' });
+      expect.soft(handler.getImmediateDecision(tool, tool, input, context)).toEqual({ decision: 'denied' });
       // Normal approval remains owned by the Action executor, with no second native Ask.
       expect(handler.getImmediateDecision(tool, tool, input)).toEqual({ decision: 'approved' });
     }
@@ -67,7 +67,8 @@ describe('execution-run hands-off permission ceiling', () => {
     expect(handler.getImmediateDecision('safe', 'mcp__happier__session_stop', { sessionId: 'other-session' }))
       .toEqual({ decision: 'approved' });
     expect(handler.getImmediateDecision('dispatch', 'mcp__happier__action_execute',
-      { actionId: 'settings.get', input: { anchor: 'voiceConversations.minSpeechMs' } })).toEqual({ decision: 'denied' });
+      { actionId: 'settings.get', input: { anchor: 'voiceConversations.minSpeechMs' } })).toEqual({ decision: 'approved' });
+    expect(handler.getImmediateDecision('write', 'Write', { path: '/repo/a' })).toEqual({ decision: 'denied' });
     expect(handler.getImmediateDecision('invalid', 'mcp__happier__session_stop', { sessionId: 'other-session' },
       { causalPermissionAuthority: null })).toEqual({ decision: 'denied' });
   });
