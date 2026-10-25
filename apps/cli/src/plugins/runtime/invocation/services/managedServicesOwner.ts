@@ -4417,8 +4417,6 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                         endpointKind: request.processSpec.mode.kind === 'native' ? 'native'
                             : request.processSpec.mode.endpointNone ? 'none' : 'http',
                         retirementSignal: lifetime.signal, isCurrent, snapshot: () => failedSnapshot,
-                        isServing: () => false,
-                        inspectCurrentOccurrence: async () => failedSnapshot,
                         observe(listener: Parameters<ManagedServiceHandle['observe']>[0]) {
                             listener(failedSnapshot);
                             return { dispose() {} };
