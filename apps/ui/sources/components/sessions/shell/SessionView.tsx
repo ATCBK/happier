@@ -468,6 +468,7 @@ import {
 import {
     buildSessionUsageLimitRecoveryPresentation,
     buildSessionUsageLimitStatusBadgePresentation,
+    resolveSessionUsageLimitRecoveryOperationStatus,
     translateSessionUsageLimitRecovery,
     type SessionUsageLimitRecoveryActionKind,
     type UsageLimitRecoveryOperationStatus,
@@ -771,24 +772,6 @@ function readUsageLimitRecoveryDiagnosticProfileActionRoute(
         profileId,
         profileKind,
     });
-}
-
-function resolveUsageLimitRecoveryStatusFromTypedFailure(
-    result: Extract<SessionUsageLimitRecoveryOperationResult, { ok: false }>,
-): UsageLimitRecoveryOperationStatus | 'resolved' | null {
-    switch (result.status) {
-        case 'exhausted':
-            return 'exhausted';
-        case 'inactive':
-        case 'not_found':
-            return 'inactive';
-        case 'rate_limited':
-            return 'waiting';
-        case 'cancelled':
-            return 'resolved';
-        default:
-            return null;
-    }
 }
 
 function isUsageLimitRecoveryCheckAction(kind: SessionUsageLimitRecoveryActionKind): boolean {
@@ -3355,12 +3338,13 @@ function SessionViewLoaded({
             });
             Modal.alert(alert.title, alert.body, alert.buttons);
         };
-        const applyTypedUsageLimitRecoveryFailureStatus = (
-            result: Extract<SessionUsageLimitRecoveryOperationResult, { ok: false }>,
+        const applyUsageLimitRecoveryOperationStatus = (
+            result: SessionUsageLimitRecoveryOperationResult,
         ): boolean => {
-            const status = resolveUsageLimitRecoveryStatusFromTypedFailure(result);
+            const status = resolveSessionUsageLimitRecoveryOperationStatus(result.status);
             if (!status) return false;
-            if (status === 'resolved') {
+            if (status === 'cancelled') {
+                if (!result.ok) return false;
                 markUsageLimitRecoveryIssueResolved();
                 return true;
             }
@@ -3390,14 +3374,10 @@ function SessionViewLoaded({
                     });
                     if (!result.ok) {
                         setUsageLimitRecoveryOperationStatus(null);
-                        if (applyTypedUsageLimitRecoveryFailureStatus(result)) {
+                        if (applyUsageLimitRecoveryOperationStatus(result)) {
                             return;
                         }
                         showUsageLimitRecoveryOperationFailure(result);
-                        return;
-                    }
-                    if (result.status === 'resumed') {
-                        markUsageLimitRecoveryIssueResolved();
                         return;
                     }
                     if (result.status === 'ready') {
@@ -3406,30 +3386,16 @@ function SessionViewLoaded({
                             resumeInactiveSession: async () => (
                                 await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: true }) === true
                             ),
-                            markResolved: markUsageLimitRecoveryIssueResolved,
                             markReady: () => markCurrentUsageLimitRecoveryOperationStatus('ready'),
                         });
                         return;
                     }
-                    if (result.status === 'waiting') {
-                        const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint;
-                        if (issueFingerprint) {
-                            setUsageLimitRecoveryOperationStatus({
-                                issueFingerprint,
-                                status: result.status,
-                            });
-                        }
-                        return;
-                    }
-                    if (result.status === 'cancelled') {
-                        markUsageLimitRecoveryIssueResolved();
-                        return;
-                    }
+                    if (applyUsageLimitRecoveryOperationStatus(result)) return;
                 }
 
                 const resumed = await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: false });
                 if (resumed) {
-                    markUsageLimitRecoveryIssueResolved();
+                    markCurrentUsageLimitRecoveryOperationStatus('waiting');
                 }
                 return;
             }
@@ -3439,7 +3405,7 @@ function SessionViewLoaded({
                     rememberPreference: true,
                 }, usageLimitRecoveryOperationOptions);
                 if (!result.ok) {
-                    if (!applyTypedUsageLimitRecoveryFailureStatus(result)) {
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) {
                         showUsageLimitRecoveryOperationFailure(result);
                     }
                 } else {
@@ -3447,7 +3413,7 @@ function SessionViewLoaded({
                         usageLimitRecoverySettingsV1,
                         'auto_wait',
                     ));
-                    setUsageLimitRecoveryOperationStatus(null);
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
                 }
                 return;
             }
@@ -3461,7 +3427,7 @@ function SessionViewLoaded({
                         : {}),
                 }, usageLimitRecoveryOperationOptions);
                 if (!result.ok) {
-                    if (applyTypedUsageLimitRecoveryFailureStatus(result)) {
+                    if (applyUsageLimitRecoveryOperationStatus(result)) {
                         return;
                     }
                     showUsageLimitRecoveryOperationFailure(result);
@@ -3471,13 +3437,7 @@ function SessionViewLoaded({
                     usageLimitRecoverySettingsV1,
                     'ask',
                 ));
-                if (result.status === 'cancelled' || result.status === 'resumed' || result.status === 'ready') {
-                    markUsageLimitRecoveryIssueResolved();
-                } else if (result.status === 'waiting') {
-                    markCurrentUsageLimitRecoveryOperationStatus(result.status);
-                } else {
-                    setUsageLimitRecoveryOperationStatus(null);
-                }
+                if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
                 return;
             }
 
@@ -3485,12 +3445,9 @@ function SessionViewLoaded({
                 markCurrentUsageLimitRecoveryOperationStatus('checking');
             }
             if (kind === 'consume_reset_credit' && usageLimitRecoveryQuotaProfileRef && usageLimitRecoveryQuotaProfileKey) {
-                const consumed = await consumeConnectedServiceRecoveryCreditForProfile({
+                await consumeConnectedServiceRecoveryCreditForProfile({
                     profileRef: usageLimitRecoveryQuotaProfileRef,
                 });
-                if (consumed) {
-                    setUsageLimitRecoveryOperationStatus(null);
-                }
                 return;
             }
             const result = kind === 'enable'
@@ -3526,7 +3483,7 @@ function SessionViewLoaded({
                 if (isUsageLimitRecoveryControlAction(kind)) {
                     setUsageLimitRecoveryOperationStatus(null);
                 }
-                if (applyTypedUsageLimitRecoveryFailureStatus(result)) {
+                if (applyUsageLimitRecoveryOperationStatus(result)) {
                     return;
                 }
                 showUsageLimitRecoveryOperationFailure(result);
@@ -3537,19 +3494,9 @@ function SessionViewLoaded({
                 setUsageLimitRecoveryOperationStatus(null);
                 return;
             }
-            if (isUsageLimitRecoveryControlAction(kind) && result.status && usageLimitRecoveryPresentation?.issueFingerprint) {
-                if (result.status === 'resumed' || result.status === 'ready' || result.status === 'cancelled') {
-                    markUsageLimitRecoveryIssueResolved();
-                    return;
-                }
-                setUsageLimitRecoveryOperationStatus({
-                    issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
-                    status: result.status,
-                });
-            } else if (kind === 'enable' || kind === 'cancel') {
-                setUsageLimitRecoveryOperationStatus(null);
-            }
+            if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
         } finally {
+            setUsageLimitRecoveryOperationStatus((current) => current?.status === 'checking' ? null : current);
             usageLimitRecoveryPendingActionRef.current = false;
             setUsageLimitRecoveryPendingAction(null);
         }
