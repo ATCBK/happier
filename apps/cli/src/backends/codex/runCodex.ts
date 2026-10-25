@@ -111,7 +111,6 @@ import {
     isCodexAppServerInvalidRequestForMethodError,
     isCodexAppServerNoActiveTurnToSteerError,
 } from './appServer/appServerCompatibility';
-import { rememberCodexUsageLimitRecoveryPreference } from './appServer/rememberCodexUsageLimitRecoveryPreference';
 import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 import { buildCodexAppServerConfigOverrides } from './appServer/buildCodexAppServerConfigOverrides';
 import { reconcileCodexAppServerOverridesBeforeTurn } from './appServer/reconcileCodexAppServerOverridesBeforeTurn';
@@ -2043,11 +2042,7 @@ export async function runCodex(opts: {
                 }),
             ...(opts.credentials
                 ? {
-                    rememberUsageLimitRecoveryPreference: async () => {
-                        await rememberCodexUsageLimitRecoveryPreference({
-                            credentials: opts.credentials as Credentials,
-                        });
-                    },
+
                 }
                 : {}),
         });
@@ -3015,7 +3010,11 @@ export async function runCodex(opts: {
                 } else {
                     let runtimeAuthClassification = readRuntimeAuthClassification(error);
                     let runtimeAuthRecoveryStatusEmitted = false;
-                    if (runtimeAuthClassification) {
+                    if (runtimeAuthClassification?.kind === 'usage_limit' && !runtimeAuthClassification.profileId && !runtimeAuthClassification.groupId) {
+                        // Native quota waits belong to the shared Session recovery owner.
+                        // Connected Accounts has no authentication selection to repair.
+                        runtimeAuthRecoveryStatusEmitted = true;
+                    } else if (runtimeAuthClassification) {
                         const appServerTerminalOwnsRecovery = useCodexAppServer
                             && isCodexAppServerTerminalOwnedGroupRecoveryClassification(runtimeAuthClassification);
                         if (appServerTerminalOwnsRecovery) {

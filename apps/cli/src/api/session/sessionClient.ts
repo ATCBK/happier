@@ -322,6 +322,7 @@ import {
     createTranscriptMessageAppendMutation,
 } from './mutations/sessionMutationTypes';
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
+import { createSessionUsageLimitRecoveryRuntime } from '@/session/usageLimitRecoveryControls/createSessionUsageLimitRecoveryRuntime';
 import { observeAcpLifecycleMarker } from '@/agent/runtime/session/turn/lifecycleMarkerAdapter';
 import type { SessionTurnLifecycleControllerWithActiveTurnWitness } from '@/agent/runtime/session/turn/types';
 import { createSessionTurnMutationWriter } from '@/agent/runtime/session/turn/writer';
@@ -760,6 +761,8 @@ export class ApiSessionClient extends EventEmitter {
     private readonly runtimeActivitySnapshotPublisher: RuntimeActivitySnapshotSessionMutationPublisher;
     readonly sessionTurnLifecycle: SessionTurnLifecycleControllerWithActiveTurnWitness;
     private readonly sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
+    private usageLimitRecoveryRuntime: ReturnType<typeof createSessionUsageLimitRecoveryRuntime> | null = null;
+    private providerUsageLimitRecoveryCheckNow: SessionRuntimeControls['checkUsageLimitRecoveryNow'];
     private readonly baseSessionRuntimeControls: Partial<SessionRuntimeControls> = {};
     private readonly sessionRuntimeControlRegistrations = new Set<Partial<SessionRuntimeControls>>();
     private providerOwnedUserMessageEchoClassifier: ProviderOwnedUserMessageEchoClassifier | null = null;
@@ -1047,6 +1050,16 @@ export class ApiSessionClient extends EventEmitter {
         });
         const parentProvider = resolveSessionCatalogAgentId(this.metadata);
 
+        this.usageLimitRecoveryRuntime = createSessionUsageLimitRecoveryRuntime({
+            sessionId: this.sessionId,
+            getMetadata: () => this.getMetadataSnapshot(),
+            updateMetadata: async (update) => { await this.updateMetadata(update); },
+            getCredentials: async () => {
+                const credentials = await readCredentials();
+                return credentials?.token === this.token ? credentials : null;
+            },
+            getAccountSettings: () => getActiveAccountSettingsSnapshot()?.settings ?? null,
+        });
         this.rebuildSessionRuntimeControls();
         this.rpcLifecycleRegistrations.push(registerSessionHandlers(this.rpcHandlerManager, this.metadata?.path, {
             getSessionMetadata: () => this.getMetadataSnapshot(),
@@ -1233,11 +1246,20 @@ export class ApiSessionClient extends EventEmitter {
         this.sessionTurnLifecycle = createSessionTurnLifecycle({
             sessionId: this.sessionId,
             enqueueSessionTurn: createSessionTurnMutationWriter(this.sessionMutationOutbox).enqueueSessionTurn,
+            onTurnFailure: (issue) => {
+                const recovery = this.usageLimitRecoveryRuntime;
+                if (recovery) void recovery.observeFailure(issue).catch(recovery.reportError);
+            },
             onTurnLifecycleEvent: (event, terminalStatus, turnId) => {
+                if (event !== 'assistant_message_end' || terminalStatus !== 'failed') {
+                    const recovery = this.usageLimitRecoveryRuntime;
+                    if (recovery) void recovery.observeSupersession().catch(recovery.reportError);
+                }
                 this.observeTurnLifecycleForPendingDrain(event, terminalStatus);
                 void this.notifyDaemonConnectedServiceTurnLifecycle(event, terminalStatus, turnId);
             },
         });
+        void this.usageLimitRecoveryRuntime.restore().catch(this.usageLimitRecoveryRuntime.reportError);
 
         //
         // Handlers
@@ -1477,6 +1499,8 @@ export class ApiSessionClient extends EventEmitter {
         for (const registration of this.sessionRuntimeControlRegistrations) {
             copyCallableSessionRuntimeControls(this.sessionRuntimeControls, registration);
         }
+        this.providerUsageLimitRecoveryCheckNow = this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
+        copyCallableSessionRuntimeControls(this.sessionRuntimeControls, this.usageLimitRecoveryRuntime?.controls);
         this.sessionRuntimeControls.wakePendingMaterialization = () => this.wakePendingMaterialization();
         this.sessionRuntimeControls.isPendingMaterializationAvailable = () => (
             !this.closed && !this.runtimeTerminationStarted
@@ -2499,8 +2523,12 @@ export class ApiSessionClient extends EventEmitter {
         const recovery = SessionUsageLimitRecoveryV1Schema.safeParse(
             this.metadata?.[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
         );
-        const providerCheck = this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
-        if (!recovery.success || !recovery.data.runtimeAuthRecoveryAttemptId) return providerCheck;
+        const coreCheck = this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
+        const providerCheck = this.providerUsageLimitRecoveryCheckNow;
+        if (!recovery.success || !recovery.data.runtimeAuthRecoveryAttemptId) return async (request) => {
+            const check = request.operation && request.operation !== 'check_now' ? providerCheck ?? coreCheck : coreCheck;
+            return check ? await check(request) : { ok: false, errorCode: 'unsupported_session_runtime_method' };
+        };
 
         // The durable attempt owns reset checks for active and inactive sessions alike.
         // Provider-only actions retain their existing owner; a failed daemon check
@@ -2545,6 +2573,12 @@ export class ApiSessionClient extends EventEmitter {
                 // Explicit input belongs in Pending before the daemon can decide
                 // whether an automatic continuation still has work to resume.
                 // Waking recovery here can enqueue old work and reject the new input.
+                return { status: 'ready' };
+            }
+            if (this.sessionRuntimeControls.checkUsageLimitRecoveryNow
+                === this.usageLimitRecoveryRuntime?.controls.checkUsageLimitRecoveryNow) {
+                // Explicit input takes ordinary Pending custody before an automatic
+                // continuation can compete with it; readiness checks never replay old work here.
                 return { status: 'ready' };
             }
             const checkNow = this.resolveUsageLimitRecoveryCheckNow();
@@ -6037,6 +6071,7 @@ export class ApiSessionClient extends EventEmitter {
         // Disposing only stops future retry timers; it never cancels a commit already in flight,
         // which the drain below still settles.
         this.sessionMessageCommitRetry.dispose();
+        this.usageLimitRecoveryRuntime?.dispose();
         if (this.startupMessageCatchUpRetryTimer) {
             clearTimeout(this.startupMessageCatchUpRetryTimer);
             this.startupMessageCatchUpRetryTimer = null;
