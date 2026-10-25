@@ -6,6 +6,8 @@ import {
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { ExecutionRunActionRequestSchema, ExecutionRunActionResponseSchema } from '@happier-dev/protocol/execution/runs/index';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { VOICE_TRANSCRIPT_MEMORY_KEY } from '@/voice/persistence/voiceTranscriptMemory';
+import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -26,7 +28,7 @@ async function applyWelcomePreference(options: Readonly<{ assistantLanguage?: st
     const current = storage.getState().settings;
     const local = readLocalConversationVoiceSettings(current.voice);
     const voice = writeVoiceProviderSettingsConfig(current.voice, 'local_conversation', {
-        ...local, agent: { ...local.agent, transcript: { ...local.agent.transcript, persistenceMode: 'persistent', epoch: 1 } },
+        ...local, agent: { ...local.agent, transcript: { ...local.agent.transcript, persistenceMode: 'persistent' } },
     });
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: {
         ...voice,
@@ -63,6 +65,11 @@ describe('Voice welcome through retained initialization, execution cache and Hom
         fixture = await createStandaloneVoicePolicyHarness({
             mode: 'immediate', existingSession: { id: 'sys_voice' }, dispatch: rpc.dispatch,
             handleRequest: async (path, init) => await artifacts.handle(path, init),
+        });
+        await fixture.transcriptMemory.handleFetch('https://fixture.test/v1/kv', { method: 'POST',
+            body: JSON.stringify({ mutations: [{ key: VOICE_TRANSCRIPT_MEMORY_KEY, version: -1,
+                value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, epoch: 1 } }),
+            }] }),
         });
         await applyWelcomePreference();
         const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');

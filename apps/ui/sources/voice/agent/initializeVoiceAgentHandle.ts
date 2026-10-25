@@ -68,6 +68,7 @@ import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget }
 import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { isVoiceConversationSystemSessionMetadata } from '@/voice/persistence/voiceConversationSystemSessionLookup';
+import { readPersistentVoiceTranscriptEpoch } from '@/voice/persistence/voiceTranscriptMemory';
 
 type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
@@ -212,10 +213,9 @@ export async function initializeVoiceAgentHandle({
 
     const transcriptCfg = agentCfg?.transcript ?? null;
     const configuredTranscriptPersistenceMode =
-        transcriptCfg && (transcriptCfg as any).persistenceMode === 'persistent' ? 'persistent' : 'ephemeral';
-    const transcriptEpochRaw = transcriptCfg ? Number((transcriptCfg as any).epoch ?? 0) : 0;
-    const transcriptEpoch =
-        Number.isFinite(transcriptEpochRaw) && transcriptEpochRaw >= 0 ? Math.floor(transcriptEpochRaw) : 0;
+        transcriptCfg?.persistenceMode === 'persistent' ? 'persistent' : 'ephemeral';
+    const transcriptEpoch = await readPersistentVoiceTranscriptEpoch({ accountLifetime, signal });
+    assertAccountCurrent();
     const resolveTranscriptConfig = (backend: 'daemon') => {
         if (backend === 'daemon') {
             return { persistenceMode: 'persistent' as const, epoch: transcriptEpoch };
@@ -859,6 +859,7 @@ export async function initializeVoiceAgentHandle({
 
     return {
         accountLifetime,
+        transcriptEpoch,
         signal,
         // A fresh fallback start uses its new admission. Only this exact
         // retained Run can override the current Account preference snapshot.

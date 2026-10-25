@@ -5,7 +5,6 @@ import {
     persistVoiceAgentWelcomedEpoch,
 } from '@/voice/agent/voiceAgentRunState';
 import { readVoiceAgentRunMetadataFromSession } from '@/voice/persistence/voiceAgentRunMetadata';
-import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { preloadVoiceWelcomeText, resolveVoiceWelcomeText } from '@/voice/agent/voiceWelcomeText';
 
@@ -24,7 +23,6 @@ export function createVoiceWelcomePolicy(args: Readonly<{
     return {
         ensureRunningAndMaybeWelcome: async (sessionId: string) => {
             const settings = storage.getState().settings;
-            const agentCfg = readLocalConversationSettingsFromAccountSettings(settings).agent;
             const handle = await args.getVoiceAgentHandle(sessionId);
             if (!handle.accountLifetime.isCurrent()) return null;
             const policy = handle.voicePolicy ?? voiceSettingsParse(settings.voice);
@@ -35,8 +33,7 @@ export function createVoiceWelcomePolicy(args: Readonly<{
                 return null;
             }
 
-            const epochRaw = Number(agentCfg?.transcript?.epoch ?? 0);
-            const epoch = Number.isFinite(epochRaw) && epochRaw >= 0 ? Math.floor(epochRaw) : 0;
+            const epoch = handle.transcriptEpoch;
 
             const metadataSessionId = handle.metadataSessionId;
             const persistedWelcomedEpoch =

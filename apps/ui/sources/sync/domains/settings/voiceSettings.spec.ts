@@ -837,7 +837,7 @@ describe('voiceSettings', () => {
     expect(voiceSettingsDefaults.welcome.mode).toBe('immediate');
     expect(agent?.commitIsolation).toBe(false);
     expect(agent?.transcript?.persistenceMode).toBe('ephemeral');
-    expect(agent?.transcript?.epoch).toBe(0);
+    expect(agent.transcript).not.toHaveProperty('epoch');
   });
 
   it('defaults include hands-free endpointing settings for local voice', () => {

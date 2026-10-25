@@ -37,6 +37,23 @@ const DISABLED_DIAGNOSTICS = {
 } as const;
 
 describe('voice settings mixed-version persistence', () => {
+    it('retains the 0.2 transcript-reset source across preference edits without making it a current preference', () => {
+        // ../0.2 HEAD 420e7887: this retained source seeds transcript memory only.
+        const raw = { voice: { providerId: 'local_conversation', adapters: { local_conversation: {
+            agent: { transcript: { persistenceMode: 'persistent', epoch: 4, futureField: true } },
+        } } } };
+        const parsed = settingsParse(raw);
+        const persisted = normalizeVoiceSettingsServerDelta({ voice: { ...parsed.voice, assistantLanguage: 'de' } }, raw);
+        expect(persisted).toMatchObject({ voice: { adapters: { local_conversation: {
+            agent: { transcript: { persistenceMode: 'persistent', epoch: 4 } },
+        } } } });
+        if (!('voiceSettingsV1' in persisted)) throw new Error('Canonical Voice projection was not written');
+        const local = persisted.voiceSettingsV1.providers.local_conversation.config;
+        expect(local).toMatchObject({ agent: { transcript: { persistenceMode: 'persistent' } } });
+        expect(local).not.toHaveProperty('agent.transcript.epoch');
+        expect(settingsParse(persisted).voice.assistantLanguage).toBe('de');
+    });
+
     it('keeps qualified credential bindings only on the canonical Voice root', () => {
         const binding = {
             contribution: {

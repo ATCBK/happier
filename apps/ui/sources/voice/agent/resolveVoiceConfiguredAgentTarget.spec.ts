@@ -177,7 +177,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       const settings = settingsParse({ voice: writeLocalConversationVoiceSettings(voiceSettingsDefaults, {
         ...readLocalConversationVoiceSettings(voiceSettingsDefaults), conversationMode: 'agent',
         agent: { ...readLocalConversationVoiceSettings(voiceSettingsDefaults).agent, agentSource: 'session', agentId: 'codex',
-          agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null, agentProjectionGeneration: null,
+          agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null,
           chatModelSource: 'custom', chatModelId: 'gpt-6-luna' },
       }) });
       if (voiceAgentSelectionBinding.kind !== 'owner') throw new Error('Expected the canonical Voice selection owner');
@@ -188,7 +188,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       const restored = prepared!(settings);
       expect(restored).not.toBeNull();
       expect(readLocalConversationVoiceSettings(restored!.voice).agent).toMatchObject({ agentSource: 'session', agentId: 'opencode',
-        agentTargetKey: 'agent:happier.agent.opencode/opencode', agentIdentity: null, agentProjectionGeneration: null,
+        agentTargetKey: 'agent:happier.agent.opencode/opencode', agentIdentity: null,
         chatModelId: 'gpt-6-luna' });
     } finally { captured.dispose(); }
   });

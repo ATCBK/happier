@@ -36,11 +36,17 @@ import { createMachineFixture, createMachineReadBatchResponseFixture, createPlai
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
+import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
+import { VOICE_TRANSCRIPT_MEMORY_KEY } from '@/voice/persistence/voiceTranscriptMemory';
 
 let homeId = '';
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let unsubscribeStorage: (() => void) | undefined;
 const committedSessionRecords = new Map<string, ReturnType<typeof sessionWireRecord>>();
+const purposes = createConnectedPurposeCatalogHttpBoundary();
+const transcriptMemory = createAccountKvHttpFixture();
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -190,6 +196,10 @@ function sessionWireRecord(session: ReturnType<typeof createSessionFixture>) {
 // Only the external Home responses are synthetic; metadata parsing, exact Account
 // authority, retries and projection application run through the real Sync owner.
 async function respondToServerRequest(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const memoryResponse = await transcriptMemory.handleFetch(input, init);
+  if (memoryResponse) return memoryResponse;
+  const purposeResponse = await purposes.handle(input, init);
+  if (purposeResponse) return purposeResponse;
   const path = new URL(String(input)).pathname;
   const json = (body: unknown) => new Response(JSON.stringify(body), {
     status: 200, headers: { 'Content-Type': 'application/json' },
@@ -461,6 +471,12 @@ describe('VoiceExecutionTransport (persistence)', () => {
   });
 
   beforeEach(async () => {
+    transcriptMemory.reset();
+    await transcriptMemory.handleFetch('https://voice-persistence.example.test/v1/kv', { method: 'POST',
+      body: JSON.stringify({ mutations: [{ key: VOICE_TRANSCRIPT_MEMORY_KEY, version: -1,
+        value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, epoch: 1 } }),
+      }] }),
+    });
     vi.useRealTimers();
     await loadSyncSingletonForTests();
     committedSessionRecords.clear();

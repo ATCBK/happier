@@ -81,6 +81,7 @@ describe('streamVoiceAgentTurn', () => {
         const text = '你好🙂'.repeat(15_000);
         const accepted: VoiceAgentAcceptedOutputV1[] = [];
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon', rpcSessionId: 'sys_voice', voiceAgentId: 'run_1', agentBackendId: 'claude',
             client: serveVoiceStream({
                 start: vi.fn(async () => ({ streamId: 'stream-incomplete' })),
@@ -110,6 +111,7 @@ describe('streamVoiceAgentTurn', () => {
     it('projects the legacy daemon wire through the single canonical output-event boundary', async () => {
         const onOutputEvent = vi.fn(async (_output: VoiceAgentAcceptedOutputV1) => {});
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -146,6 +148,7 @@ describe('streamVoiceAgentTurn', () => {
         const onOutputEvent = vi.fn(async (_output: VoiceAgentAcceptedOutputV1) => {});
         const action = { t: 'sendSessionMessage' as const, args: { message: 'Do it once' } };
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -237,6 +240,7 @@ describe('streamVoiceAgentTurn', () => {
             },
         }));
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -274,6 +278,7 @@ describe('streamVoiceAgentTurn', () => {
 
     it('fails closed on a unique out-of-order native event at the Protocol owner', async () => {
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -327,6 +332,7 @@ describe('streamVoiceAgentTurn', () => {
         });
 
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -379,6 +385,7 @@ describe('streamVoiceAgentTurn', () => {
             };
         });
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',
@@ -412,6 +419,7 @@ describe('streamVoiceAgentTurn', () => {
     it('surfaces a daemon terminal cancellation instead of returning an empty successful turn', async () => {
         const cancelTurnStream = vi.fn(async () => ({ ok: true as const }));
         const handle = {
+            transcriptEpoch: 0,
             backend: 'daemon',
             rpcSessionId: 'sys_voice',
             voiceAgentId: 'run_1',

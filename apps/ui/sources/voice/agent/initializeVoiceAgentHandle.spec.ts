@@ -22,10 +22,14 @@ import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/mod
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { createDeferred } from '@/dev/testkit';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
+import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
+import { VOICE_TRANSCRIPT_MEMORY_KEY } from '@/voice/persistence/voiceTranscriptMemory';
 
 // Synthetic daemon ACKs only; the client, Run operations and installable owners stay real.
 const start = vi.fn(async (_request: ExecutionRunEnsureOrStartRequest) => ({ ok: true as const, runId: 'voice-agent-1', created: true }));
 const rpcTargets: Array<{ sessionId: string; method: string }> = [];
+const transcriptMemory = createAccountKvHttpFixture();
 let rootRunnerPid = 123;
 let stallRootRunnerStatus = false;
 let rootRunnerStatusEntered = createDeferred<void>();
@@ -175,6 +179,7 @@ describe('initializeVoiceAgentHandle', () => {
         vi.restoreAllMocks();
     });
     beforeEach(async () => {
+        transcriptMemory.reset();
         const previousServerId = state.profileScope?.serverId ?? 'server-a';
         sessionHttp = createSessionMetadataHttpBoundary(() => Object.fromEntries(
             Object.entries(storage.getState().sessions).map(([id, session]) => [id, createSessionFixture({ ...session, id,
@@ -187,12 +192,15 @@ describe('initializeVoiceAgentHandle', () => {
             // Session HTTP is a genuine boundary. Retained-run adoption writes
             // its pointer through the real metadata tuple owner, not a stub.
             request: createSessionReadBatchFetchBoundary(async (url, init) => {
+                const memoryResponse = await transcriptMemory.handleFetch(url, init);
+                if (memoryResponse) return memoryResponse;
                 const path = new URL(String(url)).pathname;
                 const respond = (body: unknown) => Response.json(body);
                 if (path === '/health') return respond({ status: 'ok' });
                 if (path === '/v2/cursor') return respond({ cursor: 0, changesFloor: 0 });
                 if (path === '/v1/features' || path === '/v1/features/authenticated') return respond(FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }));
                 if (path === '/v1/account/encryption') return respond({ mode: 'plain', updatedAt: 0 });
+                if (path === '/v2/account/settings') return respond({ content: { t: 'plain', v: state.settings }, version: 1 });
                 if (path === '/v1/machines') return respond([createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })]);
                 if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
                     id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
@@ -264,6 +272,20 @@ describe('initializeVoiceAgentHandle', () => {
         });
         const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         await getServerFeaturesSnapshot({ serverId: home.id, force: true });
+    });
+
+    it('takes the transcript epoch from Account memory when starting a different carrier', async () => {
+        omitIncidentalProfile();
+        await transcriptMemory.handleFetch('https://voice-initialize.example.test/v1/kv', { method: 'POST',
+            body: JSON.stringify({ mutations: [{ key: VOICE_TRANSCRIPT_MEMORY_KEY, version: -1,
+                value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, epoch: 7, futureField: true } }),
+            }] }),
+        });
+        const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+        await initializeVoiceAgentHandle({ sessionId: 's1', getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+            setDeferredTargetSessionContext: () => {} });
+        expect(admittedStart().transcript)
+            .toEqual({ persistenceMode: 'persistent', epoch: 7 });
     });
 
     it('prefers visible lookup session metadata when deriving daemon startup models and profile data', async () => {
@@ -580,7 +602,7 @@ describe('initializeVoiceAgentHandle', () => {
         }, settings: { ...previousSettings, voice: voiceSettingsParse({ ...previousSettings.voice,
             providers: { ...previousSettings.voice.providers, local_conversation: { schemaVersion: 1, config: {
                 ...local, agent: { ...local.agent, agentSource: 'session', agentId: 'codex',
-                    agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null, agentProjectionGeneration: null,
+                    agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null,
                     chatModelSource: 'custom', chatModelId: 'gpt-6-luna' },
             } } },
         }) } });

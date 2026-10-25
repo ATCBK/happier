@@ -13,6 +13,9 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
+import { readPersistentVoiceTranscriptEpoch } from '@/voice/persistence/voiceTranscriptMemory';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import {
   readLocalConversationVoiceSettings,
   voiceSettingsDefaults,
@@ -52,8 +55,29 @@ async function render(voice: VoiceSettings, setVoice = vi.fn()) {
 }
 
 describe('VoiceAgentMemorySection', () => {
+  it('does not commit for unrelated Account preference changes while retaining resume-policy updates', async () => {
+    const { VoiceAgentMemorySection } = await import('./VoiceAgentMemorySection');
+    const voice = voiceWithAgent({ agentId: 'claude', agentSource: 'agent', transcript: { persistenceMode: 'persistent' } });
+    let commits = 0;
+    const screen = await renderScreen(<React.Profiler id="voice-memory" onRender={() => { commits += 1; }}>
+      <VoiceAgentMemorySection voice={voice} setVoice={() => {}} />
+    </React.Profiler>);
+    const initial = commits;
+    for (let index = 0; index < 20; index += 1) {
+      await act(async () => { storage.setState(state => ({ settings: {
+        ...state.settings, analyticsOptOut: !state.settings.analyticsOptOut,
+      } })); });
+    }
+    expect(commits - initial).toBe(0);
+    const target = buildBackendTargetKeyV2({ kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude });
+    await act(async () => { storage.setState(state => ({ settings: {
+      ...state.settings, backendEnabledByTargetKey: { ...state.settings.backendEnabledByTargetKey, [target]: false },
+    } })); });
+    const restore = screen.findAll(node => node.props?.testIDPrefix === 'settings.voice.memory.restore')[0];
+    expect(restore?.props.options.find((option: { id: string }) => option.id === 'provider_resume')?.unavailableReason).toBeTruthy();
+  });
   it('quietly leaves memory unchanged when the user declines an explicit Action Ask', async () => {
-    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent' } });
     account.replaceVoice(voice);
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: {
       v: 1, actions: { 'settings.invoke': { approvalRequiredSurfaces: ['ui'] } },
@@ -66,19 +90,20 @@ describe('VoiceAgentMemorySection', () => {
     await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
     await act(async () => { await pending; });
     expect(Modal.confirm).not.toHaveBeenCalled();
-    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(0);
   });
   it.each([true, false])('keeps the admitted Forget confirmation (confirmed: %s)', async confirmed => {
-    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent' } });
     account.replaceVoice(voice);
     vi.mocked(Modal.confirm).mockResolvedValueOnce(confirmed);
     const screen = await render(voice);
     await act(async () => { await screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
     expect(Modal.confirm).toHaveBeenCalledOnce();
-    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(confirmed ? 4 : 3);
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(confirmed ? 1 : 0);
+    expect(account.writes).toHaveLength(0);
   });
   it('refuses Forget through Action policy before confirmation or transcript invalidation', async () => {
-    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent' } });
     account.replaceVoice(voice);
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: {
       v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
@@ -88,7 +113,7 @@ describe('VoiceAgentMemorySection', () => {
     const before = account.writes.length;
     await act(async () => { await screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
     expect(Modal.confirm).not.toHaveBeenCalled();
-    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(0);
     expect(account.writes).toHaveLength(before);
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
     expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
@@ -118,7 +143,7 @@ describe('VoiceAgentMemorySection', () => {
 
   it('chooses resuming the agent as one atomic restore choice', async () => {
     const setVoice = vi.fn();
-    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 0 } });
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent' } });
     const screen = await render(voice, setVoice);
 
     screen.pressByTestId('settings.voice.memory.restore:provider_resume');
@@ -131,7 +156,7 @@ describe('VoiceAgentMemorySection', () => {
     account.replaceSettings(settingsParse({ ...account.settings,
       featureToggles: { ...account.settings.featureToggles, 'voice.agent': false },
     }));
-      const screen = await render(voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 0 } }));
+      const screen = await render(voiceWithAgent({ transcript: { persistenceMode: 'persistent' } }));
       const restore = screen.findAll((node) => node.props?.testIDPrefix === 'settings.voice.memory.restore')[0];
       const resume = restore?.props.options.find((option: { id: string }) => option.id === 'provider_resume');
       expect(typeof resume?.unavailableReason).toBe('string');

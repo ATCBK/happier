@@ -15,6 +15,7 @@ import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
 import { formatSavedSecretCatalogFingerprintV1, formatSavedSecretCatalogReferenceV1, SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
 
 export type VoiceSettingsAccountTestHarness = Omit<
     Awaited<ReturnType<typeof createSecretSettingsTestHarness>>, 'purposes'
@@ -23,25 +24,28 @@ export type VoiceSettingsAccountTestHarness = Omit<
     writes: unknown[];
     readonly settings: Settings;
     readonly persistedSettings: Settings;
+    kv: ReturnType<typeof createAccountKvHttpFixture>;
     replaceConnectedPurposes(next: ConnectedPurposeCatalogV1): Promise<void>;
     replaceVoice(next: VoiceSettings): void;
 };
 
 /** Real Account Settings owner; only the Home HTTP transport is synthetic. */
 export async function createVoiceSettingsAccountTestHarness(settings: Settings,
-    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features' | 'token' | 'serverIdentityId'> = {}): Promise<VoiceSettingsAccountTestHarness> {
+    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'accountId' | 'features' | 'token' | 'serverIdentityId' | 'mode' | 'rawSettings'> = {}): Promise<VoiceSettingsAccountTestHarness> {
     const account = await createSecretSettingsTestHarness({ ...options, settings, voiceEnabled: true, connectedPurposes: { v: 1, bindings: [] } });
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Voice Settings Account HTTP boundary missing');
+    const kv = createAccountKvHttpFixture();
     // Saved Secret maintenance reads every current reference-owning catalog.
     // These Voice fixtures have no external Prompt Registry credentials.
-    account.request.mockImplementation((input, init) => new URL(String(input)).pathname
+    account.request.mockImplementation(async (input, init) => await kv.handleFetch(input, init) ?? (new URL(String(input)).pathname
         === '/v1/account/entity-rows/prompt-library/registry-sources'
-        ? Promise.resolve(Response.json({ status: 'absent' })) : request(input, init));
+        ? Response.json({ status: 'absent' }) : request(input, init)));
     const { replaceSettings } = account;
     await account.purposes!.hydrate(account.scope);
     return {
         ...account,
+        kv,
         purposes: account.purposes!,
         writes: account.settingsWrites,
         get settings() { return storage.getState().settings; },

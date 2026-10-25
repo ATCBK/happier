@@ -18,7 +18,7 @@ import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { readSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -1830,7 +1830,7 @@ describe('voice tool handlers', () => {
         ...current.config,
         agent: {
           ...current.config.agent,
-          transcript: { persistenceMode: 'persistent', epoch: 2 },
+          transcript: { persistenceMode: 'persistent' },
         },
       },
     };
@@ -1842,7 +1842,8 @@ describe('voice tool handlers', () => {
     }));
 
     expect(result).toMatchObject(expected);
-    expect(state.settings.voice.providers.local_conversation.config.agent.transcript.epoch).toBe(2);
+    const { readPersistentVoiceTranscriptEpoch } = await import('@/voice/persistence/voiceTranscriptMemory');
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(0);
     if (serverId) {
       expect(result.artifactId).toEqual(expect.any(String));
       expect(artifactCreateRequests).toHaveBeenCalled();
@@ -1851,7 +1852,7 @@ describe('voice tool handlers', () => {
     }
   });
 
-  it('increments agent transcript epoch for a direct UI reset when persistence is enabled', async () => {
+  it('advances transcript memory for an approved direct UI reset without writing preferences', async () => {
     const current = state.settings.voice.providers.local_conversation;
     state.settings.voice.providers.local_conversation = {
       ...current,
@@ -1871,10 +1872,9 @@ describe('voice tool handlers', () => {
       presentUserConfirmation: { actionId: 'ui.voice_global.reset' },
     });
     expect(result).toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(account.persistedSettings.voice.providers.local_conversation?.config).toMatchObject({
-      agent: { transcript: { epoch: 3 } },
-    }));
-    expect(storage.getState().settings.voice.providers.local_conversation?.config).toMatchObject({ agent: { transcript: { epoch: 3 } } });
+    const { readPersistentVoiceTranscriptEpoch } = await import('@/voice/persistence/voiceTranscriptMemory');
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(1);
+    expect(account.writes).toHaveLength(0);
   });
   it('teleports the voice agent to the resolved session root', async () => {
     const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
@@ -2647,12 +2647,21 @@ describe('voice tool reset Account authority', () => {
         homeServerIdentityId: 'srv_voice-settings-account', displayName: 'Voice Settings Home' }, source: 'manual' });
       const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
       const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => account?.scope.accountId ?? null, encryptionMode: 'plain' });
+      const approvalCreated = createDeferred<void>();
+      artifacts.afterNextCreate(async () => { approvalCreated.resolve(); });
       const settingsRequest = account.request.getMockImplementation();
       if (!settingsRequest) throw new Error('Account HTTP boundary missing');
-      account.request.mockImplementation((url, init) => {
+      account.request.mockImplementation(async (url, init) => {
         const parsed = new URL(String(url));
-        return artifacts.handle(`${parsed.pathname}${parsed.search}`, init) ?? settingsRequest(url, init);
+        const response = await (artifacts.handle(`${parsed.pathname}${parsed.search}`, init) ?? settingsRequest(url, init));
+        return response;
       });
+      const { VOICE_TRANSCRIPT_MEMORY_KEY, readPersistentVoiceTranscriptEpoch } = await import('@/voice/persistence/voiceTranscriptMemory');
+      const { encodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
+      await account.kv.handleFetch('https://fixture.test/v1/kv', { method: 'POST', body: JSON.stringify({ mutations: [{
+        key: VOICE_TRANSCRIPT_MEMORY_KEY, version: -1,
+        value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, epoch: 2 } }),
+      }] }) });
       const { createVoiceToolHandlers } = await import('./handlers');
       const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
       const { getActionSpec, isVoicePromptHotPathSpec } = await import('@happier-dev/protocol');
@@ -2665,21 +2674,22 @@ describe('voice tool reset Account authority', () => {
       pendingReset = tools.action_execute({ actionId: 'ui.voice_global.reset', input: {} },
         { serverId: account.scope.serverId, effectId: 'voice-reset-test', signal: controller.signal });
       const { ApprovalRequestSchema } = await import('@happier-dev/protocol');
-      const approval = await vi.waitFor(() => {
+      await approvalCreated.promise;
+      const approval = (() => {
         const row = artifacts.list().find((candidate) => {
           const body = artifacts.readPlainBody(candidate.id);
           return body !== null && ApprovalRequestSchema.safeParse(JSON.parse(body)).success;
         });
         expect(row).toBeDefined();
         return row!;
-      });
+      })();
       const request = ApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(approval.id) ?? 'null'));
       expect(request).toMatchObject({ v: 2, status: 'open', actionId: 'ui.voice_global.reset', executionOriginV1: {
         authority: 'account_automation', surface: 'voice', serverId: account.scope.serverId,
         serverIdentityId: 'srv_voice-settings-account', accountId: account.scope.accountId, requestId: 'voice-reset-test',
       } });
       expect(account.writes).toHaveLength(0);
-      expect(account.persistedSettings.voice.providers.local_conversation?.config).toMatchObject({ agent: { transcript: { epoch: 2 } } });
+      expect(await readPersistentVoiceTranscriptEpoch()).toBe(2);
       const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
       const decision = await createDefaultActionExecutor().execute('approval.request.decide',
         { artifactId: approval.id, decision: 'approve' }, { surface: 'ui', serverId: account.scope.serverId });
@@ -2689,11 +2699,8 @@ describe('voice tool reset Account authority', () => {
       expect(readHappierActionToolResultCandidates(result)).toContainEqual({ ok: true, result: expect.objectContaining({
         kind: 'approval_request_created', actionId: 'ui.voice_global.reset', artifactId: approval.id,
       }) });
-      await vi.waitFor(() => expect(account?.persistedSettings.voice.providers.local_conversation?.config).toMatchObject({
-        agent: { transcript: { persistenceMode: 'persistent', epoch: 3 } },
-      }));
-      expect(account.writes).toHaveLength(1);
-      expect(account.settings.voiceSettingsV1.providers.local_conversation?.config).toMatchObject({ agent: { transcript: { epoch: 3 } } });
+      expect(await readPersistentVoiceTranscriptEpoch()).toBe(3);
+      expect(account.writes).toHaveLength(0);
       expect(JSON.parse(artifacts.readPlainBody(approval.id) ?? 'null')).toMatchObject({ status: 'executed' });
     } finally {
       controller.abort();

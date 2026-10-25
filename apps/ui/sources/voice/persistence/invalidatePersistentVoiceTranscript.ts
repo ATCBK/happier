@@ -1,42 +1,16 @@
 import { storage } from '@/sync/domains/state/storage';
-import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
-import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
-import {
-    readLocalConversationVoiceSettings,
-    voiceSettingsParse,
-    writeLocalConversationVoiceSettings,
-} from '@/sync/domains/settings/voiceSettings';
-import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
-import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { advancePersistentVoiceTranscriptEpoch } from './voiceTranscriptMemory';
 
-export function invalidatePersistentVoiceTranscript(
+export async function invalidatePersistentVoiceTranscript(
     expectedSettingsScope: AccountSettingsScope | null,
-): number | null {
-    const state: any = storage.getState();
-    const voice = voiceSettingsParse(state?.settings?.voice);
-    const localConversation = readLocalConversationVoiceSettings(voice);
-    const transcriptCfg = localConversation.agent.transcript;
-    if (normalizeNonEmptyString(transcriptCfg?.persistenceMode) !== 'persistent') return null;
-
-    const currentEpochRaw = Number(transcriptCfg.epoch ?? 0);
-    const currentEpoch = Number.isFinite(currentEpochRaw) && currentEpochRaw >= 0 ? Math.floor(currentEpochRaw) : 0;
-    const nextEpoch = currentEpoch + 1;
-
-    getSyncSingleton().applySettings(normalizeVoiceSettingsLocalDelta({
-        voice: writeLocalConversationVoiceSettings(voice, {
-            ...localConversation,
-            agent: {
-                ...localConversation.agent,
-                transcript: {
-                    ...localConversation.agent.transcript,
-                    epoch: nextEpoch,
-                },
-            },
-        }),
-    }, state.settings), {
-        expectedSettingsScope,
-        source: 'ui',
-    });
-
-    return nextEpoch;
+): Promise<number | null> {
+    const state = storage.getState();
+    if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, state.settingsScope)) return null;
+    if (readLocalConversationVoiceSettings(state.settings.voice).agent.transcript.persistenceMode !== 'persistent') return null;
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime || !areAccountSettingsScopesEqual(lifetime.scope, expectedSettingsScope)) return null;
+    return await advancePersistentVoiceTranscriptEpoch(lifetime);
 }

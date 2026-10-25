@@ -151,6 +151,8 @@ export type VoiceAgentHandle = Readonly<{
   signal?: AbortSignal;
   voicePolicy?: ExecutionRunVoiceAgentIntentInputV1['voicePolicy'];
   accountLifetime: ServerAccountScopeLifetime;
+  /** Transcript-memory boundary admitted with this handle, shared by replay and welcome. */
+  transcriptEpoch: number;
   metadataSessionId: string | null;
   client: VoiceAgentClient;
   voiceAgentId: string;

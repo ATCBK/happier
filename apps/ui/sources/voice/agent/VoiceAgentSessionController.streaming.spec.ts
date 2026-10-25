@@ -21,6 +21,9 @@ import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voice
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
+import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
+import { VOICE_TRANSCRIPT_MEMORY_KEY } from '@/voice/persistence/voiceTranscriptMemory';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getRetainedLocalVoiceEffectOutcomes } from '@/voice/tools/localVoiceEffectOutcomeCustody';
 
@@ -173,6 +176,7 @@ function setVoiceControllerState(options?: Parameters<typeof createVoiceControll
 
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+const transcriptMemory = createAccountKvHttpFixture();
 const requestedPaths: string[] = [];
 let hydratedTargetActive = true;
 let installerReply: ((method: string, payload: unknown) => Promise<unknown>) | null = null;
@@ -283,6 +287,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
   }, 60_000);
 
   beforeEach(async () => {
+    transcriptMemory.reset();
     requestedPaths.length = 0;
     daemonEffects.length = 0;
     retainedRuns.clear();
@@ -292,6 +297,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     connection = await restoreServerAccountForTest({
       serverUrl: 'https://voice-streaming.example.test',
       request: createSessionReadBatchFetchBoundary(async (url, init) => {
+        const memoryResponse = await transcriptMemory.handleFetch(url, init);
+        if (memoryResponse) return memoryResponse;
         const path = new URL(String(url)).pathname;
         requestedPaths.push(path);
         const json = (value: unknown) => Response.json(value);
@@ -299,6 +306,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
         if (path === '/health') return json({ status: 'ok' });
         if (path === '/v2/cursor') return json({ cursor: 0, changesFloor: 0 });
         if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v2/account/settings') return json({ content: { t: 'plain', v: storage.getState().settings }, version: 1 });
         if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
           return createMachineReadBatchResponseFixture(init.body,
             id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
@@ -1623,6 +1631,11 @@ describe('VoiceExecutionTransport (streaming)', () => {
   });
 
   it('seeds initialContext with persisted agent transcript turns when persistence is enabled', async () => {
+    await transcriptMemory.handleFetch('https://voice-streaming.example.test/v1/kv', { method: 'POST',
+      body: JSON.stringify({ mutations: [{ key: VOICE_TRANSCRIPT_MEMORY_KEY, version: -1,
+        value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, epoch: 3 } }),
+      }] }),
+    });
     // Carrier session transcript should be used to seed voice agent context across restarts.
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: connection.home.id, sessionId: 's1' });
     const summaryRunner = LlmTaskRunnerConfigV1Schema.parse({ v: 1,

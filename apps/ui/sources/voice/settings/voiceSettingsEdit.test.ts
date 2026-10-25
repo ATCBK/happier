@@ -83,8 +83,8 @@ describe('Voice settings edit intent', () => {
     it('replaces every Agent routing fact together even when a cleared fact equals the stale baseline', () => {
         const before = voiceSettingsParse({});
         const cfg = readLocalConversationVoiceSettings(before);
-        const current = writeLocalConversationVoiceSettings(before, { ...cfg, agent: { ...cfg.agent, agentId: 'fixture', agentTargetKey: 'plugin:fixture/agent', agentIdentity: { pluginId: 'fixture', localId: 'agent' }, agentProjectionGeneration: 3 } });
+        const current = writeLocalConversationVoiceSettings(before, { ...cfg, agent: { ...cfg.agent, agentId: 'fixture', agentTargetKey: 'plugin:fixture/agent', agentIdentity: { pluginId: 'fixture', localId: 'agent' } } });
         const next = writeLocalConversationVoiceSettings(before, { ...cfg, agent: { ...cfg.agent, agentId: 'custom' } });
-        expect(readLocalConversationVoiceSettings(rebaseVoiceSettingsEdit(current, before, next)).agent).toMatchObject({ agentId: 'custom', agentTargetKey: null, agentIdentity: null, agentProjectionGeneration: null });
+        expect(readLocalConversationVoiceSettings(rebaseVoiceSettingsEdit(current, before, next)).agent).toMatchObject({ agentId: 'custom', agentTargetKey: null, agentIdentity: null });
     });
 });

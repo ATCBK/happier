@@ -1,7 +1,8 @@
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createSessionFixture, standardCleanup, waitForTestEvent } from '@/dev/testkit';
+import { createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { readPersistentVoiceTranscriptEpoch } from './voiceTranscriptMemory';
 import { buildVoiceAgentRunMetadataV1 } from '@happier-dev/protocol/voice/voiceAgentRunMetadataV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 
@@ -66,17 +67,15 @@ describe('resetVoiceAgentPersistenceState', () => {
     await resetVoiceAgentPersistenceState({ stop: async () => {
       expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_bound' })?.runId).toBe('run_bound');
       expect(sessionHttp.writes).toEqual([]);
-      expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(1);
+      expect(await readPersistentVoiceTranscriptEpoch()).toBe(0);
       stopped = true;
     } });
     expect(stopped).toBe(true);
     expect(sessionHttp.writes).toContain('sys_bound');
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_bound' })).toBeNull();
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_newer' })?.runId).toBe('run_newer');
-    await waitForTestEvent(account.subscribe,
-      () => readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch,
-      epoch => epoch === 2);
-    expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(2);
+    expect(await readPersistentVoiceTranscriptEpoch()).toBe(1);
+    expect(account.writes).toHaveLength(0);
     const { sync } = await import('@/sync/sync');
     storage.setState({ sessions: {} });
     expect(await sync.ensureSessionVisibleForMessageRoute('sys_bound', { forceRefresh: true, serverId: account.scope.serverId }))
@@ -122,7 +121,7 @@ describe('resetVoiceAgentPersistenceState', () => {
     expect(account.persistedSettings).toEqual(before);
     if (!replacement.current) throw new Error('Replacement Home was not mounted');
     expect(replacement.current.writes).toEqual([]);
-    expect(readLocalConversationVoiceSettings(replacement.current.settings.voice).agent.transcript.epoch).toBe(9);
+    expect(replacement.current.kv.readRequests().filter(request => request.path.includes('voice'))).toEqual([]);
     expect(sessionHttp.writes).toEqual([]);
     const { readVoiceAgentRunMetadataFromSession } = await import('./voiceAgentRunMetadata');
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_bound' })?.runId).toBe('account-b-run');

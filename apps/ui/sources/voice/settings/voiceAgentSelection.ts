@@ -50,7 +50,6 @@ export function applyVoiceAgentSelection(voice: VoiceSettings, choice: VoiceAgen
             agentId: LEGACY_VOICE_OPENAI_CHAT_COMPATIBLE_AGENT_ID,
             agentTargetKey: providerChat.chat.agentTargetKey,
             agentIdentity: null,
-            agentProjectionGeneration: null,
             providerChat,
         },
     });

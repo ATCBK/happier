@@ -576,14 +576,16 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         expect(account!.writes).toEqual([]);
     });
 
-    it('can reset persistent local voice agent state and bumps the transcript epoch', async () => {
+    it('can reset persistent local voice agent memory without changing Account preferences', async () => {
         await import('@/modal');
+        const { readPersistentVoiceTranscriptEpoch } = await import('@/voice/persistence/voiceTranscriptMemory');
 
         voiceState.providerId = 'local_conversation';
         voiceState.providers.local_conversation.config.conversationMode = 'agent';
-        voiceState.providers.local_conversation.config.agent.transcript = { persistenceMode: 'persistent', epoch: 1 };
+        voiceState.providers.local_conversation.config.agent.transcript = { persistenceMode: 'persistent' };
 
         const screen = await renderVoiceSettings("privacy");
+        const initialSettings = account!.persistedSettings;
         const forget = screen.findRowByTitle(t('settingsVoice.pages.privacy.forgetTitle'))?.props.rightElement;
         expect(forget?.props.testID).toBe('settings.voice.memory.forget');
 
@@ -592,10 +594,11 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         });
         await act(async () => {});
 
-        expect(screen.findHostByTestId('web-modal-confirm')).toBeTruthy();
-        expect(readLocalConversationVoiceSettings(account!.persistedSettings.voice).agent.transcript.epoch).toBe(1);
+        await expect.poll(() => screen.findHostByTestId('web-modal-confirm')).toBeTruthy();
+        expect(await readPersistentVoiceTranscriptEpoch()).toBe(0);
         await screen.pressByTestIdAsync('web-modal-confirm');
-        await expect.poll(() => readLocalConversationVoiceSettings(account!.persistedSettings.voice).agent.transcript.epoch).toBe(2);
+        await expect.poll(() => readPersistentVoiceTranscriptEpoch()).toBe(1);
+        expect(account!.persistedSettings).toEqual(initialSettings);
         expect(readLocalConversationVoiceSettings(account!.persistedSettings.voice).agent.transcript.persistenceMode).toBe('persistent');
     });
 

@@ -49,13 +49,13 @@ export function rebaseVoiceSettingsEdit(current: VoiceSettings, before: VoiceSet
     }
     const oldAgent = readLocalConversationVoiceSettings(before).agent;
     const nextAgent = readLocalConversationVoiceSettings(next).agent;
-    const selectionKeys = ['agentId', 'agentTargetKey', 'agentIdentity', 'agentProjectionGeneration'] as const;
+    const selectionKeys = ['agentId', 'agentTargetKey', 'agentIdentity'] as const;
     if (selectionKeys.some((key) => !areAccountSettingsJsonValuesEqual(oldAgent[key], nextAgent[key]))) {
         const cfg = readLocalConversationVoiceSettings(rebased);
         rebased = writeLocalConversationVoiceSettings(rebased, {
             ...cfg,
             agent: { ...cfg.agent, agentId: nextAgent.agentId, agentTargetKey: nextAgent.agentTargetKey,
-                agentIdentity: nextAgent.agentIdentity, agentProjectionGeneration: nextAgent.agentProjectionGeneration },
+                agentIdentity: nextAgent.agentIdentity },
         });
     }
     return rebased;

@@ -8,7 +8,7 @@ import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/acc
 import { invalidatePersistentVoiceTranscript } from './invalidatePersistentVoiceTranscript';
 import { clearVoiceAgentRunMetadataFromSession } from './voiceAgentRunMetadata';
 
-function resolveVoiceAgentRunMetadataSessionId(state: any): string | null {
+function resolveVoiceAgentRunMetadataSessionId(state: ReturnType<typeof storage.getState>): string | null {
     const boundConversationSessionId =
         voiceConversationBindingResolver.resolveByControlSessionId({
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -22,18 +22,18 @@ function resolveVoiceAgentRunMetadataSessionId(state: any): string | null {
 export async function resetVoiceAgentPersistenceState(params: Readonly<{
     stop: () => Promise<void>;
 }>): Promise<void> {
-    // Reset is one user intent. Bind its server-backed settings mutation before
+    // Reset is one user intent. Bind its transcript-memory mutation before
     // stopping the runtime so a Home focus change during that await cannot
     // retarget the transcript invalidation to the newly active Account.
     const expectedSettingsScope = storage.getState().settingsScope ?? null;
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     await params.stop();
-    invalidatePersistentVoiceTranscript(expectedSettingsScope);
 
-    const state = storage.getState() as any;
+    const state = storage.getState();
     if (accountLifetime && !accountLifetime.isCurrent()
         || !areAccountSettingsScopesEqual(expectedSettingsScope, state.settingsScope)) return;
     const conversationSessionId = resolveVoiceAgentRunMetadataSessionId(state);
+    await invalidatePersistentVoiceTranscript(expectedSettingsScope);
     if (conversationSessionId) {
         await clearVoiceAgentRunMetadataFromSession({ sessionId: conversationSessionId, accountLifetime: accountLifetime ?? undefined }).catch(() => {});
     }

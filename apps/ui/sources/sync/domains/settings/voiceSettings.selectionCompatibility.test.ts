@@ -2512,14 +2512,13 @@ describe('Voice Agent selection target facts persistence', () => {
                 agentId: 'acme-voice-agent',
                 agentTargetKey: 'agent:acme.voice/agent',
                 agentIdentity: { pluginId: 'acme.voice', localId: 'agent' },
-                agentProjectionGeneration: 7,
             },
         });
 
         const roundTripped = readLocalConversationVoiceSettings(voiceSettingsParse(written));
         expect(roundTripped.agent.agentTargetKey).toBe('agent:acme.voice/agent');
         expect(roundTripped.agent.agentIdentity).toEqual({ pluginId: 'acme.voice', localId: 'agent' });
-        expect(roundTripped.agent.agentProjectionGeneration).toBe(7);
+        expect(roundTripped.agent).not.toHaveProperty('agentProjectionGeneration');
         expect(roundTripped.agent.agentId).toBe('acme-voice-agent');
     });
 
@@ -2543,7 +2542,7 @@ describe('Voice Agent selection target facts persistence', () => {
         expect(parsed.agent.agentId).toBe('codex');
         expect(parsed.agent.agentTargetKey ?? null).toBeNull();
         expect(parsed.agent.agentIdentity ?? null).toBeNull();
-        expect(parsed.agent.agentProjectionGeneration ?? null).toBeNull();
+        expect(parsed.agent).not.toHaveProperty('agentProjectionGeneration');
     });
 
     it('discards malformed exact target facts instead of persisting an invalid target key', () => {
