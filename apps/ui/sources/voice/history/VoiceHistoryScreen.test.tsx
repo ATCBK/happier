@@ -4,6 +4,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+
 import {
   createDeferred,
   renderScreen as renderHistoryScreen,
@@ -147,6 +150,7 @@ async function flushAsyncState(): Promise<void> {
 
 describe('VoiceHistoryScreen', () => {
   let dom: JSDOM;
+  let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness').createVoiceSettingsAccountTestHarness>>;
   beforeEach(async () => {
     dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://history.test' });
     for (const key of ['window', 'document', 'HTMLElement', 'Node', 'CustomEvent', 'MutationObserver'] as const) {
@@ -160,12 +164,30 @@ describe('VoiceHistoryScreen', () => {
       React.createElement(React.Fragment, null, children) as unknown as React.ReactPortal);
     clearMountedSessionRealtimeTranscriptConsumers();
     legendListMock.state.reset();
+    const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
   });
   afterEach(() => {
     standardCleanup();
+    account?.dispose();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     dom?.window.close();
+  });
+
+  it('honors the History clear Action policy after the person confirms the destructive dialog', async () => {
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    account.replaceSettings(settingsParse({ actionsSettingsV1: { v: 1,
+      actions: { 'ui.voice_global.history.clear': { disabledSurfaces: ['ui'] } } } }));
+      const deleteSession = vi.fn(async () => ({ success: true as const }));
+      const consumer = createVoiceHistoryConsumer(createDeps([], { deleteSession }));
+      const { VoiceHistoryScreen } = await import('./VoiceHistoryScreen');
+      const screen = await renderScreen(<VoiceHistoryScreen consumer={consumer} saveExportArtifact={vi.fn()} />);
+      await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('voice-history-clear')).not.toBeNull());
+      await answerClearDialog(screen);
+      expect(deleteSession).not.toHaveBeenCalled();
+      expect(consumer.read().sessionId).toBe('voice-history-session');
   });
 
   it('routes and retains the discovered carrier only while History is mounted', async () => {
@@ -198,6 +220,23 @@ describe('VoiceHistoryScreen', () => {
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds()).toEqual([]);
     expect(readMountedSessionTranscriptConsumerSessionIdsForRetention()).toEqual([]);
     expect(plan().evictSessionIds).toEqual(['ordinary-session', 'voice-history-session']);
+  });
+
+  it('does not apply a search that the shared Action policy refuses', async () => {
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    const consumer = createVoiceHistoryConsumer(createDeps([
+      voiceMessage({ id: 'kept', role: 'user', text: 'Release planned', createdAt: 1, source: OPENAI_SOURCE }),
+      voiceMessage({ id: 'other', role: 'assistant', text: 'Another topic', createdAt: 2, source: OPENAI_SOURCE }),
+    ]));
+    const { VoiceHistoryScreen } = await import('./VoiceHistoryScreen');
+    const screen = await renderScreen(<VoiceHistoryScreen consumer={consumer} saveExportArtifact={vi.fn()} />);
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('voice-history-row-other')).not.toBeNull());
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'ui.voice_global.history.search': { disabledSurfaces: ['ui'] } } } }));
+    await act(async () => { screen.findByTestId('voice-history-search')!.props.onChangeText('Release'); });
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('voice-history-action-message')).not.toBeNull());
+    expect(screen.findByTestId('voice-history-row-other')).not.toBeNull();
+    expect(screen.findByTestId('voice-history-row-kept')).not.toBeNull();
   });
 
   it('loads canonical rows in chronology, searches loaded text, and pages older history', async () => {
@@ -838,7 +877,6 @@ describe('VoiceHistoryScreen', () => {
 
   it('drops the previous Account rows as soon as the server-account scope changes, before the new Account read resolves', async () => {
     const { storage } = await import('@/sync/domains/state/storage');
-    const previousScope = storage.getState().profileScope ?? null;
     const readScopeKey = () => {
       const scope = storage.getState().profileScope ?? null;
       return scope ? `${scope.serverId}/${scope.accountId}` : null;
@@ -873,14 +911,9 @@ describe('VoiceHistoryScreen', () => {
       },
     ));
     const { VoiceHistoryScreen } = await import('./VoiceHistoryScreen');
+    let accountB: typeof account | undefined;
 
     try {
-      await act(async () => {
-        storage.setState((state) => ({
-          ...state,
-          profileScope: { serverId: 'server-1', accountId: 'account-a' },
-        }) as never);
-      });
       const screen = await renderScreen(
         <VoiceHistoryScreen consumer={consumer} saveExportArtifact={vi.fn()} />,
       );
@@ -890,12 +923,13 @@ describe('VoiceHistoryScreen', () => {
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds())
         .toEqual(['voice-history-session-a']);
 
-      // Same server, different Account.
+      // Replace the actual authenticated Account, not only its display scope.
       await act(async () => {
-        storage.setState((state) => ({
-          ...state,
-          profileScope: { serverId: 'server-1', accountId: 'account-b' },
-        }) as never);
+        const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        accountB = await createVoiceSettingsAccountTestHarness(settingsParse({}), {
+          accountId: 'account-b',
+        });
       });
 
       expect(screen.findByTestId('voice-history-row-account-a')).toBeNull();
@@ -916,7 +950,7 @@ describe('VoiceHistoryScreen', () => {
     } finally {
       accountBDiscovery.resolve(null);
       await act(async () => {
-        storage.setState((state) => ({ ...state, profileScope: previousScope }) as never);
+        accountB?.dispose();
       });
     }
   });

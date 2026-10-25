@@ -171,6 +171,19 @@ describe('projectVoiceHistoryRows', () => {
 });
 
 describe('createVoiceHistoryConsumer', () => {
+  it('shares lazy search admission and filters the canonical export without rereading warm history', async () => {
+    const deps = createDeps({ readMessages: () => [
+      voiceMessage({ id: 'release', role: 'user', text: 'Release planned', createdAt: 1, source: OPENAI_SOURCE }),
+      voiceMessage({ id: 'other', role: 'user', text: 'Another question', createdAt: 2, source: OPENAI_SOURCE }),
+    ] });
+    const consumer = createVoiceHistoryConsumer(deps);
+    expect((await consumer.search('release')).rows.map(row => row.id)).toEqual(['release']);
+    expect((await consumer.search('question')).rows.map(row => row.id)).toEqual(['other']);
+    expect(deps.discoverHistorySession).toHaveBeenCalledOnce();
+    expect(deps.refreshSessionMessages).toHaveBeenCalledOnce();
+    const artifact = await consumer.exportHistory({ range: 'loaded', query: 'release' });
+    expect(JSON.parse([...artifact.chunks()].join('')).entries.map((row: { id: string }) => row.id)).toEqual(['release']);
+  });
   it('projects loaded messages once when applying a local search query', async () => {
     const resolveProviderLabel = vi.fn(readProviderLabel);
     const consumer = createVoiceHistoryConsumer(createDeps({

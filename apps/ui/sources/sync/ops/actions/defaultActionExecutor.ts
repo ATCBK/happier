@@ -218,6 +218,7 @@ import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/se
 import { scmReviewComparisonOfSource, scmReviewViewUnavailableReason } from '@/sync/domains/scm/diffSummary/selection';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { isVoiceHistoryActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { resolveAgentIdForPermissionUi } from '@/agents/catalog/resolve';
@@ -661,6 +662,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   function buildDefaultActionExecutor(opts?: Readonly<{
   /** One captured Voice editor intent; never serialized into Action input or approval. */
   voiceSettingsEdit?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['voiceSettingsEdit'];
+  /** Mounted History delivery; the consumer retains Account binding and delete-wins ownership. */
+  voiceHistory?: import('@/voice/history/voiceHistoryActions').VoiceHistoryActionPorts;
   /** Mounted model-pack progress presentation; Action policy owns admission. */
   voiceModelPackPresentation?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['voiceModelPackPresentation'];
   /** Captured profile candidate; Settings admission remains in the shared executor. */
@@ -1758,6 +1761,19 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       throwIfAborted(context.signal);
       if (!accountContext?.readLiveSettings()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
       accountContext.assertCurrent();
+      if (isVoiceHistoryActionId(actionId)) {
+        const [{ executeVoiceHistoryAction }, { getDefaultVoiceHistoryConsumer }, { saveVoiceHistoryExportArtifact }] = await Promise.all([
+          import('@/voice/history/voiceHistoryActions'), import('@/voice/history/defaultVoiceHistoryConsumer'),
+          import('@/voice/history/voiceHistoryExportTarget'),
+        ]);
+        const isCurrent = () => accountContext.accountLifetime.isCurrent() && !context.signal?.aborted
+          && areServerAccountScopesEqual(getActiveServerAccountScope(), accountContext.accountLifetime.scope);
+        accountContext.assertCurrent();
+        // The Protocol executor admitted this exact action's input before entering the host port.
+        return await executeVoiceHistoryAction({ actionId, input } as Parameters<typeof executeVoiceHistoryAction>[0], opts?.voiceHistory ?? {
+          consumer: getDefaultVoiceHistoryConsumer(), saveExportArtifact: saveVoiceHistoryExportArtifact,
+        }, isCurrent);
+      }
       const opensMicrophone = actionId === 'ui.voice_global.start' || actionId === 'ui.voice_global.recover'
         || (actionId === 'ui.voice_global.set_muted' && input && typeof input === 'object' && 'muted' in input && input.muted === false)
         || actionId === 'ui.voice_global.hold_begin' || actionId === 'ui.voice_global.brief.request'

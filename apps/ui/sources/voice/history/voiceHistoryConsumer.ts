@@ -186,9 +186,11 @@ function* serializeVoiceHistoryExport(input: Readonly<{
 
 export type VoiceHistoryConsumer = Readonly<{
   open(query?: string): Promise<VoiceHistorySnapshot>;
+  /** Discover on first use; warm search only filters already-loaded rows. */
+  search(query?: string, refresh?: boolean): Promise<VoiceHistorySnapshot>;
   read(query?: string): VoiceHistorySnapshot;
   loadOlder(query?: string): Promise<VoiceHistorySnapshot>;
-  exportHistory(input: Readonly<{ range: 'loaded' | 'all' }>): Promise<VoiceHistoryExportArtifact>;
+  exportHistory(input: Readonly<{ range: 'loaded' | 'all'; query?: string }>): Promise<VoiceHistoryExportArtifact>;
   clear(): Promise<Readonly<{ cleared: boolean }>>;
   /**
    * External-store pair for the rendered History snapshot. `getRevision`
@@ -365,6 +367,18 @@ export function createVoiceHistoryConsumer<
     return result;
   };
 
+  const open = async (query = ''): Promise<VoiceHistorySnapshot> => {
+    const epoch = beginOperation();
+    const discoveredSessionId = await discover(epoch);
+    if (!discoveredSessionId || !capturedScope) return empty();
+    await deps.refreshSessionMessages(discoveredSessionId, capturedScope);
+    assertOperationCurrent(epoch);
+    if (sessionId !== discoveredSessionId) throw new VoiceHistoryOperationSupersededError();
+    if (!isScopeCurrent()) return empty();
+    resetProjection();
+    return read(query);
+  };
+
   return Object.freeze({
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -387,19 +401,9 @@ export function createVoiceHistoryConsumer<
         hasMore === null ? '' : String(hasMore),
       ].join('\u0001');
     },
-    async open(query = '') {
-      const epoch = beginOperation();
-      const discoveredSessionId = await discover(epoch);
-      if (!discoveredSessionId) return empty();
-      if (!capturedScope) return empty();
-      await deps.refreshSessionMessages(discoveredSessionId, capturedScope);
-      assertOperationCurrent(epoch);
-      if (sessionId !== discoveredSessionId) {
-        throw new VoiceHistoryOperationSupersededError();
-      }
-      if (!isScopeCurrent()) return empty();
-      resetProjection();
-      return read(query);
+    open,
+    async search(query = '', refresh = false) {
+      return !refresh && isScopeCurrent() ? read(query) : await open(query);
     },
     read,
     async loadOlder(query = '') {
@@ -472,7 +476,7 @@ export function createVoiceHistoryConsumer<
       assertOperationCurrent(epoch);
       // Exactly one projection, after the last page. Reading per page re-sorted
       // and re-labelled the whole accumulated history for every page fetched.
-      const rows = read().rows;
+      const rows = read(input.query).rows;
       const now = deps.now();
       return {
         fileName: buildExportFileName(now),

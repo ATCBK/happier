@@ -299,3 +299,10 @@ export function createDefaultVoiceHistoryConsumer() {
   };
   return createDefaultVoiceHistoryConsumerFromRuntime(runtime, providerRegistry);
 }
+
+// The answering client and all mounted History pages borrow the same consumer;
+// they never maintain competing page cursors, carrier bindings or export state.
+let defaultConsumer: ReturnType<typeof createDefaultVoiceHistoryConsumer> | undefined;
+export function getDefaultVoiceHistoryConsumer() {
+  return defaultConsumer ??= createDefaultVoiceHistoryConsumer();
+}
