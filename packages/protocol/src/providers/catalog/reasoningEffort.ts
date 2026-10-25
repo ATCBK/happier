@@ -17,17 +17,18 @@ export function readProviderReasoningEffortOption(
 }
 
 /** Agent declarations govern application; source descriptors retain their model-owned facts. */
-export function projectProviderModelReasoningForAgent(
-  model: ProviderModelDescriptorV1,
+export function projectProviderModelReasoningForAgent<TModel extends ProviderModelDescriptorV1>(
+  model: TModel,
   agent: Pick<AgentProviderRequirementsV1, 'supportsReasoningEffort'>,
-): ProviderModelDescriptorV1 {
+): TModel {
   if (!model.modelOptions
     || agent.supportsReasoningEffort === true && readProviderReasoningEffortOption(model) !== null) return model;
   const retained = model.modelOptions.filter(option => option.id !== PROVIDER_REASONING_EFFORT_OPTION_ID
     && option.overridesWhenOn?.optionIds.includes(PROVIDER_REASONING_EFFORT_OPTION_ID) !== true);
   if (retained.length === model.modelOptions.length) return model;
   const { modelOptions: _modelOptions, ...rest } = model;
-  return { ...rest, ...(retained.length ? { modelOptions: retained } : {}) };
+  // Only retained entries of the caller's own option list are removed.
+  return { ...rest, ...(retained.length ? { modelOptions: retained } : {}) } as TModel;
 }
 
 export const PROVIDER_REASONING_EFFORT_LEVELS_V1 = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
