@@ -4,7 +4,7 @@ import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -78,18 +78,32 @@ afterEach(async () => {
     provider.reset();
 });
 
+function bearerAccountId(request: Readonly<{ init?: RequestInit }>): string | null {
+    const authorization = new Headers(request.init?.headers).get('Authorization');
+    return authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
+}
+
 describe('Provider read custody at an addressed peer Account', () => {
     it.each(readers)('withdraws settled $name during peer replacement and sign-out while the active Home remains current', async reader => {
         const activeLifetime = captureActiveServerAccountScopeLifetime();
         let release!: () => void;
         const replacementResponse = new Promise<void>(resolve => { release = resolve; });
         account.home.answer(peerId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
-            select: (_input, request) => {
-                const authorization = new Headers(request.init?.headers).get('Authorization');
-                const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
-                return { body: { status: 'present', revision: 1,
-                    content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } },
-                    ...(accountId === 'peer-b' ? { respondAfter: replacementResponse } : {}) };
+            select: (_input, request) => ({ body: { status: 'present', revision: 1,
+                content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } },
+                ...(bearerAccountId(request) === 'peer-b' ? { respondAfter: replacementResponse } : {}) }),
+        });
+        // Personal model discovery first reads its target Machine row over HTTP. A Home
+        // answers that read for the requesting Account; the replacement's own row is
+        // held with the replacement response, like the other readers' daemon RPCs.
+        account.home.answer(peerId, 'POST /v1/machines/read-batch', {
+            select: async (input, request) => {
+                const accountId = bearerAccountId(request);
+                if (accountId === 'peer-b') await replacementResponse;
+                return { body: await createMachineReadBatchResponseFixture(input, id => {
+                    const machine = provider.state.machines.find(row => row.id === id);
+                    return machine && accountId ? createPlainMachineRowFixture({ id, accountId, machine }) : null;
+                }).json() };
             },
         });
         provider.intercept(reader.method, async request => {
