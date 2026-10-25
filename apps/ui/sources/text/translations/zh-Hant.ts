@@ -759,6 +759,14 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
     transcript: {
 
+      quote: {
+
+        action: '引用',
+
+        actionA11y: '在訊息中引用所選文字',
+
+      },
+
       selection: {
 
         enterA11y: '進入選取模式',

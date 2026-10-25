@@ -478,6 +478,10 @@ export const en = {
     },
 
     transcript: {
+        quote: {
+            action: 'Quote',
+            actionA11y: 'Quote the selected text in your message',
+        },
         selection: {
             enterA11y: 'Enter selection mode',
             exitA11y: 'Exit selection mode',

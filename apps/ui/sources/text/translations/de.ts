@@ -480,6 +480,10 @@ export const de: TranslationStructure = {
     },
 
     transcript: {
+        quote: {
+            action: 'Zitieren',
+            actionA11y: 'Ausgewählten Text in deiner Nachricht zitieren',
+        },
         selection: {
             enterA11y: 'Auswahlmodus starten',
             exitA11y: 'Auswahlmodus beenden',

@@ -665,6 +665,14 @@ export const es: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: 'Citar',
+
+      actionA11y: 'Citar el texto seleccionado en tu mensaje',
+
+    },
+
     selection: {
 
       enterA11y: 'Entrar en modo de selección',

@@ -680,6 +680,14 @@ export const ru: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: 'Цитировать',
+
+      actionA11y: 'Процитировать выделенный текст в сообщении',
+
+    },
+
     selection: {
 
       enterA11y: 'Войти в режим выбора',

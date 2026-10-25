@@ -663,6 +663,14 @@ export const zhHans: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: '引用',
+
+      actionA11y: '在消息中引用所选文本',
+
+    },
+
     selection: {
 
       enterA11y: '进入选择模式',

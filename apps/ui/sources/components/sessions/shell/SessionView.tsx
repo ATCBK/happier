@@ -67,6 +67,10 @@ import { ChatList, type TranscriptViewportChangeState } from '@/components/sessi
 import { applyTranscriptJumpHighlightForJumpResult } from '@/components/sessions/transcript/navigation/transcriptJumpHighlightStore';
 import { TranscriptFirstPaintPlaceholder } from '@/components/sessions/transcript/TranscriptFirstPaintPlaceholder';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
+import { TranscriptQuoteProvider } from '@/components/sessions/transcript/quote/TranscriptQuoteContext';
+import { TranscriptQuoteSelectionControls } from '@/components/sessions/transcript/quote/TranscriptQuoteSelectionControls';
+import { appendTranscriptQuoteToDraft } from '@/components/sessions/transcript/quote/transcriptQuote';
+import { useKeyboardCommand } from '@/keyboard/KeyboardShortcutProvider';
 import { TranscriptSelectionToolbarController } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbarController';
 import type { TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
 import { appendTranscriptSelectionToNewSessionDraft } from '@/components/sessions/transcript/messageSelection/appendTranscriptSelectionToNewSessionDraft';
@@ -5173,6 +5177,13 @@ function SessionViewLoaded({
                 return `${base}${spacer}@${path} `;
             });
         }, [setDraftValue]);
+        const executeKeyboardCommand = useKeyboardCommand();
+        const handleQuoteTranscriptSelection = React.useCallback((selectedText: string) => {
+            setDraftValue((prev) => appendTranscriptQuoteToDraft(prev, selectedText) ?? prev);
+            requestAnimationFrame(() => { executeKeyboardCommand('composer.focus'); });
+        }, [executeKeyboardCommand, setDraftValue]);
+        // The transcript quotes into the composer only while this surface's composer is shown and writable.
+        const transcriptQuoteHandler = surfaceFocused && shouldShowInput && !isReadOnly ? handleQuoteTranscriptSelection : null;
         const extraActionChips = useSessionAgentInputExtraActionChips({
             sessionId,
             attachmentsUploadsEnabled,
@@ -6568,19 +6579,22 @@ function SessionViewLoaded({
                         latestTurnStatus={session.latestTurnStatus}
                         surfaceFocused={surfaceFocused}
                     />
-                    <SessionTranscriptAgentContentView
-                        sessionId={sessionId}
-                        session={session}
-                        isEncryptedSessionLocked={isEncryptedSessionLocked}
-                        isForkedSessionV1={isForkedSessionV1}
-                        isLocallyAttached={isLocallyAttached}
-                        pendingMessagesCount={pendingMessages.length}
-                        hasDirectControlFooter={directControlFooter != null}
-                        content={content}
-                        input={inputWithTranscriptSelection}
-                        placeholder={placeholder}
-                        safeAreaBottom={agentContentSafeAreaBottom}
-                    />
+                    <TranscriptQuoteSelectionControls sessionId={sessionId} onQuote={transcriptQuoteHandler} />
+                    <TranscriptQuoteProvider value={transcriptQuoteHandler}>
+                        <SessionTranscriptAgentContentView
+                            sessionId={sessionId}
+                            session={session}
+                            isEncryptedSessionLocked={isEncryptedSessionLocked}
+                            isForkedSessionV1={isForkedSessionV1}
+                            isLocallyAttached={isLocallyAttached}
+                            pendingMessagesCount={pendingMessages.length}
+                            hasDirectControlFooter={directControlFooter != null}
+                            content={content}
+                            input={inputWithTranscriptSelection}
+                            placeholder={placeholder}
+                            safeAreaBottom={agentContentSafeAreaBottom}
+                        />
+                    </TranscriptQuoteProvider>
                 </TranscriptMessageSelectionProvider>
             </View >
 

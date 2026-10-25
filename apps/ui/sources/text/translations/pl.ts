@@ -676,6 +676,14 @@ export const pl: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: 'Cytuj',
+
+      actionA11y: 'Zacytuj zaznaczony tekst w wiadomości',
+
+    },
+
     selection: {
 
       enterA11y: 'Włącz tryb zaznaczania',

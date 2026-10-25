@@ -648,6 +648,14 @@ export const ja: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: '引用',
+
+      actionA11y: '選択したテキストをメッセージに引用',
+
+    },
+
     selection: {
 
       enterA11y: '選択モードに入る',

@@ -663,6 +663,14 @@ export const it: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: 'Cita',
+
+      actionA11y: 'Cita il testo selezionato nel tuo messaggio',
+
+    },
+
     selection: {
 
       enterA11y: 'Entra in modalità selezione',

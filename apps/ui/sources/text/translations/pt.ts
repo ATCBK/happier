@@ -714,6 +714,14 @@ export const pt: TranslationStructure = {
 
   transcript: {
 
+    quote: {
+
+      action: 'Citar',
+
+      actionA11y: 'Citar o texto selecionado na sua mensagem',
+
+    },
+
     selection: {
 
       enterA11y: 'Entrar no modo de seleção',

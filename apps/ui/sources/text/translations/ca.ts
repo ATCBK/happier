@@ -654,6 +654,10 @@ export const ca: TranslationStructure = {
     },
 
     transcript: {
+        quote: {
+            action: 'Cita',
+            actionA11y: 'Cita el text seleccionat al teu missatge',
+        },
         selection: {
             enterA11y: 'Entra al mode de selecció',
             exitA11y: 'Surt del mode de selecció',
