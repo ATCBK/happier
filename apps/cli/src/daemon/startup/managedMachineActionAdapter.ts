@@ -3,7 +3,7 @@ import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/action
 import { ManagedAcquireInputV1Schema, ManagedControllerUpdateInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { SessionSpawnNewActionResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
@@ -218,7 +218,7 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                         }
                     }
                     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode });
-                    const spawn = SessionSpawnNewActionResultV1Schema.safeParse(result.result);
+                    const spawn = SessionSpawnNewResultV1Schema.safeParse(result.result);
                     if (!spawn.success) {
                         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
                         if (!approval.success || approval.data.actionId !== 'session.spawn_new') {

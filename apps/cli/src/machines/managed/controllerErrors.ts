@@ -10,3 +10,8 @@ export class ManagedMachineControllerError extends Error {
 export class ManagedMachineNativeRefusal extends ManagedMachineControllerError {}
 /** A private pre-handler guard prevented native IO, not an unknown delivery. */
 export class ManagedMachineNativeEffectGuardRefusal extends ManagedMachineNativeRefusal {}
+
+/** Only preparation can prove supersession before this policy has admission or native effects. */
+export class ManagedRetentionWaitSuperseded extends ManagedMachineControllerError {
+    constructor() { super('intent_changed'); }
+}
