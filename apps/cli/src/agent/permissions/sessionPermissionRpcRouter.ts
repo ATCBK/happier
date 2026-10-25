@@ -55,6 +55,7 @@ export class SessionPermissionRpcRouter {
       }
       const result = await this.dispatch({
         id: parsed.data.id,
+        occurrenceId: parsed.data.occurrenceId,
         approved: true,
         structuredAnswersV1: parsed.data.structuredAnswersV1,
       });

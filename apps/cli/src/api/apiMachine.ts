@@ -73,6 +73,7 @@ import { readAccountSettingsVersionFromHint } from '@/settings/accountSettings/a
 import { resolveServerHttpBaseUrl } from '@/session/transport/http/serverHttpBaseUrl';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import type { RpcHandlerActiveExecution } from '@/api/rpc/types';
+import { PushNotificationClient } from './pushNotifications';
 
 export type ApiMachineClientDeps = Readonly<{
     connectedAccounts?: ScmConnectedAccountCredentialResolver;
@@ -439,6 +440,7 @@ export class ApiMachineClient {
             },
             deps: {
                 ...deps,
+                pushNotifications: new PushNotificationClient(this.token, resolveServerHttpBaseUrl()),
                 connectedServiceImportAccount: this.connectedServiceImportAccount,
                 machineRpcWorkingDirectory: this.machineRpcWorkingDirectory,
                 filesystemAccessPolicy: this.filesystemAccessPolicy,
