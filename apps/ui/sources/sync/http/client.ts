@@ -33,11 +33,11 @@ export class ServerFetchAbortedForServerSwitchError extends Error {
     }
 }
 
-export class ServerFetchConnectivityTimeoutError extends Error {
+export class ServerFetchConnectivityTimeoutError extends ServerReachabilityWaitTimeoutError {
     public readonly retryable = false;
 
     constructor() {
-        super('Timed out waiting for server reachability');
+        super();
         this.name = 'ServerFetchConnectivityTimeoutError';
     }
 }

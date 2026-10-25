@@ -11,14 +11,18 @@ import {
 import { probeAuthenticatedServerAuthPingEndpoint } from '@/sync/api/capabilities/probeAuthenticatedServerAuthPingEndpoint';
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
+import { HappyError } from '@/utils/errors/errors';
+import { t } from '@/text';
 
 import { createNotAuthenticatedError } from './authErrors';
 import { buildRetryLaterProbeResultFromResponse } from './retryLaterProbeResult';
 import { readServerReachabilityBackgroundRetryMs, readServerReachabilityProbeTimeoutMs } from './serverReachabilityTuning';
 
-export class ServerReachabilityWaitTimeoutError extends Error {
+export class ServerReachabilityWaitTimeoutError extends HappyError {
     constructor() {
-        super('Timed out waiting for server reachability');
+        super(t('errors.connectionTimeout'), true, { kind: 'network' });
+        // HappyError installs its own prototype; retain timeout-specific catches and subclasses.
+        Object.setPrototypeOf(this, new.target.prototype);
         this.name = 'ServerReachabilityWaitTimeoutError';
     }
 }

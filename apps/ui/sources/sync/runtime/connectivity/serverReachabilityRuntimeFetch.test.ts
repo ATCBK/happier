@@ -15,6 +15,43 @@ afterEach(async () => {
 });
 
 describe('runtimeFetchWithServerReachability', () => {
+    it('reports an unreachable server as a known network error before issuing the request', async () => {
+        vi.useFakeTimers();
+        const runtimeFetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+            throw new TypeError('Failed to fetch');
+        });
+        vi.doMock('@/utils/system/runtimeFetch', () => ({
+            runtimeFetch: runtimeFetchMock,
+            resetRuntimeFetch: () => {},
+            setRuntimeFetch: () => {},
+        }));
+        try {
+            const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
+            const { ServerReachabilityWaitTimeoutError } = await import('./serverReachabilitySupervisorPool');
+            const { HappyError } = await import('@/utils/errors/errors');
+            const { t } = await import('@/text');
+            const promise = runtimeFetchWithServerReachability({
+                serverUrl: 'https://api.example.test',
+                token: 'token-a',
+                url: 'https://api.example.test/v2/session-organization/folders',
+                timeoutMs: 5,
+                init: { method: 'POST' },
+            });
+            const assertion = expect(promise).rejects.toMatchObject({
+                name: 'ServerReachabilityWaitTimeoutError',
+                kind: 'network',
+                canTryAgain: true,
+                message: t('errors.connectionTimeout'),
+            });
+            await Promise.all([assertion, vi.advanceTimersByTimeAsync(5)]);
+            await expect(promise).rejects.toBeInstanceOf(HappyError);
+            await expect(promise).rejects.toBeInstanceOf(ServerReachabilityWaitTimeoutError);
+            expect(runtimeFetchMock.mock.calls.some(([input]) => String(input).includes('/folders'))).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it.each([undefined, 'background-task'] as const)('refuses authenticated cross-origin requests in %s mode (prevents token leakage)', async (networkMode) => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
 
