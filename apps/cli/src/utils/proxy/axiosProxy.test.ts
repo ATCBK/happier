@@ -40,8 +40,10 @@ describe('getAxiosProxyOptionsForUrl', () => {
     const address = server.address();
     if (address === null || typeof address === 'string') throw new Error('Expected an IP test server address');
 
-    const previousGlobalKeepAlive = globalAgent.keepAlive;
-    globalAgent.keepAlive = false;
+    // Node keeps the constructed keep-alive option on the Agent; its type declarations omit that field.
+    const nodeGlobalAgent = globalAgent as typeof globalAgent & { keepAlive: boolean };
+    const previousGlobalKeepAlive = nodeGlobalAgent.keepAlive;
+    nodeGlobalAgent.keepAlive = false;
     const targetUrl = `http://127.0.0.1:${address.port}/idle-probe`;
     const options = getAxiosProxyOptionsForUrl({ targetUrl, env: {} as NodeJS.ProcessEnv });
     try {
@@ -51,7 +53,7 @@ describe('getAxiosProxyOptionsForUrl', () => {
       expect(requestsServed).toBe(60);
       expect(connections).toBe(1);
     } finally {
-      globalAgent.keepAlive = previousGlobalKeepAlive;
+      nodeGlobalAgent.keepAlive = previousGlobalKeepAlive;
       const directAgent = options.httpAgent;
       if (directAgent && typeof directAgent === 'object' && 'destroy' in directAgent
         && typeof directAgent.destroy === 'function') directAgent.destroy();

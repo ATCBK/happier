@@ -59,7 +59,7 @@ async function createHarness(input: Readonly<{
   healthOnCurrentnessRead?: ConnectedServiceCredentialHealthV1;
   credentialSnapshot?: () => QualifiedConnectedAccountCredentialSnapshotV4 | null;
   listedProfiles?: readonly QualifiedConnectedAccountProfileV4[];
-  isAccountRuntimeCurrent?: () => boolean;
+  isAccountRuntimeCurrent?: () => Promise<boolean>;
 }>) {
   const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-qualified-status-'));
   createdDirectories.push(happyHomeDir);
@@ -270,7 +270,7 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
     let current = true;
     const harness = await createHarness({
       health: { v: 1, status: 'needs_reauth', reconnectRequired: true },
-      isAccountRuntimeCurrent: () => current,
+      isAccountRuntimeCurrent: async () => current,
       onCredentialRead: () => { current = false; },
     });
     const profile = QualifiedConnectedAccountProfileV4Schema.parse({

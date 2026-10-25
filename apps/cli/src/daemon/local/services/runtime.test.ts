@@ -510,7 +510,7 @@ describe('createLocalServicesDaemonRuntime', () => {
             [400, { pid: 400, ppid: 1, command: 'node server.js', cwd: '/repo/app' }],
         ]));
         const probe = vi.fn(async () => true);
-        const title = vi.fn<typeof fetch>(async () => new Response('<title>Local app</title>', {
+        const title = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('<title>Local app</title>', {
             headers: { 'content-type': 'text/html' },
         }));
         const runtime = createLocalServicesDaemonRuntime({

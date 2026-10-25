@@ -5,21 +5,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { createRequesterCurrentnessSocketHarness, type RequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
-import { prepareRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { prepareRequesterSessionBootstrap, type AdmittedRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { installAxiosRequestMethodAdapter } from '@/testkit/http/axiosAdapter';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import type { StoredCredentials } from '@/persistence';
+import type { MachineInstallationIdentityV1 } from '@happier-dev/protocol';
+
+export type ProjectSessionRuntimeFixture = Readonly<{
+  directory: string;
+  readonly bootstrap: AdmittedRequesterSessionBootstrap;
+  createBootstrap(): Promise<AdmittedRequesterSessionBootstrap>;
+  installation: MachineInstallationIdentityV1;
+  channel: RequesterCurrentnessSocketHarness;
+  isHomeCurrent(): boolean;
+  retire(): void;
+}>;
 
 /** Real ordinary Session admission; only Home endpoints are substituted. */
 export async function createProjectSessionRuntimeFixture(options: Readonly<{
   serverId?: string; serverUrl?: string; accountSettings?: Readonly<Record<string, unknown>>; boundSessionId?: string;
   credentials?: StoredCredentials;
   machineAccess?: Readonly<{ custodianAccountId: string; role: 'use' | 'manage' }>;
-}> = {}) {
+}> = {}): Promise<ProjectSessionRuntimeFixture> {
   const directory = await mkdtemp(join(tmpdir(), 'project-session-runtime-'));
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL']);
   env.patch({ HAPPIER_HOME_DIR: directory,
