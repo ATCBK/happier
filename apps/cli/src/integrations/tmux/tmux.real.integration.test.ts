@@ -628,7 +628,12 @@ describe.skipIf(!shouldRunTmuxIntegration())('tmux (real) integration tests (opt
                 }).status).not.toBe(0);
                 expect(await adapter.evaluateLiveness(handle)).toMatchObject({ paneAlive: true });
                 await adapter.dispose(handle);
-                expect(await adapter.evaluateLiveness(handle)).toMatchObject({ paneAlive: false });
+                const remainingWindows = runTmux(['list-windows', '-t', `=${sessionName}`, '-F', '#{window_id}'], {
+                    env: { TMUX_TMPDIR: selectedRoot },
+                });
+                expect(remainingWindows.status).toBe(0);
+                expect(handle.paneId).toMatch(/^@\d+$/);
+                expect(remainingWindows.stdout.trim().split(/\r?\n/)).not.toContain(handle.paneId);
                 expect(runTmux(['has-session', '-t', '=ambient-sentinel'], {
                     env: { TMUX_TMPDIR: ambientRoot },
                 }).status).toBe(0);
