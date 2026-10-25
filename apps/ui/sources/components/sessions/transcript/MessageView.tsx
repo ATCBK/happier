@@ -1636,6 +1636,21 @@ function ToolCallBlock(props: {
   const handleOpenMediaPath = React.useCallback((filePath: string) => {
     pushSessionFileDeepLink(router, { sessionId: props.sessionId, filePath });
   }, [props.sessionId, router]);
+  const hasToolMedia = sessionMedia.inlineImages.length > 0 || sessionMedia.unavailableMedia.length > 0;
+  const toolMedia = hasToolMedia ? (
+    <>
+      {sessionMedia.inlineImages.length > 0 ? (
+        <SessionMediaInlineImages
+          sessionId={props.sessionId}
+          media={sessionMedia.inlineImages}
+          onOpenPath={handleOpenMediaPath}
+          fileOpenEnabled={props.interaction.canOpenFiles === true}
+          mediaPreviewEnabled={props.interaction.canPreviewMedia === true}
+        />
+      ) : null}
+      <SessionMediaUnavailableItems items={sessionMedia.unavailableMedia} />
+    </>
+  ) : null;
 
   const handleJumpToAnchor = useStructuredMessageJumpHandler(
     props.sessionId,
@@ -1662,7 +1677,8 @@ function ToolCallBlock(props: {
   const shouldRenderToolChrome = !(
     toolViewTimelineChromeMode === 'activity_feed' &&
     structuredNode != null &&
-    !shouldForceToolChromeForStatus
+    !shouldForceToolChromeForStatus &&
+    !hasToolMedia
   );
   const toolRouteMessageId = props.interaction.disableToolNavigation
     ? undefined
@@ -1719,7 +1735,9 @@ function ToolCallBlock(props: {
           approvalRequests={props.approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
-        />
+        >
+          {toolMedia}
+        </ToolTimelineRow>
       ) : (
         <ToolView
           tool={props.message.tool}
@@ -1733,18 +1751,10 @@ function ToolCallBlock(props: {
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
           embedded={props.layoutContext === 'tool_calls_group'}
-        />
+        >
+          {toolMedia}
+        </ToolView>
       )) : null}
-      {sessionMedia.inlineImages.length > 0 ? (
-        <SessionMediaInlineImages
-          sessionId={props.sessionId}
-          media={sessionMedia.inlineImages}
-          onOpenPath={handleOpenMediaPath}
-          fileOpenEnabled={props.interaction.canOpenFiles === true}
-          mediaPreviewEnabled={props.interaction.canPreviewMedia === true}
-        />
-      ) : null}
-      <SessionMediaUnavailableItems items={sessionMedia.unavailableMedia} />
     </>
   );
   // The tool chrome (ToolView / ToolTimelineRow) owns the jump-landing attention

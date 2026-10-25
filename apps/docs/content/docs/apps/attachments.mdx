@@ -138,7 +138,8 @@ This protects transcript performance while preserving access to the underlying f
 ## Images returned by Agent tools
 
 In development source, Claude Code tool results that contain image blocks can also
-appear as previews below the tool row, including images read with `Read`. This
+appear as previews inside the expanded tool call, including images read with `Read`.
+Collapsed tool calls do not load or display these previews. This
 requires the corrected CLI and app; it is not a claim of availability in 0.2.17.
 The CLI saves a copy under `.happier/uploads/artifacts/...` in the session's project
 folder on the machine running the Agent. The transcript stores the file reference

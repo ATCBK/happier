@@ -117,8 +117,10 @@ The reducer splits media metadata when one transcript row contains several tool
 results, using the actual tool origins (and hashed failure origins) before updating
 each tool or buffering an orphan result. Single-result metadata stays on its owning
 row, including ACP sidechains with namespaced display ids. The shared tool row
-renders the selected metadata with the existing preview and unavailable-item
-components. This requires both
+passes the selected metadata into the existing tool disclosure. Image previews and
+unavailable items mount only while that tool is expanded, inside the same body as
+its other details; collapsed summary text does not activate media loading. User
+message attachments retain their inline presentation. This requires both
 the corrected CLI writer and UI renderer; it introduces no new server wire format.
 
 ### 3) App rendering normalization (fallback)
