@@ -1668,7 +1668,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             }
             assertNotAborted(signal);
             assertGenerationUsable();
-            const wasFailed = snapshot.state === 'unhealthy' || snapshot.state === 'failed' || snapshot.nativePhase === 'stopped';
+            const wasFailed = snapshot.state === 'unhealthy' || snapshot.nativePhase === 'stopped';
             try {
                 const observation = await waitWithAbort(spec.mode.builtinLifecycle
                     ? spec.mode.builtinLifecycle.inspect({ signal })
