@@ -25,8 +25,132 @@ import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEn
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it.each(['unchanged', 'catalog-edited-before-approval', 'connection-edited', 'catalog-raced'] as const)(
+  'approves a Gateway hub update through the real Account executor and HTTP catalog store: %s', async scenario => {
+    const credentials = { token: 'gateway-approval-http-fixture', encryption: null };
+    let catalog = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1;
+    let revision = 7;
+    let raceNextWrite = false;
+    let commitCompetingEdit: (() => Promise<void>) | undefined;
+    let writes = 0;
+    let boundaryError: unknown;
+    const server = createServer(async (request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      try {
+        if (request.url === '/v1/account/encryption/currentness') {
+          response.end(JSON.stringify({ mode: 'plain', version: 1, settingsVersion: 4,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+        } else if (request.url === '/v1/account/entity-rows/provider-connections' && request.method === 'GET') {
+          response.end(JSON.stringify({ status: 'present', revision, content: { t: 'plain', v: catalog } }));
+        } else if (request.url === '/v1/account/entity-rows/provider-connections' && request.method === 'POST') {
+          let body = '';
+          for await (const chunk of request) body += String(chunk);
+          const mutation = ProviderConnectionsRowMutationV1Schema.parse(JSON.parse(body));
+          writes++;
+          if (raceNextWrite) {
+            raceNextWrite = false;
+            if (!commitCompetingEdit) throw new Error('Missing competing catalog Action');
+            await commitCompetingEdit();
+          }
+          if (mutation.expectedRevision !== revision) {
+            response.end(JSON.stringify({ status: 'conflict', revision }));
+          } else {
+            if (mutation.content?.t !== 'plain') throw new Error('Expected Plain catalog fixture');
+            catalog = mutation.content.v;
+            revision++;
+            response.end(JSON.stringify({ status: 'updated', revision, cursor: revision }));
+          }
+        } else {
+          throw new Error(`Unexpected Gateway approval HTTP request: ${request.method} ${request.url}`);
+        }
+      } catch (error) {
+        boundaryError = error;
+        response.statusCode = 500;
+        response.end(JSON.stringify({ error: 'invalid-fixture-request' }));
+      }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      await runWithServerHttpBaseUrl(base, async () => {
+        const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
+          settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) };
+        const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+          serverHttpBaseUrl: base, isCurrent: async () => true });
+        let approval: ApprovalRequestV2 | null = null;
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+          isApprovalExecutionOriginCurrent: async () => true,
+          approvalsCreate: async ({ request }) => {
+            approval = ApprovalRequestV2Schema.parse(request);
+            return { artifactId: 'gateway-hub-approval' };
+          },
+          approvalsGet: async () => approval && structuredClone(approval),
+          approvalsUpdate: async ({ request }) => {
+            if (!approval) throw new Error('Missing Gateway approval');
+            const next = ApprovalRequestV2Schema.parse(request);
+            const transition = decideApprovalRequestTransition(approval, next);
+            if (!transition.ok) return transition;
+            approval = structuredClone(next);
+            return { ok: true };
+          },
+          providerActionExecute: createCliProviderActionExecuteV1({ credentials, operationContext,
+            serverId: 'gateway-home', serverHttpBaseUrl: base,
+            callMachineAction: async () => { throw new Error('Account hub update must not invoke Machine RPC'); } }),
+        });
+        const invocation = { surface: 'cli' as const, serverId: 'gateway-home', authority: 'present_user' as const,
+          actionCaller: { kind: 'host' as const }, actionRequestId: 'gateway-hub-request' };
+        commitCompetingEdit = async () => {
+          expect(await executor.execute('providers.models.source_visibility.set', {
+            action: 'setConnectionVisibility', connectionId: 'pc_hub_approval', shown: false,
+          }, { ...invocation, presentUserConfirmation: { actionId: 'providers.models.source_visibility.set' } }))
+            .toMatchObject({ ok: true });
+        };
+        const creation = await executor.execute('providers.connections.create_contribution', {
+          action: 'createContribution', connectionId: 'pc_hub_approval',
+          contributionKey: 'happier.provider.cliproxyapi/cliproxyapi', displayName: 'Approval Gateway',
+          savedSecretId: null, enable: false, deployment: { kind: 'managedLocal', purposeBindingDefaults: {} },
+        }, { ...invocation, presentUserConfirmation: { actionId: 'providers.connections.create_contribution' } });
+        expect(creation, JSON.stringify(creation)).toMatchObject({ ok: true });
+        const created = catalog.connections[0]!;
+        expect(created).toMatchObject({ revision: 1, deployment: { kind: 'managedLocal' } });
+        expect(await executor.execute('providers.connections.update', {
+          action: 'update', connectionId: created.id, expectedRevision: created.revision,
+          gatewayPlacement: { kind: 'machine', machineId: 'hub-machine' },
+        }, invocation)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        expect(writes).toBe(1);
+        if (scenario === 'connection-edited') {
+          expect(await executor.execute('providers.connections.update', {
+            action: 'update', connectionId: created.id, expectedRevision: created.revision, displayName: 'Concurrent name',
+          }, { ...invocation, presentUserConfirmation: { actionId: 'providers.connections.update' } })).toMatchObject({ ok: true });
+        }
+        if (scenario === 'catalog-edited-before-approval') await commitCompetingEdit();
+        raceNextWrite = scenario === 'catalog-raced';
+        const decided = await executor.execute('approval.request.decide', {
+          artifactId: 'gateway-hub-approval', decision: 'approve',
+        }, invocation);
+        expect(boundaryError).toBeUndefined();
+        const applied = scenario === 'unchanged' || scenario === 'catalog-edited-before-approval';
+        expect(decided).toMatchObject({ ok: true, result: { execution: applied ? { ok: true }
+          : { ok: false, errorCode: scenario === 'connection-edited' ? 'provider_connection_changed' : 'provider_catalog_conflict' } } });
+        const observed = await executor.execute('providers.connections.describe', { connectionId: created.id }, invocation);
+        expect(observed).toMatchObject({ ok: true, result: { connections: [applied
+          ? { connectionId: created.id, revision: 2, gatewayPlacement: { kind: 'machine', machineId: 'hub-machine' } }
+          : { connectionId: created.id, revision: scenario === 'connection-edited' ? 2 : 1 }] } });
+        expect(catalog.connections[0]?.gatewayPlacement).toEqual(applied ? { kind: 'machine', machineId: 'hub-machine' } : undefined);
+        if (scenario === 'catalog-raced' || scenario === 'catalog-edited-before-approval') {
+          expect(catalog.modelPickerVisibilityByConnectionId?.[created.id]).toBe(false);
+        }
+        // One admitted effect; a refused CAS must settle without retrying the mutation.
+        expect(writes).toBe(scenario === 'catalog-raced' || scenario === 'catalog-edited-before-approval' ? 3 : 2);
+      });
+    } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  },
+);
 
 it('does no source or history GETs for repeated post-cutover catalog reads', async () => {
   const credentials = { token: 'provider-cutover-cost', encryption: null };
