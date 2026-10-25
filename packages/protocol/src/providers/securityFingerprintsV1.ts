@@ -155,6 +155,7 @@ function projectManagedRuntimeDeclarationSecurityFactsV1(input: Readonly<{
     managedRuntime: {
       kind: 'managed' as const,
       ...(managedRuntime.sharing ? { sharing: managedRuntime.sharing } : {}),
+      ...(managedRuntime.sourceEnvelopeTransport ? { sourceEnvelopeTransport: managedRuntime.sourceEnvelopeTransport } : {}),
       dependencies: [...managedRuntime.dependencies].sort(
         compareProviderCanonicalStringsV1,
       ),

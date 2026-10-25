@@ -208,6 +208,16 @@ describe('typed provider security fingerprints', () => {
         ...managedDeployment,
         managedRuntime: {
           ...managedDeployment.managedRuntime,
+          sourceEnvelopeTransport: 'cpx-v1',
+        },
+      },
+    })).not.toBe(fingerprint);
+    expect(createProviderConnectionSecurityFingerprintV1({
+      ...input,
+      managedDeployment: {
+        ...managedDeployment,
+        managedRuntime: {
+          ...managedDeployment.managedRuntime,
           connectedAccounts: [{
             ...managedDeployment.managedRuntime.connectedAccounts[0],
             title: 'Use the renamed upstream account',

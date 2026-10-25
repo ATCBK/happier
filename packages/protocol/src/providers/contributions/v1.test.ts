@@ -43,6 +43,22 @@ function validContribution() {
 }
 
 describe('ProviderContributionV1Schema', () => {
+  it('admits and preserves only the explicit private source-envelope transport', () => {
+    const value = { ...validContribution(),
+      catalog: { ...validContribution().catalog, sourceRegistryVersion: 'source-envelope/v1' },
+      managedRuntime: {
+      kind: 'managed', sourceEnvelopeTransport: 'cpx-v1', endpointTemplateIds: ['responses'],
+    } };
+    const contribution = ProviderContributionV1Schema.parse(value);
+    expect(resolveProviderManagedRuntimeDeclarationV1({
+      implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
+      managedRuntime: contribution.managedRuntime!,
+    })).toMatchObject({ sourceEnvelopeTransport: 'cpx-v1' });
+    expect(ProviderContributionV1Schema.safeParse({ ...value, managedRuntime: {
+      ...value.managedRuntime, sourceEnvelopeTransport: 'unknown',
+    } }).success).toBe(false);
+  });
+
   it('retains a credential-free model catalog on its exact managed service purpose', () => {
     const model = { id: 'sdk-model', name: 'SDK model', capabilities: { toolRoundTrips: 'unknown' as const } };
     const value = {
