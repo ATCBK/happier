@@ -29,6 +29,8 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 import type { PluginUiContributionOriginV1 } from '@/sync/domains/plugins/ui/projectionOrigins';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), segments: [] as string[], sessionId: '' }));
 // The cross-package daemon dispatcher can import Socket before the UI installs
@@ -85,6 +87,22 @@ beforeEach(async () => {
   answerDaemonRpc = () => { throw Object.assign(new Error('RPC method not available'), { code: 'RPC_METHOD_NOT_AVAILABLE' }); };
   await homes.reset();
   serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://relay.test', accountId: 'relay-account' });
+  // Let the real Sync bootstrap settle against the same external Session facts
+  // used by the tests; an unclaimed active census is not an older Home here.
+  const sessions = createSessionMetadataHttpBoundary(() => Object.fromEntries(
+    Object.entries(storage.getState().sessions).filter(([, session]) => session.serverId === serverId)));
+  for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization']) {
+    homes.answer(serverId, `GET ${path}`, { select: async () => {
+      const response = sessions.handle(new URL(path, 'https://relay.test'));
+      if (!response) throw new Error(`Missing Session bootstrap fixture: ${path}`);
+      return { status: response.status, body: await response.json() };
+    } });
+  }
+  homes.answer(serverId, 'GET /v2/sessions/metadata-upgrades', { select: async () => {
+    const response = createEmptyAccountBootstrapHttpResponse('/v2/sessions/metadata-upgrades');
+    if (!response) throw new Error('Missing metadata-upgrade bootstrap fixture');
+    return { body: await response.json() };
+  } });
   connection = await restoreServerAccountForTest({ serverUrl: 'https://relay.test', accountId: 'relay-account', request: homes.request });
   installHomeGovernanceBoundaries(homes);
   const features = createRootLayoutFeaturesResponse();
@@ -152,6 +170,12 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       React.createElement(ClientActionReverseRuntime), React.createElement(NextPendingNavigationHost)));
     try {
       expect([...registered].some(method => method.includes('.session.'))).toBe(false);
+      homes.answer(serverId, '/v2/sessions/lookup-by-tags', { body: { sessions: [] } });
+      const backgroundAgent = { ...context, defaultSessionId: 'background-agent-session' };
+      expect(await caller.execute('ui.voice_global.history.search', { refresh: true }, backgroundAgent))
+        .toEqual({ ok: true, result: { sessionId: null, loadedRowCount: 0, hasMore: null, rows: [] } });
+      const voice = await caller.execute('ui.voice_global.get', {}, backgroundAgent);
+      expect(voice).toMatchObject({ ok: true, result: { voice: { status: 'disconnected', attemptId: null } } });
       expect(await caller.execute('session.pending.next', {}, context)).toEqual({ ok: true, result: { status: 'none' } });
       const result = await caller.execute('search.conversations', {
         query: { v: 1, query: 'owned-phrase', scope: { type: 'global' }, mode: 'deep' }, mode: 'indexed',
@@ -164,6 +188,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     } finally { await runtime.unmount(); }
     expect(await caller.execute('session.pending.next', {}, context))
       .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+    expect(await caller.execute('ui.voice_global.history.search', {}, { ...context, defaultSessionId: 'background-agent-session' }))
+      .toMatchObject({ ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable' } });
   });
   it('keeps reverse binding renders and in-flight Actions independent of executable-only AppShell publications', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
@@ -931,6 +957,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       codexBackendMode: 'appServer', codexSessionId: 'teleport-root-thread' };
     const carrierMetadata = { ...metadata,
       codexSessionId: 'teleport-carrier-thread',
+      // Reuse requires the carrier's admitted permission to match the Voice recipe.
+      permissionMode: 'read-only' as const,
       systemSessionV1: { v: 1 as const, key: 'voice_conversation', hidden: true },
       voiceConversationScopeV1: { v: 1 as const, kind: 'session_root' as const, sessionRootId: rootId },
     };
@@ -939,6 +967,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       createSessionFixture({ id: carrierId, serverId, metadata: carrierMetadata }),
     ]);
     let carrier = createPlainSessionCurrentProjectionRecordFixture({ id: carrierId, metadata: carrierMetadata });
+    const root = createPlainSessionCurrentProjectionRecordFixture({ id: rootId, metadata });
+    homes.answer(serverId, `GET /v2/sessions/${rootId}${buildSessionDetailAccessProjectionQuery(serverId)}`, { body: { session: root } });
     const carrierPath = `/v2/sessions/${carrierId}`;
     homes.answer(serverId, `GET ${carrierPath}${buildSessionDetailAccessProjectionQuery(serverId)}`, { select: () => ({ body: { session: carrier } }) });
     const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined

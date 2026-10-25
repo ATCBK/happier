@@ -104,6 +104,7 @@ describe('CLI current-Session controls through the installed answering-client tr
         // Only process/network delivery is replaced; both real executors,
         // Account lifetime capture, option validation and publication run.
         callConnectedClientRpc: async (_method, payload, options) => {
+          if (!connected) return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
           UiActionDispatchRequestV1Schema.parse(payload);
           options.onIssued();
           return { ok: true, result: await (current ? receive : createUiClientActionReverseHandler({ serverId, accountId, isCurrent: () => false }))(

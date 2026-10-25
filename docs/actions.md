@@ -348,6 +348,16 @@ method. An absent viewer returns typed unavailability; several viewers return
 answering App. Explicit mounted Work, current-context command, Workflow draft
 and plugin execution-origin addresses keep their existing routing contracts;
 execution-origin discovery may still enumerate the connected clients.
+Standalone CLI destination selectors are not caller Sessions: opening a Session
+uses the answering App even when that destination is not already viewed. Agent
+bridges and explicit Session caller provenance retain their bound routing.
+
+Voice conversation (including History) and client-placed Settings operations use the generic answering-client
+room even for a Session caller, so visiting Home or Settings does not withdraw
+them. They require one signed-in client connected to the target Machine;
+multiple clients return `client_ambiguous`, and absence returns `noClient` with
+a `connect_client` recovery instruction. Composer and other view-specific
+operations retain their exact Session routing.
 
 In 0.3 development, `ui.pet.choose` is the shared UI, Agent and MCP pet-selection
 Action, executed by the answering client through the existing reverse dispatcher.

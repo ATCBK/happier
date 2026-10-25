@@ -15,6 +15,7 @@ import { isWorkspaceActionId } from './workspaceActionFamily.js';
 import { isUpdatesActionId } from './updatesActionFamily.js';
 import { isAppUpdateActionId } from './appUpdateActionFamily.js';
 import { isAccountLifecycleActionId } from './accountLifecycleActionFamily.js';
+import { isVoiceConversationActionId } from './voiceConversationActionFamily.js';
 
 /** A mounted Session view, rather than any signed-in client on the Account. */
 export function sessionUiActionClientRpcMethod(sessionId: string): string {
@@ -125,9 +126,9 @@ export function clientActionUnavailable(actionId: ActionId): ActionExecuteResult
     return { ok: true, result: { status: 'unavailable', reason: 'noClient' } };
   }
   if (actionId === 'session.pending.next') return { ok: true, result: { status: 'unavailable', reason: 'noClient' } };
-  if (isSettingsDeclarationActionIdV1(actionId)) return { ok: false, errorCode: 'unavailable', error: 'noClient',
+  if (isSettingsDeclarationActionIdV1(actionId) || isVoiceConversationActionId(actionId)) return { ok: false, errorCode: 'unavailable', error: 'noClient',
     details: { reason: 'client_unavailable', recovery: { kind: 'connect_client', rpcMethod: RPC_METHODS.UI_ACTION_EXECUTE,
-      instruction: 'Open a signed-in Happier client connected to the target Machine, then retry this setting Action.' } } };
+      instruction: 'Open a signed-in Happier client connected to the target Machine, then retry this Action.' } } };
   return { ok: false, errorCode: 'unavailable', error: 'noClient' };
 }
 

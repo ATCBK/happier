@@ -1,12 +1,14 @@
 import { vi } from 'vitest';
-import type { RuntimeActionExecute } from '@happier-dev/protocol/actions/executor/types';
+import type { RuntimeActionExecute, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import type { FeaturesResponseSchema } from '@happier-dev/protocol';
+import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
 
 type View = Readonly<{ browserSessionId: string; viewId: string }>;
 type ReverseClient = Readonly<{
     hasConnectedClientRpcHandler(method: string): boolean;
     callConnectedClientRpc(method: string, payload: unknown,
-        options?: Readonly<{ timeoutMs?: number; signal?: AbortSignal; onIssued?: () => void }>): Promise<
+        options?: Readonly<{ timeoutMs?: number | null; signal?: AbortSignal; onIssued?: () => void;
+            answeringClient?: SocketRpcAnsweringClientV1 }>): Promise<
             Readonly<{ ok: true; result: unknown }> | Readonly<{ ok: false; error?: string; errorCode?: string }>>;
 }>;
 
@@ -14,7 +16,9 @@ type ReverseClient = Readonly<{
 export async function loadBrowserDaemonRuntimeForTests() {
     const runtimeSource = '../../../../../cli/src/daemon/runtimeActionExecutor';
     const reverseSource = '../../../../../cli/src/daemon/browser/automation/reverseDispatch';
-    const [runtime, reverse] = await Promise.all([
+    const clientSource = '../../../../../cli/src/session/actions/clientActionReverseDispatch';
+    const transportsSource = '../../../../../cli/src/testkit/actionTransportDeps';
+    const [runtime, reverse, client, transports] = await Promise.all([
         vi.importActual<{ createDaemonRuntimeActionExecutor(input: Readonly<{
             env: Readonly<Record<string, string | undefined>>;
             resolveRouteOwners(): Readonly<{ browserUiAutomation?: Readonly<{
@@ -25,6 +29,9 @@ export async function loadBrowserDaemonRuntimeForTests() {
         vi.importActual<{ createBrowserAutomationReverseDispatcher(input: Readonly<{
             getMachineClient(): ReverseClient | null | undefined;
         }>): RuntimeActionExecute }>(reverseSource),
+        vi.importActual<{ createClientActionReverseDispatcher(getMachineClient: () => ReverseClient | null | undefined):
+            NonNullable<ActionExecutorDeps['clientActionExecute']> }>(clientSource),
+        vi.importActual<{ createUnavailableActionTransportDeps(): ActionExecutorDeps }>(transportsSource),
     ]);
-    return { ...runtime, ...reverse };
+    return { ...runtime, ...reverse, ...client, ...transports };
 }

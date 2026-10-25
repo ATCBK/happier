@@ -21,6 +21,8 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
 import { seedTestServerProfile } from '@/testkit/serverProfiles';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createClientActionReverseDispatcher } from '@/session/actions/clientActionReverseDispatch';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 afterEach(() => { vi.restoreAllMocks(); process.exitCode = undefined; });
 
@@ -76,6 +78,36 @@ function contributedActionDefinition() {
 }
 
 describe('actions root command', () => {
+  it.each([false, true])('opens a Session not already viewed by the signed-in client (exact Machine: %s)', async exactMachine => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const sessionId = `c${'a'.repeat(24)}`;
+    const stored = credentials('stored_session');
+    const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
+    const addressOwner = createCliActionExecutorFromCredentials({ credentials: stored, readCredentials: async () => stored });
+    const opened: string[] = [];
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      clientActionExecute: createClientActionReverseDispatcher(() => ({
+        hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+        // Replace only the network hop; the real CLI, Action executor and
+        // dispatcher must select the App without a mounted destination Session.
+        callConnectedClientRpc: async (method, _request, options) => {
+          if (method !== RPC_METHODS.UI_ACTION_EXECUTE) return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
+          options.onIssued();
+          opened.push(sessionId);
+          return { ok: true, result: { v: 1, execution: { ok: true, result: {
+            status: 'opened', sessionId, serverId: 'home',
+          } } } };
+        },
+      })),
+    });
+    await handleActionsCommand(['invoke', 'session.open', '--input-json', JSON.stringify({ sessionId }),
+      ...(exactMachine ? ['--machine-id', 'machine_1'] : []), '--json'], {
+      readCredentialsFn: async () => stored,
+      createExecutorFn: () => ({ ...executor, resolveSessionTarget: addressOwner.resolveSessionTarget }),
+    });
+    expect(opened).toEqual([sessionId]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
   it.each(['invoke', 'friendly'] as const)('preserves native Goal failure evidence in the %s JSON envelope', async surface => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {

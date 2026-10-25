@@ -17,6 +17,8 @@ import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraf
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
 import { readCliActionBoundSessionId } from './resolveCliActionCallerSession';
+import { isVoiceConversationActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import { isSettingsDeclarationActionIdV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 export type ClientActionMachineRpc = Readonly<{
   hasConnectedClientRpcHandler(method: string): boolean;
@@ -35,16 +37,23 @@ export function createClientActionReverseDispatcher(
       ok: false as const, errorCode, error: errorCode,
     });
     const client = getMachineClient();
-    // Session callers choose the App viewing their Session even when the
-    // mounted operation itself searches or navigates across the Account.
+    // Voice and Settings use the answering Account client's owners even when
+    // the invoking Agent's Session is in the background. View-specific Actions
+    // still require the App viewing their exact Session, without fallback.
+    const accountClientAction = isVoiceConversationActionId(actionId) || isSettingsDeclarationActionIdV1(actionId);
     const composerAction = actionId === 'ui.prompts.picker.open' || actionId === 'composer.transaction.apply'
       || actionId === 'composer.attachments.pick';
     const composerRef = composerAction && input && typeof input === 'object'
       ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
+    // Standalone CLI adapters also put the resolved destination in this field.
+    // It is not a viewed caller Session; Agent/bridge and explicit Session
+    // provenance retain their bound route. Explicit composer refs stay exact.
+    const callerSessionId = context.surface === 'cli' && context.actionCaller?.kind !== 'session'
+      ? null : context.defaultSessionId;
     const targetSessionId = composerRef
       ? typeof composerRef === 'object' && 'sessionId' in composerRef && typeof composerRef.sessionId === 'string'
         ? composerRef.sessionId : null
-      : context.defaultSessionId ? readCliActionBoundSessionId(context.defaultSessionId) : null;
+      : callerSessionId ? readCliActionBoundSessionId(callerSessionId) : null;
     const originAction = PluginExecutionOriginActionIdSchema.safeParse(actionId);
     const originInput = originAction.success ? PluginExecutionOriginActionInputSchemas[originAction.data].parse(input) : null;
     const answeringClient = originInput ? { ...(originInput.clientId ? { clientId: originInput.clientId } : {}),
@@ -63,7 +72,7 @@ export function createClientActionReverseDispatcher(
         && typeof Reflect.get(input, 'commandId') === 'string'
         ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
       : address?.success ? workflowDraftClientRpcMethod(address.data)
-      : !originInput && targetSessionId ? sessionUiActionClientRpcMethod(targetSessionId)
+      : !originInput && !accountClientAction && targetSessionId ? sessionUiActionClientRpcMethod(targetSessionId)
       : RPC_METHODS.UI_ACTION_EXECUTE;
     if (!client) return machineTransportUnavailable();
     // Advertisements are hints, not receiver authority: reconnect/withdrawal can
