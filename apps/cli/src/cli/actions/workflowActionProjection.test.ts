@@ -98,6 +98,7 @@ describe('workflow Action projections', () => {
       'workflow.authoring.draft.redo',
       'workflow.authoring.draft.save',
       'workflow.authoring.draft.undo',
+      'workflow.discussion.round.project',
       'workflow.run.cancel',
       'workflow.run.get',
       'workflow.run.review.draft.set',

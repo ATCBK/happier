@@ -359,7 +359,7 @@ it('refuses a direct development install without registering its source during h
     const handoff = await runtime.owner.changeService.quiesceForHandoff();
     try {
       const refused = await runtime.owner.changeService.requestPluginChange({ kind: 'development', sourceRootPath: entryPath });
-      expect(refused, JSON.stringify(refused)).toMatchObject({ kind: 'unavailable', code: 'daemon_shutting_down' });
+      expect(refused, JSON.stringify(refused)).toMatchObject({ kind: 'unavailable', code: 'daemon_draining' });
       const status = await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'status' });
       expect(status.status.roots).toEqual([]);
       expect(status.status.plugins).toEqual([]);

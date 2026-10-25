@@ -17,19 +17,19 @@ import { scanNativeSkillRoots } from '@/prompts/skills/native/scanNativeSkillRoo
 import { withTempDir } from '@/testkit/fs/tempDir';
 
 const cases = [
-  { manifest: copilot, roots: ['.copilot/skills', '.agents/skills'], project: ['.github/skills', '.agents/skills', '.claude/skills'] },
-  { manifest: qwen, roots: ['.qwen/skills', '.agents/skills'], project: ['.qwen/skills', '.agents/skills'] },
-  { manifest: codebuddy, roots: ['.codebuddy/skills'], project: ['.codebuddy/skills'] },
-  { manifest: devin, roots: ['.config/devin/skills', '.agents/skills'], project: ['.devin/skills', '.agents/skills', '.windsurf/skills'] },
-  { manifest: antigravity, roots: ['.gemini/antigravity-cli/skills'], project: ['.gemini/skills', '.agents/skills'] },
-  { manifest: kiro, roots: ['.kiro/skills'], project: ['.kiro/skills'] },
-  { manifest: kimi, roots: ['.config/agents/skills', '.agents/skills', '.kimi/skills', '.claude/skills', '.codex/skills'], project: ['.agents/skills', '.kimi/skills', '.claude/skills', '.codex/skills'] },
-  { manifest: fx, roots: ['.fx/skills', '.config/opencode/skills', '.codex/skills', '.claude/skills', '.agents/skills', '.claw/skills'], project: ['.fx/skills', 'skills', '.opencode/skills', '.codex/skills', '.claude/skills', '.agents/skills', '.claw/skills'] },
-  { manifest: droid, roots: ['.factory/skills', '.agents/skills', '.agent/skills'], project: ['.factory/skills', '.agents/skills', '.agent/skills'] },
-  { manifest: auggie, roots: ['.augment/skills', '.claude/skills', '.agents/skills'], project: ['.augment/skills', '.claude/skills', '.agents/skills'] },
+  { manifest: copilot, delivery: 'session_dir', roots: ['.copilot/skills', '.agents/skills'], project: ['.github/skills', '.agents/skills', '.claude/skills'] },
+  { manifest: qwen, delivery: 'session_dir', roots: ['.qwen/skills', '.agents/skills'], project: ['.qwen/skills', '.agents/skills'] },
+  { manifest: codebuddy, delivery: 'session_dir', roots: ['.codebuddy/skills'], project: ['.codebuddy/skills'] },
+  { manifest: devin, delivery: 'session_dir', roots: ['.config/devin/skills', '.agents/skills'], project: ['.devin/skills', '.agents/skills', '.windsurf/skills'] },
+  { manifest: antigravity, delivery: 'none', roots: ['.gemini/antigravity-cli/skills'], project: ['.gemini/skills', '.agents/skills'] },
+  { manifest: kiro, delivery: 'none', roots: ['.kiro/skills'], project: ['.kiro/skills'] },
+  { manifest: kimi, delivery: 'none', roots: ['.config/agents/skills', '.agents/skills', '.kimi/skills', '.claude/skills', '.codex/skills'], project: ['.agents/skills', '.kimi/skills', '.claude/skills', '.codex/skills'] },
+  { manifest: fx, delivery: 'none', roots: ['.fx/skills', '.config/opencode/skills', '.codex/skills', '.claude/skills', '.agents/skills', '.claw/skills'], project: ['.fx/skills', 'skills', '.opencode/skills', '.codex/skills', '.claude/skills', '.agents/skills', '.claw/skills'] },
+  { manifest: droid, delivery: 'none', roots: ['.factory/skills', '.agents/skills', '.agent/skills'], project: ['.factory/skills', '.agents/skills', '.agent/skills'] },
+  { manifest: auggie, delivery: 'session_dir', roots: ['.augment/skills', '.claude/skills', '.agents/skills'], project: ['.augment/skills', '.claude/skills', '.agents/skills'] },
 ] as const;
 
-it.each(cases)('discovers the declared native roots of $manifest.id while retaining index-only delivery', async ({ manifest, roots, project }) => {
+it.each(cases)('discovers the declared native roots of $manifest.id while retaining its declared skill delivery', async ({ manifest, delivery, roots, project }) => {
   await withTempDir('happier-acp-native-root-contract-', async dir => {
     const home = join(dir, 'home'); const cwd = join(dir, 'project');
     await mkdir(join(cwd, '.git'), { recursive: true });
@@ -40,10 +40,14 @@ it.each(cases)('discovers the declared native roots of $manifest.id while retain
     }
     const agent = PluginAgentContributionV2Schema.parse(manifest.contributes.agents?.[0]);
     const skills = 'skills' in agent.capabilities ? agent.capabilities.skills : undefined;
-    expect(skills?.delivery).toBe('none');
+    expect(skills?.delivery).toBe(delivery);
     const scan = await scanNativeSkillRoots({ nativeRoots: skills?.nativeRoots, home, directory: cwd });
     expect(scan.status).toBe('ok');
     expect(scan.names.map(item => item.root).sort()).toEqual(expected.sort());
-    if ('runtime' in agent && agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
+    if ('runtime' in agent && agent.runtime.kind === 'acp') {
+      const definitionSkills = agent.runtime.definition?.skills;
+      if (delivery === 'none') expect(definitionSkills).toBeUndefined();
+      else expect(Object.keys(definitionSkills ?? {}).filter(key => key !== 'sessionDelivery')).toEqual([]);
+    }
   });
 });

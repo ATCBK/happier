@@ -112,7 +112,9 @@ describe('createExternalMcpServer plugin tools', () => {
         expect(await client.callTool({ name: advertised.name, arguments: input })).toMatchObject({ isError: true });
       }
       expect(await client.callTool({ name: 'acme_union_missing', arguments: { kind: 'text', text: 'wrong route' } })).toMatchObject({ isError: true });
-      expect(boundary.daemonPost).not.toHaveBeenCalled();
+      // A refused input reads the Action descriptor only to redact declared secrets
+      // from its repair facts; no refused call may reach the Action itself.
+      expect(boundary.daemonPost.mock.calls.map(([, request]) => request.actionId)).toEqual(Array(3).fill('action.spec.get'));
     } finally { await client.close(); await mcp.close(); }
   });
 

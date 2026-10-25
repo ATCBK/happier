@@ -8,6 +8,7 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { reloadConfiguration } from '@/configuration';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 
 describe('auth pair-remote diagnostic secret custody', () => {
   it.each([true, false])('redacts post-pair diagnostics (valid JSON=%s)', async validJson => {
@@ -22,6 +23,7 @@ describe('auth pair-remote diagnostic secret custody', () => {
         'HAPPIER_WEBAPP_URL', 'HAPPIER_LOG_LEVEL']);
       const app = fastify({ logger: false });
       app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+      app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
       app.post('/v1/auth/response', async () => ({ success: true }));
       await app.ready();
       const restoreAxios = installAxiosFastifyAdapter({ app, origin: 'https://happier-auth.test' });

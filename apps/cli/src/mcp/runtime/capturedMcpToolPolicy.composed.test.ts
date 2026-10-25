@@ -129,7 +129,8 @@ it('captured Account socket and reconnect row changes update Session and Run pol
     expect(run.getImmediateDecision('ask', 'mcp__docs__write', {})).toBeNull();
     expect(cursor).toBe(revision);
     expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
-    expect(followWakes).toBe(1); expect(updates).toBe(1);
+    // An Account-catalog change is unrelated to this Session's Follow context; only its own change kinds wake it.
+    expect(followWakes).toBe(0); expect(updates).toBe(1);
     unavailableStorage = true;
     let acknowledgedAfterMcpFailure = false;
     await runWithServerHttpBaseUrl(url, () => runSessionChangesSyncOnConnect({ reason: 'reconnect', token: credentials.token, sessionId: session.sessionId, lastObservedMessageSeq: 0,
@@ -137,7 +138,7 @@ it('captured Account socket and reconnect row changes update Session and Run pol
       writeChangesCursor: async () => { acknowledgedAfterMcpFailure = true; }, catchUpSessionMessages: async () => {}, syncSessionSnapshotFromServer: async () => true,
       refreshDemandedAccountCatalogs: resolver.refreshDemandedMcpCatalog, onDebug() {} }));
     expect(acknowledgedAfterMcpFailure).toBe(true);
-    expect(operation.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'encryption-material-unavailable' });
+    expect(operation.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
     // Lost catalog authority cannot reuse a persistent Allow. Both real
     // interactive handlers defer to a fresh prompt rather than auto-approving.
     expect(handler.getImmediateDecision('unavailable', 'mcp__docs__write', {})).toBeNull();

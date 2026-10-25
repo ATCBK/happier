@@ -271,7 +271,7 @@ describe('happier session send (action executor)', () => {
 
   it.each([
     ['uses the default timeout when --timeout is omitted', ['send', 'sess-1', 'Hello', '--json'], 300],
-    ['clamps an explicit timeout to the supported maximum', ['send', 'sess-1', 'Hello', '--timeout', '9999', '--json'], 3600],
+    ['passes an explicit timeout through; the canonical send input has no ceiling', ['send', 'sess-1', 'Hello', '--timeout', '9999', '--json'], 9999],
   ])('%s', async (_label, argv, expectedTimeoutSeconds) => {
     execute.mockResolvedValueOnce({
       ok: true,

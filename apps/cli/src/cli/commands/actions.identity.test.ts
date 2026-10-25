@@ -2,6 +2,7 @@ import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { handleActionsCommand } from './actions';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 afterEach(() => {
@@ -22,14 +23,9 @@ it('admits the same qualified widget Home through ambient and explicit generic A
   // generic command, credential target, executor and widget admission stay real.
   const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner', session: 'fixture-terminal-enrollment' })).toString('base64url')}.signature`;
   const credentials = { token, encryption: null };
-  const profile = {
-    id: 'profile-a', name: 'Home A', serverUrl: 'https://home-a.example.test',
-    webappUrl: 'https://home-a.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1,
-    homeConnectionDescriptorAuthority: 'exact' as const,
-    homeConnectionDescriptor: { v: 1 as const, homeServerIdentityId: 'srv_home_a',
-      canonicalServerUrl: 'https://home-a.example.test', revision: 1,
-      endpoints: [{ kind: 'https' as const, url: 'https://home-a.example.test' }] },
-  };
+  // The saved Home is persisted at the settings boundary: Action target resolution
+  // reads the exact Home identity back from it rather than from the injected profile read.
+  const profile = await seedTestServerProfile({ id: 'profile-a', homeId: 'srv_home_a', serverUrl: 'https://home-a.example.test' });
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/profile') return { status: 200, data: { id: 'owner' } };

@@ -176,7 +176,8 @@ async function writeBundledFirstPartyDescriptorPackFixture(repoRoot: string): Pr
       version: '0.0.0',
       private: true,
       type: 'module',
-      main: './dist/index.js',
+      // A descriptor-only package declares no author entry: a `main` module is
+      // an author entry and would require the public SDK dependency instead.
       files: ['dist', '.happier-plugin', 'package.json'],
     }, null, 2), 'utf8'),
     writeFile(join(packageRoot, 'dist', 'index.js'), 'export const bundled = true;\n', 'utf8'),

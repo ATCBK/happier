@@ -7,6 +7,7 @@ import {
   runCompiledActionCliCommand,
   type ActionCliExecutionDeps,
 } from '@/cli/actions/executeCommand';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
 import { handleSessionCommand } from './handleSessionCommand';
 import { SESSION_LIST_PRESENTATION } from './sessionListPresentation';
 
@@ -276,24 +277,16 @@ describe('happier session list (action executor)', () => {
       token: 'home-b-token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(2) },
     };
-    const getServerProfileFn = vi.fn(async () => ({
+    // Target resolution reads the exact Home identity back from saved settings, so the
+    // profile is persisted at that boundary and the injected read returns the same record.
+    const savedProfile = await seedTestServerProfile({
       id: 'home-b-profile',
-      name: 'Home B',
+      homeId: 'srv_home_b_stable',
       serverUrl: 'https://home-b.example.test',
       localServerUrl: 'http://127.0.0.1:43100',
       webappUrl: 'https://app.home-b.example.test',
-      createdAt: 1,
-      updatedAt: 1,
-      lastUsedAt: 1,
-      homeConnectionDescriptor: {
-        v: 1 as const,
-        homeServerIdentityId: 'home-b-stable',
-        canonicalServerUrl: 'https://home-b.example.test',
-        revision: 1,
-        endpoints: [{ kind: 'https' as const, url: 'https://home-b.example.test' }],
-      },
-      homeConnectionDescriptorAuthority: 'exact' as const,
-    }));
+    });
+    const getServerProfileFn = vi.fn(async () => savedProfile);
     const readCredentialsForServerIdFn = vi.fn(async () => selectedCredentials);
     const serverFeaturesSnapshot = {
       status: 'ready' as const,
@@ -343,7 +336,7 @@ describe('happier session list (action executor)', () => {
       expect(createExecutorFn).toHaveBeenCalledWith(expect.objectContaining({
         credentials: selectedCredentials,
         serverId: 'home-b-profile',
-        serverIdentityId: 'home-b-stable',
+        serverIdentityId: 'srv_home_b_stable',
         serverApiUrl: 'http://127.0.0.1:43100',
         resolveServerFeaturesSnapshot: expect.any(Function),
         readCredentials: expect.any(Function),

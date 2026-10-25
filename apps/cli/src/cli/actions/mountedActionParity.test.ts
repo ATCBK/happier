@@ -14,7 +14,7 @@ const cases = [
   { id: 'session.work.get', input: { sessionId: 'session-a' }, result: { status: 'ready', sessionId: 'session-a',
     summary: { outstanding: 0, needsYou: 0, stalled: 0, sessions: 0, runs: 0 }, items: [],
     managedRuns: { phase: 'loaded', refreshFailed: false } } },
-  { id: 'inbox.get', input: {}, result: { status: 'ready', groups: [], approvalIds: [], usageNoticeIds: [],
+  { id: 'inbox.get', input: {}, result: { status: 'ready', groups: [], items: [], coverage: { discussions: 'complete' }, approvalIds: [], usageNoticeIds: [],
     friendRequestIds: [], automationRunIds: [], readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false } },
   { id: 'inbox.mark_all_read', input: { targets: [{ serverId: 'home-a', sessionId: 'session-a' }] },
     result: { results: [{ serverId: 'home-a', sessionId: 'session-a', status: 'succeeded' }] } },
@@ -51,6 +51,8 @@ function cliInput(actionId: ActionId, input: unknown) {
 
 const context = { surface: 'cli', authority: 'account_automation', defaultSessionId: 'session-a', bypassApprovals: true } as const;
 const commands = listCompiledActionCliCommands();
+// The private Inbox read is admitted only for the host's own captured Account.
+const contextFor = (id: ActionId) => id === 'inbox.get' ? { ...context, runtimeAccountId: scope.accountId } : context;
 
 describe('mounted Action CLI parity', () => {
   it('does not expose undeclared client scope Actions', () => {
@@ -78,7 +80,7 @@ describe('mounted Action CLI parity', () => {
       currentSessionPresentationApply: respond,
     } satisfies Partial<ActionExecutorDeps>;
     const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...mountedPorts });
-    await expect(executor.execute(id, normalizedInput, context)).resolves.toEqual({ ok: true, result });
+    await expect(executor.execute(id, normalizedInput, contextFor(id))).resolves.toEqual({ ok: true, result });
     expect(delivered).toEqual([normalizedInput]);
   });
 
@@ -98,7 +100,7 @@ describe('mounted Action CLI parity', () => {
         || id === 'session.draft.append' || id === 'session.draft.directory.set'
         ? { ok: true, result: { status: 'unavailable' } }
       : { ok: false, errorCode: 'unavailable', error: 'noClient' };
-    await expect(executor.execute(id, normalizedInput, context)).resolves.toEqual(expected);
+    await expect(executor.execute(id, normalizedInput, contextFor(id))).resolves.toEqual(expected);
   });
 });
 

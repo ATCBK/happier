@@ -42,7 +42,7 @@ describe('external MCP rule Account custody composition', () => {
       };
       const continuing = Object.hasOwn(request.body as object, 'cursor');
       return { sessions: continuing
-        ? [{ ...createSessionNotificationContextFixture('matching'), ownerAccountId: 'rule-owner', origin: { kind: 'none' }, encryptionMode: 'plain', metadata: JSON.stringify({ projectId: 'payments' }) }]
+        ? [{ ...createSessionNotificationContextFixture('matching'), ownerAccountId: 'rule-owner', origin: { kind: 'none' }, encryptionMode: 'plain', projectKey: 'payments', metadata: JSON.stringify({}) }]
         : [{ ...createSessionNotificationContextFixture('locked'), ownerAccountId: 'rule-owner', origin: { kind: 'none' }, metadata: 'unreadable-ciphertext' }],
         nextCursor: continuing ? null : encodeV2SessionListCursorV1('locked'), hasNext: !continuing,
         attentionNextCursor: null, attentionHasNext: false };

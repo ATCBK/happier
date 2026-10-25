@@ -9,6 +9,7 @@ import { SignedRootActionExecuteRequestSchema, SIGNED_ROOT_ACTION_EXECUTE_PATH }
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { handleActionsCommand } from './actions';
 
 afterEach(() => {
@@ -25,6 +26,21 @@ it('admits exact Stop targets without opening Session content and preserves rece
     void (async () => {
       requests.push(`${request.method} ${request.url}`);
       response.setHeader('content-type', 'application/json');
+      // Original CLI invocation derives the owning Machine from the exact Session's
+      // Home record and Account currentness; it never reads Session content.
+      if (request.url === '/v1/features/authenticated') {
+        response.end(JSON.stringify({ features: {}, capabilities: { serverIdentity: { serverIdentityId: 'stop-home-identity' } } }));
+        return;
+      }
+      if (request.url === '/v1/account/encryption/currentness') {
+        response.end(JSON.stringify(createAccountEncryptionCurrentnessFixture({ mode: 'plain' })));
+        return;
+      }
+      if (request.url?.startsWith(`/v2/sessions/${sessionId}?`) || request.url === `/v2/sessions/${sessionId}`) {
+        response.end(JSON.stringify({ session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+          metadata: JSON.stringify({ machineId: 'own-machine', path: '/repo' }) }) }));
+        return;
+      }
       if (request.url !== SIGNED_ROOT_ACTION_EXECUTE_PATH) {
         response.writeHead(403);
         response.end(JSON.stringify({ error: 'Session content is unavailable' }));
@@ -86,7 +102,8 @@ it('admits exact Stop targets without opening Session content and preserves rece
       };
       const first = await invoke(sessionId);
       expect(first, JSON.stringify({ first, requests })).toMatchObject({ ok: true, data: { sessionId, stopped: true } });
-      expect(requests).toEqual([`POST ${SIGNED_ROOT_ACTION_EXECUTE_PATH}`]);
+      expect(requests.filter(request => request.includes('/messages'))).toEqual([]);
+      expect(requests.filter(request => request.startsWith('POST'))).toEqual([`POST ${SIGNED_ROOT_ACTION_EXECUTE_PATH}`]);
       expect(received).toEqual([expect.objectContaining({ actionId: 'session.stop', input: { sessionId },
         target: { kind: 'machine', machineId: 'own-machine' } })]);
       denyStop = true;

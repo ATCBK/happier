@@ -90,7 +90,8 @@ describe('callBuiltInHappierTool plugin tools', () => {
       ok: true,
       result: { completed: true },
     });
-    expect(daemonBoundary.executeAction).toHaveBeenCalledWith({
+    // Placement admission reads the descriptor first; the effect is the last daemon request.
+    expect(daemonBoundary.executeAction.mock.calls.at(-1)?.[0]).toEqual({
       actionId: 'acme.review.plugin/review-start',
       input: { scope: 'diff' },
       surface: 'cli',

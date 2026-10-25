@@ -15,7 +15,7 @@ describe('createExternalMcpServer with an API token', () => {
     const sessionId = 'c123456789012345678901234';
     const spec = getActionSpec('session.status.get');
     if (!spec.outputSchema) throw new Error('Session status must declare its public output');
-    const status = spec.outputSchema.parse({ session: { id: sessionId, active: true } });
+    const status = spec.outputSchema.parse({ session: { id: sessionId, createdAt: 1, updatedAt: 2, active: true, activeAt: 2, encryption: null } });
     const app = Fastify();
     const requests: unknown[] = [];
     // Home HTTP is the genuine system boundary. MCP registration, the Action

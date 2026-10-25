@@ -47,7 +47,7 @@ describe('createExternalMcpServer Session Follow dependencies', () => {
       const refused = textResult.parse(result);
       expect(refused.isError).toBe(true);
       expect(JSON.parse(refused.content[0]!.text)).toMatchObject({
-        errorCode: 'unavailable', error: 'noClient',
+        errorCode: 'daemon_unavailable', error: 'daemon_unavailable',
       });
       expect(boundary.request).not.toHaveBeenCalled();
     } finally {

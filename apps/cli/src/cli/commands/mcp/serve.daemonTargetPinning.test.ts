@@ -5,12 +5,14 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer, type Server } from 'node:http';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 import { reloadConfiguration } from '@/configuration';
 import { readDaemonPluginCatalog } from '@/daemon/controlClient';
 import { resolveLiveDaemonControlTargetForServer } from '@/daemon/multiDaemon';
 import { disableMcpStdioConsolePatch } from '@/mcp/server/mcpStdioConsolePatch';
+import { readStoredCredentialsForServerId, writeStoredCredentialsForServerId } from '@/persistence';
 import { addServerProfile } from '@/server/serverProfiles';
 import { applyEphemeralServerSelectionFromPrefixArgs } from '@/server/serverSelection';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -43,6 +45,13 @@ const pluginTool = {
   surfaces: ['mcp' as const],
 };
 
+const pluginActionSpec = ActionDefinitionV1Schema.parse({
+  id: pluginTool.actionId, title: pluginTool.title, description: null, safety: 'safe', executionPlacement: 'machine',
+  placements: [], slash: null, bindings: null, examples: null, inputHints: null,
+  surfaces: { agent: false, mcp: true, cli: false },
+  inputSchema: pluginTool.inputSchema,
+});
+
 async function startDaemonControlServer(
   daemonName: string,
   observed: ObservedDaemonRequest[],
@@ -60,10 +69,17 @@ async function startDaemonControlServer(
       return;
     }
     if (request.url === '/plugins/actions/execute') {
-      response.end(JSON.stringify({
-        matched: true,
-        result: { ok: true, result: { daemon: daemonName } },
-      }));
+      void (async () => {
+        let body = '';
+        for await (const chunk of request) body += String(chunk);
+        const { actionId } = JSON.parse(body) as { actionId?: string };
+        // Placement admission reads the semantic descriptor from this same daemon before the effect.
+        response.end(JSON.stringify({
+          matched: true,
+          result: { ok: true, result: actionId === 'action.spec.get'
+            ? { actionSpec: pluginActionSpec } : { daemon: daemonName } },
+        }));
+      })();
       return;
     }
     response.statusCode = 404;
@@ -174,10 +190,14 @@ describe('happier mcp serve daemon target pinning', () => {
 
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: 'daemon-target-pinning-test', version: '1.0.0' }, { capabilities: {} });
-      const credentials = {
+      // Plugin execution re-reads the Home's stored credential to prove the served one is
+      // still current, so the credential lives at the persistence boundary and is served from it.
+      await writeStoredCredentialsForServerId(selectedProfile.id, {
         token: 'selected-home-token',
-        encryption: { type: 'legacy' as const, secret: new Uint8Array([1, 2, 3, 4]) },
-      };
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      });
+      const credentials = await readStoredCredentialsForServerId(selectedProfile.id);
+      if (!credentials) throw new Error('Expected the selected Home credential');
       const deps: McpCommandDeps = {
         readStoredCredentials: async () => credentials,
         ensureMachineIdForCredentials: async () => ({ machineId: 'machine-selected' }),
@@ -207,6 +227,7 @@ describe('happier mcp serve daemon target pinning', () => {
         expect(result.structuredContent).toEqual({ daemon: 'selected' });
         expect(selectedRequests.map(({ path }) => path)).toEqual([
           '/plugins/catalog/read',
+          '/plugins/actions/execute',
           '/plugins/actions/execute',
         ]);
         expect(attackerRequests).toEqual([]);
