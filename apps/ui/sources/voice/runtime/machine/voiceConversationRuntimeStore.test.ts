@@ -37,6 +37,11 @@ describe('voiceConversationRuntimeStore', () => {
             expect(listener).toHaveBeenCalledTimes(2);
             setVoiceConversationRuntimeSnapshot(current => ({ ...current, inUseVoice: { ...inUseVoice } }));
             expect(listener).toHaveBeenCalledTimes(2);
+            const preparedInstructionsFor = { serverId: 'home', sessionId: 'target' };
+            setVoiceConversationRuntimeSnapshot(current => ({ ...current, preparedInstructionsFor }));
+            expect(listener).toHaveBeenCalledTimes(3);
+            setVoiceConversationRuntimeSnapshot(current => ({ ...current, preparedInstructionsFor: { ...preparedInstructionsFor } }));
+            expect(listener).toHaveBeenCalledTimes(3);
         } finally {
             unsubscribe();
         }

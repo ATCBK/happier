@@ -36,6 +36,7 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
     const starts: Array<ReturnType<typeof ExecutionRunTurnStreamStartRequestSchema.parse>> = [];
     const reads: Array<ReturnType<typeof ExecutionRunTurnStreamReadRequestSchema.parse>> = [];
     let events: ExecutionRunTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
+    let preparedInstructionsFor: ReturnType<typeof ExecutionRunTurnStreamReadResponseSchema.parse>['preparedInstructionsFor'];
     let beforeRead: (() => void) | undefined;
     let nextStartError: Readonly<{ error: string; errorCode: string }> | null = null;
     let transcript: NonNullable<ReturnType<typeof ExecutionRunEnsureOrStartRequestSchema.parse>['start']>['transcript'];
@@ -68,6 +69,7 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
                 beforeRead?.();
                 return ExecutionRunTurnStreamReadResponseSchema.parse({
                     streamId: 'streaming-turn', events, nextCursor: events.length, done: true,
+                    ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}),
                 });
             }
             if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) return { ok: true };
@@ -126,6 +128,7 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
     return {
         starts, reads, rpc, transport, controlSessionId, fixture, storage,
         setEvents(value: ExecutionRunTurnStreamEvent[]) { events = value; },
+        setPreparedInstructionsFor(value: NonNullable<typeof preparedInstructionsFor>) { preparedInstructionsFor = value; },
         beforeRead(callback: () => void) { beforeRead = callback; },
         rejectNextStart(error: string, errorCode: string) { nextStartError = { error, errorCode }; },
         setPrivacy(currentUiContextMode: 'automatic' | 'on_demand' | 'off') {
@@ -183,6 +186,26 @@ async function mountAutomaticUiContext() {
 }
 
 describe('Voice streaming through retained initialization, execution transport and daemon RPC', () => {
+    it.each([true, false])('projects actual delivered instructions through local tool delivery (streaming=%s)', async streaming => {
+        const f = await createStreamingFixture({ streaming, target: true });
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const receipt = { serverId: captureActiveServerAccountScopeLifetime()!.scope.serverId, sessionId: 'streaming-target' };
+        f.setPreparedInstructionsFor(receipt);
+        const { sendVoiceTextTurn } = await import('@/voice/local/sendVoiceTextTurn');
+        const { createVoicePlaybackController } = await import('@/voice/runtime/playback/VoicePlaybackController');
+        const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        const { deriveLocalVoiceSessionSnapshot } = await import('@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot');
+        const { readLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+        const settings = f.storage.getState().settings;
+        const local = readLocalConversationVoiceSettings(settings.voice);
+        await sendVoiceTextTurn({ sessionId: f.controlSessionId, settings: { ...settings, voice:
+            writeVoiceProviderSettingsConfig(settings.voice, 'local_conversation', { ...local, tts: { ...local.tts, autoSpeakReplies: false } }) },
+            userText: 'hello', playbackController: createVoicePlaybackController(), voiceAgentSessions: f.transport,
+            durableDispatch: { localId: 'receipt-local', deliveryCommand: 'interrupt_and_send' } });
+        expect(deriveLocalVoiceSessionSnapshot('local_conversation', 'local', machine.getSnapshot()).preparedInstructionsFor).toEqual(receipt);
+        machine.transitionToEnding({ controlSessionId: f.controlSessionId });
+        expect(machine.getSnapshot().preparedInstructionsFor).toBeUndefined();
+    });
     it.each([
         { streaming: true, anchor: 'none' },
         { streaming: false, anchor: 'none' },
