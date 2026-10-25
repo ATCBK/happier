@@ -17179,6 +17179,7 @@ settingsSession: {
         },
         run: {
             notRun: "このチェックアウトではまだ実行されていません",
+            waitsForSetup: "セットアップを待機中",
             accepted: "受け付けました。開始を待っています。",
             running: ({ machine }: { machine: string }) => `${machine} で実行中`,
             completed: ({ time }: { time: string }) => `完了 ${time}`,
@@ -17209,6 +17210,7 @@ settingsSession: {
             values: "値",
             valuesNote: "名前のみ。値は実行時に入ります。",
             stepsUnavailable: "セットアップの手順を読み取れませんでした。",
+            review: "セットアップを確認",
             from: "出典",
             viewFile: "ファイルを表示",
             sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `${machine} で ${osUser} として実行されます。このプロジェクトへの承認は、セットアップが変わるまで有効です。`,

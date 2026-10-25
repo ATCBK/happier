@@ -17091,6 +17091,7 @@ settingsSession: {
         },
         run: {
             notRun: "Jeszcze nie uruchamiano w tym checkoucie",
+            waitsForSetup: "Czeka na konfigurację",
             accepted: "Przyjęto. Czeka na start.",
             running: ({ machine }: { machine: string }) => `Działa na ${machine}`,
             completed: ({ time }: { time: string }) => `Ukończono ${time}`,
@@ -17121,6 +17122,7 @@ settingsSession: {
             values: "Wartości",
             valuesNote: "Tylko nazwy; wartości są uzupełniane przy uruchomieniu.",
             stepsUnavailable: "Nie udało się odczytać kroków konfiguracji.",
+            review: "Sprawdź konfigurację",
             from: "Z",
             viewFile: "Pokaż plik",
             sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Działa jako ${osUser} na ${machine}. Twoje zatwierdzenie dla tego projektu obowiązuje, dopóki konfiguracja się nie zmieni.`,

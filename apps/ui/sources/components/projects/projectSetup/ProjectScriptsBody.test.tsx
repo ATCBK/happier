@@ -115,6 +115,7 @@ vi.mock('@/text', async () => {
 });
 
 const { ProjectScriptsBody } = await import('./ProjectScriptsBody');
+const { ProjectPageBackProvider } = await import('@/components/projects/detail/projectPageBack');
 const { AppPaneScopeLayoutProvider } = await import('@/components/appShell/panes/hooks/useAppPaneScopeLayout');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { actionOperationStore } =
@@ -234,7 +235,12 @@ function operation(
 async function render(
   presentation: 'page' | 'widget',
   ready: string,
-  host: Readonly<{ outputScopeId?: string; bottomPresentation?: 'docked' | 'overlay' }> = {},
+  host: Readonly<{
+    outputScopeId?: string;
+    bottomPresentation?: 'docked' | 'overlay';
+    /** The Project's phone bar: receives the way back a pushed page registers. */
+    registerPageBack?: (back: (() => void) | null) => void;
+  }> = {},
 ) {
   connection ??= await restoreServerAccountForTest({
     serverUrl: workspaceServerUrl,
@@ -279,7 +285,7 @@ async function render(
       revisionsByPhysicalKey: {},
     },
   });
-  const body = (
+  const scripts = (
     <ProjectScriptsBody
       workspace={workspace}
       presentation={presentation}
@@ -287,6 +293,9 @@ async function render(
       outputScopeId={host.outputScopeId}
     />
   );
+  const body = host.registerPageBack
+    ? <ProjectPageBackProvider value={host.registerPageBack}>{scripts}</ProjectPageBackProvider>
+    : scripts;
   const screen = await renderScreen(
     host.bottomPresentation ? (
       <AppPaneScopeLayoutProvider
@@ -684,7 +693,7 @@ describe('ProjectScriptsBody runs', () => {
     expect(
       screen.findByTestId('scripts.setup.review.effect:step:0'),
     ).toBeTruthy();
-    expect(textOf(screen, 'scripts.setup.review')).toContain('worker-machine');
+    expect(screen.getTextContent()).toContain('worker-machine');
     shared.operationRead
       .mockResolvedValueOnce({ kind: 'found', operation: held })
       .mockResolvedValueOnce({
@@ -1421,6 +1430,78 @@ describe('ProjectScriptsBody on a phone', () => {
     await vi.waitFor(() => expect(show).toHaveBeenCalledTimes(1));
     expect(shared.calls.some((call) => call.actionId === 'session.terminals.open')).toBe(false);
     show.mockRestore();
+  });
+});
+
+describe('ProjectScriptsBody setup review on a phone', () => {
+  beforeEach(isolateManifestDrafts);
+  const devenv = { kind: 'toolchain', tool: 'devenv', configPath: 'devenv.nix' } as const;
+  const literal = { kind: 'command', command: 'devenv shell -- true' } as const;
+  const hold = (): ActionOperationSnapshotV1 => ({
+    ...operation('accepted', 2),
+    domainRef: { kind: 'projectCommand', purpose: 'script', serverId: workspace.serverId, machineId: 'm1',
+      workspaceRefId: 'w1', cwd: '/repo', sourceWorkspace: workspace, script: { name: 'verify', source: literal } },
+    setupReview: { kind: 'pendingApproval' as const, code: 'project_setup_consent_required',
+      reviewedEffectDigest: hash, reviewedEffect: { commands: [{ source: literal }] } },
+  });
+  const present = () => {
+    shared.device = 'phone';
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: devenv, scripts: { verify: { source: literal } } }),
+      detection,
+      importCandidates: [],
+    };
+    actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [hold()] });
+  };
+
+  it('keeps the Setup card to the waiting state and pushes the review as its own page with a pinned footer', async () => {
+    present();
+    let back: (() => void) | null = null;
+    const screen = await render('page', 'scripts.setup.reviewEntry', { registerPageBack: (next) => { back = next; } });
+    expect(textOf(screen, 'scripts.setup')).toContain('projects.scripts.environment.pending');
+    // The decision is not made on the card: no review body, scope choice or Run beside the page's rows.
+    expect(screen.findByTestId('scripts.setup.review')).toBeNull();
+    expect(screen.findByTestId('scripts.setup.reviewPage')).toBeNull();
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewEntry'); });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.reviewPage')).toBeTruthy());
+    expect(textOf(screen, 'scripts.setup.reviewPage.title')).toContain('projects.scripts.setup.review');
+    expect(screen.findByTestId('scripts.setup.reviewPage.effect:step:0')).toBeTruthy();
+    const footer = screen.findByTestId('scripts.setup.reviewPage.actions');
+    expect(footer?.findAllByProps({ testID: 'scripts.setup.reviewPage.run' }).length).toBeGreaterThan(0);
+    expect(footer?.findAllByProps({ testID: 'scripts.setup.reviewPage.notNow' }).length).toBeGreaterThan(0);
+    // The Project bar's Back is the page's way out, and the choice made on the page survives it.
+    expect(back).not.toBeNull();
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewPage.scope:untilChanged'); });
+    await act(async () => { back?.(); });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.reviewPage')).toBeNull());
+    expect(back).toBeNull();
+    expect(screen.findByTestId('scripts.setup.reviewEntry')).toBeTruthy();
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewEntry'); });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('projects.scripts.setup.consequenceUntilChanged'));
+  });
+
+  it('decides on the page like the card does, and leaves the page once the review is decided', async () => {
+    present();
+    const screen = await render('page', 'scripts.setup.reviewEntry', { registerPageBack: () => {} });
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewEntry'); });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.reviewPage')).toBeTruthy());
+    shared.operationRead
+      .mockResolvedValueOnce({ kind: 'found', operation: hold() })
+      .mockResolvedValueOnce({ kind: 'found', operation: { ...hold(), revision: 3, setupReview: undefined } });
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewPage.scope:untilChanged'); });
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.reviewPage.run'); });
+    await vi.waitFor(() => expect(shared.trustMutations).toEqual([expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({ reviewedEffectDigest: hash }) } })]));
+    await act(async () => {
+      actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [{ ...hold(), revision: 3, setupReview: undefined, state: 'succeeded' } as never] });
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.reviewPage')).toBeNull());
+  });
+
+  it('keeps the inline review where no pushed page exists: a desktop page and a compact host', async () => {
+    present();
+    shared.device = null;
+    const screen = await render('page', 'scripts.setup.review');
+    expect(screen.findByTestId('scripts.setup.reviewEntry')).toBeNull();
   });
 });
 

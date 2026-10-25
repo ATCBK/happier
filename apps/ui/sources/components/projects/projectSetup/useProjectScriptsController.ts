@@ -24,7 +24,7 @@ import {
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { ProjectNativeRefV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import { decideProjectSetupConsent, type ProjectSetupDecision } from './projectSetupConsentDecision';
-import { useProjectSetupRun } from './projectScriptRuns';
+import { useProjectHeldSetupReview, useProjectSetupRun } from './projectScriptRuns';
 import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import type { ActionOperationAddress, QualifiedActionOperation } from '@/sync/domains/actionOperations/qualifiedActionOperation';
@@ -101,8 +101,10 @@ export function useProjectScriptsController(
   const [retained, setRetained] = React.useState<Readonly<{ scopeKey: string; address: ActionOperationAddress }> | null>(null);
   const retainedOperation = useActionOperation(retained?.scopeKey === scopeKey
     ? retained.address : { serverId: workspace.serverId, operationId: '' });
+  // A review survives a reload and another client's Run: the store's held review is the checkout's own.
+  const storeHeldOperation = useProjectHeldSetupReview(workspace, accountId);
   const heldOperation = retainedOperation?.snapshot.setupReview ? retainedOperation
-    : setupOperation?.snapshot.setupReview ? setupOperation : null;
+    : setupOperation?.snapshot.setupReview ? setupOperation : storeHeldOperation;
   const heldReview = heldOperation?.snapshot.setupReview;
   const approval = useActionApprovalContinuation({
     scopeKey,

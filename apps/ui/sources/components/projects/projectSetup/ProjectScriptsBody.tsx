@@ -68,8 +68,9 @@ import {
   useProjectSetupRun,
 } from './projectScriptRuns';
 import { ProjectScriptRow } from './ProjectScriptRow';
-import { ProjectSetupReview } from './ProjectSetupReview';
-import { useProjectSetupMachine } from './useProjectSetupMachine';
+import { ProjectSetupReview, type ProjectSetupScope } from './ProjectSetupReview';
+import { ProjectSetupReviewPage, useProjectSetupReviewDecision } from './ProjectSetupReviewPage';
+import { useRestoreFocusToTrigger, type FocusReturnTarget } from '@/keyboard/focusReturn';
 import { ProjectSetupAuthoredLine } from './ProjectSetupReturn';
 import { WorkspaceAdHocCommandsItem } from '@/components/projects/workers/WorkspaceAdHocCommandsItem';
 import { ProjectAgentGuidanceDisclosure } from '@/components/projects/workers/ProjectAgentGuidanceDisclosure';
@@ -94,6 +95,9 @@ export type ProjectScriptsBodyProps = Readonly<{
   outputScopeId?: string | null;
   testID?: string;
 }>;
+
+/** The phone's way into the pushed review page: opens it, and hands back the entry that focus returns to. */
+type PhoneSetupReview = Readonly<{ open: () => void; entryTarget: React.MutableRefObject<FocusReturnTarget> }>;
 
 type EditorState = Readonly<{
   key: string;
@@ -137,6 +141,27 @@ export function ProjectScriptsBody({
   const [workersKey, setWorkersKey] = React.useState<string | null>(null);
   const page = presentation === 'page';
   const phone = useDeviceType() === 'phone';
+  // On a phone the held setup review is a page of its own (lab SETUPp); the choice made there survives Back.
+  const [reviewPageOpen, setReviewPageOpen] = React.useState(false);
+  const [reviewScope, setReviewScope] = React.useState<ProjectSetupScope | null>(null);
+  const reviewEntryTarget = React.useRef<FocusReturnTarget>(null);
+  const reviewFocusPending = React.useRef(false);
+  const restoreReviewEntryFocus = useRestoreFocusToTrigger(reviewEntryTarget);
+  const setupRun = useProjectSetupRun(workspace, controller.accountId);
+  const setupReview = useProjectSetupReviewDecision(workspace, controller, setupRun);
+  React.useLayoutEffect(() => {
+    if (reviewPageOpen || !reviewFocusPending.current) return;
+    reviewFocusPending.current = false;
+    restoreReviewEntryFocus();
+  }, [reviewPageOpen, restoreReviewEntryFocus]);
+  // Back keeps the choice made on the page; a review that is decided (anywhere) ends it with the page.
+  const closeReviewPage = React.useCallback(() => {
+    reviewFocusPending.current = true;
+    setReviewPageOpen(false);
+  }, []);
+  React.useEffect(() => {
+    if (!setupReview.reviewing) { setReviewPageOpen(false); setReviewScope(null); }
+  }, [setupReview.reviewing]);
   // Scripts are read on the checkout's machine: while it isn't answering, the last-known list stays and
   // the read waits with it (said once by the page above) instead of failing on its own.
   const reachability = useCheckoutReachability(workspace);
@@ -174,6 +199,19 @@ export function ProjectScriptsBody({
     );
   } else if (!('value' in read)) {
     content = inspectionFailure;
+  } else if (page && phone && reviewPageOpen && setupReview.reviewing && read.value.definition.document?.status === 'valid') {
+    ownsPhoneScroll = true;
+    content = (
+      <ProjectSetupReviewPage
+        testID={`${testID}.setup.reviewPage`}
+        manifest={read.value.definition.document.manifest}
+        review={setupReview}
+        scope={reviewScope}
+        onScopeChange={setReviewScope}
+        onBack={closeReviewPage}
+        onViewFile={() => { closeReviewPage(); setEditor({ key, seed: false, mode: 'raw' }); }}
+      />
+    );
   } else if (page && workersKey === key) {
     const document = read.value.definition.document;
     const manifestScripts = document?.status === 'valid' ? Object.entries(document.manifest.scripts ?? {}) : [];
@@ -217,6 +255,7 @@ export function ProjectScriptsBody({
         testID={testID}
         onEdit={page ? openEditor : null}
         onOpenWorkers={page ? () => setWorkersKey(key) : null}
+        phoneReview={page && phone ? { open: () => setReviewPageOpen(true), entryTarget: reviewEntryTarget } : null}
         onOpenServices={onOpenServices}
         onRetry={retry}
       />
@@ -292,6 +331,7 @@ export function ProjectScriptsContent(
     onEdit: ((seed: boolean, mode?: 'form' | 'raw') => void) | null;
     /** Opens this checkout's Workers settings; null where the host has no room for the page. */
     onOpenWorkers?: (() => void) | null;
+    phoneReview?: PhoneSetupReview | null;
     onOpenServices?: () => void;
     onRetry: () => void;
   }>,
@@ -389,6 +429,7 @@ function DeclaredScripts(
     testID: string;
     onEdit: ((seed: boolean, mode?: 'form' | 'raw') => void) | null;
     onOpenWorkers?: (() => void) | null;
+    phoneReview?: PhoneSetupReview | null;
     /** Sections that continue the list (found scripts and services), before the settings sections. */
     children?: React.ReactNode;
   }>,
@@ -471,6 +512,7 @@ function DeclaredScripts(
           operation={setupRun}
           readiness={setupReadiness}
           compact={!props.page}
+          phoneReview={props.phoneReview ?? null}
           testID={`${props.testID}.setup`}
           onViewFile={props.onEdit ? () => props.onEdit?.(false, 'raw') : null}
         />
@@ -498,7 +540,7 @@ function DeclaredScripts(
             memoryDemand={resolveProjectMemoryDemandV1(declaration.memoryDemand, props.manifest.workspace?.memoryDemand)}
             initialManagedConfiguration={props.initialManagedConfiguration}
             onOpenWorkerSettings={props.onOpenWorkers ?? undefined}
-            idleText={setupReady ? t('projects.scripts.run.notRun') : ''}
+            idleText={setupReady ? t('projects.scripts.run.notRun') : props.controller.consent ? t('projects.scripts.run.waitsForSetup') : ''}
             showDivider={index < scripts.length - 1}
           />
         ))
@@ -652,17 +694,14 @@ function SetupRow(
     operation: ReturnType<typeof useProjectSetupRun>;
     readiness: ProjectDefinitionInspection['setupReadiness'];
     compact: boolean;
+    phoneReview: PhoneSetupReview | null;
     onViewFile: (() => void) | null;
   }>,
 ) {
   const { theme } = useUnistyles();
   const steps = props.manifest.workspace?.setup?.length ?? 0;
-  const consent = props.controller.consent;
-  const reviewTarget = consent?.operation?.snapshot.domainRef ?? props.operation?.snapshot.domainRef;
-  const reviewMachine = useProjectSetupMachine(
-    reviewTarget?.kind === 'projectCommand' ? reviewTarget.serverId : props.workspace.serverId,
-    reviewTarget?.kind === 'projectCommand' ? reviewTarget.machineId : props.workspace.machineId,
-  );
+  const review = useProjectSetupReviewDecision(props.workspace, props.controller, props.operation);
+  const reviewMachine = review.machine;
   const stop = props.controller.setupStop;
   const output = useProjectCommandOutputOpener();
   const environmentName = nativeEnvironmentNameFor(props.manifest);
@@ -672,8 +711,7 @@ function SetupRow(
     t('projects.scripts.setup.steps', { count: steps }),
     environmentName,
   );
-  const reviewing =
-    consent !== null || Boolean(props.operation?.snapshot.setupReview);
+  const reviewing = review.reviewing;
   const failed = props.operation?.snapshot.state === 'failed';
   const stopping = stop.pending || stop.stopRequested;
   const stepCount = t('projects.scripts.setup.steps', { count: steps });
@@ -689,7 +727,7 @@ function SetupRow(
           ? `${projectSetupReadinessLine(props.readiness)} · ${stepCount}`
           // Setup states once what the script rows below wait for; the rows themselves stay quiet.
           : projectSetupReadinessLine(props.readiness ?? null, environmentName) ?? presentation.text;
-  const pending = props.controller.pendingKeys.setup === true;
+  const pending = review.pending;
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {
     if (props.operation)
@@ -701,6 +739,8 @@ function SetupRow(
   const expanded = props.compact
     ? props.controller.setupReviewOpen
     : props.controller.setupReviewOpen || reviewing || open;
+  // On a phone the held review is a page of its own: the card keeps the waiting line and one way in.
+  const phoneReview = reviewing ? props.phoneReview : null;
   // Run and Stop share one slot: a live setup can be stopped from its own row (lab `s-scripts` PAGE).
   const control = presentation.live ? (
     <RoundButton
@@ -750,15 +790,25 @@ function SetupRow(
       }
       title={t('projects.scripts.setup.title')}
       // Waiting for the person's approval: the row head carries the attention tint (lab SETUP).
-      style={reviewing ? { backgroundColor: theme.colors.state.attention.background } : undefined}
+      pressableStyle={reviewing ? { backgroundColor: theme.colors.state.attention.background } : undefined}
       subtitle={subtitle}
       subtitleStyle={failed && !stopping ? { color: theme.colors.status.error } : undefined}
-      subtitleLines={1}
+      // The approval line names the environment and must not be cut on a phone.
+      subtitleLines={reviewing ? 2 : 1}
       showChevron={false}
       rightElementOutsidePressable
       accessoryLayout="inline"
       rightElement={
-        inReview ? (
+        phoneReview ? (
+          <RoundButton
+            size="small"
+            display="secondary"
+            testID={`${props.testID}.reviewEntry`}
+            title={t('projects.scripts.setup.review')}
+            controlRef={(target) => { phoneReview.entryTarget.current = target; }}
+            onPress={phoneReview.open}
+          />
+        ) : inReview ? (
           <Icon name={expanded ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.tertiary} />
         ) : (
           <View style={styles.setupTail}>
@@ -769,6 +819,7 @@ function SetupRow(
       }
     />
   );
+  if (phoneReview) return header({ onPress: phoneReview.open });
   return (
     <>
       <ExpandableItem
@@ -807,18 +858,12 @@ function SetupRow(
             machineName={reviewMachine.machineName}
             sharedRunAs={reviewMachine.sharedRunAs}
             pending={pending}
-            reviewedEffect={consent?.reviewedEffect ?? props.operation?.snapshot.setupReview?.reviewedEffect}
-            initialScope={consent?.consentScope ?? props.operation?.snapshot.setupReview?.consentScope}
-            onRun={(scope) => {
-              void props.controller.prepare(
-                consent?.reviewedEffectDigest ??
-                  props.operation?.snapshot.setupReview?.reviewedEffectDigest,
-                scope,
-              );
-            }}
+            reviewedEffect={review.reviewedEffect}
+            initialScope={review.initialScope}
+            onRun={review.run}
             onNotNow={() => {
               setOpen(false);
-              props.controller.dismissConsent();
+              review.dismiss();
             }}
             onViewFile={() => props.onViewFile?.()}
           />

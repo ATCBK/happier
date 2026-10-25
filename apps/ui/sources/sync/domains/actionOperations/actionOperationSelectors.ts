@@ -57,6 +57,7 @@ export type ActionOperationSelectors = Readonly<{
     selectForSession(state: ActionOperationStoreSnapshot, address: ActionOperationSessionAddress): readonly ActionOperationProjection[];
     selectForProjectScript(state: ActionOperationStoreSnapshot, query: ActionOperationProjectScriptQuery): ActionOperationProjection | null;
     selectForProjectSetup(state: ActionOperationStoreSnapshot, query: ActionOperationProjectWorkspaceQuery): ActionOperationProjection | null;
+    selectHeldProjectSetupReview(state: ActionOperationStoreSnapshot, query: ActionOperationProjectWorkspaceQuery): ActionOperationProjection | null;
     selectForManagedMachine(state: ActionOperationStoreSnapshot, query: ActionOperationManagedMachineQuery): ActionOperationProjection | null;
     selectForProjectServices(state: ActionOperationStoreSnapshot, query: ActionOperationProjectServicesQuery): readonly ActionOperationProjection[];
     selectInbox(state: ActionOperationStoreSnapshot): readonly InboxActionOperationEntry[];
@@ -263,6 +264,11 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
         && snapshot.domainRef.purpose === 'setup' && snapshot.domainRef.script === undefined
     ));
 
+    /** The setup review this checkout is waiting on, whichever standalone preparation or Script run holds it. */
+    const selectHeldProjectSetupReview = (state: ActionOperationStoreSnapshot, query: ActionOperationProjectWorkspaceQuery) => selectProjectOperation(state, query, snapshot => (
+        !isActionOperationTerminal(snapshot.state) && snapshot.setupReview !== undefined
+    ));
+
     const selectForProjectServices = (state: ActionOperationStoreSnapshot, query: ActionOperationProjectServicesQuery) => {
         const serverId = normalizeActionOperationServerId(query.serverId);
         if (!serverId || !query.accountId) return EMPTY_OPERATIONS;
@@ -454,6 +460,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
         selectForSession,
         selectForProjectScript,
         selectForProjectSetup,
+        selectHeldProjectSetupReview,
         selectForManagedMachine,
         selectForProjectServices,
         selectInbox,

@@ -128,6 +128,36 @@ describe('Project Scripts Setup controls', () => {
         } finally { await hook.unmount(); }
     });
 
+    it('finds a review a Script run is holding that this surface did not start', async () => {
+        const { useProjectScriptsController } = await import('./useProjectScriptsController');
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const home = await harness.addHome({ name: 'Held elsewhere', serverUrl: 'https://held-elsewhere.test', accountId: 'alice' });
+        const serverId = resolveServerProfileScopeIdForIdentifier(home);
+        const workspace = { serverId, workspaceId: 'source', machineId: 'source-machine', rootPath: '/repo' };
+        const otherCheckout = { ...workspace, workspaceId: 'elsewhere', rootPath: '/other' };
+        const held = { ...operation(serverId).snapshot, actionId: 'projects.script.run', state: 'accepted' as const,
+            scope: { accountId: 'alice', machineId: 'source-machine' }, startedAt: undefined,
+            domainRef: { kind: 'projectCommand' as const, purpose: 'script' as const, serverId, machineId: 'source-machine',
+                workspaceRefId: 'source', cwd: '/repo', sourceWorkspace: workspace, script: { name: 'verify', source: { kind: 'command' as const, command: 'echo ok' } } },
+            setupReview: { kind: 'pendingApproval' as const, code: 'project_setup_consent_required' as const,
+                reviewedEffectDigest: 'reviewed', reviewedEffect: { commands: ['echo setup'] } },
+        };
+        const homes = [serverId];
+        const hook = await renderHook((props: { workspace: typeof workspace }) => useProjectScriptsController(props.workspace, () => {},
+            useServerCredentialAccountScopeBindings(homes).get(serverId) ?? null), { initialProps: { workspace } });
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            expect(hook.getCurrent().consent).toBeNull();
+            await act(async () => { actionOperationStore.mergeSnapshots({ serverId, snapshots: [held] }); });
+            // The review is the checkout's own, so a reload or another client's Run still surfaces it.
+            await waitForHomeGovernance(() => expect(hook.getCurrent().consent?.reviewedEffectDigest).toBe('reviewed'));
+            expect(hook.getCurrent().consent?.operation?.snapshot.operationId).toBe('operation-1');
+            expect(hook.getCurrent().setupReviewOpen).toBe(true);
+            await hook.rerender({ workspace: otherCheckout });
+            expect(hook.getCurrent().consent).toBeNull();
+        } finally { await hook.unmount(); }
+    });
+
     it('admits independent Scripts while another Run awaits its Action result', async () => {
         const firstGate = createDeferred<void>();
         const { useProjectScriptsController } = await import('./useProjectScriptsController');

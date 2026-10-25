@@ -12921,6 +12921,7 @@ settingsSession: {
             },
             run: {
                 notRun: "尚未在此簽出中執行",
+                waitsForSetup: "等待設定",
                 accepted: "已接受，等待開始。",
                 running: ({ machine }: { machine: string }) => `正在 ${machine} 上執行`,
                 completed: ({ time }: { time: string }) => `已完成 ${time}`,
@@ -12951,6 +12952,7 @@ settingsSession: {
                 values: "值",
                 valuesNote: "僅名稱；值會在執行時填入。",
                 stepsUnavailable: "無法讀取設定步驟。",
+                review: "檢視設定",
                 from: "來自",
                 viewFile: "查看檔案",
                 sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `以 ${osUser} 身分在 ${machine} 上執行。你對此專案的核准在設定變更前持續有效。`,

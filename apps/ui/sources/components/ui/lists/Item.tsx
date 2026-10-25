@@ -1696,7 +1696,7 @@ export const Item = React.memo<ItemProps>((props) => {
         })();
 
         const roundedCornersStyle = getItemGroupRowCornerRadii({
-            hasBackground: backgroundColor !== 'transparent',
+            hasBackground: backgroundColor !== 'transparent' || typeof pressableBackground === 'string',
             position: rowPosition,
             radius: groupCornerRadius,
         });

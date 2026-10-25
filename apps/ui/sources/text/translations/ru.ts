@@ -17218,6 +17218,7 @@ settingsSession: {
         },
         run: {
             notRun: "В этом checkout ещё не запускался",
+            waitsForSetup: "Ждёт настройки",
             accepted: "Принято. Ожидает запуска.",
             running: ({ machine }: { machine: string }) => `Выполняется на ${machine}`,
             completed: ({ time }: { time: string }) => `Завершено ${time}`,
@@ -17248,6 +17249,7 @@ settingsSession: {
             values: "Значения",
             valuesNote: "Только имена; значения подставляются при запуске.",
             stepsUnavailable: "Не удалось прочитать шаги настройки.",
+            review: "Проверить настройку",
             from: "Из",
             viewFile: "Открыть файл",
             sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Выполняется как ${osUser} на ${machine}. Ваше одобрение для этого проекта действует, пока настройка не изменится.`,

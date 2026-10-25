@@ -1,7 +1,7 @@
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
-import { useProjectScriptActionOperation, useProjectSetupActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
+import { useProjectHeldSetupReviewOperation, useProjectScriptActionOperation, useProjectSetupActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import type { ActionOperationProjectScriptSelection } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
@@ -36,5 +36,14 @@ export function useProjectSetupRun(
   accountId: string | null,
 ): ActionOperationProjection | null {
   return useProjectSetupActionOperation({ accountId, workspace: { ...workspace,
+    serverId: resolveServerProfileScopeIdForIdentifier(workspace.serverId) } });
+}
+
+/** The setup review the checkout is waiting on, held by its preparation or by a Script's setup phase. */
+export function useProjectHeldSetupReview(
+  workspace: WorkspaceAddressV1,
+  accountId: string | null,
+): ActionOperationProjection | null {
+  return useProjectHeldSetupReviewOperation({ accountId, workspace: { ...workspace,
     serverId: resolveServerProfileScopeIdForIdentifier(workspace.serverId) } });
 }

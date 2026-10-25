@@ -16876,6 +16876,7 @@ settingsSession: {
         },
         run: {
             notRun: "尚未在此检出中运行",
+            waitsForSetup: "等待设置",
             accepted: "已接受，等待开始。",
             running: ({ machine }: { machine: string }) => `正在 ${machine} 上运行`,
             completed: ({ time }: { time: string }) => `已完成 ${time}`,
@@ -16906,6 +16907,7 @@ settingsSession: {
             values: "值",
             valuesNote: "仅名称；值在运行时填入。",
             stepsUnavailable: "无法读取设置步骤。",
+            review: "查看设置",
             from: "来自",
             viewFile: "查看文件",
             sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `以 ${osUser} 身份在 ${machine} 上运行。你对此项目的批准在设置变更前一直有效。`,

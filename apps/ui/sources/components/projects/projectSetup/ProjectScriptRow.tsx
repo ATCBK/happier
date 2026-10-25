@@ -108,6 +108,8 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const targetName = (target ? getMachineSentenceName(target) : null) ?? attachment?.machineId ?? null;
   const presentation = presentProjectRun(props.operation, targetName, props.idleText, props.environmentName ?? null);
   const stop = useActionOperationStopControl(props.operation);
+  // A Run held for the setup review leaves that decision to the Setup card; the row says what it waits for.
+  const waitsForSetup = presentation.live && Boolean(props.operation?.snapshot.setupReview);
   const [expanded, setExpanded] = React.useState(false);
   // A failed operation carries the same strict refusal as an immediate Run failure: one parser.
   const operationError = props.operation?.snapshot.error;
@@ -139,8 +141,8 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
       // A live run an agent started from a Session says so (lab `s-agent` PANE); Stop stays one owner.
       : presentation.live && props.operation?.snapshot.scope.sessionId
         ? `${presentation.text} · ${t('projects.scripts.byAgent')}`
-        : presentation.text;
-  const tone = props.failureCode ? 'danger' : presentation.tone;
+        : waitsForSetup ? t('projects.scripts.run.waitsForSetup') : presentation.text;
+  const tone = props.failureCode ? 'danger' : waitsForSetup ? 'quiet' : presentation.tone;
   // Output opens as the host's bottom terminal tab named after the script and its actual Machine
   // (plan 21 §8); hosts without one (phone, widgets) open the operation detail.
   const output = useProjectCommandOutputOpener();
@@ -166,7 +168,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
       {...headerProps}
       testID={props.testID}
       icon={
-        <RunGlyph glyph={props.failureCode ? 'failed' : presentation.glyph} />
+        <RunGlyph glyph={props.failureCode ? 'failed' : waitsForSetup ? 'idle' : presentation.glyph} />
       }
       title={props.name}
       titleAccessory={

@@ -17268,6 +17268,7 @@ settingsSession: {
         },
         run: {
             notRun: "Mai eseguito in questo checkout",
+            waitsForSetup: "In attesa della configurazione",
             accepted: "Accettato. In attesa di avvio.",
             running: ({ machine }: { machine: string }) => `In esecuzione su ${machine}`,
             completed: ({ time }: { time: string }) => `Completato ${time}`,
@@ -17298,6 +17299,7 @@ settingsSession: {
             values: "Valori",
             valuesNote: "Solo nomi; i valori vengono inseriti all’esecuzione.",
             stepsUnavailable: "Non è stato possibile leggere i passaggi di configurazione.",
+            review: "Controlla la configurazione",
             from: "Da",
             viewFile: "Mostra file",
             sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Eseguito come ${osUser} su ${machine}. La tua approvazione per questo progetto vale finché la configurazione non cambia.`,

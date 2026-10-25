@@ -20829,6 +20829,7 @@ const enProjects = {
     },
     run: {
       notRun: "Not run in this checkout yet",
+      waitsForSetup: "Waits for setup",
       accepted: "Accepted. Waiting to start.",
       running: ({ machine }: { machine: string }) => `Running on ${machine}`,
       completed: ({ time }: { time: string }) => `Completed ${time}`,
@@ -20859,6 +20860,7 @@ const enProjects = {
       values: "Values",
       valuesNote: "Names only; values are filled at run time.",
       stepsUnavailable: "The setup steps couldn’t be read.",
+      review: "Review setup",
       from: "From",
       viewFile: "View file",
       sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Runs as ${osUser} on ${machine}. Your approval for this project applies until setup changes.`,

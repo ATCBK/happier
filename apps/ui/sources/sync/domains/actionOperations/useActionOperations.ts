@@ -78,6 +78,10 @@ export function useProjectSetupActionOperation(query: ActionOperationProjectWork
     return useActionOperationSelector(() => actionOperationSelectors.selectForProjectSetup(actionOperationStore.getSnapshot(), query));
 }
 
+export function useProjectHeldSetupReviewOperation(query: ActionOperationProjectWorkspaceQuery) {
+    return useActionOperationSelector(() => actionOperationSelectors.selectHeldProjectSetupReview(actionOperationStore.getSnapshot(), query));
+}
+
 export function useProjectServiceActionOperations(query: ActionOperationProjectServicesQuery) {
     return useActionOperationSelector(() => actionOperationSelectors.selectForProjectServices(actionOperationStore.getSnapshot(), query));
 }

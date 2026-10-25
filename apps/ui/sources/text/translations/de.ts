@@ -17335,6 +17335,7 @@ settingsSession: {
             },
             run: {
                 notRun: "In diesem Checkout noch nicht ausgeführt",
+                waitsForSetup: "Wartet auf die Einrichtung",
                 accepted: "Angenommen. Wartet auf den Start.",
                 running: ({ machine }: { machine: string }) => `Läuft auf ${machine}`,
                 completed: ({ time }: { time: string }) => `Abgeschlossen ${time}`,
@@ -17365,6 +17366,7 @@ settingsSession: {
                 values: "Werte",
                 valuesNote: "Nur Namen; die Werte werden beim Ausführen eingesetzt.",
                 stepsUnavailable: "Die Einrichtungsschritte konnten nicht gelesen werden.",
+                review: "Einrichtung prüfen",
                 from: "Aus",
                 viewFile: "Datei ansehen",
                 sharedScope: ({ osUser, machine }: { osUser: string; machine: string }) => `Läuft als ${osUser} auf ${machine}. Deine Freigabe für dieses Projekt gilt, bis sich die Einrichtung ändert.`,
