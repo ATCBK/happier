@@ -1,6 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 
 describe('voiceTargetStore', () => {
+  it('publishes only real changes to nullable primary and focused targets', async () => {
+    const { useVoiceTargetStore } = await import('./voiceTargetStore');
+    const original = useVoiceTargetStore.getState();
+    original.setPrimaryActionSessionAddress(null);
+    original.setLastFocusedSessionAddress(null);
+    let notifications = 0;
+    const off = useVoiceTargetStore.subscribe(() => { notifications += 1; });
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
+        useVoiceTargetStore.getState().setLastFocusedSessionAddress(null);
+      }
+      expect(notifications).toBe(0);
+      const address = { serverId: 'home-a', sessionId: 'session-1' };
+      useVoiceTargetStore.getState().setPrimaryActionSessionAddress(address);
+      useVoiceTargetStore.getState().setLastFocusedSessionAddress(address);
+      expect(notifications).toBe(2);
+      useVoiceTargetStore.getState().setPrimaryActionSessionAddress({ serverId: ' home-a ', sessionId: ' session-1 ' });
+      useVoiceTargetStore.getState().setLastFocusedSessionAddress({ ...address });
+      expect(notifications).toBe(2);
+      useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
+      useVoiceTargetStore.getState().setLastFocusedSessionAddress(null);
+      expect(notifications).toBe(4);
+      expect(useVoiceTargetStore.getState()).toMatchObject({ primaryActionSessionAddress: null, lastFocusedSessionAddress: null });
+    } finally {
+      off();
+      useVoiceTargetStore.setState(original, true);
+    }
+  });
+
   it('publishes only real changes to the tracked qualified targets', async () => {
     const { useVoiceTargetStore } = await import('./voiceTargetStore');
     const original = useVoiceTargetStore.getState();

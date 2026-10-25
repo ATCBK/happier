@@ -103,7 +103,8 @@ export const useVoiceTargetStore = create<VoiceTargetState>((set) => ({
   setPrimaryActionSessionAddress: (address) =>
     set((state) => {
       const primaryActionSessionAddress = normalizeAddress(address);
-      return areSessionAddressesEqual(state.primaryActionSessionAddress, primaryActionSessionAddress)
+      return state.primaryActionSessionAddress === primaryActionSessionAddress
+        || areSessionAddressesEqual(state.primaryActionSessionAddress, primaryActionSessionAddress)
         ? state
         : { primaryActionSessionAddress };
     }),
@@ -134,7 +135,8 @@ export const useVoiceTargetStore = create<VoiceTargetState>((set) => ({
   setLastFocusedSessionAddress: (address) =>
     set((state) => {
       const lastFocusedSessionAddress = normalizeAddress(address);
-      return areSessionAddressesEqual(state.lastFocusedSessionAddress, lastFocusedSessionAddress)
+      return state.lastFocusedSessionAddress === lastFocusedSessionAddress
+        || areSessionAddressesEqual(state.lastFocusedSessionAddress, lastFocusedSessionAddress)
         ? state
         : { lastFocusedSessionAddress };
     }),
