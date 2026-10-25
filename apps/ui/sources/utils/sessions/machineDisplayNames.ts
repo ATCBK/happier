@@ -111,16 +111,33 @@ export function getMachineDisplayName(machine: MachineNameInput, inventory?: rea
 export function getMachineDisplayName(machine: MachineNameInput | null | undefined, inventory?: readonly MachineNameSource[]): string | null;
 export function getMachineDisplayName(machine: MachineNameInput | null | undefined, inventory?: readonly MachineNameSource[]): string | null {
     if (!machine) return null;
+    const name = machineBaseDisplayName(machine);
+    // Qualify just this chip through the same resolver that names its picker.
+    if (inventory && machine.id) {
+        const peers = selectMachineDisplayNamePeers(machine, inventory);
+        return resolveMachineDisplayNames(peers).get(machine.id) ?? name;
+    }
+    return name;
+}
+
+function machineBaseDisplayName(machine: MachineNameInput): string {
     if (machine.absence) return t(ABSENT_MACHINE_NAME_KEYS[machine.absence]);
     if (isMachineLocked(machine)) return lockedMachineName();
     if (isMachineDisplayHydrating(machine)) return t('common.loading');
-    // A selected chip keeps the same identity as the list it opens. The list's resolver owns
-    // disambiguation; callers supply its Home inventory rather than reimplementing suffix rules.
-    if (inventory && machine.id) {
-        const name = resolveMachineDisplayNames(inventory).get(machine.id);
-        if (name !== undefined) return name;
-    }
     return readMachineName(machine) ?? unnamedMachineName();
+}
+
+/** Only same-name peers can affect a selected label's inventory qualification. */
+export function selectMachineDisplayNamePeers(
+    machine: MachineNameInput | null | undefined,
+    inventory: readonly MachineNameSource[],
+): readonly MachineNameSource[] {
+    if (!machine?.id || machine.absence || isMachineLocked(machine) || isMachineDisplayHydrating(machine)) return [];
+    const listed = inventory.find(candidate => candidate.id === machine.id);
+    if (!listed) return [];
+    const name = machineBaseDisplayName(listed).toLocaleLowerCase();
+    return inventory.filter(candidate => machineBaseDisplayName(candidate).toLocaleLowerCase() === name)
+        .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /**

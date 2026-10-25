@@ -24,8 +24,7 @@ import {
   writeLocalConversationVoiceSettings,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { useSettings } from '@/sync/domains/state/storage';
-import { useSettingsVersion } from '@/sync/store/hooks';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { t, tLoose } from '@/text';
@@ -97,12 +96,13 @@ export function useVoiceDictationReadinessModel(props: Readonly<{
 }>) {
   const { theme } = useUnistyles();
   const providerSpecs = useLocalSttProviderSpecs('dictation_stt');
-  const accountSettings = useSettings();
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const accountSettings = React.useMemo(() => ({ voiceSettingsV1, secrets }), [voiceSettingsV1, secrets]);
   const settingsScope = useAccountSettingsScope();
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);
   const connectedPurposes = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;
   const savedSecretCatalog = useSavedSecretCatalog();
-  const settingsVersion = useSettingsVersion();
   const dictation = props.voice.dictation ?? voiceDictationSettingsDefaults;
   const [openMenu, setOpenMenu] = React.useState<null | 'language'>(null);
   const [readinessCheck, setReadinessCheck] = React.useState<DictationReadinessCheck | null>(null);
@@ -123,7 +123,9 @@ export function useVoiceDictationReadinessModel(props: Readonly<{
     machineId: props.executionMachineId,
     realm: 'daemon',
     phase: 'speech',
-    settingsVersion,
+    settingsScope,
+    credentialBindings: voiceSettingsV1.credentialBindings,
+    legacySecrets: secrets.map(({ id, kind, updatedAt }) => ({ id, kind, updatedAt })),
     purposes,
     savedSecretCatalog: {
       status: savedSecretCatalog.status,

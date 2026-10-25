@@ -13,7 +13,7 @@ import {
   resolveLocalVoiceAdapterSettings,
 } from '@/voice/local/localVoiceSettings';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineSelection } from '@/voice/credentials/useExecutionMachinePresentation';
 import { VoiceExecutionMachineSection } from '@/voice/settings/panels/VoiceExecutionMachineSection';
 import { DaemonVoiceModelCatalogProvider } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
 import { useDaemonVoiceModelCatalogState } from '@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState';
@@ -57,7 +57,7 @@ export function VoiceDictationSettingsScreen() {
     if (focus) router.setParams({ focus: focus === 'local' ? 'provider' : focus });
   }, [router]);
   const [voice, setVoice] = useVoiceSettingsMutable();
-  const executionMachine = useVoiceExecutionMachinePresentation();
+  const executionMachine = useVoiceExecutionMachineSelection();
   const dictationRuntimeSettings = React.useMemo(
     () => createVoiceDictationRuntimeSettingsSnapshot({ voice }),
     [voice],

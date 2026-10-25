@@ -4,7 +4,7 @@ import {
   voiceSettingsParse,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 import { parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings, resolveLocalVoiceAdapterSettings } from '@/voice/local/localVoiceSettings';
 import { DaemonVoiceModelCatalogSection } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogSection';
 import { useDaemonVoiceModelCatalogState } from '@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState';
@@ -25,8 +25,7 @@ export function VoiceSpeechModelsSection(props: Readonly<{
   voice: VoiceSettings;
   setVoice: (next: VoiceSettings) => void;
 }>) {
-  const executionMachine = useVoiceExecutionMachinePresentation();
-  const machineId = executionMachine.machineId;
+  const machineId = useVoiceExecutionMachineId();
   const scope = useAccountSettingsScope();
   const actions = useMountedActionExecution(scope, { openOnRequest: true });
   const catalog = useDaemonVoiceModelCatalogState({ enabled: Boolean(machineId), refreshKey: machineId });

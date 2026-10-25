@@ -209,6 +209,30 @@ describe('VoiceRawCredentialAccessReview', () => {
   });
   afterEach(async () => { standardCleanup(); await account.dispose(); });
 
+  it('does not re-inspect for unrelated Account preference revisions', async () => {
+    const client = {
+      inspect: vi.fn(async () => ({ ok: true as const, authorization, review })),
+      request: vi.fn(),
+    };
+    const actions = {
+      list: vi.fn(async () => ({ grants: [], pendingRequests: [] })),
+      request: vi.fn(), grant: vi.fn(), revoke: vi.fn(), dismissRequest: vi.fn(),
+    };
+    const { VoiceRawCredentialAccessReview } = await import('./VoiceRawCredentialAccessReview');
+    const screen = await renderScreen(<VoiceRawCredentialAccessReview contribution={contribution} rawGrant={rawGrant}
+      client={machineClient(client)} actions={httpActions(actions)} testID="raw-access" />);
+    await waitForTestEvent(screen.subscribe, () => actions.list.mock.calls.length, count => count === 1);
+    const initial = client.inspect.mock.calls.length;
+    const { storage } = await import('@/sync/domains/state/storage');
+    for (let index = 0; index < 20; index += 1) {
+      await act(async () => { storage.setState(state => ({
+        settings: { ...state.settings, analyticsOptOut: !state.settings.analyticsOptOut },
+        settingsVersion: (state.settingsVersion ?? 0) + 1,
+      })); });
+    }
+    expect(client.inspect.mock.calls.length - initial).toBe(0);
+  });
+
   it('lists, requests, approves, and revokes the exact host-derived raw credential subject', async () => {
     const listed = createDeferred<void>();
     const requested = createDeferred<void>();
@@ -432,7 +456,13 @@ describe('VoiceRawCredentialAccessReview', () => {
 
     selectedAccount = 'B';
     const { storage } = await import('@/sync/domains/state/storage');
-    storage.setState({ settingsVersion: 2 });
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    storage.setState(state => ({ settingsVersion: 2, settings: settingsParse({ ...state.settings,
+      voiceSettingsV1: { ...state.settings.voiceSettingsV1, credentialBindings: [{ contribution,
+        credentialSlotId: 'api_key', credentialSource: { kind: 'savedSecret' },
+        credentialBindings: { account: { api_key: 'account-b-secret' } },
+      }] },
+    }) }));
 
     // A user decision can race the subscription render. The action itself
     // must therefore re-inspect rather than decide the captured request.
@@ -459,7 +489,9 @@ describe('VoiceRawCredentialAccessReview', () => {
     // without any decision driving it.
     selectedAccount = 'A';
     relistedA = createDeferred<void>();
-    storage.setState({ settingsVersion: 3 });
+    storage.setState(state => ({ settingsVersion: 3, settings: { ...state.settings,
+      voiceSettingsV1: { ...state.settings.voiceSettingsV1, credentialBindings: [] },
+    } }));
     await act(async () => {
       screen.tree.update(renderReview());
     });

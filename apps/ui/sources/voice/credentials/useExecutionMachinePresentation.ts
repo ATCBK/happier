@@ -4,7 +4,7 @@ import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { resolveVoiceExecutionMachineIdFromState, resolveVoiceExecutionMachineSelectionFromState, type VoiceExecutionMachineSelection } from '@/voice/settings/executionMachine';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, selectMachineDisplayNamePeers } from '@/utils/sessions/machineDisplayNames';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
@@ -18,12 +18,39 @@ export type VoiceExecutionMachinePresentation = Readonly<{
   selectionKind: VoiceExecutionMachineSelection['kind'];
 }>;
 
+// A subscription port, not another store: unrelated root writes do not even
+// ask for naming inputs. Machine ingestion owns these source-slice identities.
+const machineNamingSource = {
+  getState: storage.getState,
+  getInitialState: storage.getInitialState,
+  subscribe: (listener: Parameters<typeof storage.subscribe>[0]) => storage.subscribe((state, previous) => {
+    if (state.machines !== previous.machines
+      || state.machineListByServerId !== previous.machineListByServerId
+      || state.machineListStatusByServerId !== previous.machineListStatusByServerId) listener(state, previous);
+  }),
+};
+
 function machineLabelFromState(state: ReturnType<typeof storage.getState>, selectedMachineId: string | null): string | null {
   if (!selectedMachineId) return null;
   const scope = { serverId: getAppliedActiveServerSnapshot().serverId };
   const machines = resolveVisibleMachinesForActiveServerFromState(state, scope).filter(isMachineVisibleForLaunchSelection);
-  return getMachineDisplayName(resolveMachineForActiveServerFromState(state, selectedMachineId, scope), machines)
-    ?? getMachineDisplayName({ id: selectedMachineId, absence: 'unlisted' });
+  const machine = resolveMachineForActiveServerFromState(state, selectedMachineId, scope);
+  return getMachineDisplayName(machine ?? { id: selectedMachineId, absence: 'unlisted' }, machines);
+}
+
+function machineLabelFactsFromState(state: ReturnType<typeof storage.getState>, selectedMachineId: string | null) {
+  if (!selectedMachineId) return [];
+  const scope = { serverId: getAppliedActiveServerSnapshot().serverId };
+  const machine = resolveMachineForActiveServerFromState(state, selectedMachineId, scope);
+  const machines = resolveVisibleMachinesForActiveServerFromState(state, scope).filter(isMachineVisibleForLaunchSelection);
+  // Primitive naming inputs, not whole Machine/metadata identities or an already
+  // computed label. Presence, daemon state and unrelated metadata do not name it.
+  return [
+    machine?.id ?? null, machine?.metadata === null,
+    machine?.metadata?.displayName ?? null, machine?.metadata?.host ?? null,
+    machine?.availability?.kind ?? null,
+    ...selectMachineDisplayNamePeers(machine, machines).flatMap(peer => [peer.id, peer.metadata?.host ?? null]),
+  ];
 }
 
 /** The same machine facts used by mounted controls and prepared settings mutations. */
@@ -59,11 +86,21 @@ export function useVoiceExecutionMachineId(): string | null {
   return useVoiceExecutionMachineState(resolveVoiceExecutionMachineIdFromState);
 }
 
-export function useVoiceExecutionMachinePresentation(): VoiceExecutionMachinePresentation {
+/** Readiness needs selection/reachability, not a display-name projection. */
+export function useVoiceExecutionMachineSelection(): Omit<VoiceExecutionMachinePresentation, 'machineLabel'> {
   const selection = useVoiceExecutionMachineState(resolveVoiceExecutionMachineSelectionFromState);
   const selectionKind = selection.kind;
   const selectedMachineId = selection.kind === 'none' ? null : selection.machineId;
   const machineId = selection.kind === 'resolved' ? selectedMachineId : null;
-  const machineLabel = useStoreWithEqualityFn(storage, state => machineLabelFromState(state, selectedMachineId));
-  return { selectedMachineId, machineId, machineLabel, selectionKind };
+  return { selectedMachineId, machineId, selectionKind };
+}
+
+export function useVoiceExecutionMachinePresentation(): VoiceExecutionMachinePresentation {
+  const selection = useVoiceExecutionMachineSelection();
+  const selectedMachineId = selection.selectedMachineId;
+  useStoreWithEqualityFn(machineNamingSource, state => machineLabelFactsFromState(state, selectedMachineId), shallow);
+  // Resolve the demanded label after its naming inputs wake the consumer; root
+  // notifications must not run a full naming projection before comparing it.
+  const machineLabel = machineLabelFromState(storage.getState(), selectedMachineId);
+  return { ...selection, machineLabel };
 }

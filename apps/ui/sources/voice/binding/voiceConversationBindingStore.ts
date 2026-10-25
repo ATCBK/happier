@@ -6,8 +6,8 @@ import { readRegisteredStorageState, subscribeRegisteredStorageState } from '@/s
 import { readPreferredVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
 import type { VoiceSessionBinding } from './voiceConversationBindingTypes';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { getServerProfilesGeneration } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
+import { getServerProfilesGeneration, subscribeServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 
 type BindingsByConversationSessionId = Record<string, VoiceSessionBinding>;
@@ -393,8 +393,10 @@ export function syncPersistedVoiceConversationBindings(params?: Readonly<{
 
 syncPersistedVoiceConversationBindings();
 
-subscribeRegisteredStorageState((state) => {
-    syncPersistedVoiceConversationBindings({
-        state: state as Readonly<{ sessions?: Record<string, any> }>,
-    });
+subscribeRegisteredStorageState((state, previousState) => {
+    if (previousState && state.sessions === previousState.sessions
+        && state.sessionListRowsByServerId === previousState.sessionListRowsByServerId) return;
+    syncPersistedVoiceConversationBindings({ state });
 });
+subscribeActiveServer(() => syncPersistedVoiceConversationBindings());
+subscribeServerProfiles(() => syncPersistedVoiceConversationBindings());

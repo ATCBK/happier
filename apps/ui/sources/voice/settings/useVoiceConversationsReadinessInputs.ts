@@ -6,7 +6,7 @@ import {
   readLocalDirectVoiceSettings,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineSelection } from '@/voice/credentials/useExecutionMachinePresentation';
 import {
   parseLocalVoiceSttSettings,
   parseLocalVoiceTtsSettings,
@@ -35,7 +35,7 @@ export function useVoiceConversationsReadinessInputs(voice: VoiceSettings, optio
   const providerId = resolveVoiceProviderId(voice.providerId);
   const daemonCatalogEnabled = options.probeMachine
     && (providerId === 'local_direct' || providerId === 'local_conversation');
-  const executionMachine = useVoiceExecutionMachinePresentation();
+  const executionMachine = useVoiceExecutionMachineSelection();
   const daemonMachineId = executionMachine.machineId;
   const daemonModelCatalog = useDaemonVoiceModelCatalogState({
     enabled: daemonCatalogEnabled,

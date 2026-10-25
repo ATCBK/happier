@@ -9,7 +9,7 @@ import {
   useMachineCliDetectionTargets,
 } from '@/sync/store/hooks';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 
 import { publishVoiceDiagnosticsRuntimeStatus, useVoiceDiagnosticsRuntimeStatus } from './runtimeStatus';
 import {
@@ -34,7 +34,7 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
   // policy. Only changed diagnostics values require daemon reconciliation.
   const selectDiagnostics = useShallow((settings: typeof parsed) => settings.diagnostics);
   const diagnostics = selectDiagnostics(parsed);
-  const { machineId } = useVoiceExecutionMachinePresentation();
+  const machineId = useVoiceExecutionMachineId();
   const { isOnline } = useMachineCliDetectionTarget(machineId);
   const persistenceScope = useActiveServerAccountScope();
   const runtimeStatus = useVoiceDiagnosticsRuntimeStatus();

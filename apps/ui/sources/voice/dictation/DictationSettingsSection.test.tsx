@@ -732,16 +732,27 @@ describe('DictationSettingsSection', () => {
     storage.getState().applyMachines([createMachineFixture({ id: 'machine-online', activeAt: Date.now() })], true, { sourceServerId: account.scope.serverId });
     await refreshSavedSecretCatalog(account.scope);
     const setVoice = vi.fn();
-    const render = (nextVoice: typeof ready.voice) => <DictationSettingsSection
+    let commits = 0;
+    const render = (nextVoice: typeof ready.voice) => <React.Profiler id="dictation" onRender={() => { commits += 1; }}><DictationSettingsSection
       voice={nextVoice}
       setVoice={setVoice}
       executionMachineId="machine-online"
       localAvailability={localAvailability}
-    />;
+    /></React.Profiler>;
     const screen = await renderScreen(render(account.settings.voice));
     const tree = screen.tree;
     await waitForTestEvent(screen.subscribe, () => dictationCardReadiness(tree), readiness => readiness?.status === 'ready');
     expect(dictationCardReadiness(tree)?.status).toBe('ready');
+    const initialCommits = commits;
+    const initialInspections = daemonResponse.mock.calls.length;
+    for (let index = 0; index < 20; index += 1) {
+      await act(async () => { storage.setState(state => ({
+        settings: { ...state.settings, analyticsOptOut: !state.settings.analyticsOptOut },
+        settingsVersion: (state.settingsVersion ?? 0) + 1,
+      })); });
+    }
+    expect(commits - initialCommits).toBe(0);
+    expect(daemonResponse.mock.calls.length - initialInspections).toBe(0);
     expect(account.resources).toHaveLength(1);
     account.resources.splice(0);
     await act(async () => {

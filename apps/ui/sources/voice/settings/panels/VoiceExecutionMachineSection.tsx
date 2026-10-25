@@ -16,7 +16,7 @@ import {
   voiceSettingsParse,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
-import { useSettingsSelector } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useAllMachines } from '@/sync/store/hooks';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
@@ -50,10 +50,9 @@ export function VoiceExecutionMachineSection(props: Readonly<{
 }>) {
   const { theme } = useUnistyles();
   const machines = useAllMachines();
-  const accountSettings = useSettingsSelector((settings) => ({
-      voiceSettingsV1: settings.voiceSettingsV1,
-      secrets: settings.secrets,
-  }));
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const accountSettings = React.useMemo(() => ({ voiceSettingsV1, secrets }), [voiceSettingsV1, secrets]);
   const settingsScope = useAccountSettingsScope();
   const presenceMembership = useMachinePresenceMembership(settingsScope?.serverId ?? null);
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);

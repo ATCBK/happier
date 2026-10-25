@@ -21,7 +21,9 @@ import {
   selectPluginPermissionPendingRequests,
 } from '@/sync/domains/plugins/permissions/store';
 import { usePluginPermissionGrants } from '@/sync/domains/plugins/permissions/usePluginPermissionGrants';
-import { useSettingsVersion } from '@/sync/store/hooks';
+import { useSetting } from '@/sync/domains/state/storage';
+import { getConnectedAccountCatalogValue, subscribeConnectedAccountCatalogSnapshots } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { getSavedSecretCatalogSnapshot, subscribeSavedSecretCatalogSnapshots } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -141,7 +143,13 @@ export function VoiceRawCredentialAccessReview(props: VoiceRawCredentialAccessRe
     execute: executeValue,
   }), [executeValue]);
   const actions = props.actions ?? defaultActions;
-  const settingsVersion = useSettingsVersion();
+  const voice = useSetting('voice');
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const readPurposes = React.useCallback(() => getConnectedAccountCatalogValue(scope, 'purposes'), [scope]);
+  const purposes = React.useSyncExternalStore(subscribeConnectedAccountCatalogSnapshots, readPurposes, readPurposes);
+  const readSavedSecrets = React.useCallback(() => getSavedSecretCatalogSnapshot(scope), [scope]);
+  const savedSecrets = React.useSyncExternalStore(subscribeSavedSecretCatalogSnapshots, readSavedSecrets, readSavedSecrets);
   const [inspection, setInspection] = React.useState<AuthorizationInspection | null>(null);
   const [unavailable, setUnavailable] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -164,14 +172,14 @@ export function VoiceRawCredentialAccessReview(props: VoiceRawCredentialAccessRe
     }
   }, [client, props.contribution, props.rawGrant]);
 
-  // The authorization subject is derived from account settings, so a settings
-  // change invalidates the current inspection and the pending request rendered
-  // for it. Re-derive rather than keeping a surface bound to the old account.
+  // The selected credential and target determine authorization. Whole-document
+  // CAS revisions include unrelated preferences; the credential owners provide
+  // the facts that invalidate this inspection and any pending request.
   React.useEffect(() => {
     const controller = new AbortController();
     void inspect(controller.signal);
     return () => controller.abort();
-  }, [inspect, settingsVersion]);
+  }, [inspect, scope, voice, voiceSettingsV1, secrets, purposes, savedSecrets]);
 
   const listInput = React.useMemo(() => inspection ? ({
     pluginId: inspection.authorization.pluginId,

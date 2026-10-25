@@ -20,7 +20,7 @@ import {
 } from '@/sync/domains/settings/voiceSettings';
 import { t, tLoose } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 
 import { createVoiceDiagnosticsClientForMachine } from './client';
@@ -85,7 +85,7 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
     () => readVoiceDiagnosticsSettings(props.voice),
     [props.voice.diagnostics],
   );
-  const { machineId } = useVoiceExecutionMachinePresentation();
+  const machineId = useVoiceExecutionMachineId();
   const accountLifetime = useActiveServerAccountScopeLifetime();
   const runtimeStatus = useVoiceDiagnosticsRuntimeStatus();
   const client = React.useMemo(

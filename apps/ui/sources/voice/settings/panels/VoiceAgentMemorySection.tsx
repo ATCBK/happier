@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSettings } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { BackendTargetKeyV2Schema, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import {
@@ -43,7 +43,7 @@ export function VoiceAgentMemorySection(props: Readonly<{
   const scope = useAccountSettingsScope();
   const { execute } = useMountedActionExecution(scope, { openOnRequest: true });
   const voiceAgentEnabled = useFeatureEnabled('voice.agent');
-  const accountSettings = useSettings();
+  const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
   const { snapshot: acpCatalog } = useAcpCatalog();
   const voice = voiceSettingsParse(props.voice);
   const cfg = readLocalConversationVoiceSettings(voice);
@@ -60,7 +60,7 @@ export function VoiceAgentMemorySection(props: Readonly<{
     }
   }
   const agentCanResume = agent.agentSource !== 'agent' || backendTarget !== null && canAgentResume(agent.agentId, {
-    accountSettings,
+    accountSettings: { backendEnabledByTargetKey },
     backendTarget,
     acpCatalogSnapshot: acpCatalog && !acpCatalog.stale ? acpCatalog.catalog : undefined,
   });
