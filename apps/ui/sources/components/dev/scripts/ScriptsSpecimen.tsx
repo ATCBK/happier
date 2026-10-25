@@ -266,6 +266,8 @@ function controller(frame: string): ProjectScriptsController {
     chooseForRun: noop,
     failure: null,
     approvalId: null,
+    approvalPending: false,
+    approvalSummary: null,
     consent:
       frame === 'SETUP'
         ? { code: 'project_setup_consent_required', reviewedEffectDigest: 'd', scopeKey: 'specimen' }

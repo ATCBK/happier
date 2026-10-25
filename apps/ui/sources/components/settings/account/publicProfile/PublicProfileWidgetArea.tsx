@@ -127,7 +127,7 @@ export function PublicProfileWidgetArea(
   const actions = React.useMemo((): WidgetAreaLayoutActions | null => {
     const summary = selected?.summary;
     if (!summary || !ready?.canEdit) return null;
-    const index = options.indexOf(selected);
+    const index = options.findIndex((option) => option.id === selected.id);
     const before = options[index - 1]?.summary;
     const after = options[index + 1]?.summary;
     return {
