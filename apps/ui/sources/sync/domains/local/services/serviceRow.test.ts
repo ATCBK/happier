@@ -116,6 +116,19 @@ describe('buildLocalServiceRows', () => {
         expect(selectLocalServiceRunningCount([row!])).toBe(0);
     });
 
+    it.each(['project_service_binding_pending', 'project_service_binding_unavailable'] as const)(
+        'keeps an observed failure visible during %s without granting Start authority', unavailableReason => {
+            const target = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ source: 'managed_service', serviceState: 'failed',
+                workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'checkout', rootPath: '/repo' },
+                declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } },
+                diagnostics: [{ code: 'native_service_output', severity: 'info', message: 'service exited' }], unavailableReason }));
+            const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' });
+            expect(row).toMatchObject({ status: 'failed', primaryAction: null, target: { diagnostics: target.diagnostics } });
+            const [offline] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [{ ...target, state: 'stale' }], sessionId: null, scope: 'workspace' });
+            expect(offline?.status).toBe('stale');
+        },
+    );
+
     it('finds only the openable instance on the failed target\'s actual Machine and qualified checkout', () => {
         const workspace = { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/repo' };
         const declared = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ id: 'declared:web', source: 'managed_service',

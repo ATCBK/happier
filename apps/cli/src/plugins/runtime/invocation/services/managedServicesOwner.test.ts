@@ -7274,7 +7274,7 @@ describe('Project Local Services control composition', () => {
             const previewRegistry = createLocalServicePreviewRegistry();
             const endpoint = new URL(handle.snapshot().baseUrl!);
             const registration = registerLocalServicePreview(previewRegistry, {
-                previewId: handle.serviceId, machineId: workspace.machineId, owner: { kind: 'user', id: requester.accountId },
+                previewId: handle.instanceId, machineId: workspace.machineId, owner: { kind: 'user', id: requester.accountId },
                 serviceTarget: target, target: { scheme: 'http', host: endpoint.hostname, port: Number(endpoint.port) },
                 initialPath: { pathname: '/', search: '' }, display: { title: 'Web', addressLabel: endpoint.host }, originMode: 'host',
             });
@@ -7289,9 +7289,9 @@ describe('Project Local Services control composition', () => {
                 feed: createLocalServiceLauncherFeed({ machineId: workspace.machineId, inventoryRegistry: createLocalServiceInventoryRegistry(),
                     previewRegistry, projectManagedServices: owner }), previewRoutes, history: createLocalServiceLauncherHistoryStore() });
             expect(await leaves.registerPreview({ machineId: workspace.machineId, targetId: handle.serviceId }))
-                .toMatchObject({ status: 'existing', previewId: handle.serviceId, browserTarget: { kind: 'localServicePreview', targetId: handle.serviceId } });
+                .toMatchObject({ status: 'existing', previewId: handle.instanceId, browserTarget: { kind: 'localServicePreview', targetId: handle.instanceId } });
             expect(await leaves.openPreview({ machineId: workspace.machineId, targetId: handle.serviceId }))
-                .toMatchObject({ status: 'opened', browserTarget: { kind: 'localServicePreview', targetId: handle.serviceId } });
+                .toMatchObject({ status: 'opened', browserTarget: { kind: 'localServicePreview', targetId: handle.instanceId } });
             const waiting = call({ v: 1, kind: 'wait_retirement', target, instanceId: handle.instanceId });
             await new Promise<void>(resolve => setImmediate(resolve));
             await owner.stopForAccessLoss(requester);

@@ -72,9 +72,13 @@ const SOURCE_LABEL_KEYS: Readonly<Record<LocalServiceLaunchTarget['source'], Tra
 };
 
 function resolveStatus(target: LocalServiceLaunchTarget, inventoryRow: LocalServiceInventoryRow | undefined): ServiceRowStatus {
+    if (target.state === 'stale') return 'stale';
+    // Binding hydration can withhold controls without erasing the supervisor's
+    // observed failure. Uncertain native custody retains its distinct state.
+    if (target.source === 'managed_service' && target.serviceState === 'failed'
+        && !hasUncertainLocalServiceNativeCustodyV1(target)) return 'failed';
     if (target.unavailableReason === 'project_service_binding_pending') return 'loading';
     if (target.unavailableReason === 'project_service_binding_unavailable') return 'unavailable';
-    if (target.state === 'stale') return 'stale';
     // Available means the script can be launched, never that a listener is running. Older
     // launcher snapshots may omit sourceClass; source already establishes this distinction.
     if (target.source === 'package_script') return 'stopped';
@@ -83,7 +87,6 @@ function resolveStatus(target: LocalServiceLaunchTarget, inventoryRow: LocalServ
     if (target.source === 'managed_service') {
         if (hasUncertainLocalServiceNativeCustodyV1(target)) return 'unavailable';
         if (target.serviceState === 'stopped') return 'stopped';
-        if (target.serviceState === 'failed') return 'failed';
         if (target.serviceState === 'stopping') return 'stopping';
         // A declaration nobody has started is stopped (Ready to start); the feed's placeholder
         // `unavailable` describes the launcher row, not a broken service.

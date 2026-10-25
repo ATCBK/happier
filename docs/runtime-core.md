@@ -1485,7 +1485,9 @@ existing diagnostic byte budget and admitted invocation context; an adapter
 without it retains the failure diagnostic without output. Built-in Compose
 uses its already-admitted container IDs and a bounded Docker tail. The supervisor
 sanitizes and retains this output as `native_service_output`; it is a bounded
-failure diagnostic, not a long-lived Service output reader.
+failure diagnostic, not a long-lived Service output reader. Observed resource
+death withdraws its endpoint before awaiting output, then publishes terminal
+custody after collection so automatic cleanup cannot retire the output read.
 
 The development Local Services launcher feed carries only diagnostic code,
 severity and sanitized message while a managed lifetime is failed or unhealthy.
@@ -1493,11 +1495,24 @@ The strict launcher target schema and existing Services row target carry those
 facts to the client; recovery omits them even if the supervisor retains earlier
 diagnostics. Private diagnostic details and remediation never enter this projection.
 
+An unexpected Project Service process exit is a failed lifetime, including an
+endpoint-free command that exits immediately. The supervisor projects sanitized
+output from that process's existing bounded terminal result; it adds no output
+subscription or retention policy. After confirmed cleanup, the same semantic
+entry retains the failed attempt and its supervisor-issued occurrence for review.
+Failed native starters and native resources already stopped at initial inspection
+use this same failure presentation. Explicit Stop clears the attempt; a freshly
+reviewed retry replaces it through the incumbent owner, and a recovered running
+target omits failure diagnostics. Unconfirmed cleanup retains actual custody and
+cannot become a settled failed attempt or permission to start a replacement.
+
 Complete Project binding reads join an in-flight establishment at this owner and
 re-read its published handle before returning. A pending Start or Move therefore
 keeps its native read pending rather than publishing a Machine-unavailable
-failure. Failed establishment, retired custody and lost currentness still refuse
-the complete read; an incomplete snapshot never establishes absence or Start
+failure. A failed establishment with confirmed cleanup returns its retained failed
+attempt in complete reads, while its Start operation still rejects. Unsettled
+establishment, retired custody and lost currentness refuse the complete read;
+an incomplete snapshot never establishes absence or Start
 permission. Ordinary diagnostic lists remain synchronous views of published
 handles. The existing native establishment lifetime governs the wait.
 

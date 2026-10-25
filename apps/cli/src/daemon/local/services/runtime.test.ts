@@ -305,6 +305,102 @@ describe('createLocalServicesDaemonRuntime', () => {
         } finally { await runtime.stop(); await owner.dispose(); }
     });
 
+    it.each(['command', 'native-starter', 'native-resource', 'native-lifetime'] as const)('retains a failed %s start and its existing output through the real Services feed', async kind => {
+        let observedAt = 1_000;
+        let restored = false;
+        let started = false;
+        let resourceExited = false;
+        let logStarted = false;
+        let releaseOutput!: () => void;
+        const outputReady = new Promise<void>(resolve => { releaseOutput = resolve; });
+        let releaseLaunch!: () => void;
+        const launchReleased = new Promise<void>(resolve => { releaseLaunch = resolve; });
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, now: () => observedAt, projectManagedServices: owner, runTargets: () => [],
+            scan: async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }) });
+        const start = () => owner.superviseProject({
+            workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: kind } },
+            cwd: process.cwd(), serviceId: kind, specIdentity: restored ? `${kind}-restored` : kind, isCurrent: () => true,
+            requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
+            processSpec: { ...(kind === 'native-lifetime' ? { watchdog: { intervalMs: 250, missedIntervals: 1 } } : {}),
+                mode: kind === 'command' ? { kind: 'managedSpawn', endpointNone: true } : {
+                kind: 'native', builtinLifecycle: {
+                    inspect: async () => {
+                        const running = started && (restored || kind === 'native-lifetime' && !resourceExited);
+                        return { phase: running ? 'running' : 'stopped', readiness: 'not_reported',
+                            endpoint: running && kind === 'native-lifetime' ? 'http://127.0.0.1:43210' : null };
+                    },
+                    markStarted() { started = true; },
+                    logs: async () => {
+                        logStarted = true;
+                        if (kind === 'native-lifetime') await outputReady;
+                        return 'container failed with fixture-service-secret';
+                    },
+                    stop: async () => { started = false; return { status: 'stopped' }; },
+                },
+            } },
+            authorizeLaunch: async () => ({ command: process.execPath,
+                args: ['-e', restored && kind === 'command' ? 'setInterval(() => {}, 1000)'
+                    : `console.error('service failed with fixture-service-secret'); process.exit(${kind === 'native-resource' || kind === 'native-lifetime' || restored ? 0 : 3})`],
+                env: { FIXTURE_TOKEN: 'fixture-service-secret' }, release: async () => { releaseLaunch(); } }),
+        });
+        const readRow = async (projection?: 'managed_bindings') => {
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await runtime.launcherRoutes.getSnapshot({ scope: 'machine', projection }));
+            const targets = selectLocalServiceLaunchTargets(applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), snapshot));
+            return buildLocalServiceRows({ inventoryRows: [], launchTargets: targets, sessionId: null, scope: 'machine' })[0];
+        };
+        try {
+            // A rejected starter still leaves a reviewable failed attempt; a successful detached
+            // starter does not make its already-dead native resource a successful Service.
+            const launching = start();
+            const joinedFailure = kind === 'native-starter'
+                ? readRow('managed_bindings').catch((error: unknown) => ({ error })) : null;
+            await launching.catch(() => undefined);
+            if (joinedFailure) expect(await joinedFailure).toMatchObject({ status: 'failed' });
+            // Endpoint-free admission returns before process exit. Join the actual launch
+            // release so this checks the observed exit rather than scheduler speed.
+            if (kind === 'command') await launchReleased;
+            resourceExited = true;
+            if (kind === 'native-lifetime') {
+                await vi.waitFor(() => expect(logStarted).toBe(true));
+                // Output IO may remain pending after resource death. Serving authority
+                // must be withdrawn before awaiting it, without racing cleanup against it.
+                expect(owner.listProjectServices()[0]?.snapshot().baseUrl).toBeNull();
+                expect((await readRow())?.target).not.toHaveProperty('endpointUrl');
+                releaseOutput();
+            }
+            await vi.waitFor(async () => {
+                const row = await readRow();
+                expect(row?.status).toBe('failed');
+                expect(row?.target.diagnostics).toEqual(expect.arrayContaining([
+                    expect.objectContaining({ message: expect.stringContaining('failed with [REDACTED]') }),
+                ]));
+                expect(JSON.stringify(row)).not.toContain('fixture-service-secret');
+            }, { timeout: 10_000 });
+            expect((await readRow('managed_bindings'))?.status).toBe('failed');
+            await runtime.refreshInventoryNow();
+            let publications = 0;
+            runtime.inventoryRegistry.subscribe(() => { publications++; });
+            for (let index = 0; index < 75; index++) { observedAt += 10_000; await runtime.refreshInventoryNow(); }
+            expect(publications).toBe(0);
+            restored = true;
+            started = false;
+            const recovered = await start();
+            observedAt += 10_000;
+            await runtime.refreshInventoryNow();
+            expect((await readRow())?.status).toBe('running');
+            expect((await readRow())?.target).not.toHaveProperty('diagnostics');
+            expect(publications).toBe(1);
+            await recovered.stop();
+            expect(owner.listProjectServices()).toEqual([]);
+        } finally { releaseOutput(); await runtime.stop(); await owner.dispose(); }
+    });
+
     it('reads exact managed bindings while listener hydration is pending, keeping ordinary launcher reads fresh', async () => {
         let releaseScan!: () => void;
         const scanned = new Promise<void>(resolve => { releaseScan = resolve; });

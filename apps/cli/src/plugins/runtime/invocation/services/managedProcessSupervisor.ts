@@ -1134,17 +1134,20 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             if (!process || processTerminalObservation) return;
             processTerminalObservation = process.wait().then((result) => {
                 processTerminal = Object.freeze({ kind: 'result', result });
-                if (spec.mode.kind === 'native') {
+                if (spec.mode.kind === 'native' || isStopping() || isStopped() || !isGenerationUsable()) {
                     return;
                 }
                 lifecycleProbeController.abort();
                 stopWatchdog();
                 const observed = result.termination.observed;
-                setUnhealthy('plugin_managed_server_process_exited', observed.kind === 'failed'
-                    ? observed.diagnostic : { details: { spawnFailure: classifySpawnFailure(undefined) } });
+                setUnhealthy('plugin_managed_server_process_exited', {
+                    ...(observed.kind === 'failed' ? observed.diagnostic
+                        : { details: { spawnFailure: classifySpawnFailure(undefined) } }),
+                    message: processFailureMessage(result),
+                });
             }).catch(() => {
                 processTerminal = Object.freeze({ kind: 'failed' });
-                if (spec.mode.kind === 'native') {
+                if (spec.mode.kind === 'native' || isStopping() || isStopped() || !isGenerationUsable()) {
                     return;
                 }
                 lifecycleProbeController.abort();
@@ -1153,6 +1156,26 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             });
             void processTerminalObservation;
         };
+        function processFailureMessage(result: PluginProcessResult): string {
+            // The process owner already retained bounded stdout/stderr for its terminal
+            // result. Project that same output; do not install another stream collector.
+            const observed = result.termination.observed;
+            return sanitizeExecDiagnosticText([
+                observed.kind === 'failed' ? observed.diagnostic.message
+                    : `Managed service process exited (${processExitCode(result)})`,
+                Buffer.from(result.stdout).toString('utf8'),
+                Buffer.from(result.stderr).toString('utf8'),
+            ].filter(Boolean).join('\n'), MAX_MANAGED_SERVICE_DIAGNOSTIC_BYTES, {
+                redactedValues: [...launchRedactedValues, ...(spec.mode.kind === 'managedSpawn'
+                    ? readManagedServiceProcessCredentialRedactionValues(spec.mode.credential) : [])],
+            });
+        }
+        function retainProjectEstablishmentFailure(): void {
+            if (scope.kind !== 'project' || !process || entry.lifecycle.signal.aborted || !isGenerationUsable()) return;
+            setUnhealthy(spec.mode.kind === 'native' ? 'native_service_start_failed' : 'plugin_managed_server_process_failed', {
+                ...(processTerminal?.kind === 'result' ? { message: processFailureMessage(processTerminal.result) } : {}),
+            });
+        }
         const assertProcessRunning = async (): Promise<void> => {
             if (!processTerminal || spec.mode.kind === 'native') return;
             if (processTerminal.kind === 'failed') {
@@ -1694,6 +1717,16 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     : observation.phase === 'unknown'
                         ? 'unhealthy'
                         : observation.readiness === 'ready' ? 'healthy' : 'running';
+                if (state === 'stopped' && (!wasFailed || explicitFailureOutput)) {
+                    // Publishing terminal custody lets the managed owner begin cleanup.
+                    // Withdraw serving first, then read output before terminal cleanup retires IO.
+                    setSnapshot({ ...snapshot, state: 'unhealthy', nativePhase: observation.phase,
+                        readiness: observation.readiness, baseUrl: null, port: null });
+                    await collectNativeFailureOutput(signal);
+                    assertNotAborted(signal);
+                    assertGenerationUsable();
+                    if (nativeStopped || isStopped()) return observation;
+                }
                 const next: ManagedServiceProcessSnapshot = {
                     ...snapshot,
                     state,
@@ -1716,7 +1749,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     // semantic lifecycle subscribers on every watchdog sample.
                     snapshot = freezeSnapshot(next);
                 }
-                if ((!wasFailed || explicitFailureOutput) && (state === 'unhealthy' || observation.phase === 'stopped'
+                if (state !== 'stopped' && (!wasFailed || explicitFailureOutput) && (state === 'unhealthy' || observation.phase === 'stopped'
                     || explicitFailureOutput && observation.readiness === 'not_ready')) {
                     await collectNativeFailureOutput(signal);
                 }
@@ -2546,6 +2579,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
         try {
             return await establishHandle();
         } catch (error) {
+            retainProjectEstablishmentFailure();
             try {
                 await cleanup();
                 cleanupCustody?.release();

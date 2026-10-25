@@ -1645,7 +1645,7 @@ function wrapHandle(
         lifetimeSignal: AbortSignal,
     ) => Promise<ManagedServiceResponse>,
     signal?: AbortSignal,
-    onTerminalDetected?: () => void,
+    onTerminalDetected?: (snapshot: ManagedServiceProcessSnapshot, unexpected: boolean) => void,
     onTerminalComplete?: () => void,
     stopOnAuthorityAbort = true,
 ): ManagedServiceHandle {
@@ -1782,7 +1782,7 @@ function wrapHandle(
                 snapshot.state === 'stopped'
                 || processTerminal
             ) {
-                onTerminalDetected?.();
+                onTerminalDetected?.(snapshot, underlyingCleanupPromise === null);
                 void runWithFinalization(
                     async () => await handle.dispose(),
                 ).catch(() => undefined);
@@ -4146,7 +4146,11 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 // A complete native read joins the lifecycle that will publish its handle.
                 // Do not turn an in-flight Start/Move into a cached Machine failure. Re-read
                 // after publication: another declaration may have entered while we waited.
-                await Promise.all(establishing.map(entry => entry.establishment));
+                await Promise.all(establishing.map(entry => entry.establishment.catch(error => {
+                    // A failed starter can settle real custody and publish its failed
+                    // attempt while still rejecting the caller's Start operation.
+                    if (!entry.project.handle) throw error;
+                })));
             }
         })();
     }
@@ -4197,13 +4201,15 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         if (existing) {
             if (
                 !isProjectManagedServiceSemanticEntry(existing)
-                || existing.specIdentity !== request.specIdentity
             ) {
                 return fail('plugin_managed_service_spec_conflict', 'A different reviewed service effect owns this Project declaration');
             }
             if (existing.terminal || existing.establishmentAbort.signal.aborted) {
                 await retireEntry(existing);
                 return await superviseProject(request);
+            }
+            if (existing.specIdentity !== request.specIdentity) {
+                return fail('plugin_managed_service_spec_conflict', 'A different reviewed service effect owns this Project declaration');
             }
             await waitForManagedServiceEstablishment(existing, request.signal);
             if (!existing.project.handle || !readsCurrent(request.isCurrent)) {
@@ -4303,6 +4309,13 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 await releaseEntryProcessHandle(entry, true);
                 throw error;
             }
+            let failedSnapshot: ManagedServiceSnapshot | undefined;
+            const clearFailedAttempt = () => {
+                if (!failedSnapshot) return;
+                failedSnapshot = undefined;
+                lifetime.abort('Project service custody settled');
+                removeSemanticEntry(entry);
+            };
             const wrapped = wrapHandle(
                 process,
                 async () => {},
@@ -4337,10 +4350,20 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     });
                 },
                 lifetime.signal,
-                () => {
+                (snapshot, unexpected) => {
                     entry.terminal = true;
+                    if (unexpected) {
+                        failedSnapshot = Object.freeze({ ...translateSnapshot(snapshot), state: 'failed', baseUrl: null });
+                    }
                 },
                 () => {
+                    // Terminal cleanup settles custody, but a failed Project Service
+                    // remains reviewable in this same declaration entry until retry/Stop.
+                    if (failedSnapshot) {
+                        notifyActivity();
+                        invalidateProcessLaunchDiscovery();
+                        return;
+                    }
                     lifetime.abort('Project service custody settled');
                     removeSemanticEntry(entry);
                 },
@@ -4351,6 +4374,19 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             const handle = Object.freeze({
                 ...wrapped,
                 ...witness,
+                snapshot: () => process.snapshot().state === 'stopped' && failedSnapshot ? failedSnapshot : wrapped.snapshot(),
+                observe(listener: Parameters<ManagedServiceHandle['observe']>[0]) {
+                    return wrapped.observe(snapshot => listener(snapshot.state === 'stopped' && failedSnapshot ? failedSnapshot : snapshot));
+                },
+                async stop(options?: Parameters<ManagedServiceHandle['stop']>[0]) {
+                    const result = await wrapped.stop(options);
+                    clearFailedAttempt();
+                    return result;
+                },
+                async dispose() {
+                    await wrapped.dispose();
+                    clearFailedAttempt();
+                },
                 instanceId: process.snapshot().instanceId,
                 endpointKind: request.processSpec.mode.kind === 'native' ? 'native' as const
                     : request.processSpec.mode.endpointNone ? 'none' as const : 'http' as const,
@@ -4367,7 +4403,34 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         }).catch((error) => {
             entry.terminal = true;
             if (!entry.processHandle && !entry.establishmentCleanup) {
-                removeSemanticEntry(entry);
+                const snapshot = entry.readProcessSnapshot?.();
+                if (snapshot?.state === 'stopped' && snapshot.diagnostics.some(item => item.severity === 'error') && isCurrent()) {
+                    // Establishment rejected after acquiring and then settling real custody.
+                    // Keep its actual occurrence and bounded diagnostics, never a live binding.
+                    const failedSnapshot: ManagedServiceSnapshot = Object.freeze({ ...translateSnapshot(snapshot), state: 'failed', baseUrl: null });
+                    const dispose = async () => {
+                        lifetime.abort('Failed Project service dismissed');
+                        removeSemanticEntry(entry);
+                    };
+                    const unavailable = async (): Promise<never> => fail('plugin_managed_service_unavailable', 'Project service start failed');
+                    entry.project.handle = Object.freeze({ ...witness, instanceId: snapshot.instanceId,
+                        endpointKind: request.processSpec.mode.kind === 'native' ? 'native'
+                            : request.processSpec.mode.endpointNone ? 'none' : 'http',
+                        retirementSignal: lifetime.signal, isCurrent, snapshot: () => failedSnapshot,
+                        isServing: () => false,
+                        inspectCurrentOccurrence: async () => failedSnapshot,
+                        observe(listener: Parameters<ManagedServiceHandle['observe']>[0]) {
+                            listener(failedSnapshot);
+                            return { dispose() {} };
+                        },
+                        waitUntilHealthy: unavailable, request: unavailable, dispose,
+                        async stop() { await dispose(); return { status: 'stopped' as const }; },
+                    } satisfies ProjectManagedServiceHandle);
+                    notifyActivity();
+                    invalidateProcessLaunchDiscovery();
+                } else {
+                    removeSemanticEntry(entry);
+                }
             }
             return translateError(error);
         });

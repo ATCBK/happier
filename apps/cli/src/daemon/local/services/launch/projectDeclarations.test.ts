@@ -85,6 +85,7 @@ import { resolveManifestHostAccessRequestsForQualifiedContribution } from '@/plu
 import { pixiPlugin, pixiRuntime, pixiAdapter, importedPixiEnvironment } from '../../../../../../../packages/plugin-sdk/fixtures/external-targeted-packages/project-native-source';
 import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withSocketTempDir } from '@/testkit/fs/tempDir';
 import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
@@ -1170,21 +1171,25 @@ describe('accepted Project Service declaration starter', () => {
         expect(result).toMatchObject({ status: 'failed', reasonCode: 'plugin_managed_service_establishment_failed',
             establishmentFailure: { cause: 'port_in_use', port: address.port, sameProject: true, exitCode: 1,
                 lastStderrLine: `Error: listen EADDRINUSE: address already in use 127.0.0.1:${address.port}` } });
-        expect(f.owner.listProjectServices()).toEqual([]);
+        expect(f.owner.listProjectServices().map(handle => handle.snapshot())).toEqual([
+            expect.objectContaining({ state: 'failed', diagnostics: expect.arrayContaining([
+                expect.objectContaining({ message: expect.stringContaining('EADDRINUSE') }),
+            ]) }),
+        ]);
         expect(f.operationRuntime.store.list({ accountId: 'owner', machineId: f.targetWorkspace.machineId }).items
             .find(item => item.actionId === 'localServices.launcher.start')).toMatchObject({ state: 'failed',
                 error: { errorCode: 'plugin_managed_service_establishment_failed' } });
         expect(occupant.exitCode).toBeNull();
     });
 
-    it.skipIf(process.platform === 'win32')('retains a real Unix-socket collision without blaming the declared TCP port', async () => {
+    it.skipIf(process.platform === 'win32')('retains a real Unix-socket collision without blaming the declared TCP port', async () => withSocketTempDir(async socketRoot => {
         const tcp = createServer();
         await new Promise<void>(resolve => tcp.listen(0, '127.0.0.1', resolve));
         const address = tcp.address();
         if (!address || typeof address === 'string') throw new Error('Missing fixture TCP port');
         await new Promise<void>((resolve, reject) => tcp.close(error => error ? reject(error) : resolve()));
         const f = await fixture();
-        const socketPath = join(f.root, 'ipc.sock');
+        const socketPath = join(socketRoot, 'ipc.sock');
         const listener = createServer();
         await new Promise<void>(resolve => listener.listen(socketPath, resolve));
         cleanups.push(async () => { if (listener.listening) await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve())); });
@@ -1203,8 +1208,12 @@ describe('accepted Project Service declaration starter', () => {
         expect(result.establishmentFailure).not.toHaveProperty('port');
         expect(result.establishmentFailure).not.toHaveProperty('sameProject');
         expect(listener.listening).toBe(true);
-        expect(f.owner.listProjectServices()).toEqual([]);
-    });
+        expect(f.owner.listProjectServices().map(handle => handle.snapshot())).toEqual([
+            expect.objectContaining({ state: 'failed', diagnostics: expect.arrayContaining([
+                expect.objectContaining({ message: expect.stringContaining('EADDRINUSE') }),
+            ]) }),
+        ]);
+    }));
 
     for (const [_runtime, executable, args, expected] of [
         ['node', process.execPath, ['-e', "throw new Error('FX51 establishment failed')"], 'Error: FX51 establishment failed'],
@@ -1244,7 +1253,11 @@ describe('accepted Project Service declaration starter', () => {
             expect(result).toMatchObject({ status: 'failed', reasonCode: 'plugin_managed_service_establishment_failed',
                 establishmentFailure: { cause: 'process_exited', exitCode: 1,
                     lastStderrLine: _runtime === 'ruby' ? expect.stringContaining(expected) : expected } });
-            expect(f.owner.listProjectServices()).toEqual([]);
+            expect(f.owner.listProjectServices().map(handle => handle.snapshot())).toEqual([
+                expect.objectContaining({ state: 'failed', diagnostics: expect.arrayContaining([
+                    expect.objectContaining({ message: expect.stringContaining(expected) }),
+                ]) }),
+            ]);
         });
     }
 
