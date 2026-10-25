@@ -2,7 +2,8 @@
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ReactTestRendererJSON } from 'react-test-renderer';
 import type { LayoutChangeEvent, ViewStyle } from 'react-native';
@@ -115,8 +116,9 @@ vi.mock('expo-linear-gradient', async () => {
 vi.mock('@expo/vector-icons', async importOriginal => {
     const actual = await importOriginal<Record<string, unknown>>();
     const { Text } = await import('react-native');
-    const glyphs = JSON.parse(readFileSync(join(process.cwd(),
-        'node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json'), 'utf8')) as Record<string, number>;
+    // The package is installed wherever the workspace resolver placed it, not necessarily under apps/ui.
+    const glyphs = JSON.parse(readFileSync(join(dirname(createRequire(import.meta.url).resolve('@expo/vector-icons/package.json')),
+        'build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json'), 'utf8')) as Record<string, number>;
     return { ...actual, Ionicons: (props: React.ComponentProps<typeof Text> & { size?: number; color?: string; name: string }) => React.createElement(Text,
         { ...props, style: [props.style, { fontFamily: 'Ionicons', fontSize: props.size, color: props.color }] },
         String.fromCodePoint(glyphs[String(props.name)] ?? 0)) };
@@ -132,9 +134,9 @@ vi.mock('react-native-svg', () => {
         }) };
 });
 // The external virtualization SDK renders its requested items for a static source capture.
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async importOriginal => {
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return { LegendList: createCapturingLegendListMock({ renderItems: true }).module.LegendList };
+    return createCapturingLegendListMock({ original: await importOriginal<Record<string, unknown>>(), renderItems: true }).module;
 });
 
 const { storage } = await import('@/sync/domains/state/storage');
@@ -293,8 +295,8 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     const web = await vi.importActual<{ StyleSheet: { getSheet(): { textContent: string } } }>('react-native-web');
     const fonts = ['Inter-Regular', 'Inter-Medium', 'Inter-SemiBold'].map(name =>
         `@font-face{font-family:${name};src:url(data:font/ttf;base64,${readFileSync(join(process.cwd(), `sources/assets/fonts/${name}.ttf`)).toString('base64')})}`).join('')
-        + `@font-face{font-family:Ionicons;src:url(data:font/ttf;base64,${readFileSync(join(process.cwd(),
-            'node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf')).toString('base64')})}`;
+        + `@font-face{font-family:Ionicons;src:url(data:font/ttf;base64,${readFileSync(join(dirname(createRequire(import.meta.url).resolve('@expo/vector-icons/package.json')),
+            'build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf')).toString('base64')})}`;
     const documentHtml = (body: string) => `<!doctype html><html style="${glassVariables}"><meta charset="utf-8"><style>${fonts}${web.StyleSheet.getSheet().textContent}
         body{margin:0;background:${theme.colors.surface.base};color:${theme.colors.text.primary};font:14px system-ui}section{padding:24px;min-width:0}h2{font-size:13px;margin:0 0 16px;color:${theme.colors.text.secondary}}.collection-scene{display:flex;flex-direction:column;height:1400px}@media(max-width:600px){section{padding:0 0 24px}h2{padding:16px}}</style><body>${body}</body></html>`;
     // Replay real Chromium geometry through the native onLayout boundary before serializing.

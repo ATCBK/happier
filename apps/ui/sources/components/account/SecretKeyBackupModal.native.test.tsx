@@ -12,15 +12,28 @@ const platform = vi.hoisted(() => ({
         return choices[this.OS] ?? choices.native ?? choices.default;
     },
 }));
+const sharing = vi.hoisted(() => ({ available: true, failed: false, observed: vi.fn() }));
+// iOS hands the cache file to the system Share sheet (RN Share); Android and others use their own SDK boundary.
 installAccountCommonModuleMocks({
-    reactNative: async () => ({ ...await createReactNativeNativeMock({ platformOS: 'ios' }), Platform: platform }),
+    reactNative: async () => ({
+        ...await createReactNativeNativeMock({ platformOS: 'ios' }),
+        Platform: platform,
+        Share: {
+            sharedAction: 'sharedAction',
+            dismissedAction: 'dismissedAction',
+            share: async ({ url }: { url: string }) => {
+                await sharing.observed(url, undefined, undefined);
+                if (sharing.failed) throw new Error('native_share_failed');
+                return { action: 'sharedAction' };
+            },
+        },
+    }),
 });
 
 const fs = await vi.hoisted(async () => {
     const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
     return createExpoFileSystemFileMock();
 });
-const sharing = vi.hoisted(() => ({ available: true, failed: false, observed: vi.fn() }));
 vi.mock('expo-file-system', () => fs.module);
 vi.mock('expo-sharing', () => ({
     isAvailableAsync: async () => sharing.available,
@@ -69,7 +82,8 @@ describe('Recovery key native disclosure', () => {
         sharing.observed.mockImplementation((uri: string, name?: string, mimeType?: string) => {
             expect(fs.close).toHaveBeenCalledWith(uri);
             expect(new TextDecoder().decode(new Uint8Array(fs.files.get(uri)!))).toBe(`${formatRecoveryKeyForDisplay(syntheticKey)}\n`);
-            expect(mimeType).toBe('text/plain');
+            // The iOS Share sheet infers the type from the file; the SDK boundaries carry it explicitly.
+            expect(mimeType).toBe(os === 'ios' ? undefined : 'text/plain');
         });
         await shareSyntheticKey();
         expect(sharing.observed).toHaveBeenCalledOnce();

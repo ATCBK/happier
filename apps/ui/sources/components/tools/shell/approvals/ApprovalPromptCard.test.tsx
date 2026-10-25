@@ -240,10 +240,11 @@ describe('ApprovalPromptCard', () => {
         homeId = await home.addHome({ name: 'Home A', serverUrl: 'https://approval-home-a.example',
             serverIdentityId: 'srv_stable-home-a', accountId: 'account-1', currentAccount: true });
         // Replay first admits the exact daemon's custody from its Home's genuine machine census.
-        home.answer(homeId, 'GET /v1/machines', { body: [{
-            ...createPlainMachineRowFixture({ id: 'machine-exact', accountId: 'account-1' }),
-            installationId: 'installation-exact',
-        }] });
+        const machineRow = { ...createPlainMachineRowFixture({ id: 'machine-exact', accountId: 'account-1' }),
+            installationId: 'installation-exact' };
+        home.answer(homeId, 'GET /v1/machines', { body: [machineRow] });
+        // The external Action transport reads its exact Machine by id (read-batch over this row).
+        home.answer(homeId, 'GET /v1/machines/machine-exact', { body: { machine: machineRow } });
         headerHomeId = await home.addHome({ name: 'Header Home', serverUrl: 'https://approval-header.example',
             serverIdentityId: 'srv_stable-home-b', accountId: 'account-1', active: false });
         v1HomeId = await home.addHome({ name: 'V1 Home', serverUrl: 'https://approval-v1.example',

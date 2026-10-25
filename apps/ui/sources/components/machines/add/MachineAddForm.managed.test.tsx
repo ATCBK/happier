@@ -42,7 +42,8 @@ describe('Add machine Connect and Create entry', () => {
     });
 
     it('groups the ways in as Connect | Create on a phone, with the connection paths under Connect', async () => {
-        vi.spyOn(await import('react-native'), 'useWindowDimensions').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        // Dimensions is the window authority; useWindowDimensions and the presentation readers follow it.
+        vi.spyOn((await import('react-native')).Dimensions, 'get').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
         await harness.addHome({ name: 'Build', serverUrl: 'https://build-phone.example', serverIdentityId: 'srv_build_phone', accountId: 'owner' });
         const { MachineAddForm } = await import('./MachineAddForm');
         const screen = await renderScreen(<MachineAddForm layout="page" canCreate testID="settings.machines.draft.form" onClose={() => {}} onStartSession={() => {}} />);

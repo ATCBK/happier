@@ -227,10 +227,11 @@ describe('TeamJoinedCard', () => {
         accountId, activation: 'switch',
         request: (input, init) => account!.request(input, init) });
       storage.setState({ isDataReady: true, profileScope: { serverId: replacement.serverId, accountId } });
-      storage.getState().applyProfile({ ...profileDefaults, id: accountId, name: 'Grace' });
       installHome(home, events);
     });
     await screen.update(renderCard(replacement!.credentials));
+    // Activating another Home starts that Account's profile from defaults; its name is then the replacement's own.
+    await act(async () => { storage.getState().applyProfile({ ...profileDefaults, id: accountId, name: 'Grace' }); });
     const { getCurrentAuth } = await import('@/auth/context/currentAuth');
     const { parseToken } = await import('@/utils/auth/parseToken');
     expect(parseToken(getCurrentAuth()!.credentials!.token)).toBe(accountId);

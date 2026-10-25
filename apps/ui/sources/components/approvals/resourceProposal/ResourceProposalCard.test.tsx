@@ -294,17 +294,16 @@ describe('resource proposal card', () => {
       accountId: 'account-1',
       currentAccount: true,
     });
-    home.answer(homeId, 'GET /v1/machines', {
-      body: [
-        {
-          ...createPlainMachineRowFixture({
-            id: MACHINE,
-            accountId: 'account-1',
-          }),
-          installationId: 'installation-exact',
-        },
-      ],
-    });
+    const machineRow = {
+      ...createPlainMachineRowFixture({
+        id: MACHINE,
+        accountId: 'account-1',
+      }),
+      installationId: 'installation-exact',
+    };
+    home.answer(homeId, 'GET /v1/machines', { body: [machineRow] });
+    // The external Action transport reads its exact Machine by id (read-batch over this row).
+    home.answer(homeId, `GET /v1/machines/${MACHINE}`, { body: { machine: machineRow } });
     home.answer(homeId, 'POST /v1/actions/approval.request.decide', {
       select: raw => {
         const request = ExternalActionRequestEnvelopeV1Schema.parse(raw);
