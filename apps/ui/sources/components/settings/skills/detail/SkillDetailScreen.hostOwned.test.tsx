@@ -2,7 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
@@ -138,6 +138,10 @@ async function pluginSkillHome(origin: string, skill: Partial<SkillListItemV1> =
     handleRequest: async (path, init) => {
       if (path === '/v2/account/settings/history')
         return Response.json({ snapshots: [] });
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST')
+        return createMachineReadBatchResponseFixture(init.body, (id) => (id === machine.id
+          ? { ...createPlainMachineRowFixture({ id, accountId: 'artifact-account', machine }), installationId: 'plugin-installation' }
+          : null));
       if (path.startsWith('/v1/machines')) return Response.json([published]);
       if (
         path === '/v1/actions/skills.list' ||

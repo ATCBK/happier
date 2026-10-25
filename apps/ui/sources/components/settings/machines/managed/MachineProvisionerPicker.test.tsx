@@ -500,7 +500,8 @@ describe('provisioner picker demand', () => {
       return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
         execution: { ok: false, errorCode: 'unavailable', error: 'unavailable' } }) };
     } });
-    await act(async () => { await harness.addHome({ name: 'Refresh', serverUrl: 'https://refresh.example', serverIdentityId: 'srv_refresh', accountId: 'refresh' }); });
+    // A refreshed credential for the same Account retires the binding; an unrelated Home publication does not.
+    await act(async () => { await harness.switchAccount(serverId, 'owner', { currentAccount: true }); });
     await vi.waitFor(async () => { await act(async () => {}); expect(cards().find(card => card.title === 'Alpha')?.action.disabled, 'failed catalog').toBe(true); });
     expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull();
     const retained = cards().find(card => card.title === 'Alpha');
@@ -529,8 +530,8 @@ describe('provisioner picker demand', () => {
     try {
       await waitForHomeGovernance(() => expect(hook.getCurrent().provisioners).toHaveLength(2));
       const firstBinding = hook.getCurrent().binding;
-      // A profile publication retires the credential binding and binds the same Account again.
-      await harness.addHome({ name: 'Other', serverUrl: 'https://other.example', serverIdentityId: 'srv_other', accountId: 'other' });
+      // A refreshed credential retires the binding and binds the same Account again.
+      await harness.switchAccount(serverId, 'owner', { currentAccount: true });
       await waitForHomeGovernance(() => expect(hook.getCurrent().binding).not.toBe(firstBinding));
       expect(hook.getCurrent().loading).toBe(true);
       expect(hook.getCurrent().provisioners).toHaveLength(2);
