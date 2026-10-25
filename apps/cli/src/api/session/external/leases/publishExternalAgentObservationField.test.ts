@@ -22,6 +22,9 @@ import * as pinnedHttp from '@/network/pinnedHttp';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import type { patchSessionMetadataEnvelopeTuple } from '@/session/transport/http/sessionsHttp';
 
+// The Account delivery-mute read is bound to the bearer's own Account id.
+const externalToken = `e30.${Buffer.from(JSON.stringify({ sub: 'external-account' })).toString('base64url')}.signature`;
+
 function snapshot(
     boundary?: Readonly<{ id: string; observedAtMs: number }>,
 ): ExternalAgentObservationSnapshotV1 {
@@ -144,7 +147,7 @@ describe('publishExternalAgentObservationField', () => {
         let suppressed = true;
         const { preservedMetadata: _preserved, ...metadata } = linkedMetadata();
         const fields = buildSessionMetadataEnvelopeFields({
-            credentials: { token: 'external-token', encryption: null },
+            credentials: { token: externalToken, encryption: null },
             accountEncryptionMode: 'plain', storedContentMode: 'plain', metadata, agentState: null,
         });
         const rawSession = {
@@ -159,9 +162,13 @@ describe('publishExternalAgentObservationField', () => {
             if (String(url).endsWith('/v1/account/encryption/currentness')) {
                 return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
             }
+            // The sending Account's delivery mutes are read from Home before any channel is selected.
+            if (String(url).endsWith('/v2/account/session-delivery-mutes')) return { status: 200, data: { scopes: [] } };
             const viewer = rawSession.viewer!;
             return { status: 200, data: V2SessionByIdResponseSchema.parse({ session: { ...rawSession, viewer: {
-                ...viewer, follow: { follows: false, notificationLevel: suppressed ? 'none' : null },
+                ...viewer, follow: { ...viewer.follow,
+                // Ready delivery follows the Account Follow policy: no events while muted, everything once enabled.
+                policy: suppressed ? { preset: 'custom' as const, events: {} } : { preset: 'everything' as const } },
             } } }) };
         });
         vi.spyOn(axios, 'patch').mockImplementation(async (_url, body: unknown) => {
@@ -182,7 +189,7 @@ describe('publishExternalAgentObservationField', () => {
         });
         setActiveAccountSettingsSnapshot({
             source: 'network', settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
-            scopeKey: runWithServerHttpBaseUrl('https://external-home.example.test', () => resolveAccountSettingsScopeKeyForToken('external-token')),
+            scopeKey: runWithServerHttpBaseUrl('https://external-home.example.test', () => resolveAccountSettingsScopeKeyForToken(externalToken)),
             settings: accountSettingsParse({
                 attentionDeliveryPolicyV1: { v: 1, privacy: { defaultPreviewBehavior: previewBehavior } },
             }), notificationChannelCatalog: { status: 'ready', revision: 1, diagnostics: [], channels: [NotificationChannelRecordV1Schema.parse({
@@ -192,7 +199,7 @@ describe('publishExternalAgentObservationField', () => {
         });
         const publish = createExternalAgentObservationFieldPublisher({
             shouldSendReadyNotification: () => true,
-            readCredentials: async () => ({ token: 'external-token', encryption: null }),
+            readCredentials: async () => ({ token: externalToken, encryption: null }),
         });
         const send = (id: string, observedAtMs = suppressed ? 2_000 : 3_000) => runWithServerHttpBaseUrl('https://external-home.example.test', () => publish({
             sessionId, fieldId: 'runtime.externalAgent', value: snapshot({ id, observedAtMs }),
@@ -209,7 +216,7 @@ describe('publishExternalAgentObservationField', () => {
         }
         expect(axios.get).toHaveBeenCalledWith(
             `https://external-home.example.test/v2/sessions/${sessionId}?accessProjectionVersion=1`,
-            expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer external-token' }) }),
+            expect.objectContaining({ headers: expect.objectContaining({ Authorization: `Bearer ${externalToken}` }) }),
         );
         const incumbent = getActiveAccountSettingsSnapshot();
         if (!incumbent) throw new Error('Notification Account fixture retired');

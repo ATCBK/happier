@@ -156,9 +156,16 @@ describe('retained Runner managed dependencies', () => {
         try {
             await mkdir(join(runtimeRoot, 'package-dist'), { recursive: true });
             await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
-            await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(manifest({
+            // A first-party development root is the checkout package that holds its source entry.
+            await mkdir(join(pluginRoot, 'src'), { recursive: true });
+            await writeFile(join(pluginRoot, 'src', 'index.ts'), 'export {};\n', 'utf8');
+            const antigravityManifest = JSON.stringify(manifest({
                 pluginId: 'happier.agent.antigravity', definition,
-            })), 'utf8');
+            }));
+            await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), antigravityManifest, 'utf8');
+            // Source-mode declarations are the runner's tracked CLI assets, which this runner publishes beside its source.
+            await mkdir(join(runtimeRoot, 'assets', 'bundled-plugin-manifests'), { recursive: true });
+            await writeFile(join(runtimeRoot, 'assets', 'bundled-plugin-manifests', 'antigravity.json'), antigravityManifest, 'utf8');
             const sourceCustody = { kind: 'development' as const, registeredRootId: pluginRoot };
             const binding = createAgentSessionRunnerFactoryBinding({
                 v: 1, pluginId: 'happier.agent.antigravity', pluginVersion: '1.0.0',

@@ -61,9 +61,9 @@ describe('credentialed target-action current-intent wiring', () => {
       token: 'token-1',
       encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
     };
-    mockGet
-      .mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 1 } })
-      .mockResolvedValue({ status: 404, data: null });
+    // Account mode is read by path, not by call order: the writer admits it more than once.
+    mockGet.mockImplementation(async (url: string) => new URL(url).pathname === '/v1/account/encryption'
+      ? { status: 200, data: { mode: 'e2ee', updatedAt: 1 } } : { status: 404, data: null });
     const requester = createCredentialedTargetActionCurrentIntent(credentials);
     const result = await requester({
       action: {
@@ -99,9 +99,9 @@ describe('credentialed target-action current-intent wiring', () => {
       token: 'token-only',
       encryption: null,
     };
-    mockGet
-      .mockResolvedValueOnce({ status: 200, data: { mode: 'plain', updatedAt: 1 } })
-      .mockResolvedValue({ status: 404, data: null });
+    // Account mode is read by path, not by call order: the writer admits it more than once.
+    mockGet.mockImplementation(async (url: string) => new URL(url).pathname === '/v1/account/encryption'
+      ? { status: 200, data: { mode: 'plain', updatedAt: 1 } } : { status: 404, data: null });
     const requester = createCredentialedTargetActionCurrentIntent(credentials);
     const result = await requester({
       action: {

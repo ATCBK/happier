@@ -191,7 +191,7 @@ describe('workflow Action host', () => {
     expect(update).toHaveBeenCalledWith(expect.anything(), ingress, { defaultSessionId: 'session-1' });
   });
 
-  it('requires a positive timeout only for Session-bound agent and MCP waits before delegation', async () => {
+  it('delegates every Session-bound and unbound wait to the Run owner, which alone enforces the caller lifetime', async () => {
     const runs = { execute: vi.fn(async () => unavailable) };
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
@@ -201,12 +201,11 @@ describe('workflow Action host', () => {
     const input = { runId: '550e8400-e29b-41d4-a716-446655440000' } as const;
 
     for (const surface of ['agent', 'mcp'] as const) {
-      await expect(execute({ actionId: 'workflow.run.wait', input, context: { surface, defaultSessionId: 'session-1' } }))
-        .resolves.toEqual({ ok: false, errorCode: 'invalid_input', error: 'invalid_input' });
+      await execute({ actionId: 'workflow.run.wait', input, context: { surface, defaultSessionId: 'session-1' } });
     }
     await execute({ actionId: 'workflow.run.wait', input, context: { surface: 'cli' } });
     await execute({ actionId: 'workflow.run.wait', input, context: { surface: 'agent' } });
-    expect(runs.execute).toHaveBeenCalledTimes(2);
+    expect(runs.execute).toHaveBeenCalledTimes(4);
   });
 
   it('delegates requested target validation to the host availability owner', async () => {

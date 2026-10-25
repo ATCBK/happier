@@ -136,7 +136,7 @@ describe('CLI MCP Actions through admitted catalog persistence', () => {
       const entry = { id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] },
         env: { TOKEN: { t: 'literal', v: 'private' } }, createdAt: 1, updatedAt: 1 } as const;
       expect(await executor.execute('mcp.servers.create', { entry, expectedRevision: 1 }, context))
-        .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2 } });
+        .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2, serverId: 'server' } });
       expect(await executor.execute('mcp.servers.read', { serverId: 'server' }, context)).toMatchObject({ ok: true,
         result: { status: 'present', complete: true, authority: 'active', revision: 2, server: entry } });
       expect(await executor.execute('mcp.servers.update', { entry: { ...entry, name: 'changed' }, expectedRevision: 1 }, context))

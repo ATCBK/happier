@@ -478,12 +478,14 @@ describe('stateUpdates (plaintext sessions)', () => {
             sourceTurnId: 'turn_1',
             requestKind: 'permission',
             occurredAt: 1,
+            followEvent: { kind: 'needs_you', type: 'approval' },
           },
           {
             requestId: 'req_action',
             sourceTurnId: 'turn_1',
             requestKind: 'user_action',
             occurredAt: 2,
+            followEvent: { kind: 'needs_you', type: 'decision' },
           },
         ],
       });

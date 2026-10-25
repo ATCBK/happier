@@ -82,11 +82,17 @@ describe('PushNotificationClient.fetchPushTokens', () => {
   });
 });
 
+// Ready push is selected only for a followed Session; this suite exercises focus filtering, not Follow policy.
+function followEverythingContext(context: ReturnType<typeof createSessionNotificationContextFixture>) {
+  return { ...context, viewer: { ...context.viewer!, follow: { ...context.viewer!.follow, policy: { preset: 'everything' as const } } } };
+}
+
 describe('focused computer push filtering', () => {
+  beforeEach(() => { vi.mocked(axios.get).mockReset(); });
   it('carries the canonical Account opt-in through real activity delivery to the HTTP boundary', async () => {
     vi.mocked(axios.get).mockImplementation(async (url) => ({ status: 200, data:
       String(url).includes('/v2/sessions/')
-        ? { session: createSessionNotificationContextFixture('focus-session') }
+        ? { session: followEverythingContext(createSessionNotificationContextFixture('focus-session')) }
         : { tokens: [], suppressedByFocusedComputer: true },
     }));
     const client = new PushNotificationClient('t', 'https://api.example.test');
@@ -100,9 +106,10 @@ describe('focused computer push filtering', () => {
       pluginNotifications: null,
       expoPushSender: client,
       fetchSessionNotificationContext: client.fetchSessionNotificationContext.bind(client),
+      readAccountSessionDeliveryMutedScopes: async () => [],
       event: { topic: 'ready', sessionId: 'focus-session', waitingForCommandLabel: 'Agent' },
     });
-    expect(result).toMatchObject({ deliveredChannels: 0 });
+    expect(result).toMatchObject({ attemptedChannels: 1, deliveredChannels: 0 });
     expect(axios.get).toHaveBeenCalledWith(
       'https://api.example.test/v1/push-tokens?suppressIfComputerFocused=1', expect.anything(),
     );

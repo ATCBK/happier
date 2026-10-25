@@ -25,7 +25,14 @@ async function retainedCustomAcpSource() {
     await mkdir(join(sourceRoot, 'apps', 'cli'), { recursive: true });
     await mkdir(join(rootPath, '.happier-plugin'), { recursive: true });
     await mkdir(join(rootPath, 'assets'), { recursive: true });
+    // A first-party development root is the checkout package that holds its source entry.
+    await mkdir(join(rootPath, 'src'), { recursive: true });
+    await writeFile(join(rootPath, 'src', 'index.ts'), 'export {};\n');
     await writeFile(join(rootPath, '.happier-plugin', 'plugin.json'), JSON.stringify(PLUGIN_MANIFEST));
+    // Source-mode declarations are the runner's tracked CLI assets, which this runner publishes beside its source.
+    await mkdir(join(sourceRoot, 'apps', 'cli', 'assets', 'bundled-plugin-manifests'), { recursive: true });
+    await writeFile(join(sourceRoot, 'apps', 'cli', 'assets', 'bundled-plugin-manifests', 'custom-acp.json'),
+        await readFile(new URL('../../../../../assets/bundled-plugin-manifests/custom-acp.json', import.meta.url)));
     const bytes = await readFile(new URL('../../../../../../../packages/plugins/custom-acp/assets/brand.png', import.meta.url));
     await writeFile(join(rootPath, 'assets', 'brand.png'), bytes);
     const source = await attestRetainedPluginSource({

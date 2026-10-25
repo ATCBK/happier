@@ -573,39 +573,27 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
     await expect(second).resolves.not.toHaveProperty('metadata');
   });
 
-  it('falls back to scanning /v2/sessions when the single-session route is missing (404 Not found)', async () => {
+  it('does not scan /v2/sessions when the single-session route is missing (404 Not found)', async () => {
     const getSpy = vi.spyOn(axios, 'get');
-        getSpy
-            .mockResolvedValueOnce({
-                status: 404,
-                data: { error: 'Not found', path: '/v2/sessions/s1', method: 'GET' },
-            } as any)
-            .mockResolvedValueOnce({
-                status: 200,
-                data: {
-                    sessions: [createSessionRecordFixture({ id: 's1', metadataVersion: 0, agentStateVersion: 0 })],
-                    hasNext: false,
-                    nextCursor: null,
-                },
-            } as any);
+    getSpy.mockResolvedValueOnce({
+      status: 404,
+      data: { error: 'Not found', path: '/v2/sessions/s1', method: 'GET' },
+    } as any);
 
-        const res = await fetchSessionSnapshotUpdateFromServer({
-            token: 't',
-            sessionId: 's1',
-            mode: 'e2ee',
+    const res = await fetchSessionSnapshotUpdateFromServer({
+      token: 't',
+      sessionId: 's1',
+      mode: 'e2ee',
 
-            ctx: { encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy' },
-            currentMetadataVersion: 999,
-            currentAgentStateVersion: 999,
-        });
-
-        expect(res.metadata).toBeUndefined();
-        expect(res.agentState).toBeUndefined();
-        expect(res.pendingQueueState).toEqual({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 0 });
-        expect(getSpy).toHaveBeenCalledTimes(2);
-        expect(String(getSpy.mock.calls[0]?.[0])).toContain('/v2/sessions/s1');
-        expect(String(getSpy.mock.calls[1]?.[0])).toContain('/v2/sessions');
+      ctx: { encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy' },
+      currentMetadataVersion: 999,
+      currentAgentStateVersion: 999,
     });
+
+    expect(res).toEqual({});
+    expect(getSpy).toHaveBeenCalledTimes(1);
+    expect(String(getSpy.mock.calls[0]?.[0])).toContain('/v2/sessions/s1');
+  });
 
     it('does not scan /v2/sessions when the session is missing (404 Session not found)', async () => {
         const getSpy = vi.spyOn(axios, 'get');

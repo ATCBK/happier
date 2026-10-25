@@ -41,6 +41,7 @@ describe('runPermissionModePromptLoop assistant text snapshots', () => {
       popPendingMessage: async () => false,
       waitForMetadataUpdate: async () => false,
       sendAgentMessage: vi.fn(),
+      markPendingProviderInputDispatched: vi.fn(),
     };
 
     const sendReady = createReadyNotificationDispatcher({

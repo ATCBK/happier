@@ -5,6 +5,7 @@ import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { resolveCliVoicePromptStackBlocks } from './resolveCliVoicePromptStackBlocks';
 import { configuration } from '@/configuration';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
   commitActivePromptLibraryCatalog, commitActiveProfileCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -269,7 +270,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
         settingsVersion, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: settingsVersion, content: { t: 'plain', v: rawSettings } } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: {
         status: 'present', revision: 1, content: { t: 'plain', v: profileId } } };
       throw new Error(`Unexpected rowless Voice selection boundary: ${path}`);

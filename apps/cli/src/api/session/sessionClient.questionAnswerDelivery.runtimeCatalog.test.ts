@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
-import type { SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2 } from '@happier-dev/protocol';
+import { FeaturesResponseSchema, type SessionPendingEnqueueByMachineRequestV1, type SessionPendingExecutionRunEnqueueByMachineRequestV2 } from '@happier-dev/protocol';
 import type { AgentState } from '@/api/types';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
@@ -10,6 +10,9 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { ApiSessionClient } from './sessionClient';
 import { buildPluginSessionInputAdmissionV1 } from '@/session/services/sessionInputAdmissionIdentity';
 import { settleSessionInputRequestV1, withSessionInputAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+
+// The Session's portable Home identity, distinct from the transport's local profile id.
+const questionHomeIdentity = 'srv_question_home';
 
 // HTTP/Socket.IO, authenticated Machine admission and persisted AgentState are the system boundaries.
 vi.mock('axios');
@@ -25,15 +28,15 @@ describe('Session-owned question answer return', () => {
         const sessionId = `c${'a'.repeat(24)}`;
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.sig`;
         const home = 'https://question-return-home.test';
-        const cause = { requestRef: 'bob-input', requester: { serverId: 'question-home', accountId: 'bob' },
-            persona: { serverId: 'question-home', sessionId }, origin: { kind: 'session',
-                session: { serverId: 'question-home', sessionId }, messageId: 'bob-message' } };
+        const cause = { requestRef: 'bob-input', requester: { serverId: questionHomeIdentity, accountId: 'bob' },
+            persona: { serverId: questionHomeIdentity, sessionId }, origin: { kind: 'session',
+                session: { serverId: questionHomeIdentity, sessionId }, messageId: 'bob-message' } };
         const sourceInputId = mode === 'wait' ? 'bob-input' : undefined;
         const originalMessage = { id: 'bob-message', localId: 'bob-input', seq: 7,
             sidechainId: null, createdAt: 1, updatedAt: 1, messageRole: 'user',
             inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'bob', sessionRelationship: 'sharedEditor' },
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Bob original' },
-                meta: { actionRequestAttributionV1: { ...cause, requester: { serverId: 'question-home', accountId: 'forged' } } } } },
+                meta: { actionRequestAttributionV1: { ...cause, requester: { serverId: questionHomeIdentity, accountId: 'forged' } } } } },
         };
         const pending: Array<SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2> = [];
         vi.mocked(axios.get).mockImplementation(async url => {
@@ -56,7 +59,7 @@ describe('Session-owned question answer return', () => {
             if (String(url).endsWith('/v1/account/encryption/currentness')) return {
                 status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
             };
-            if (String(url).endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+            if (/delivery-mutes$/u.test(String(url))) return { status: 200, data: { scopes: [] } };
             if (String(url).includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
                 createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: true,
                     metadata: JSON.stringify({ machineId: 'worker-machine', path: '/repo' }) }) } };
@@ -66,6 +69,8 @@ describe('Session-owned question answer return', () => {
         const client = new ApiSessionClient(token, createMockSession({ id: sessionId, encryptionMode: 'plain' }), {
             metadataAuthority: { kind: 'owner', credentials: { token, encryption: null } },
             durableMutationDeliveryInitiallyActive: false,
+            getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {},
+                capabilities: { serverIdentity: { serverIdentityId: questionHomeIdentity } } }) }),
             machineAdmissionTransport: async request => {
                 expect(request.sessionId).toBe(sessionId);
                 expect(request.targetMachineId).toBe('worker-machine');
@@ -119,8 +124,8 @@ describe('Session-owned question answer return', () => {
         { requester: 'bob', failure: 'original-read' },
     ] as const)('rejoins a complete person answer after host loss ($requester, $failure) with the same original cause', async ({ requester, failure }) => {
         const sessionId = `c${'b'.repeat(24)}`;
-        const cause = { requestRef: 'original-delegated-input', requester: requester ? { serverId: 'question-home', accountId: requester } : null,
-            persona: { serverId: 'question-home', sessionId: 'original-bot' }, origin: null };
+        const cause = { requestRef: 'original-delegated-input', requester: requester ? { serverId: questionHomeIdentity, accountId: requester } : null,
+            persona: { serverId: questionHomeIdentity, sessionId: 'original-bot' }, origin: null };
         const original = buildPluginSessionInputAdmissionV1({ actionRequestAttributionV1: cause,
             caller: { kind: 'plugin', pluginId: 'example.bridge', contributionLocalId: 'messages' }, source: {
                 sourceRef: 'original', sourceRevisionOrEpoch: '1', requestedPermissionCeiling: 'read-only', remoteApprovalMaxScope: 'request' } });
@@ -170,6 +175,8 @@ describe('Session-owned question answer return', () => {
             const client = new ApiSessionClient('token', createMockSession({ id: sessionId, encryptionMode: 'plain' }), {
                 metadataAuthority: { kind: 'owner', credentials: { token: 'token', encryption: null } },
                 durableMutationDeliveryInitiallyActive: false,
+                getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {},
+                    capabilities: { serverIdentity: { serverIdentityId: questionHomeIdentity } } }) }),
                 machineAdmissionTransport: async request => {
                     pending.push(request);
                     if (loseReceipt) throw new Error('Machine admission receipt lost');

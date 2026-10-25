@@ -29,9 +29,9 @@ describe('shared daemon inference active paths', () => {
     expect(voiceInferenceSharedSource).not.toContain("@/daemon/inference/");
     expect(voiceInferenceSharedSource).not.toContain('voiceModelPackInstaller');
 
-    const memoryWorkerSource = await readFile('src/daemon/memory/memoryWorker.ts', 'utf8');
-    expect(memoryWorkerSource).toContain("@/daemon/inference/inferencePaths");
-    expect(memoryWorkerSource).not.toContain("@/daemon/voiceInference/");
+    const memoryIndexerSource = await readFile('src/daemon/memory/memoryIndexer.ts', 'utf8');
+    expect(memoryIndexerSource).toContain("@/daemon/inference/inferencePaths");
+    expect(memoryIndexerSource).not.toContain("@/daemon/voiceInference/");
 
     const memoryEmbeddingsSource = await readFile(
       'src/daemon/memory/deepIndex/embeddings/createLocalTransformersEmbeddingsProvider.ts',

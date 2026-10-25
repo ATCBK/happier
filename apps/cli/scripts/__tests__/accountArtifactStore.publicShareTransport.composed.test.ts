@@ -19,7 +19,9 @@ const persistence = vi.hoisted(() => {
   const tx = {
     homeSettings: { findUnique: async () => null },
     homeGovernancePolicy: { findUnique: async () => null },
-    artifact: { findFirst: async () => ({ id: artifactId }) },
+    // Artifact access facts carry the owner's Account mode and the grant relations the policy reads.
+    artifact: { findFirst: async () => ({ id: artifactId, accountId: 'owner', account: { encryptionMode: 'plain' },
+      accountGrants: [], teamGrants: [], groupGrants: [] }) },
     publicSessionShare: {
       findUnique: async () => state.removed ? null : share,
       findMany: async () => state.removed ? [] : [share],
@@ -34,7 +36,7 @@ const persistence = vi.hoisted(() => {
       return 0;
     },
     $executeRawUnsafe: async (query: string) => {
-      if (!/^SET LOCAL statement_timeout = \d+$/.test(query)) throw new Error('Unexpected transaction setting write');
+      if (!/^SET LOCAL (?:statement_timeout = \d+|application_name = '[A-Za-z0-9._:-]+')$/.test(query)) throw new Error('Unexpected transaction setting write');
       return 0;
     },
     $queryRawUnsafe: async () => [{ cursor: 1 }],

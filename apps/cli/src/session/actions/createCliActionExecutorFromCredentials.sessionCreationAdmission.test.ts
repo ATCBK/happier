@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability';
+import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { SessionSpawnNewInputV2Schema, deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol';
 import { ExternalActionRequestEnvelopeV2Schema, openExternalActionRequestV2,
@@ -232,15 +234,35 @@ describe('paired terminal Action admission', () => {
                     data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
                 throw new Error('Unexpected Home request');
             });
+            // The Account's plugin availability census is the only Home read a plugin Action needs
+            // before it proves Machine placement; this Account has no plugin intents.
+            const availability = (url: string) => url.endsWith(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'])
+                ? { availabilityCursor: 1, pluginIds: [], intentReads: [], failedPluginIds: [] }
+                : url.endsWith(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'])
+                    ? { availabilityCursor: 1, hostingCapability: { enabled: true, maxArtifactBytes: 16 * 1024 * 1024, maxAccountBytes: 256 * 1024 * 1024 },
+                        intent: null, release: null, uiArtifacts: [], packageAssets: [] }
+                    : null;
             vi.spyOn(axios, 'post').mockImplementation(async url => actionId === 'session.role.set' && url.endsWith('/v2/sessions/lookup-by-tags')
                 ? { status: 200, data: { sessions: [createSessionRecordFixture({ id: 'session-one', encryptionMode: 'plain', share: null,
                     metadata: JSON.stringify({ machineId: 'own-machine', path: '/workspace', flavor: 'claude' }) })] } }
-                : { status: 401, data: { error: 'invalid_token' } });
+                : availability(url) ? { status: 200, data: availability(url) } : { status: 401, data: { error: 'invalid_token' } });
+            // Plugin discovery and contributed-Action invocation enter the daemon's placement-aware plugin ingress;
+            // every other Action enters the signed root ingress. Both authenticate with the daemon control token.
+            const pluginIngress = actionId === 'action.spec.search' || actionId === 'action.invoke';
+            let ingressRequests = 0;
             vi.stubGlobal('fetch', async (url: unknown, options: RequestInit) => {
-                expect(String(url)).toBe('http://127.0.0.1:43123/actions/root/execute');
+                ingressRequests++;
+                expect(String(url)).toBe(`http://127.0.0.1:43123${pluginIngress ? PLUGIN_ACTION_EXECUTE_PATH : '/actions/root/execute'}`);
                 expect(options.headers).toMatchObject({ 'x-happier-daemon-token': 'fixture-control-token' });
-                expect(JSON.parse(String(options.body))).toMatchObject({ actionId, input });
-                return Response.json(expected);
+                const body = JSON.parse(String(options.body));
+                // A contributed Action's typed Machine placement is read before its effect reaches the daemon.
+                if (actionId === 'action.invoke' && body.actionId === 'action.spec.get') return Response.json({ matched: true,
+                    result: { ok: true, result: PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse({ actionSpec: {
+                        id: body.input.id, title: 'Discover', description: null, safety: 'safe', executionPlacement: 'machine',
+                        placements: [], slash: null, bindings: null, examples: null, surfaces: { cli: true }, inputHints: null,
+                        inputSchema: { type: 'object' } } }) } });
+                expect(body).toMatchObject({ actionId, input });
+                return Response.json(pluginIngress ? { matched: true, result: expected } : expected);
             });
             const executor = createCliActionExecutorFromCredentials({ credentials, externalActionClient: true,
                 serverId, serverIdentityId: 'srv_home', serverApiUrl: 'https://home.test', machineId: 'own-machine',
@@ -251,6 +273,7 @@ describe('paired terminal Action admission', () => {
                     return prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
                 })();
             expect(result).toEqual(expected);
+            expect(ingressRequests).toBeGreaterThan(0);
         });
     });
 

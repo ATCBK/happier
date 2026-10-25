@@ -17,6 +17,8 @@ import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { registerMachineSessionGoalRpcHandlers } from '@/api/machine/rpcHandlers.sessionGoals';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createDaemonSessionMutationCustody } from '@/daemon/connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
+import { bindInactiveSessionControlLaunchScope } from '@/daemon/spawn/inactiveSessionControlLaunchScope';
+import { resolveSpawnChildEnvironment } from '@/daemon/spawn/resolveSpawnChildEnvironment';
 
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
@@ -153,6 +155,14 @@ describe('inactive session control adapters for an externally contributed Agent'
       return { status: 200, data: { didWrite: true, message: { id: `message-${originals.length}`, localId: request.localId,
         seq: originals.length, createdAt: 1, updatedAt: 1, content } } };
     });
+    // The daemon's admitted launch owner is the process boundary; this external Agent selects no Account,
+    // so the ordinary native environment owner stays real beneath it.
+    const releaseLaunchScope = bindInactiveSessionControlLaunchScope(async input => {
+      const result = await resolveSpawnChildEnvironment({ options: { directory: input.adapterParams.cwd ?? '/repo' },
+        profileEnvironmentVariables: {}, processEnv: {}, daemonSpawnHooks: null, logDebug() {}, logInfo() {}, logWarn() {} });
+      if (!result.ok) throw new Error('Native fixture scope unavailable');
+      return { environment: result.extraEnvForChild, connectedAccounts: [], async assertCurrent() {}, async dispose() {} };
+    });
     const custody = createDaemonSessionMutationCustody({ credentials });
     const handlers = new Map<string, (request: unknown) => Promise<unknown>>();
     registerMachineSessionGoalRpcHandlers({ rpcHandlerManager: {
@@ -186,6 +196,6 @@ describe('inactive session control adapters for an externally contributed Agent'
       for (const original of originals) expect(original).toEqual({ role: 'agent', content: { type: 'event',
         id: expect.stringMatching(/^goal-changed:/), data: { type: 'goal-changed' } } });
       expect(row.active).toBe(false);
-    } finally { await custody.close(); vi.restoreAllMocks(); }
+    } finally { releaseLaunchScope(); await custody.close(); vi.restoreAllMocks(); }
   });
 });

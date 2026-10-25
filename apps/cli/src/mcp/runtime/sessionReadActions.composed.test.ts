@@ -49,6 +49,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     starterDepth: 0, turnDepth: 0, callerPermissionMode: read ? 'read-only' : 'default', settings, roles: {} });
   if (!startContext) throw new Error('Missing canonical caller context fixture');
   const members = new Set(children);
+  const managerOf = new Map<string, string>();
   const connectedServices = { v: 2 as const, bindingsByServiceId: {
     'acme.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'self-non-default' },
   } };
@@ -58,7 +59,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       metadata: JSON.stringify({ v: 1 }), ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
         workspace: { machineId: 'read-machine', path: '/workspace' }, connectedServices: { connectedServices },
       }) } : {}),
-    manager: { sessionId } });
+    manager: { sessionId: managerOf.get(id) ?? sessionId } });
   const command = 'node /runtime/.runner-snapshots/session-read/dist/index.mjs';
   const runner = { pid: process.pid, processStartTimeMs: 23346,
     processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:session-read' };
@@ -114,16 +115,25 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     }
     return { status: 200, data: response.data };
   });
+  // A led child's Stop first records the explicit-stop intent in its metadata.
+  const metadataPatches: string[] = [];
+  vi.spyOn(axios, 'patch').mockImplementation(async (url) => {
+    metadataPatches.push(new URL(String(url)).pathname);
+    return { status: 200, data: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 1 } } };
+  });
   // Machine RPC is a process/network boundary. Its strict fork input is read
   // by the real receiving schema; an inactive stop is confirmed by the Home row.
   const stop = vi.spyOn(machineRpc, 'callMachineRpc').mockResolvedValue({ status: 'not_found' });
   const machineRequests: unknown[] = [];
+  const stopRequests: unknown[] = [];
   let approvalRequired = false;
   const daemon = createCliActionExecutor({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
     serverId, serverHttpBaseUrl, pluginActionExecutionOwner: 'current_process',
     actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
       ...(approvalRequired ? { actions: { [actionId]: { approvalRequiredSurfaces: ['agent'] } } } : {}) }) },
     machineActionDirectTargetTransport: { machineId: 'read-machine', invoke: async (method, request) => {
+      // The exact local Machine is reached by its direct transport, never the Home relay.
+      if (method === RPC_METHODS.STOP_SESSION) { stopRequests.push(request); return { status: 'not_found' }; }
       expect(method).toBe(RPC_METHODS.SESSION_FORK);
       const parsed = SessionForkRpcParamsSchema.parse(request);
       machineRequests.push(parsed);
@@ -161,8 +171,9 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   try {
     await runtime.mcp.connect(serverTransport);
     await client.connect(clientTransport);
+    // An Agent may archive its own Session but never Stop it (self_stop_forbidden).
     const targets = actionId === 'session.status.get' ? [sessionId, ...children]
-      : read ? children : ledLifecycle ? [sessionId, ...children] : [sessionId];
+      : read || actionId === 'session.stop' ? children : ledLifecycle ? [sessionId, ...children] : [sessionId];
     for (const child of targets) {
       const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId, input: { sessionId: child,
@@ -187,15 +198,19 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     }
     expect(forwarded).toEqual(targets.map(() => actionId));
     if (actionId === 'session.fork') expect(machineRequests).toMatchObject([{ parentSessionId: sessionId, forkPoint: { type: 'latest' } }]);
-    if (actionId === 'session.stop') for (const target of targets) expect(stop).toHaveBeenCalledWith(expect.objectContaining({
-      method: RPC_METHODS.STOP_SESSION, request: { sessionId: target }, authorization: { kind: 'session.write', sessionId: target },
-    }));
+    if (actionId === 'session.stop') expect(metadataPatches).toEqual(targets.map(target => `/v2/sessions/${target}`));
+    if (actionId === 'session.stop') {
+      expect(stopRequests).toEqual(targets.map(target => ({ sessionId: target })));
+      expect(stop).not.toHaveBeenCalled();
+    }
     if (actionId === 'session.messages.recent.get') {
       for (const child of children) expect(httpReads).toContain(`/v1/sessions/${child}/messages`);
     }
     // Captured facts cannot retain read/lifecycle authority after relationship
-    // loss. Fork/open retain their current-Session-only semantics.
+    // loss. Fork stays current-Session-only; headless open resumes only the
+    // caller's direct managed child, so a child another Session manages is refused.
     if (read || ledLifecycle) members.delete(children[0]!);
+    if (actionId === 'session.open') managerOf.set(children[0]!, children[1]!);
     httpReads.length = 0;
     const refused = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
       arguments: { actionId, input: { sessionId: children[0],
@@ -208,11 +223,15 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       // Forwarding cannot turn a configured Ask-first Action into a direct
       // effect. This host has no approval Artifact owner, so it must refuse.
       approvalRequired = true;
-      const effectsBefore = { stop: stop.mock.calls.length, fork: machineRequests.length, posts: vi.mocked(axios.post).mock.calls.length };
+      // Subtree membership is a Home read; every other POST or metadata PATCH is an effect.
+      const effects = () => ({ stop: stopRequests.length, fork: machineRequests.length, patches: metadataPatches.length,
+        posts: vi.mocked(axios.post).mock.calls.filter(([url]) => new URL(String(url)).pathname !== '/v2/sessions/query').length });
+      const effectsBefore = effects();
       const denied = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
-        arguments: { actionId, input: { sessionId, ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
+        arguments: { actionId, input: { sessionId: actionId === 'session.stop' ? children[1] : sessionId,
+          ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
       expect(denied.isError, JSON.stringify(denied.content)).toBe(true);
-      expect({ stop: stop.mock.calls.length, fork: machineRequests.length, posts: vi.mocked(axios.post).mock.calls.length }).toEqual(effectsBefore);
+      expect(effects()).toEqual(effectsBefore);
     }
     admissionAvailable = false;
     const forwardedBefore = [...forwarded];

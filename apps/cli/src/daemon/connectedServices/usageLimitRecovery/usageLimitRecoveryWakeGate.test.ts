@@ -56,6 +56,7 @@ describe('createUsageLimitRecoveryWakeGate', () => {
         },
       },
       recover,
+      resume: async () => {},
       gate: createUsageLimitRecoveryWakeGate({
         nowMs: () => Date.now(),
         hasRunner: () => true,

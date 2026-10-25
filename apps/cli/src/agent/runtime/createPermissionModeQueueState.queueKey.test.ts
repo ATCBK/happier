@@ -33,7 +33,8 @@ describe('createPermissionModeQueueState (queue key)', () => {
       } } });
     const batch = await waiting;
     expect(batch?.message).toMatchObject({ localId: 'human-input', text: 'Continue the migration',
-      localIds: ['human-input', 'returned-input'],
+      // Retained context keeps its exact identity but is not another native primary input.
+      localIds: ['human-input'], returnedAnswerContext: [expect.objectContaining({ localId: 'returned-input' })],
       causalPermissionAuthority: { admittedPermissionCeiling: 'default' }, inputProvenance: { kind: 'cli' } });
     if (!batch) throw new Error('missing_real_input');
     const prepared = await prepareSessionInputForProviderDispatch({ prompt: batch.message,

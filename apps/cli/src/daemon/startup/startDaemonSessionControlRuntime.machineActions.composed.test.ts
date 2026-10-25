@@ -5,13 +5,11 @@ import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import {
-  PROJECT_ACCOUNT_ROWS_ROUTE_V1,
-  ProjectAccountRowListResponseV1Schema,
-} from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 import { ApiMachineClient } from '@/api/apiMachine';
 import { writeStoredCredentialsForServerId } from '@/persistence';
+import { createPlainProjectAccountRefRow, projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 import { createRequesterSessionControlRuntimeFixture } from '../testkit/requesterSessionControlRuntimeFixture';
 
@@ -37,23 +35,20 @@ it('resolves Machine Action adapters after the daemon startup executor is publis
     }
     throw new Error(`Unexpected Home GET: ${new URL(url).pathname}`);
   });
-  vi.spyOn(axios, 'post').mockImplementation(async url => {
-    if (new URL(url).pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) {
-      const key = { kind: 'workspace-ref' as const, serverId, id: 'workspace-ref' };
-      return { status: 200, data: ProjectAccountRowListResponseV1Schema.parse({
-        status: 'listed',
-        coverage: 'complete',
-        rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: {
-          id: key.id,
-          serverId,
-          machineId,
-          rootPath: directory,
-          projectKey: 'machine-actions-project',
-          createdAtMs: 1,
-        } } } }],
-      }) };
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    const path = new URL(url).pathname;
+    // Project setup reads the exact workspace-ref key (/read) or a kind-scoped selection (/list).
+    if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` || path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/read`) {
+      return projectAccountRowsReadHttpResponse([createPlainProjectAccountRefRow({
+        id: 'workspace-ref',
+        serverId,
+        machineId,
+        rootPath: directory,
+        projectKey: 'machine-actions-project',
+        createdAtMs: 1,
+      })], path, body);
     }
-    throw new Error(`Unexpected Home POST: ${new URL(url).pathname}`);
+    throw new Error(`Unexpected Home POST: ${path}`);
   });
   const fixture = await createRequesterSessionControlRuntimeFixture({
     happyHomeDir: join(directory, 'home'),
@@ -96,7 +91,7 @@ it('resolves Machine Action adapters after the daemon startup executor is publis
       mode: 'preview',
     }, context)).resolves.toMatchObject({
       ok: false,
-      errorCode: 'unsupported_action',
+      errorCode: 'machine_transport_unavailable',
     });
 
     active = new ApiMachineClient(token, {

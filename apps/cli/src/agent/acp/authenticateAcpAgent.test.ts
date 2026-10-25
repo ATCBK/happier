@@ -28,6 +28,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readdir: (...args: Parameters<typeof actual.readdir>) => {
     if (enumeration.denied && String(args[0]) === '/proc') throw new Error('process listing unavailable');
     return actual.readdir(...args);
+  }, open: (...args: Parameters<typeof actual.open>) => {
+    // Exact-PID teardown observes identity directly, so the same OS boundary also refuses that read.
+    if (enumeration.denied && /^\/proc\/\d+\/stat$/u.test(String(args[0]))) throw new Error('process observation unavailable');
+    return actual.open(...args);
   } };
 });
 vi.mock('@happier-dev/cli-common/process', async (importOriginal) => {

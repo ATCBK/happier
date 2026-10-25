@@ -377,7 +377,7 @@ describe('native startup question permission composition', () => {
         }
     });
 
-    it('keeps ordinary native questions on their admitted turn and cancels the exact caller', async () => {
+    it('keeps ordinary native questions on their admitted turn and detaches the exact caller', async () => {
         const fixture = createFixture();
         const caller = new AbortController();
         fixture.setWitness({ inputId: 'input-question', turnId: 'turn-question', userMessageSeq: 1, userMessageSeqs: [1],
@@ -389,8 +389,9 @@ describe('native startup question permission composition', () => {
         try {
             await vi.waitFor(() => expect(Object.values(fixture.state().requests ?? {})).toMatchObject([{ turnId: 'turn-question' }]));
             caller.abort();
-            await vi.waitFor(() => expect(Object.keys(fixture.state().requests ?? {})).toHaveLength(0));
             await expect(pending).resolves.toMatchObject({ behavior: 'deny' });
+            // A durable Session question outlives its detached caller and stays on its admitted turn.
+            expect(Object.values(fixture.state().requests ?? {})).toMatchObject([{ turnId: 'turn-question' }]);
         } finally {
             fixture.occurrence.abort();
             await fixture.permissions.abortPendingRequestsAndFlush('test cleanup');

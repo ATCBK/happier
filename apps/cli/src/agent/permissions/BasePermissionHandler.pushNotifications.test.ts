@@ -16,6 +16,8 @@ import type { AgentStateRequestResponseTarget } from './agentStateRequestStore';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
 
 const fetchSessionNotificationContext = async (sessionId: string) => createSessionNotificationContextFixture(sessionId);
+// Source-session delivery fails closed without the Account's mute scopes; this Account has none.
+const readAccountSessionDeliveryMutedScopes = async () => [];
 
 function admitNotificationSettings(options: Parameters<typeof createNotificationAccountSnapshotFixture>[0] = {}) {
   const snapshot = createNotificationAccountSnapshotFixture(options);
@@ -96,7 +98,7 @@ describe('BasePermissionHandler push notifications', () => {
     const session = new FakeSession();
     const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session as any, {
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
     } as any);
 
@@ -124,7 +126,7 @@ describe('BasePermissionHandler push notifications', () => {
       { v: 1, id: 'builtin:expo_push', kind: 'expo_push', topics: { permissionRequest: false } },
     ] });
     const handler = new TestPermissionHandler(session as any, {
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
     } as any);
 
@@ -143,7 +145,7 @@ describe('BasePermissionHandler push notifications', () => {
     const session = new FakeSession();
     const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session as any, {
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
     } as any);
 
@@ -172,7 +174,7 @@ describe('BasePermissionHandler push notifications', () => {
 
     const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session1 as any, {
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
     } as any);
 
@@ -284,7 +286,7 @@ describe('BasePermissionHandler push notifications', () => {
       ],
     });
     const handler = new TestPermissionHandler(session as any, {
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync: vi.fn(async () => { return true; }) },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes, sendToAllDevicesAsync: vi.fn(async () => { return true; }) },
       getAccountSettings: () => settings,
     } as any);
 

@@ -7,12 +7,12 @@ vi.mock('axios', () => ({ default: { post: vi.fn() } }));
 const requester = { token: 'requester-token', serverHttpBaseUrl: 'https://server.invalid', isCurrent: async () => true };
 
 describe('session draft presence', () => {
-  it.each(['session', 'run', 'discussion', 'newDiscussion'] as const)('finds a %s draft after a page of unrelated/deleted drafts', async kind => {
+  // Discussion and new-Discussion drafts are Account-owned and carry no Session id, so only these kinds can mark a Session.
+  it.each(['session', 'run'] as const)('finds a %s draft after a page of unrelated/deleted drafts', async kind => {
     vi.mocked(axios.post).mockReset().mockResolvedValueOnce({ data: { items: [{
       address: { kind: 'session', sessionId: 'another' }, content: null, revision: 1, createdAt: 1, updatedAt: 2,
     }], nextAfter: 'session/another' } }).mockResolvedValueOnce({ data: { items: [{
-      address: { kind, sessionId: 'target', ...(kind === 'run' ? { runId: 'run-1' } : {}),
-        ...(kind === 'discussion' ? { discussionId: 'discussion-1' } : {}) },
+      address: { kind, sessionId: 'target', ...(kind === 'run' ? { runId: 'run-1' } : {}) },
       content: { t: 'encrypted', c: 'opaque' }, revision: 1, createdAt: 1, updatedAt: 20,
     }] } });
     expect(await readSessionDraftPresence({ sessionId: 'target', requester })).toEqual({ status: 'present', updatedAt: 20 });

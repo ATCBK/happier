@@ -62,6 +62,9 @@ function buildSettings(topics: Readonly<{ blocked: boolean; recovered: boolean }
 describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
   it('commits opted-in witnessed notices through the keyless plain Account Artifact owner, never hydration or unavailable E2EE material', async () => {
     const created: Array<Record<string, unknown>> = [];
+    // Creation first reads the private occurrence id and then the private list; neither holds the notice yet.
+    artifactNetwork.get.mockImplementation(async (url: string) => new URL(url).pathname === '/v1/artifacts'
+      ? { status: 200, data: [] } : { status: 404, data: { error: 'artifact_not_found' } });
     artifactNetwork.post.mockImplementation(async (_url, wire: Record<string, unknown>) => {
       // Model the actual Artifact create boundary's unique id, including after dismissal.
       if (created.some(row => row.id === wire.id)) return { status: 409, data: { error: 'conflict' } };
@@ -80,7 +83,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
     await dispatchNotification({ ...base, transition });
     expect(created).toHaveLength(1);
     expect(created[0].dataEncryptionKey).toBe(ARTIFACT_PLAIN_DATA_KEY_MARKER);
-    expect(decodePlainArtifactStoredContent(String(created[0].header))).toMatchObject({ kind: 'usage_notice.v1', status: 'open',
+    expect(decodePlainArtifactStoredContent(String(created[0].header))).toMatchObject({ kind: 'account_notice.v1', status: 'open',
       notice: { kind: 'pace', evidence: { meterId: 'weekly', observedAtMs: 600, previousObservedAtMs: 500 } } });
     expect(JSON.stringify(created[0])).not.toContain('sessionId');
     await dispatchNotification({ ...base, transition });
@@ -99,7 +102,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       recipientSecretKeyOrSeed: secret });
     expect(key).not.toBeNull();
     expect(decryptWithDataKey(Buffer.from(String(created[1].header), 'base64'), key!)).toMatchObject({
-      kind: 'usage_notice.v1', notice: { kind: 'pace', evidence: { meterId: 'weekly' } } });
+      kind: 'account_notice.v1', notice: { kind: 'pace', evidence: { meterId: 'weekly' } } });
     await dispatchNotification({ ...base, usageNoticeArtifactStore: { accountId: 'other-owner', store: encryptedStore }, transition });
     expect(created).toHaveLength(2);
     const differentSecret = new Uint8Array(32).fill(8);
@@ -136,7 +139,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       usageNoticeArtifactStore: { accountId: 'foreign', store },
       transition: { phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account',
         previous: usageSnapshot(500, 40), snapshot: usageSnapshot(600, 70) }, nowMs: () => 600, dedupeWindowMs: 0 }))
-      .rejects.toMatchObject({ code: 'usage_notice_account_scope_mismatch' });
+      .rejects.toMatchObject({ code: 'notice_account_scope_mismatch' });
     expect(created).toEqual([]);
   });
   it('requires user thresholds for depletion, almost-out, ending and credit expiry, and rejects stale or changed credit evidence', async () => {

@@ -217,20 +217,29 @@ describe('dispatchCli command cancellation', () => {
     });
   });
 
-  it.each(['auth', 'setup', 'home'] as const)('owns interrupt listeners while the real %s command runs and releases them', async (root) => {
+  // `<root> --help` is answered before the command starts, so each root runs its real handler
+  // through an invocation that prints and returns without credentials or prompts.
+  it.each([
+    ['auth', ['auth']],
+    ['setup', ['setup', '--non-interactive']],
+    ['home', ['home']],
+  ] as const)('owns interrupt listeners while the real %s command runs and releases them', async (_root, args) => {
     const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
     let observedOwnedListeners = false;
     vi.spyOn(console, 'log').mockImplementation(() => {
       observedOwnedListeners ||= process.listenerCount('SIGINT') > before.SIGINT
         && process.listenerCount('SIGTERM') > before.SIGTERM;
     });
-    await withConfiguredDaemonTestHome({ prefix: 'happier-dispatch-command-help-' }, async () => {
-      await dispatchCli({
-        args: [root, '--help'],
-        rawArgv: ['happier', root, '--help'],
-        terminalRuntime: null,
+    const exitCode = process.exitCode;
+    try {
+      await withConfiguredDaemonTestHome({ prefix: 'happier-dispatch-command-help-' }, async () => {
+        await dispatchCli({
+          args: [...args],
+          rawArgv: ['happier', ...args],
+          terminalRuntime: null,
+        });
       });
-    });
+    } finally { process.exitCode = exitCode; }
     expect(observedOwnedListeners).toBe(true);
     expect(process.listenerCount('SIGINT')).toBe(before.SIGINT);
     expect(process.listenerCount('SIGTERM')).toBe(before.SIGTERM);

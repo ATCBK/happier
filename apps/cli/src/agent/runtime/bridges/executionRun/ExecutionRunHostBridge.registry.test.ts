@@ -94,7 +94,7 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
   it('refuses a fresh Run after its authoritative contribution snapshot is retired', async () => {
     await withAdmittedSessionRun({ run: async fixture => {
       await fixture.admittedRuntime.dispose();
-      expect(await rawStart(fixture)).toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input',
+      expect(await rawStart(fixture)).toMatchObject({ ok: false, errorCode: 'execution_run_contribution_snapshot_unavailable',
         details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
       expect(fixture.nativeOpen).not.toHaveBeenCalled();
       expect(await listExecutionRunMarkers()).toEqual([]);

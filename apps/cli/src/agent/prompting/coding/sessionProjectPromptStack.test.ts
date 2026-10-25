@@ -109,6 +109,6 @@ it('reads only the exact current Project association and reports unavailable Sou
   })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_source_unavailable' });
   expect(sourceRead.mock.calls[0]?.[0]).toMatchObject({ method: 'GET' });
   await expect(resolveSessionProjectPromptStack({ credentials: { token: 'project-token', encryption: null },
-    metadata: { workspaceId: 'checkout', projectId: 'project', path: '/different' }, machineId: 'machine', directory: '/different',
+    metadata: { projectId: 'project', path: '/different' }, machineId: 'machine', directory: '/different',
   })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
 });

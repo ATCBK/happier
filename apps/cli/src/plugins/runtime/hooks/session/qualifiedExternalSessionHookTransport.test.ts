@@ -802,7 +802,8 @@ describe('qualified External Session hook transport', () => {
             secretFile: credential.secretFile,
             payload: { raw_secret_marker: 'must-not-be-logged' },
         });
-        expect(mismatched).toMatchObject({ code: 0, stdout: '', stderr: '' });
+        // A refused event reports only its content-free status line (0358e3eb84), never the payload.
+        expect(mismatched).toMatchObject({ code: 0, stdout: '', stderr: '[happier hook] Hook server returned HTTP 403\n' });
         expect(harness.handleAuthenticatedEvent).toHaveBeenCalledOnce();
 
         harness.handleAuthenticatedEvent.mockImplementationOnce(
@@ -846,7 +847,7 @@ describe('qualified External Session hook transport', () => {
             payload: { session_id: 'must-not-reach-handler' },
         });
 
-        expect(result).toMatchObject({ code: 0, stdout: '', stderr: '' });
+        expect(result).toMatchObject({ code: 0, stdout: '', stderr: '[happier hook] Hook server returned HTTP 403\n' });
         expect(harness.handleAuthenticatedEvent).not.toHaveBeenCalled();
     });
 });

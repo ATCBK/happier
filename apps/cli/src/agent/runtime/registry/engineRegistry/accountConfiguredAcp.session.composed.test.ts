@@ -391,15 +391,16 @@ describe('Account-configured ACP composed Session journey', () => {
           { ...firstDefinition, id: 'second-definition', name: 'second-definition', launch: { kind: 'command', command: process.execPath, args: [secondScript] },
             env: { CONFIGURED_ACP_LITERAL: { t: 'literal', v: 'second-environment' } } },
         ] } } });
+      // New-session draft addresses are UUIDs; a reload drops any other spelling.
       const definitions = [
-        [BACKEND_ID, firstScript, 'from-account-declaration'],
-        ['second-definition', secondScript, 'second-environment'],
+        [BACKEND_ID, firstScript, 'from-account-declaration', '6f0c5a3e-6a1d-4c36-9d3e-1f6a7b8c9d01'],
+        ['second-definition', secondScript, 'second-environment', '6f0c5a3e-6a1d-4c36-9d3e-1f6a7b8c9d02'],
       ] as const;
       const scope = { serverId: 'server-a', accountId: 'account-a' };
       await prepareSessionDraftPersistenceStorage();
       resetSessionDraftRepositoryForTests();
-      for (const [definitionId] of definitions) {
-        writeNewSessionDraftToRepository({ scope, draftId: definitionId, draft: {
+      for (const [definitionId, , , draftId] of definitions) {
+        writeNewSessionDraftToRepository({ scope, draftId, draft: {
           input: 'Review this repository', composerAttachments: [], selectedMachineId: 'machine-b', selectedPath: dir,
           entryIntent: 'session', selectedProfileId: null, selectedSecretId: null, agentType: 'codex',
           permissionMode: 'default', acpSessionModeId: null, updatedAt: 10,
@@ -407,11 +408,11 @@ describe('Account-configured ACP composed Session journey', () => {
           backendTarget: { kind: 'backend', backendId: definitionId, configuredBackendId: definitionId },
           executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
         } });
-        await flushSessionDraft({ scope, address: { kind: 'newSession', draftId: definitionId } });
+        await flushSessionDraft({ scope, address: { kind: 'newSession', draftId } });
       }
       resetSessionDraftRepositoryForTests();
-      for (const [definitionId, scriptPath, literal] of definitions) {
-        const reopened = readNewSessionDraftFromRepository({ scope, draftId: definitionId });
+      for (const [definitionId, scriptPath, literal, draftId] of definitions) {
+        const reopened = readNewSessionDraftFromRepository({ scope, draftId });
         if (!reopened) throw new Error('Expected the flushed Custom ACP selection');
         const spawn = buildSessionSpawnNewInputV2FromAuthoringDraft({
           draft: buildNewSessionAuthoringDraftFromPersistedDraft(reopened),

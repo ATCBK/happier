@@ -239,7 +239,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       },
       plan: expect.objectContaining({
         type: 'tmux',
-        target: 'happy:layout1-owner',
+        target: '=happy:layout1-owner',
       }),
     });
   });
@@ -337,7 +337,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: 'claude',
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-local-marker' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-local-marker' }),
     });
   });
 
@@ -371,7 +371,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: 'claude',
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-same-host' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-same-host' }),
     });
   });
 
@@ -414,7 +414,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: 'claude',
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-same-host' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-same-host' }),
     });
   });
 
@@ -452,7 +452,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: null,
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-same-host-unknown-agent' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-same-host-unknown-agent' }),
     });
   });
 
@@ -484,7 +484,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: 'claude',
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-1' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-1' }),
     });
   });
 
@@ -516,7 +516,7 @@ describe('evaluateCliSessionAttachEligibility', () => {
       attachStrategy: 'terminal_host',
       agentId: 'claude',
       attachScope: 'local',
-      plan: expect.objectContaining({ type: 'tmux', target: 'happy:session-1' }),
+      plan: expect.objectContaining({ type: 'tmux', target: '=happy:session-1' }),
     });
   });
 

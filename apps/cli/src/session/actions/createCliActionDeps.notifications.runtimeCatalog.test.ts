@@ -128,7 +128,8 @@ describe('CLI Notify me host composition', () => {
       serverHttpBaseUrl: requesterHome, isCurrent: async () => true }));
     boundary.get.mockImplementation(async (url: string) => {
       expect(url).toBe(`${requesterHome}/v1/account/encryption/currentness`);
-      return { status: 503, data: {} };
+      // A malformed currentness answer is not a retryable Home outage: the Account material is not admitted.
+      return { status: 200, data: {} };
     });
     const deps = createCliActionDeps({ ...hostParams(settings), savedSecretOperationContext: operationContext });
     await expect(createActionExecutor(deps).execute('action.options.resolve', {

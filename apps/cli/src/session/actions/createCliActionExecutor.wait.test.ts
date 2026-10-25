@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol';
+import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 import { createCliActionExecutor } from './createCliActionExecutor';
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
@@ -11,6 +12,13 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
 
 it('generic plugin wait reaches the existing daemon contributed-Action admission', async () => {
   request.mockImplementation(async (value: { actionId: string; input: unknown }) => {
+    if (value.actionId === 'action.spec.get') {
+      // Typed Machine placement is read before any effect reaches the daemon.
+      return { matched: true, result: { ok: true, result: PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse({ actionSpec: {
+        id: (value.input as { id: string }).id, title: 'Observe checks', description: null, safety: 'safe', executionPlacement: 'machine',
+        placements: [], slash: null, bindings: null, examples: null, surfaces: { cli: true }, inputHints: null, inputSchema: { type: 'object' },
+      } }) } };
+    }
     expect(value).toMatchObject({ actionId: 'action.invoke', surface: 'cli', input: {
       action: { pluginId: 'acme.checks', localId: 'observe/checks' },
       input: { sourceId: 'checkpoint', condition: 'checks_passed' },
@@ -27,5 +35,5 @@ it('generic plugin wait reaches the existing daemon contributed-Action admission
     target: { kind: 'plugin_source', serverId: 'home', pluginId: 'acme.checks', sourceId: 'checkpoint' },
     condition: { kind: 'plugin', actionLocalId: 'observe/checks', condition: 'checks_passed' },
   }, { surface: 'cli', signal: controller.signal })).toMatchObject({ ok: true, result: { disposition: 'matched', snapshot: { passed: true } } });
-  expect(request.mock.calls[0]?.[1]).toEqual({ signal: controller.signal });
+  expect(request.mock.calls.at(-1)?.[1]).toEqual({ signal: controller.signal });
 });

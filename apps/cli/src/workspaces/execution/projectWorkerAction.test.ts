@@ -370,9 +370,9 @@ describe('exact target worker status Action', () => {
       assertActionOutputContract('projects.worker.copy.retire', settledDefinition.result);
       return;
     }
-    // The post-commit HTTP 503 body is not a canonical row response. Preserve
-    // the existing boundary fallback and the confirmed-retirement marker.
-    expect(settledDefinition).toMatchObject({ ok: false, errorCode: settlement === 'confirmed' ? 'workspace_sync_unavailable' : 'indeterminate',
+    // The post-commit reconciliation read is refused with HTTP 503. Its typed
+    // Project-row failure code reaches the Action with the confirmed-retirement marker.
+    expect(settledDefinition).toMatchObject({ ok: false, errorCode: settlement === 'confirmed' ? 'project_account_rows_unavailable' : 'indeterminate',
       details: { kind: 'outcomeUnknown' } });
   });
 

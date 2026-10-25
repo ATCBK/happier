@@ -23,7 +23,7 @@ it.each(['cli', 'mcp'] as const)('discovers and personalizes host presets throug
     const presets = await list();
     expect(presets.map(row => [row.surface.owner.kind === 'corePage' && row.surface.owner.layoutId, row.name, row.isPreset]))
         .toEqual([['overview', 'Overview', true], ['costs', 'Costs', true], ['work', 'Work', true], ['usage', 'Usage', true],
-            ['plans', 'Plans', true], ['coach', 'Coach', true], ['how-you-work', 'How you work', true], ['sources', 'Sources', true]]);
+            ['plans', 'Plans', true], ['coach', 'Coach', true], ['how-you-work', 'How you work', true], ['sources', 'Sources', true], ['agents', 'Agents', true]]);
     for (const preset of presets) {
         const read = await executor.execute('widgets.item.list', { surface: preset.surface }, context);
         if (!read.ok) throw new Error(read.errorCode);
@@ -46,7 +46,7 @@ it.each(['cli', 'mcp'] as const)('discovers and personalizes host presets throug
     expect(await executor.execute('widgets.area.layout.create', { surface, layoutId: 'my-view', name: 'My view', fromSurface: selected }, context))
         .toMatchObject({ ok: true, result: { isPreset: false } });
     const combined = await list();
-    expect(combined.filter(row => row.isPreset)).toHaveLength(8);
+    expect(combined.filter(row => row.isPreset)).toHaveLength(9);
     expect(combined.filter(row => !row.isPreset)).toMatchObject([{ name: 'My view', surface: { owner: { layoutId: 'my-view' } } }]);
     expect(await executor.execute('widgets.area.layout.delete', { surface: selected, expectedRevision: combined.find(row => row.artifactId === edited.artifactId)!.revision }, context))
         .toMatchObject({ ok: false, errorCode: 'widget_area_layout_default_protected' });

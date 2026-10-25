@@ -108,7 +108,7 @@ describe('tracked Session Guard notice acknowledgement lifetime', () => {
       ]);
       expect(owner.metadata()).toHaveProperty('sessionGuardStateV1.kind', 'stopping');
       expect(results[0]).toEqual({ status: 'fulfilled', value: { ok: true } });
-      expect(results[1]).toMatchObject({ status: 'rejected', reason: new Error('RPC call timeout') });
+      expect(results[1]).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ name: 'RpcError', message: 'RPC call timeout' }) });
     } finally { await owner.close(); }
   }, 40_000);
 

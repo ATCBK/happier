@@ -70,6 +70,7 @@ describe('transfer rpc family (import-boundary)', () => {
         const transportOwners = new Set([
             fileURLToPath(new URL('../../api/machine/rpcHandlers.preparedTransfers.ts', import.meta.url)),
             fileURLToPath(new URL('../../api/rpc/RpcHandlerManager.ts', import.meta.url)),
+            fileURLToPath(new URL('../../api/apiMachine.ts', import.meta.url)),
         ]);
 
         const files = (await listFilesRecursively(cliRoot)).filter(isProductionTsFile);

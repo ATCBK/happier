@@ -5,14 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:path', async () => {
   const actual = await vi.importActual<typeof import('node:path')>('node:path');
-  return {
-    join: actual.join,
-    resolve: actual.resolve,
-    relative: () => 'D:\\outside\\escape.json',
-    sep: actual.sep,
-    posix: actual.posix,
-    win32: actual.win32,
-  };
+  const relative = () => 'D:\\outside\\escape.json';
+  return { ...actual, relative, default: { ...actual, relative } };
 });
 
 describe('sessionHandoffSourceExportStore path safety', () => {

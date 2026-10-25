@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureConsoleJsonOutput, captureStdout } from '@/testkit/logger/captureOutput';
 
-const { execute, readStoredCredentials, resolveSessionTarget, startHappyHeadlessInTmux } = vi.hoisted(() => ({
+const { createExecutor, execute, readStoredCredentials, resolveSessionTarget, startHappyHeadlessInTmux } = vi.hoisted(() => ({
+  createExecutor: vi.fn(),
   execute: vi.fn(),
   readStoredCredentials: vi.fn(),
   resolveSessionTarget: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('@/persistence', async (importOriginal) => {
 });
 
 vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
-  createCliActionExecutorFromCredentials: vi.fn(() => ({ execute, resolveSessionTarget })),
+  createCliActionExecutorFromCredentials: createExecutor.mockImplementation(() => ({ execute, resolveSessionTarget })),
 }));
 
 vi.mock('@/integrations/tmux/startHeadlessSession', () => ({ startHappyHeadlessInTmux }));
@@ -74,7 +75,7 @@ describe('dispatchCli compiled Action entrypoint', () => {
     expect(execute).toHaveBeenNthCalledWith(
       1,
       'action.spec.get',
-      { id: 'acme.notes/actions/create' },
+      { id: 'acme.notes/actions/create', includeOutputSchema: true },
       expect.objectContaining({ surface: 'cli' }),
     );
     expect(execute).toHaveBeenNthCalledWith(
@@ -161,7 +162,7 @@ describe('dispatchCli compiled Action entrypoint', () => {
       const output = captureConsoleJsonOutput();
       try {
         await dispatchCli({ args, rawArgv: ['happier', ...args], terminalRuntime: null });
-        expect(readStoredCredentials).not.toHaveBeenCalled();
+        expect(createExecutor).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
         expect(output.json()).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } });
       } finally {
@@ -265,7 +266,7 @@ describe('dispatchCli compiled Action entrypoint', () => {
     const output = captureConsoleJsonOutput();
     try {
       await dispatchCli({ args, rawArgv: ['happier', ...args], terminalRuntime: null });
-      expect(readStoredCredentials).not.toHaveBeenCalled();
+      expect(createExecutor).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
       expect(output.json()).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } });
     } finally {

@@ -186,7 +186,8 @@ describe('bootstrapAccountSettingsContext active Account scope fence', () => {
     try {
       const bindingCredentials = { ...credentials, token: accountToken('channel-account', issuance) };
       await expect(createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials: bindingCredentials }).read()).resolves.toEqual({ v: 1, bindings: [] });
-      expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(3);
+      // An admitted catalog read observes the row only; it repeats no source transfer, so the settings version stays the incumbent's.
+      expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(1);
     } finally { release(); }
     expect(await outcome).toMatchObject({ context: { settingsVersion: 4 } });
     expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({ status: 'ready', revision: 1 });

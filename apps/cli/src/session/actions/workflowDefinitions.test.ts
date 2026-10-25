@@ -242,7 +242,7 @@ describe('workflow definition Actions', () => {
     await expect(actions.list({ limit: 1 })).resolves.toMatchObject({
       definitions: [{ definitionId: definitionOne }], nextCursor: expect.any(String),
     });
-    expect(list).toHaveBeenNthCalledWith(2, { limit: 500, cursor: 'page-2', includeBody: true });
+    expect(list).toHaveBeenNthCalledWith(2, { limit: 500, cursor: 'page-2', includeBody: true, kind: 'workflow-definition.v1', coarseKind: 'other' });
   });
 
   it('fails closed when private header identity/currentness disagrees with the Artifact row', async () => {
@@ -302,7 +302,7 @@ describe('workflow definition Actions', () => {
 
     const secondPage = await actions.list({ cursor: firstPage.nextCursor });
     expect(secondPage).toMatchObject({ definitions: [{ ...rowTwo.header, stepCount: 1, triggers: [] }] });
-    expect(list).toHaveBeenLastCalledWith({ limit: 500, cursor: firstPage.nextCursor, includeBody: true });
+    expect(list).toHaveBeenLastCalledWith({ limit: 500, cursor: firstPage.nextCursor, includeBody: true, kind: 'workflow-definition.v1', coarseKind: 'other' });
   });
 
   describe('delete', () => {

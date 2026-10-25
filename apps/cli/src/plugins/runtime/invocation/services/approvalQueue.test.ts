@@ -122,14 +122,15 @@ describe('stable plugin approval queue owner', () => {
                 defaultSessionId: 'session-1',
                 surface: 'plugin',
                 authority: 'account_automation',
-                actionCaller: {
+                // The host-stamped caller also carries its qualified contribution and origin surface.
+                actionCaller: expect.objectContaining({
                     kind: 'plugin',
                     pluginId: 'acme.plugin',
                     contributionLocalId: 'action',
                     occurrenceId: expect.any(String),
                     sourceCustody: { kind: 'development', registeredRootId: 'plugin-root' },
                     materialization: pluginMaterialization.materialization,
-                },
+                }),
             }),
         );
     });

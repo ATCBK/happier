@@ -149,10 +149,9 @@ describe('bundled PluginApi parity', () => {
         const expectedStartupPluginIds = new Set(startupTargets.map((target) => target.pluginId));
         expect([...expectedStartupPluginIds]).toEqual([
             'happier.channel.discord',
+            'happier.channel.slack',
             'happier.channels',
-            'happier.posthog',
             'happier.scm.forge.github',
-            'happier.sentry',
         ]);
         expect(startupTargets.map((target) => listDeclaredPluginContributionFamilies(
             target.manifest.contributes as unknown as Readonly<Record<string, unknown>>,

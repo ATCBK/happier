@@ -16,7 +16,7 @@ vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', asyn
   ...await importOriginal<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>(),
   resolveMergedContributionRegistry: contributionRegistry.resolve,
 }));
-vi.mock('@/persistence', () => ({ readCredentials: vi.fn(async () => null) }));
+vi.mock('@/persistence', () => ({ readCredentials: vi.fn(async () => null), readStoredCredentials: vi.fn(async () => null) }));
 vi.mock('@/session/actions/approvals/credentialedTargetActionCurrentIntent', () => ({ createCredentialedTargetActionCurrentIntent: vi.fn() }));
 
 import { dispatchCli } from './dispatch';

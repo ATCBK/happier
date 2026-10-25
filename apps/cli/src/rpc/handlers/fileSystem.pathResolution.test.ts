@@ -18,6 +18,8 @@ vi.mock('fs/promises', async (importOriginal) => ({
 import { readFile, readdir, writeFile } from 'fs/promises';
 import { mkdir } from 'fs/promises';
 import { stat } from 'fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { registerFileSystemHandlers } from './fileSystem';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -25,6 +27,27 @@ import { resolve } from 'path';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { accountSettingsParse } from '@happier-dev/protocol';
+
+const realFs = await vi.importActual<typeof import('fs/promises')>('fs/promises');
+
+/**
+ * Guarded writes stage a temporary file beside the destination and rename it, so their
+ * contract is observed on the real filesystem: the module-wide mocks above are lifted for
+ * the duration of one write scenario and a real temporary working directory is used.
+ */
+async function withRealWriteFilesystem(run: (roots: Readonly<{ work: string; outside: string }>) => Promise<void>) {
+  const work = await realFs.mkdtemp(join(tmpdir(), 'happier-fs-work-'));
+  const outside = await realFs.mkdtemp(join(tmpdir(), 'happier-fs-outside-'));
+  const mocked = [[writeFile, realFs.writeFile], [mkdir, realFs.mkdir], [stat, realFs.stat]] as const;
+  const previous = mocked.map(([mock]) => vi.mocked(mock).getMockImplementation());
+  mocked.forEach(([mock, real]) => vi.mocked(mock as (...args: never[]) => unknown).mockImplementation(real as never));
+  try {
+    await run({ work, outside });
+  } finally {
+    mocked.forEach(([mock], index) => vi.mocked(mock as (...args: never[]) => unknown).mockImplementation(previous[index] as never));
+    await Promise.all([work, outside].map(root => realFs.rm(root, { recursive: true, force: true })));
+  }
+}
 
 const restrictedWorkDirPolicy = { kind: 'restrictedRoots', roots: ['/work/dir'] } as const;
 
@@ -77,21 +100,22 @@ describe('registerFileSystemHandlers', () => {
   });
 
   it('allows absolute writes outside the default directory by default', async () => {
-    vi.clearAllMocks();
-    const mgr = createRpcHandlerManager();
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+    await withRealWriteFilesystem(async ({ work, outside }) => {
+      const mgr = createRpcHandlerManager();
+      registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, work);
 
-    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
-    if (!write) throw new Error('expected write handler');
+      const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
+      if (!write) throw new Error('expected write handler');
 
-    const writeResult = await write({
-      path: '/tmp/happier-outside-root/file.bin',
-      content: Buffer.from('x').toString('base64'),
-      expectedHash: null,
+      const writeResult = await write({
+        path: join(outside, 'file.bin'),
+        content: Buffer.from('x').toString('base64'),
+        expectedHash: null,
+      });
+
+      expect(writeResult).toMatchObject({ success: true });
+      expect(await realFs.readFile(join(outside, 'file.bin'), 'utf8')).toBe('x');
     });
-
-    expect(writeResult).toMatchObject({ success: true });
-    expect(writeFile).toHaveBeenCalledWith(resolve('/tmp/happier-outside-root/file.bin'), expect.any(Buffer));
   });
 
   it('rejects traversal-style paths for read and write', async () => {
@@ -172,20 +196,22 @@ describe('registerFileSystemHandlers', () => {
 
   it('uses the validated resolved path for readFile/writeFile operations', async () => {
     vi.clearAllMocks();
-    const mgr = createRpcHandlerManager();
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+    await withRealWriteFilesystem(async ({ work }) => {
+      const mgr = createRpcHandlerManager();
+      registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, work);
 
-    const read = mgr.handlers.get(RPC_METHODS.READ_FILE);
-    if (!read) throw new Error('expected read handler');
-    vi.mocked(stat).mockResolvedValueOnce({ size: 1, mtime: new Date(), isDirectory: () => false } as any);
-    await read({ path: 'notes.txt' });
-    expect(readFile).toHaveBeenCalledWith(resolve('/work/dir', 'notes.txt'));
+      const read = mgr.handlers.get(RPC_METHODS.READ_FILE);
+      if (!read) throw new Error('expected read handler');
+      vi.mocked(stat).mockResolvedValueOnce({ size: 1, mtime: new Date(), isDirectory: () => false } as any);
+      await read({ path: 'notes.txt' });
+      expect(readFile).toHaveBeenCalledWith(resolve(work, 'notes.txt'));
 
-    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
-    if (!write) throw new Error('expected write handler');
-    await write({ path: './sub/file.bin', content: Buffer.from('x').toString('base64'), expectedHash: null });
-    expect(mkdir).toHaveBeenCalledWith(resolve('/work/dir', 'sub'), { recursive: true });
-    expect(writeFile).toHaveBeenCalledWith(resolve('/work/dir', 'sub', 'file.bin'), expect.any(Buffer));
+      const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
+      if (!write) throw new Error('expected write handler');
+      await expect(write({ path: './sub/file.bin', content: Buffer.from('x').toString('base64'), expectedHash: null }))
+        .resolves.toMatchObject({ success: true });
+      expect(await realFs.readFile(join(work, 'sub', 'file.bin'), 'utf8')).toBe('x');
+    });
   });
 
   it('allows directory tree reads from configured additional read roots', async () => {
@@ -284,47 +310,45 @@ describe('registerFileSystemHandlers', () => {
   });
 
   it('allows overwriting an existing file when expectedHash is undefined', async () => {
-    vi.clearAllMocks();
-    const mgr = createRpcHandlerManager();
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+    await withRealWriteFilesystem(async ({ work }) => {
+      await realFs.writeFile(join(work, 'exists.txt'), 'old');
+      const mgr = createRpcHandlerManager();
+      registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, work);
 
-    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
-    if (!write) throw new Error('expected write handler');
+      const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
+      if (!write) throw new Error('expected write handler');
 
-    // Simulate an existing file.
-    vi.mocked(stat).mockResolvedValueOnce({} as any);
+      const writeResult = await write({
+        path: 'exists.txt',
+        content: Buffer.from('updated').toString('base64'),
+        // expectedHash intentionally omitted / undefined: should be treated as "no expectation".
+        expectedHash: undefined,
+      });
 
-    const writeResult = await write({
-      path: 'exists.txt',
-      content: Buffer.from('updated').toString('base64'),
-      // expectedHash intentionally omitted / undefined: should be treated as "no expectation".
-      expectedHash: undefined,
+      expect(writeResult).toMatchObject({ success: true });
+      expect(await realFs.readFile(join(work, 'exists.txt'), 'utf8')).toBe('updated');
     });
-
-    expect(writeResult).toMatchObject({ success: true });
-    expect(writeFile).toHaveBeenCalledWith(resolve('/work/dir', 'exists.txt'), expect.any(Buffer));
   });
 
   it('rejects overwriting an existing file when expectedHash is null (new file expected)', async () => {
-    vi.clearAllMocks();
-    const mgr = createRpcHandlerManager();
-    registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, '/work/dir');
+    await withRealWriteFilesystem(async ({ work }) => {
+      await realFs.writeFile(join(work, 'exists.txt'), 'old');
+      const mgr = createRpcHandlerManager();
+      registerFileSystemHandlers(mgr as unknown as RpcHandlerManager, work);
 
-    const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
-    if (!write) throw new Error('expected write handler');
+      const write = mgr.handlers.get(RPC_METHODS.WRITE_FILE);
+      if (!write) throw new Error('expected write handler');
 
-    // Simulate an existing file.
-    vi.mocked(stat).mockResolvedValueOnce({} as any);
+      const writeResult = await write({
+        path: 'exists.txt',
+        content: Buffer.from('updated').toString('base64'),
+        expectedHash: null,
+      });
 
-    const writeResult = await write({
-      path: 'exists.txt',
-      content: Buffer.from('updated').toString('base64'),
-      expectedHash: null,
+      expect(writeResult).toMatchObject({ success: false });
+      expect(String((writeResult as any).error ?? '')).toContain('expected to be new');
+      expect(await realFs.readFile(join(work, 'exists.txt'), 'utf8')).toBe('old');
     });
-
-    expect(writeResult).toMatchObject({ success: false });
-    expect(String((writeResult as any).error ?? '')).toContain('expected to be new');
-    expect(writeFile).not.toHaveBeenCalled();
   });
 
   it('registers a createDirectory handler that uses the validated resolved path', async () => {

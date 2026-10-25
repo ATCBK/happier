@@ -3,6 +3,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { describe, expect, it } from 'vitest';
 
 import type { RpcHandler, RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
+import { native } from '@/daemon/computer/driver/nativeComputerBoundary.testkit';
 import { createComputerRoutes } from '@/daemon/computer/routes';
 import { createComputerCaptureSource } from '@/daemon/computer/source';
 import { createMachineLiveStreamCaptureRegistry } from '@/daemon/peer/mediation/stream/captureRegistry';
@@ -24,7 +25,7 @@ function createCapturingRegistrar() {
 
 function selectTarget(registry: ReturnType<typeof createMachineLiveStreamCaptureRegistry>, sessionId: string) {
     const source = createComputerCaptureSource({ sessionId, title: 'Sign in to Lumen',
-        target: { kind: 'window', displayId: ':not-an-x11-display', pid: 42, windowId: 7 } });
+        target: { kind: 'window', displayId: ':73', pid: 42, windowId: 7 }, executablePath: '/managed/native-driver' });
     registry.register({ sourceId: source.sourceId, streamFamily: 'screen', computer: source, adapter: source.adapter,
         capabilities: { v: 1, sourceId: source.sourceId, sourceKind: 'screen', supportedCodecs: ['image.frame.v1'],
             inputMode: 'shared', sidebands: [], health: { status: 'available' } } });
@@ -38,6 +39,9 @@ describe('daemon computer present-user RPC', () => {
         const routes = createComputerRoutes({ machineId: 'machine_1', machineDisplayName: 'Studio laptop', registry });
         const { registrar, invoke } = createCapturingRegistrar();
         registerDaemonComputerHandler(registrar, { resolveComputer: () => routes });
+        // The native driver process is the system boundary; status reads its OS grants.
+        native.call.mockImplementation(async ({ name }) => name === 'check_permissions'
+            ? { structuredContent: { x11: true, xsend_event: true } } : { structuredContent: {} });
         const context = { callerAuthority: 'present_user', signal: new AbortController().signal } as const;
 
         // A present-user-only Action succeeds: the route is the person's, never the payload's claim.

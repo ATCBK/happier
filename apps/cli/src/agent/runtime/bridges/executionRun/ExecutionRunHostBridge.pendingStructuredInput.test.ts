@@ -124,7 +124,8 @@ describe('ExecutionRunHostBridge retained structured input', () => {
                     bindExecutionRunPendingInput: (binding) => {
                         consume = binding.consume;
                         return {
-                            getMetadataSnapshot: () => null,
+                            // Missing metadata is an unreadable Session, which blocks Pending drains.
+                            getMetadataSnapshot: () => ({}),
                             waitForMetadataUpdate: async () => await new Promise<boolean>(() => undefined),
                             shouldAttemptPendingMaterialization: () => true,
                             reconcilePendingProviderInputCustodyBeforeMaterialization: async () => true,

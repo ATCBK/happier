@@ -613,8 +613,8 @@ it.each([503, 404])('keeps transient initial observation recoverable while retai
       setCurrentnessStatus(200);
       const initial = vi.mocked(axios.get).mock.calls.length;
       const api = await ApiClient.create(credentials);
-      expect(await api.getAccountEncryptionMode({ refresh: true })).toBe('plain');
-      expect(await api.getAccountEncryptionMode({ refresh: true })).toBe('plain');
+      expect(await api.getAccountEncryptionMode()).toBe('plain');
+      expect(await api.getAccountEncryptionMode()).toBe('plain');
       const paths = vi.mocked(axios.get).mock.calls.slice(initial).map(([url]) => new URL(String(url)).pathname);
       expect(paths).toEqual(status === 404 ? ['/v1/account/encryption', '/v1/account/encryption'] : ['/v1/account/encryption/currentness']);
     } finally { await client.shutdown(); await channel.close(); }
