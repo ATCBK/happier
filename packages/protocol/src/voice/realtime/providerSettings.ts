@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { z } from 'zod/mini';
 
 import { SavedSecretSlotBindingsV1Schema } from '../../providers/settings/v1.js';
@@ -174,37 +175,9 @@ export type VoiceProviderSettingsJsonValueV1 =
   | readonly VoiceProviderSettingsJsonValueV1[]
   | Readonly<{ [key: string]: VoiceProviderSettingsJsonValueV1 }>;
 
-function isVoiceProviderSettingsJsonValueV1(
-  value: unknown,
-  depth = 0,
-  ancestors: Set<object> = new Set(),
-): value is VoiceProviderSettingsJsonValueV1 {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (typeof value !== 'object' || depth > 128 || ancestors.has(value)) return false;
-
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return value.every((entry) => isVoiceProviderSettingsJsonValueV1(entry, depth + 1, ancestors));
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return false;
-    if (Object.getOwnPropertySymbols(value).length > 0) return false;
-
-    const record = value as Record<string, unknown>;
-    const propertyNames = Object.getOwnPropertyNames(record);
-    if (propertyNames.some((key) => !Object.prototype.propertyIsEnumerable.call(record, key))) return false;
-    return propertyNames.every((key) => isVoiceProviderSettingsJsonValueV1(record[key], depth + 1, ancestors));
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
 export const VoiceProviderSettingsJsonValueV1Schema = lazyZodSchema(() => {
   const schema = z.custom<VoiceProviderSettingsJsonValueV1>(
-    (value): value is VoiceProviderSettingsJsonValueV1 => isVoiceProviderSettingsJsonValueV1(value),
+    (value): value is VoiceProviderSettingsJsonValueV1 => StrictJsonValueSchema.safeParse(value).success,
     'Expected a serializable JSON value',
   );
   // Keep Voice's raw-value admission while projecting the canonical JSON
