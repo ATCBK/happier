@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { ActionId } from './actionIds.js';
 
 describe('Provider Settings present-user approval policy', () => {
+  it('uses the same safe label-write approval floor for connected-account rename and labels.set', async () => {
+    const { getActionSpec } = await import('./actionSpecs.js');
+    const { resolveActionApprovalRouting } = await import('./actionApprovalPolicy.js');
+    const { ActionsSettingsV1Schema } = await import('./actionSettings.js');
+    for (const actionId of ['connectedServices.accounts.rename', 'connectedServices.labels.set'] as const) {
+      for (const surface of ['ui', 'agent', 'mcp', 'cli'] as const) {
+        const spec = getActionSpec(actionId);
+        const context = { surface, authority: surface === 'ui' ? 'present_user' as const : 'account_automation' as const };
+        expect(resolveActionApprovalRouting({ actionId, spec, context }).required, `${actionId}/${surface}`).toBe(false);
+        const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+        expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required).toBe(true);
+      }
+    }
+  }, 60_000);
   it('keeps the reached preference and experimental approvals configurable and waivable', async () => {
     const { getActionSpec } = await import('./actionSpecs.js');
     const { resolveActionApprovalRouting } = await import('./actionApprovalPolicy.js');

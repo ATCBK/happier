@@ -14,8 +14,24 @@ import { getActionSpec, listActionSpecs } from './actionSpecs.js';
 import { bindHomeDomainActionHttpRequestV1 } from './homeDomainActionFamily.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { serializeActionSpec } from './actionCatalog.js';
+import { isActionDiscoverableOnToolSurface } from './actionToolExposure.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('Team credential Action contracts', () => {
+  it('makes credential edits discoverable through the real MCP catalog without bypassing approval or authority', () => {
+    for (const id of ['teams.credentials.update', 'teams.credentials.audience.set', 'teams.credentials.test',
+      'teams.credentials.limits.upsert', 'teams.credentials.externalKeys.create', 'teams.credentials.externalKeys.authorize'] as const) {
+      const spec = getActionSpec(id);
+      expect(isActionDiscoverableOnToolSurface(spec, 'mcp'), id).toBe(true);
+      expect(serializeActionSpec(spec).surfaces.mcp, id).toBe(true);
+      expect(spec.approval.result, id).toBe('required');
+      expect(spec.requiredAuthority, id).toBe(id === 'teams.credentials.test' ? 'present_user' : 'account_automation');
+      expect(resolveActionApprovalRouting({ actionId: id, spec,
+        context: { surface: 'mcp', authority: 'account_automation' } }).required, id).toBe(true);
+    }
+    const createKey = getActionSpec('teams.credentials.externalKeys.create');
+    expect(createKey.approvalResultCustody).toBe('live_only');
+  });
   const externalKeyActionIds = [
     'teams.credentials.externalKeys.create',
     'teams.credentials.externalKeys.authorize',
@@ -33,7 +49,7 @@ describe('Team credential Action contracts', () => {
       });
       expect(spec.requiredAuthority).toBe('account_automation');
       expect(spec.surfaces).toMatchObject({ ui: true, cli: true, agent: true,
-        mcp: id === 'teams.credentials.externalKeys.revoke' || id === 'teams.credentials.externalKeys.revokeAll' });
+        mcp: id !== 'teams.credentials.externalKeys.list' });
     }
   });
   it('registers each live resource operation through the canonical Home transport', () => {
@@ -55,7 +71,10 @@ describe('Team credential Action contracts', () => {
         mcp: id === 'teams.credentials.test' || String(id) === 'teams.credentials.preparation.get'
           || id === 'teams.credentials.create' || id === 'teams.credentials.entitled.list'
           || id === 'teams.credentials.delete' || id === 'teams.credentials.limits.delete'
-          || id === 'teams.credentials.externalKeys.revoke' || id === 'teams.credentials.externalKeys.revokeAll',
+          || id === 'teams.credentials.externalKeys.revoke' || id === 'teams.credentials.externalKeys.revokeAll'
+          || id === 'teams.credentials.update' || id === 'teams.credentials.audience.set'
+          || id === 'teams.credentials.limits.upsert' || id === 'teams.credentials.externalKeys.create'
+          || id === 'teams.credentials.externalKeys.authorize',
         api: id !== 'teams.credentials.test',
         plugin: true,
       });

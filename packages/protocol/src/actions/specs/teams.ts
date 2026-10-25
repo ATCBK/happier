@@ -285,7 +285,10 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     mcp: id === 'teams.credentials.preparation.get' || id === 'teams.credentials.create'
       || id === 'teams.credentials.entitled.list' || id === 'teams.credentials.delete'
       || id === 'teams.credentials.limits.delete' || id === 'teams.credentials.externalKeys.revoke'
-      || id === 'teams.credentials.externalKeys.revokeAll',
+      || id === 'teams.credentials.externalKeys.revokeAll' || id === 'teams.credentials.update'
+      || id === 'teams.credentials.audience.set' || id === 'teams.credentials.test'
+      || id === 'teams.credentials.limits.upsert' || id === 'teams.credentials.externalKeys.create'
+      || id === 'teams.credentials.externalKeys.authorize',
     id, approval: ['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set', 'teams.credentials.delete', 'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll'].includes(id) ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title: {
       'teams.credentials.list': 'List Team credentials',
