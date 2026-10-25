@@ -168,6 +168,34 @@ describe('Script output before a terminal exists', () => {
   });
 });
 
+describe('A refusal newer than the retained run', () => {
+  const workspace: WorkspaceAddressV1 = { serverId: 'home', machineId: 'machine', workspaceId: 'ws', rootPath: '/repo' };
+  const finished: ActionOperationProjection = {
+    serverId: 'home', observation: 'available', isUnavailableProjection: false,
+    snapshot: {
+      version: 1, operationId: 'earlier', revision: 2, actionId: 'projects.script.run', state: 'succeeded',
+      scope: { accountId: 'account', machineId: 'machine' }, title: 'verify', createdAt: 1_000, startedAt: 1_100, settledAt: 2_000,
+      cancellation: 'supported',
+      domainRef: { kind: 'projectCommand', purpose: 'script', serverId: 'home', machineId: 'machine', workspaceRefId: 'ws', cwd: '/repo' },
+    },
+  };
+  const row = (failureCode: string | null) => <ProjectScriptRow testID="script" workspace={workspace} name="verify" badge={null}
+    command="devenv shell" portable={false} operation={finished} idleText="Not run" pending={false} failureCode={failureCode}
+    failureText={failureCode ? 'refusal sentence' : null} compact={false} onRun={() => {}} />;
+
+  it('says the refusal and keeps the earlier run\'s output out from under it', async () => {
+    const earlier = await renderScreen(row(null));
+    await earlier.pressByTestIdAsync('script');
+    expect(earlier.findAllByTestId('script.noOutput').length).toBeGreaterThan(0);
+    await earlier.unmount();
+    const refused = await renderScreen(row('native_tool_unavailable'));
+    await refused.pressByTestIdAsync('script');
+    expect(refused.getTextContent()).toContain('refusal sentence');
+    expect(refused.findAllByTestId('script.noOutput')).toHaveLength(0);
+    await refused.unmount();
+  });
+});
+
 describe('A new machine created for this Run', () => {
   const workspace: WorkspaceAddressV1 = { serverId: 'source-home', machineId: 'source-machine', workspaceId: 'source-workspace', rootPath: '/source' };
   const render = (progress: import('@/components/settings/machines/managed/managedMachineCreation').ManagedMachineCreationProgress,

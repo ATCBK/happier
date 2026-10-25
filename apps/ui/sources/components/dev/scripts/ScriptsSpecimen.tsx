@@ -15,6 +15,7 @@ import { ProjectManifestEditor } from '@/components/projects/projectSetup/Projec
 import { ProjectScriptsContent } from '@/components/projects/projectSetup/ProjectScriptsBody';
 import { createProjectManifestActionClient } from '@/components/projects/projectSetup/projectManifestActionClient';
 import type { ProjectScriptsController } from '@/components/projects/projectSetup/useProjectScriptsController';
+import { projectScriptRowKey } from '@/components/projects/projectSetup/projectScriptRuns';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ProjectSetupReview } from '@/components/projects/projectSetup/ProjectSetupReview';
@@ -35,6 +36,23 @@ const WORKSPACE = {
   machineId: MACHINE,
   rootPath: '/src/happier',
 } as const;
+/** A native (devenv) environment's refusal, changed-inputs and unevaluated-Nix states (plan 24 copy). */
+const NATIVE_MANIFEST = {
+  version: 1,
+  environment: { kind: 'toolchain', tool: 'devenv', configPath: 'devenv.nix' },
+  scripts: {
+    verify: { source: { kind: 'command', command: 'devenv shell -- ./verify.sh' } },
+    check: { source: { kind: 'command', command: 'devenv shell -- ./check.sh' } },
+    build: { source: { kind: 'command', command: 'devenv shell -- ./build.sh' } },
+  },
+} as const;
+const NATIVE_DETECTION: ProjectDefinitionDetectionV1 = {
+  entries: [],
+  environments: [{ kind: 'toolchain', tool: 'devenv', configPath: 'devenv.nix' }],
+  devcontainers: [],
+  coverage: 'partial',
+  diagnostics: [{ file: 'devenv.nix', code: 'unevaluated_nix' }],
+};
 const HASH = 'a41c9e2'.padEnd(64, '0');
 const NOW = Date.now();
 
@@ -264,7 +282,7 @@ function controller(frame: string): ProjectScriptsController {
     choiceRequired: null,
     dismissChoice: () => {},
     chooseForRun: noop,
-    failure: null,
+    failure: frame === 'NATIVE' ? { key: projectScriptRowKey(WORKSPACE, 'verify'), code: 'native_tool_unavailable' } : null,
     approvalId: null,
     approvalPending: false,
     approvalSummary: null,
@@ -294,7 +312,9 @@ export function ScriptsSpecimen(
   const declared = definition(MANIFEST);
   const inspection = {
     definition:
-      frame === 'FIRST'
+      frame === 'NATIVE'
+        ? definition(NATIVE_MANIFEST)
+        : frame === 'FIRST'
         ? { basis: { kind: 'absent' as const }, document: null }
         : frame === 'STATES'
           ? definition({
@@ -303,8 +323,9 @@ export function ScriptsSpecimen(
               environment: undefined,
             })
           : declared,
-    detection: DETECTION,
+    detection: frame === 'NATIVE' ? NATIVE_DETECTION : DETECTION,
     importCandidates: [],
+    ...(frame === 'NATIVE' ? { setupReadiness: { kind: 'needsReview' as const, code: 'setup_changed' } } : {}),
   };
   const body =
     frame === 'OUTPUT' ? (

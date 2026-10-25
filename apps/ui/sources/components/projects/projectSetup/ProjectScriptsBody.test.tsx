@@ -1378,6 +1378,35 @@ describe('ProjectScriptsBody on a phone', () => {
     expect(shared.calls.filter(call => call.actionId === 'projects.manifest.update')).toHaveLength(1);
   });
 
+  it('summarizes the tools each environment found and their availability under the phone Environment row', async () => {
+    shared.device = 'phone';
+    const tool = (name: string, availability: 'available' | 'unavailable' | 'unresolved') =>
+      ({ tool: name, file: '.mise.toml', availability, ...(availability === 'available' ? { version: '1.0.0' } : {}) });
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: { kind: 'toolchain', tool: 'mise', configPath: '.mise.toml' } }),
+      detection, importCandidates: [], tools: [tool('node', 'available'), tool('protoc', 'unresolved')],
+    };
+    let screen = await render('page', 'scripts.edit');
+    await act(async () => { await screen.pressByTestIdAsync('scripts.edit'); });
+    await vi.waitFor(() => expect(screen.findByTestId('project-manifest-editor.section:environment.tools')).toBeTruthy());
+    const summary = textOf(screen, 'project-manifest-editor.section:environment.tools');
+    expect(summary).toContain('node');
+    expect(summary).toContain('protoc');
+    expect(summary).toContain('projects.scripts.editor.toolsCount');
+  });
+
+  it('names a single tool\'s availability on the Machine under the phone Environment row', async () => {
+    shared.device = 'phone';
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: { kind: 'toolchain', tool: 'devenv', configPath: 'devenv.nix' } }),
+      detection, importCandidates: [], tools: [{ tool: 'devenv', file: 'devenv.nix', availability: 'available' }],
+    };
+    const screen = await render('page', 'scripts.edit');
+    await act(async () => { await screen.pressByTestIdAsync('scripts.edit'); });
+    await vi.waitFor(() => expect(screen.findByTestId('project-manifest-editor.section:environment.tools')).toBeTruthy());
+    expect(textOf(screen, 'project-manifest-editor.section:environment.tools')).toContain('projects.scripts.editor.toolAvailable');
+  });
+
   it('opens a run’s output in the operation detail, never a desktop terminal tab', async () => {
     shared.device = 'phone';
     const { Modal } = await import('@/modal');
@@ -1489,5 +1518,122 @@ describe('ProjectScriptsBody native previews and tools', () => {
     expect(
       screen.findByTestId('project-manifest-editor.tool:protoc.version'),
     ).toBeNull();
+  });
+});
+
+describe('ProjectScriptsBody native environment states (plan 24 copy)', () => {
+  beforeEach(isolateManifestDrafts);
+  const devenv = { kind: 'toolchain', tool: 'devenv', configPath: 'devenv.nix' } as const;
+  const literal = { kind: 'command', command: 'devenv shell -- true' } as const;
+
+  it.each([
+    ['a selected native environment', devenv, 'projects.scripts.environment.unavailable'],
+    ['the host environment', { kind: 'host' }, 'projects.scripts.run.refused'],
+  ] as const)('reads a missing native tool for %s without leaking its raw code or its earlier output', async (_name, environment, expected) => {
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment, scripts: { verify: { source: literal } } }),
+      detection,
+      importCandidates: [],
+    };
+    shared.failures['projects.script.run'] = { ok: false, errorCode: 'native_tool_unavailable', error: 'native_tool_unavailable' };
+    const screen = await render('page', 'scripts.script:verify');
+    await act(async () => { await screen.pressByTestIdAsync('scripts.script:verify.run'); });
+    await vi.waitFor(() => expect(textOf(screen, 'scripts.script:verify.status')).toContain(expected));
+    const status = textOf(screen, 'scripts.script:verify.status');
+    expect(status.includes('projects.scripts.environment.noFallback')).toBe(expected.includes('environment'));
+    // A refusal is the newest fact: the row does not stack a previous run's output under it.
+    expect(screen.findByTestId('scripts.script:verify.noOutput')).toBeNull();
+  });
+
+  it('says a held review of a native environment waits for approval to evaluate it', async () => {
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: devenv, scripts: { verify: { source: literal } } }),
+      detection,
+      importCandidates: [],
+    };
+    const held: ActionOperationSnapshotV1 = {
+      ...operation('accepted', 2),
+      domainRef: { kind: 'projectCommand', purpose: 'script', serverId: workspace.serverId, machineId: 'm1',
+        workspaceRefId: 'w1', cwd: '/repo', sourceWorkspace: workspace, script: { name: 'verify', source: literal } },
+      setupReview: { kind: 'pendingApproval' as const, code: 'project_setup_consent_required', reviewedEffectDigest: hash, reviewedEffect: {} },
+    };
+    shared.responses['projects.script.run'] = { operation: operation('accepted', 1) };
+    const screen = await render('page', 'scripts.script:verify');
+    await act(async () => {
+      await screen.pressByTestIdAsync('scripts.script:verify.run');
+      actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [held] });
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.review')).toBeTruthy());
+    expect(screen.getTextContent()).toContain('projects.scripts.environment.pending');
+    expect(screen.getTextContent()).not.toContain('projects.scripts.setup.pending');
+  });
+
+  it('shows a review held by a Script run as the Setup card, and every row waits for it', async () => {
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: devenv, scripts: { verify: { source: literal }, lint: { source: literal } } }),
+      detection,
+      importCandidates: [],
+    };
+    // The Run came from before this page loaded (a reload, or another client): nothing here started it.
+    const held: ActionOperationSnapshotV1 = {
+      ...operation('accepted', 2),
+      domainRef: { kind: 'projectCommand', purpose: 'script', serverId: workspace.serverId, machineId: 'm1',
+        workspaceRefId: 'w1', cwd: '/repo', sourceWorkspace: workspace, script: { name: 'verify', source: literal } },
+      setupReview: { kind: 'pendingApproval' as const, code: 'project_setup_consent_required', reviewedEffectDigest: hash, reviewedEffect: {} },
+    };
+    actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [held] });
+    const screen = await render('page', 'scripts.script:verify');
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.review')).toBeTruthy());
+    expect(textOf(screen, 'scripts.setup')).toContain('projects.scripts.environment.pending');
+    // The approval is decided once, on the Setup card; the rows only say what they wait for.
+    expect(textOf(screen, 'scripts.script:verify.status')).toContain('projects.scripts.run.waitsForSetup');
+    expect(textOf(screen, 'scripts.script:verify.status')).not.toContain('projects.scripts.environment.pending');
+    expect(textOf(screen, 'scripts.script:lint.status')).toContain('projects.scripts.run.waitsForSetup');
+  });
+
+  const partialInspection = (diagnostics: { file: string; code: string }[]) => ({
+    definition: presentDefinition({ version: 1, environment: devenv, scripts: { verify: { source: literal } } }),
+    detection: { ...detection, coverage: 'partial', diagnostics },
+    importCandidates: [],
+  });
+
+  it('reads unevaluated Nix as a fact about the environment, not as a failed read with a Retry', async () => {
+    shared.inspection = partialInspection([{ file: 'devenv.nix', code: 'unevaluated_nix' }]);
+    const screen = await render('page', 'scripts.script:verify');
+    expect(screen.getTextContent()).toContain('projects.scripts.environment.unevaluated');
+    expect(screen.getTextContent()).not.toContain('projects.scripts.definition.partial');
+    expect(screen.findByTestId('scripts.partial')).toBeNull();
+  });
+
+  it('still reports a definition that could not be read next to the unevaluated Nix fact', async () => {
+    shared.inspection = partialInspection([{ file: 'devenv.nix', code: 'unevaluated_nix' }, { file: 'Makefile', code: 'unreadable' }]);
+    const screen = await render('page', 'scripts.script:verify');
+    expect(screen.getTextContent()).toContain('projects.scripts.definition.partial');
+    expect(screen.findAllByTestId('scripts.partial').some((node) => JSON.stringify(node.props.details) === '["Makefile: unreadable"]')).toBe(true);
+    expect(screen.getTextContent()).toContain('projects.scripts.environment.unevaluated');
+  });
+
+  it('shows the Form checking while inspection has not reported tools', async () => {
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, environment: devenv }),
+      detection: { ...detection, environments: [devenv] },
+      importCandidates: [],
+    };
+    const screen = await render('page', 'scripts.edit');
+    await act(async () => { await screen.pressByTestIdAsync('scripts.edit'); });
+    await vi.waitFor(() => expect(screen.findByTestId('project-manifest-editor.environment.checking')).toBeTruthy());
+  });
+
+  it('keeps the host as the explicit default when nothing native was detected', async () => {
+    shared.inspection = {
+      definition: presentDefinition({ version: 1, scripts: { test: { source: nativeRef('test') } } }),
+      detection,
+      importCandidates: [],
+      tools: [],
+    };
+    const screen = await render('page', 'scripts.edit');
+    await act(async () => { await screen.pressByTestIdAsync('scripts.edit'); });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('projects.scripts.environment.empty'));
+    expect(screen.findByTestId('project-manifest-editor.environment.checking')).toBeNull();
   });
 });

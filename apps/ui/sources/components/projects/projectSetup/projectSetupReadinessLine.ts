@@ -8,11 +8,15 @@ import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
  * Scripts page reads). A finished authoring Session is no evidence of setup; nothing is said when
  * setup is not needed or the producer reported nothing.
  */
-export function projectSetupReadinessLine(readiness: ProjectSetupReadinessV1 | null): string | null {
+export function projectSetupReadinessLine(
+    readiness: ProjectSetupReadinessV1 | null,
+    /** The selected native environment's name: its changed inputs ask for a new review (plan 24). */
+    environmentName: string | null = null,
+): string | null {
     switch (readiness?.kind) {
         case 'current': return t('projects.scripts.setup.readySince', { time: formatAsOfTime(readiness.completedAtMs) });
         case 'unprepared': return t('projects.scripts.setup.notRunYet');
-        case 'needsReview': return t('projects.scripts.setup.needsReview');
+        case 'needsReview': return environmentName ? t('projects.scripts.environment.changed') : t('projects.scripts.setup.needsReview');
         case 'unknown': return t('projects.scripts.setup.stateUnknown');
         default: return null;
     }

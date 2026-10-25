@@ -36,6 +36,7 @@ import { Typography } from '@/constants/Typography';
 import { useLayoutMaxWidth, useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { projectSetupReadinessLine } from './projectSetupReadinessLine';
+import { describeScriptEnvironmentRefusal, nativeEnvironmentNameFor } from './projectEnvironmentPresentation';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
@@ -297,18 +298,32 @@ export function ProjectScriptsContent(
 ) {
   const { definition, detection } = props.inspection;
   const document = definition.document;
-  const partial =
-    detection.coverage === 'partial' ? (
-      <AttentionBanner
-        testID={`${props.testID}.partial`}
-        tone="warning"
-        title={t('projects.scripts.definition.partial')}
-        details={detection.diagnostics.map(
-          (diagnostic) => `${diagnostic.file}: ${diagnostic.code}`,
-        )}
-        action={{ label: t('common.retry'), onPress: props.onRetry }}
-      />
-    ) : null;
+  // Nix/devenv definitions are read once the environment is evaluated; that is a fact about the
+  // environment, not a failed read, and Retry cannot change it.
+  const unreadable = detection.diagnostics.filter((diagnostic) => diagnostic.code !== 'unevaluated_nix');
+  const unevaluated = unreadable.length < detection.diagnostics.length;
+  const partial = detection.coverage === 'partial' ? (
+    <>
+      {unreadable.length > 0 || !unevaluated ? (
+        <AttentionBanner
+          testID={`${props.testID}.partial`}
+          tone="warning"
+          title={t('projects.scripts.definition.partial')}
+          details={unreadable.map(
+            (diagnostic) => `${diagnostic.file}: ${diagnostic.code}`,
+          )}
+          action={{ label: t('common.retry'), onPress: props.onRetry }}
+        />
+      ) : null}
+      {unevaluated ? (
+        <AttentionBanner
+          testID={`${props.testID}.unevaluated`}
+          tone="neutral"
+          title={t('projects.scripts.environment.unevaluated')}
+        />
+      ) : null}
+    </>
+  ) : null;
   if (document === null) {
     return (
       <>
@@ -474,6 +489,7 @@ function DeclaredScripts(
             testID={`${props.testID}.script:${name}`}
             workspace={props.workspace}
             name={name}
+            manifest={props.manifest}
             declaration={declaration}
             invocation={findProjectInvocation(props.inspection, declaration.source)}
             controller={props.controller}
@@ -562,6 +578,7 @@ function DeclaredScriptRow(
     testID: string;
     workspace: WorkspaceAddressV1;
     name: string;
+    manifest: ProjectManifestV1;
     declaration: NonNullable<ProjectManifestV1['scripts']>[string];
     invocation: ReturnType<typeof findProjectInvocation>;
     controller: ScriptsController;
@@ -598,6 +615,8 @@ function DeclaredScriptRow(
       idleText={props.idleText}
       pending={props.controller.pendingKeys[rowKey] === true}
       failureCode={failure}
+      failureText={describeScriptEnvironmentRefusal(failure, props.manifest, props.declaration.source)}
+      environmentName={nativeEnvironmentNameFor(props.manifest)}
       compact={props.compact}
       showDivider={props.showDivider}
       defaultChoice={resolvedChoice.status === 'resolved' ? resolvedChoice.choice : null}
@@ -646,10 +665,12 @@ function SetupRow(
   );
   const stop = props.controller.setupStop;
   const output = useProjectCommandOutputOpener();
+  const environmentName = nativeEnvironmentNameFor(props.manifest);
   const presentation = presentProjectRun(
     props.operation,
     reviewMachine.machineName,
     t('projects.scripts.setup.steps', { count: steps }),
+    environmentName,
   );
   const reviewing =
     consent !== null || Boolean(props.operation?.snapshot.setupReview);
@@ -657,7 +678,9 @@ function SetupRow(
   const stopping = stop.pending || stop.stopRequested;
   const stepCount = t('projects.scripts.setup.steps', { count: steps });
   const subtitle = reviewing
-    ? t('projects.scripts.setup.pending')
+    ? environmentName
+      ? t('projects.scripts.environment.pending')
+      : t('projects.scripts.setup.pending')
     : stopping
       ? t('projects.scripts.run.stopping')
       : failed
@@ -665,7 +688,7 @@ function SetupRow(
         : props.readiness?.kind === 'current'
           ? `${projectSetupReadinessLine(props.readiness)} · ${stepCount}`
           // Setup states once what the script rows below wait for; the rows themselves stay quiet.
-          : projectSetupReadinessLine(props.readiness ?? null) ?? presentation.text;
+          : projectSetupReadinessLine(props.readiness ?? null, environmentName) ?? presentation.text;
   const pending = props.controller.pendingKeys.setup === true;
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {

@@ -55,6 +55,10 @@ export type ProjectScriptRowProps = Readonly<{
   idleText: string;
   pending: boolean;
   failureCode: string | null;
+  /** What the failure says when the script's own environment explains it (plan 24); generic otherwise. */
+  failureText?: string | null;
+  /** The selected native environment's name: its pending review and preparation say so. */
+  environmentName?: string | null;
   compact: boolean;
   showDivider?: boolean;
   /** Where this checkout sends portable runs by default (its worker preference), for the Run on check. */
@@ -102,7 +106,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const source = useServerScopedMachine(props.workspace.serverId, props.workspace.machineId);
   // The actual target, never the operation's custody Machine.
   const targetName = (target ? getMachineSentenceName(target) : null) ?? attachment?.machineId ?? null;
-  const presentation = presentProjectRun(props.operation, targetName, props.idleText);
+  const presentation = presentProjectRun(props.operation, targetName, props.idleText, props.environmentName ?? null);
   const stop = useActionOperationStopControl(props.operation);
   const [expanded, setExpanded] = React.useState(false);
   // A failed operation carries the same strict refusal as an immediate Run failure: one parser.
@@ -129,7 +133,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
     : workerRefusal
     ? t('projectWorkers.empty')
     : props.failureCode
-    ? t('projects.scripts.run.refused', { reason: props.failureCode })
+    ? props.failureText ?? t('projects.scripts.run.refused', { reason: props.failureCode })
     : stop.pending || stop.stopRequested
       ? t('projects.scripts.run.stopping')
       // A live run an agent started from a Session says so (lab `s-agent` PANE); Stop stays one owner.
@@ -271,7 +275,8 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   ) : null;
   const notices = <>{refusal}{managedNotice}</>;
 
-  const outputBody = expanded && props.operation && attachment?.terminalId ? (
+  // A refusal is newer than the run the row still holds; that run's output is history, not what just happened.
+  const outputBody = props.failureCode ? null : expanded && props.operation && attachment?.terminalId ? (
     <ProjectCommandOutputPane
       operation={props.operation}
       operationStopPending={stop.pending || stop.stopRequested}

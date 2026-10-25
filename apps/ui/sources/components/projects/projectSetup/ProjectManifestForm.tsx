@@ -121,6 +121,7 @@ export function ProjectManifestForm(props: ProjectManifestFormProps) {
 function PhoneFormSections(props: ProjectManifestFormProps & Readonly<{ onOpen: (section: FormSection) => void }>) {
   const { manifest } = props;
   const environment = describeEnvironment(manifest.environment ?? { kind: 'host' });
+  const tools = props.tools ?? [];
   const setup = manifest.workspace?.setup ?? [];
   const scripts = Object.entries(declarationsOf(manifest, 'scripts'));
   const services = Object.entries(declarationsOf(manifest, 'services'));
@@ -136,6 +137,18 @@ function PhoneFormSections(props: ProjectManifestFormProps & Readonly<{ onOpen: 
       <ItemGroup title={t('projects.scripts.editor.environment')}>
         <Item testID={`${ID}.section:environment`} title={t('projects.scripts.editor.toolsFrom')}
           subtitle={[environment.title, environment.subtitle].filter(Boolean).join(' · ')} onPress={() => props.onOpen('environment')} />
+        {tools.length > 0 ? (
+          // The tools the environment found and whether this Machine has them, without opening the section.
+          <Item testID={`${ID}.section:environment.tools`} title={tools.map((tool) => tool.tool).join(' · ')}
+            subtitle={tools.length === 1
+              ? describeToolAvailability(tools[0]!.availability, props.machineName)
+              : t('projects.scripts.editor.toolsCount', {
+                  available: tools.filter((tool) => tool.availability === 'available').length,
+                  total: tools.length,
+                  machine: props.machineName,
+                })}
+            onPress={() => props.onOpen('environment')} />
+        ) : null}
       </ItemGroup>
       <ItemGroup title={t('projects.scripts.editor.setup')}>
         <Item testID={`${ID}.section:setup`} title={t('projects.scripts.setup.steps', { count: setup.length })}
@@ -179,6 +192,17 @@ function describeEnvironment(
 
 function devcontainerPath(selection: ProjectDevcontainerSelectionV1): string {
   return selection.configPath ?? '.devcontainer/devcontainer.json';
+}
+
+function describeToolAvailability(
+  availability: 'available' | 'unavailable' | 'unresolved',
+  machine: string,
+): string {
+  return availability === 'available'
+    ? t('projects.scripts.editor.toolAvailable', { machine })
+    : availability === 'unavailable'
+      ? t('projects.scripts.editor.toolUnavailable', { machine })
+      : t('projects.scripts.editor.toolUnresolved', { machine });
 }
 
 /** Tools from (toolchain) and Devcontainer (namespace): two independent choices (plan 24 §5). */
@@ -269,6 +293,10 @@ function EnvironmentSection(props: ProjectManifestFormProps) {
                       .join(', '),
                   })
                 : null,
+              // The host stays the explicit default when nothing native was found (plan 24).
+              environment.kind === 'host' && props.detection.environments.length === 0
+                ? t('projects.scripts.environment.empty')
+                : null,
             ]
               .filter(Boolean)
               .join(' · ') || undefined,
@@ -297,6 +325,16 @@ function EnvironmentSection(props: ProjectManifestFormProps) {
               ? devcontainerPath(manifest.devcontainer)
               : t('projects.scripts.editor.devcontainerNoneDetail'),
           }}
+        />
+      ) : null}
+      {environment.kind !== 'host' && props.tools === undefined ? (
+        // Inspection has not reported yet; nothing is evaluated while it looks.
+        <Item
+          testID={`${ID}.environment.checking`}
+          mode="info"
+          density="compact"
+          showChevron={false}
+          title={t('projects.scripts.environment.checking')}
         />
       ) : null}
       {(props.tools ?? []).map((tool) => (
@@ -329,18 +367,7 @@ function EnvironmentSection(props: ProjectManifestFormProps) {
                 })
               : undefined
           }
-          detail={
-            tool.availability === 'available'
-              ? t('projects.scripts.editor.toolAvailable', {
-                  machine: props.machineName,
-                })
-              : tool.availability === 'unavailable'
-                ? t('projects.scripts.editor.toolUnavailable', {
-                    machine: props.machineName,
-                  })
-                : t('projects.scripts.editor.toolUnresolved', {
-                    machine: props.machineName,
-                  })
+          detail={describeToolAvailability(tool.availability, props.machineName)
           }
         />
       ))}

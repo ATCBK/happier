@@ -109,7 +109,7 @@ export function describeProjectEnvironment(
   selection: ProjectEnvironmentSelectionV1,
 ): Readonly<{ title: string; config: string | null }> {
   if (selection.kind === 'host')
-    return { title: t('projects.scripts.editor.hostTools'), config: null };
+    return { title: t('projects.scripts.environment.host'), config: null };
   const title =
     selection.kind === 'toolchain'
       ? describeProjectTool(selection.tool)
@@ -171,6 +171,8 @@ export function presentProjectRun(
   operation: ActionOperationProjection | null,
   machineName: string | null,
   idleText: string,
+  /** The selected native environment's name (plan 24): its review and preparation say so by name. */
+  environmentName: string | null = null,
 ): ProjectRunPresentation {
   if (!operation)
     return {
@@ -220,7 +222,9 @@ export function presentProjectRun(
       return live(
         'attention',
         'attention',
-        t('projects.scripts.setup.pending'),
+        environmentName
+          ? t('projects.scripts.environment.pending')
+          : t('projects.scripts.setup.pending'),
       );
     if (
       resolveActionOperationObservation(snapshot, operation.observation) ===
@@ -234,7 +238,14 @@ export function presentProjectRun(
         queueAhead && queueAhead > 0 ? t('projectWorkers.ahead', { count: queueAhead }) : null].filter(Boolean).join(' · '));
     // Copying and preparing are work happening now (a moving mark); only waiting in line is queued.
     if (phase === 'copying') return live('running', 'quiet', t('projectWorkers.copying', { machine }));
-    if (phase === 'preparing' || phase === 'setup') return live('running', 'quiet', t('projectWorkers.preparing', { machine }));
+    if (phase === 'preparing' || phase === 'setup')
+      return live(
+        'running',
+        'quiet',
+        environmentName
+          ? t('projects.scripts.environment.preparing', { tool: environmentName, machine })
+          : t('projectWorkers.preparing', { machine }),
+      );
     return snapshot.state === 'accepted'
       ? live('queued', 'quiet', t('projects.scripts.run.accepted'))
       : live(
