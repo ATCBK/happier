@@ -16,6 +16,40 @@ afterEach(() => {
 });
 
 describe('UI testkit render helpers', () => {
+    it('notifies subscribers when only the provider wrapper commits', async () => {
+        const { renderScreen } = await import('./renderScreen');
+        const response = createDeferred<string>();
+        function Provider({ children }: React.PropsWithChildren) {
+            const [value, setValue] = React.useState('pending');
+            React.useEffect(() => { void response.promise.then(setValue); }, []);
+            return React.createElement(React.Fragment, null, children,
+                React.createElement('Text', { testID: 'provider.value' }, value));
+        }
+        const screen = await renderScreen(React.createElement('View'), { wrapper: Provider });
+        const commits = vi.fn();
+        const unsubscribe = screen.subscribe(commits);
+        await act(async () => { response.resolve('completed'); });
+        expect(screen.findByTestId('provider.value')?.children).toEqual(['completed']);
+        expect(commits).toHaveBeenCalledOnce();
+        unsubscribe();
+    });
+
+    it('preserves initial effect replay when the wrapper is StrictMode', async () => {
+        const { renderScreen } = await import('./renderScreen');
+        const lifecycle: string[] = [];
+        function Leaf() {
+            React.useEffect(() => {
+                lifecycle.push('mounted');
+                return () => { lifecycle.push('retired'); };
+            }, []);
+            return React.createElement('View');
+        }
+        const screen = await renderScreen(React.createElement(Leaf), { wrapper: React.StrictMode });
+        expect(lifecycle).toEqual(['mounted', 'retired', 'mounted']);
+        await screen.unmount();
+        expect(lifecycle).toEqual(['mounted', 'retired', 'mounted', 'retired']);
+    });
+
     it('notifies screen and tree subscribers when a descendant commits after asynchronous work', async () => {
         const { renderScreen } = await import('./renderScreen');
         const { waitForTestEvent } = await import('../hooks/waitForTestEvent');

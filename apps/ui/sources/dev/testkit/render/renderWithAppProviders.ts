@@ -50,8 +50,17 @@ export async function renderWithAppProviders(
     let tree!: renderer.ReactTestRenderer;
     const listeners = new Set<() => void>();
     const onCommit = () => { for (const notify of listeners) notify(); };
-    const renderElement = (value: React.ReactElement) => React.createElement(React.Profiler,
-        { id: 'testkit.screen', onRender: onCommit }, applyWrapper(value, options.wrapper));
+    const renderElement = (value: React.ReactElement) => {
+        // Observe provider-owned siblings such as dialogs too. Root StrictMode
+        // must remain outside the profiler for React 19's initial effect replay.
+        const strict = options.wrapper === React.StrictMode;
+        const profiled = React.createElement(
+            React.Profiler,
+            { id: 'testkit.screen', onRender: onCommit },
+            applyWrapper(value, strict ? undefined : options.wrapper),
+        );
+        return strict ? React.createElement(React.StrictMode, null, profiled) : profiled;
+    };
     const rendererOptions = options.createNodeMock
         // React supplies an object props bag; the SDK erases it to unknown in React 19.
         ? { createNodeMock: options.createNodeMock as renderer.TestRendererOptions['createNodeMock'] }
