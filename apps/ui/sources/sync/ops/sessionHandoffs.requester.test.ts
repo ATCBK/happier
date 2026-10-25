@@ -7,6 +7,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const rawRpc = vi.hoisted(() => vi.fn(async () => ({ ok: true, handoffId: 'moved',
     status: { handoffId: 'moved', status: 'completed', phase: 'finalizing', recoveryActions: [] }, workspace: { kind: 'none' } })));
@@ -36,10 +37,10 @@ describe('human requester handoff transport', () => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 1 });
-            if (path === '/v1/machines') return Response.json([{ id: 'source', kind: 'persistent', active: true,
-                revokedAt: null, replacedByMachineId: null, installationId: 'source-install', installationPublicKey,
-                dataEncryptionKey: null, access: { custodian: { accountId: 'alice', displayName: 'Alice' },
-                    role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
+            // The Action Machine is read by id through the Machine rows reader (a532f4a1e0).
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, id => (
+                id === 'source' ? { ...createPlainMachineRowFixture({ id, accountId: 'alice' }), installationId: 'source-install', installationPublicKey,
+                    access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' } } : null));
             const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
             if (path.includes('/execution-authorization')) {
                 const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);

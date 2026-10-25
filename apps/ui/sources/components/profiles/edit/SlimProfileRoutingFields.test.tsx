@@ -341,7 +341,9 @@ describe('SlimProfileRoutingFields model visibility', () => {
         const { SlimProfileRoutingFields } = await import('./SlimProfileRoutingFields');
         const screen = await renderScreen(<SlimProfileRoutingFields
             entries={[entry]}
-            machineId="machine-profile"
+            // Account browsing: the bundled Agent declarations admit the Provider rows (an exact
+            // Machine would first need its admitted registry projection; 515cb386fa).
+            machineId={null}
             serverId="server-profile"
             defaultPermissionModeByTargetKey={{}}
             defaultPersistenceModeByTargetKey={{}}

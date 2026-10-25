@@ -1,5 +1,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { act } from 'react-test-renderer';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';

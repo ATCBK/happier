@@ -5,7 +5,7 @@ import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
-import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsageComparisonQuery, resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderHook, renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { resolveUsageShownCalendarRange, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
@@ -25,7 +25,7 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 describe('shared Usage identity and dependent coverage', () => {
     it('projects the declared comparison source through pending, answered and failed reads', () => {
         const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 } });
-        const comparison = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 1000 } });
+        const comparison = resolveUsageComparisonQuery(query)!;
         const accounting = { v: 1 as const, totals: usageQaAccountingFixture().totals };
         const sliceFor = (status: 'pending' | 'available' | 'error') => resolveUsagePageAggregation({ queries: [query], accounting: [
             { query, status: 'available', value: accounting },

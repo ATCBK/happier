@@ -6,7 +6,7 @@ import { installApprovalCommonModuleMocks } from '@/components/approvals/approva
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -150,6 +150,9 @@ describe('managed catalog request lifetime', () => {
             if (path === '/v1/machines') return Response.json([ExternalActionMachineBootstrapV1Schema.parse({ id: 'controller', kind: 'persistent', active: true,
                 installationId: 'installation', revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
                 access: { custodian: { accountId: 'catalog-owner', displayName: 'Catalog owner' }, accessState: 'ready', role: 'manage', resourceMode: 'plain' } })]);
+            // The controller row is read through the batched Machine reader.
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body, machineId => machineId === 'controller'
+                ? { ...createPlainMachineRowFixture({ id: 'controller', accountId: 'catalog-owner' }), installationId: 'installation' } : null);
             requestSignal = init?.signal;
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
             const pending = new Promise<void>(resolve => { release = resolve; });

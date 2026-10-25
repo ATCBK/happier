@@ -264,6 +264,8 @@ describe('apiSocket.sessionRPC plaintext sessions', () => {
                 method: 's1:watch',
                 params: { hello: 'world' },
                 timeoutMs: null,
+                // Ordinary calls carry a diagnostic-only trace id (f3e31f32da).
+                traceId: expect.any(String),
             },
         );
         expect(response).toEqual({ ok: true, value: 790 });

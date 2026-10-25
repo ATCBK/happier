@@ -16,12 +16,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock({ theme: { colors: { state: { warning: { foreground: themeBoundary.warningForeground } } } } });
 });
 
-vi.mock('react-native-svg', () => ({
-    Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Svg', props, props.children),
-    Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
-}));
-
 import { ContextGauge } from './ContextGauge';
 import { ringGeometry } from './gaugeMath';
 import { GAUGE_RING_STROKE_WIDTH } from './GaugeRing';

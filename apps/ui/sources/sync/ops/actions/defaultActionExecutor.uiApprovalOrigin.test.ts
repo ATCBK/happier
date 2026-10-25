@@ -91,8 +91,8 @@ describe('present-user UI approval origin at the Action host', () => {
         expect(Modal.confirm).toHaveBeenCalledTimes(1);
         expect(vi.mocked(Modal.confirm).mock.calls[0]?.[0]).toBeTruthy();
         expect(vi.mocked(Modal.confirm).mock.calls[0]?.[1]).toBe('');
-        // The confirm button names the Action itself, never a bare OK.
-        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[2]).toEqual({ confirmText: getActionSpec('session.draft.delete').title });
+        // The confirm button carries the approval presentation's verb and destructive styling, never a bare OK (5b4ff8f3a5).
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[2]).toEqual({ confirmText: 'Delete', destructive: true });
         expect(harness.artifacts(serverId).list()).toEqual([]);
     });
 

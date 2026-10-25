@@ -15,6 +15,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 installApprovalCommonModuleMocks();
 // Install the shared presentation boundaries before loading the real Account transport.
@@ -62,10 +63,10 @@ describe('managed Machine rebuild origination', () => {
             const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
             if (path === '/v1/account/encryption') return Response.json({ mode: accountMode, updatedAt: 1 });
             if (path === '/v1/machines/managed/actions/get') return Response.json(machine);
-            if (path === '/v1/machines') return Response.json([{ id: selectedController.machineId, kind: 'persistent', active: true,
-                installationId: selectedController.installationId, installationPublicKey: encodeBase64(installation.publicKey),
-                revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-                access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
+            // The Action Machine is read by id through the Machine rows reader (a532f4a1e0).
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, id => (
+                id === selectedController.machineId ? { ...createPlainMachineRowFixture({ id, accountId: 'alice' }),
+                installationId: selectedController.installationId, installationPublicKey: encodeBase64(installation.publicKey) } : null));
             if (path === `/v1/actions/${actionId}/execution-authorization`) {
                 const request = body as Readonly<{ envelope: unknown; machineId: string }>;
                 const envelope = ExternalActionRequestEnvelopeSchema.parse(request.envelope);
@@ -148,10 +149,9 @@ describe('managed Machine rebuild origination', () => {
                 expect(body).toEqual({ homeId, managedId: rebuildInput.managedMachineId });
                 return new Response(JSON.stringify(machine), { status: 200 });
             }
-            if (parsedUrl.pathname === '/v1/machines') return Response.json([{ id: 'ordinary-child', kind: 'persistent', active: true,
-                installationId: 'joined-installation', installationPublicKey: null,
-                revokedAt: revoked ? 5 : null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-                access: { custodian: { accountId, displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
+            if (parsedUrl.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, id => (
+                id === 'ordinary-child' ? { ...createPlainMachineRowFixture({ id, accountId }),
+                installationId: 'joined-installation', revokedAt: revoked ? 5 : null } : null));
             if (parsedUrl.pathname === `/v1/actions/${actionId}`) {
                 expect(revoked).toBe(false);
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);

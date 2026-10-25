@@ -61,7 +61,8 @@ vi.mock('@/components/workspaces/files/file/WorkspaceFileDownloadButton', () => 
 
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     useAppPaneScope: () => ({
-        scopeState: { details: { tabState: {} } },
+        // The pane owner always publishes its Details tabs beside their per-tab state.
+        scopeState: { details: { tabs: [], tabState: {} } },
         setDetailsTabState: vi.fn(),
         patchDetailsTabState: vi.fn(),
     }),

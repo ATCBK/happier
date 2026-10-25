@@ -14,8 +14,11 @@ describe('personal Activity selection', () => {
         };
         const base = { counts: { unread: 0, permissionRequired: 0, actionRequired: 0, thinking: 0, totalAttention: 0 } };
         const overview = { ...base, candidates: [
-            { ...candidate, sessionId: 'failed', attentionState: 'failed' as const, hasAttention: true },
-            { ...candidate, sessionId: 'ready', attentionState: 'ready' as const, hasAttention: true },
+            // Surfaces classify through work status: failed and ready Sessions carry an update attention type.
+            { ...candidate, sessionId: 'failed', attentionState: 'failed' as const, hasAttention: true,
+                workStatus: { ...candidate.workStatus, attentionType: 'update' as const } },
+            { ...candidate, sessionId: 'ready', attentionState: 'ready' as const, hasAttention: true,
+                workStatus: { ...candidate.workStatus, attentionType: 'update' as const } },
             { ...candidate, sessionId: 'untracked', attentionState: 'permission_required' as const, hasAttention: false },
         ] };
         const slots = resolveActivitySurfaceSlots({

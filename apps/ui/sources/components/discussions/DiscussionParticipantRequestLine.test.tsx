@@ -12,6 +12,7 @@ import {
   installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('expo-router', async () => {
@@ -24,6 +25,8 @@ vi.mock('expo-router', async () => {
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+// The content-demand owner reaches the Sync singleton; load it after the transport boundaries.
+await loadSyncSingletonForTests();
 const { DiscussionParticipantRequestLine } =
   await import('./DiscussionParticipantRequestLine');
 const { storage } = await import('@/sync/domains/state/storageStore');

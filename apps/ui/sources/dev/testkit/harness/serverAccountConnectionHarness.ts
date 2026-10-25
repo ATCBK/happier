@@ -6,6 +6,7 @@ import type { SessionSystemRecordStored } from '@happier-dev/protocol';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { assertBoundaryImportOrder, recordBoundaryImportOriginal } from './assertBoundaryImportOrder';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 
 /** Session/record HTTP fixture below the real Sync, authority, repository and codec owners. */
 export function createSessionSystemRecordHttpFixture(params: Readonly<{
@@ -16,7 +17,7 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
     effectiveAccess?: SessionEffectiveAccessV1;
 }>) {
     const recordReads: string[] = [];
-    const request: NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]> = async url => {
+    const readSingle: NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]> = async url => {
         const parsed = new URL(String(url));
         const prefix = `/v2/sessions/${encodeURIComponent(params.sessionId)}`;
         if (parsed.pathname === prefix) {
@@ -42,6 +43,8 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
         }
         return new Response('{}', { status: 404 });
     };
+    // Session reads arrive on the batch wire; it composes the same single-Session facts.
+    const request = createSessionReadBatchFetchBoundary(readSingle);
     return { request, recordReads };
 }
 

@@ -147,7 +147,9 @@ it.each(['approve', 'reject', 'retire'] as const)('settles each metric approval 
     const changed = WidgetSurfaceReadV1Schema.parse(after.result).items![0]!;
     if (changed.kind !== 'group') throw new Error('expected_group');
     for (const child of changed.children.filter(child => ids.includes(child.instance.id))) {
-        expect(child.instance.bindings.metric).toEqual({ kind: 'value', value: decision === 'approve' ? 'cost' : 'tokens' });
+        // An unsettled write keeps each widget's own preset metric (Rhythm reads busy time, the others tokens).
+        const before = group.children.find(row => row.instance.id === child.instance.id)!.instance.bindings.metric;
+        expect(child.instance.bindings.metric).toEqual(decision === 'approve' ? { kind: 'value', value: 'cost' } : before);
         expect(child.instance.bindings.period).toEqual({ kind: 'context', slot: 'period' });
     }
 });

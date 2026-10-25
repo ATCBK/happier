@@ -11,6 +11,18 @@ import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/ac
 import { createDeferred } from '@/dev/testkit';
 import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
+const fs = await vi.hoisted(async () => {
+  const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
+  return createExpoFileSystemFileMock();
+});
+vi.mock('expo-file-system', () => fs.module);
+
+async function readUploadBody(body: BodyInit | null | undefined): Promise<Uint8Array> {
+  const uri = body && typeof body === 'object' && 'uri' in body ? (body as { uri: unknown }).uri : undefined;
+  if (typeof uri === 'string') return new Uint8Array(fs.files.get(uri) ?? []);
+  return new Uint8Array(await new Response(body).arrayBuffer());
+}
+
 describe('createArtifactWithHeaderViaApi', () => {
   it('derives coarse kind from the actual header for create and update', async () => {
     const writes: Record<string, unknown>[] = [];
@@ -33,7 +45,8 @@ describe('createArtifactWithHeaderViaApi', () => {
     await updateArtifactWithHeaderViaApi({ ...shared, artifactId,
       header: { kind: 'prompt_doc.v2', title: 'Prompt' }, body: 'prompt',
       getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
-    expect(writes.map(write => write.kind)).toEqual(['skill', 'prompt']);
+    // The wire kind column carries the exact kind hint beside its coarse kind (90558ca59e).
+    expect(writes.map(write => projectArtifactStoredKind(write.kind).kind)).toEqual(['skill', 'prompt']);
   });
   it('carries the exact decision source to Home on lazy create and existing-document correction', async () => {
     const { CoordinationMessageRefV1Schema } = await import('@happier-dev/protocol/discussions/references');
@@ -189,8 +202,9 @@ describe('createArtifactWithHeaderViaApi', () => {
     const request = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === '/v1/account/encryption') return new Response(JSON.stringify({ mode, updatedAt: 0 }));
       if (path === ARTIFACT_UPLOAD_PATH_V1) {
-        if (!(init?.body instanceof ArrayBuffer)) throw new Error('Expected canonical Artifact upload frame');
-        const frame = new Uint8Array(init.body);
+        // The upload body is one finite frame: a staged cache file on native, a Blob on web (41e7017938).
+        const frame = await readUploadBody(init?.body);
+        if (frame.indexOf(10) < 0) throw new Error('Expected canonical Artifact upload frame');
         const separator = frame.indexOf(10);
         const metadata = decodeArtifactUploadMetadataV1(frame.subarray(0, separator));
         if (metadata.kind !== 'create') throw new Error('Expected create destination');

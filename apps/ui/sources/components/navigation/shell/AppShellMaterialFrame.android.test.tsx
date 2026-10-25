@@ -50,7 +50,8 @@ describe('native shell material planes', () => {
                 const paint = flattenTestStyle(sidebar.props.style).backgroundColor;
                 if (typeof paint !== 'string') throw new Error('Expected the Android material tint to be a color string');
                 expect(Color(paint).alpha()).toBeCloseTo(reduceTransparency ? 1 : glassPresetMaterials('everywhere').sidebar.opacity, 2);
-                if (reduceTransparency) expect(Color(paint).hexa()).toBe(Color(theme.colors.surface.inset).hexa());
+                // The column stands on the navigation plane: Reduce Transparency resolves it to the canvas itself.
+                if (reduceTransparency) expect(Color(paint).hexa()).toBe(Color(theme.colors.background.canvas).hexa());
                 standardCleanup();
             }
         } finally { standardCleanup(); }

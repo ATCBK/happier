@@ -6,7 +6,8 @@ import { TokenUsageRing } from './TokenUsageRing';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('react-native-svg', () => ({
+vi.mock('react-native-svg', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('react-native-svg')>()),
     Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('Svg', props, props.children),
     Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),

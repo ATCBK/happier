@@ -215,7 +215,9 @@ describe('manager captured Home Action transport', () => {
         const env = await setup();
         try {
             env.request.mockImplementation(async () => {
-                await env.TokenStorage.setCredentialsForServerUrl('https://reports.example', { serverId: env.home.id }, { token: `${env.token}-rotated` });
+                // A same-Account bearer refresh retains authority; a different Account retires it (af4706f44d).
+                await env.TokenStorage.setCredentialsForServerUrl('https://reports.example', { serverId: env.home.id },
+                    { token: `e30.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature` });
                 return new Response(JSON.stringify({ ok: true, sessionId: input.sessionId, managerSessionId: input.managerSessionId, attachedAt: 1 }), { status: 200 });
             });
             await expect(env.execute({ ...input, context, serverId: env.home.id })).rejects.toMatchObject({ code: 'action_account_scope_changed' });

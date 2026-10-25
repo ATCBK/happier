@@ -479,8 +479,12 @@ describe('ApiTokensSettingsScreen', () => {
 
         const screen = await renderScreen(<ApiTokensSettingsScreen controller={controller} />);
 
-        expect(screen.findByTestId(`settings-api-tokens-embed:${tokens[1].tokenId}`)).toBeTruthy();
-        expect(screen.findByTestId(`settings-api-tokens-embed:${tokens[0].tokenId}`)).toBeNull();
+        // An embed-backed token leads its context line with its kind; an ordinary token does not.
+        const { t } = await import('@/text');
+        const subtitle = (tokenId: string) => String(screen.findAll((node) => node.props?.testID === `settings-api-tokens-row:${tokenId}`
+            && typeof node.props?.subtitle === 'string')[0]?.props.subtitle ?? '');
+        expect(subtitle(tokens[1].tokenId)).toContain(t('settingsApiTokens.embedPill'));
+        expect(subtitle(tokens[0].tokenId)).not.toContain(t('settingsApiTokens.embedPill'));
 
         await screen.pressByTestIdAsync(`settings-api-tokens-row:${tokens[0].tokenId}`);
         await screen.pressByTestIdAsync(`settings-api-tokens-row:${tokens[1].tokenId}`);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildActivityBadgeState } from './buildActivityBadgeState';
+import { createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { StorageState } from '@/sync/store/types';
 
 const storageState = vi.hoisted(() => ({
@@ -40,7 +41,6 @@ describe('buildActivityBadgeState', () => {
                 id: 's-mixed',
                 seq: 5,
                 active: true,
-                lastViewedSessionSeq: 1,
                 latestTurnStatus: 'failed',
                 lastRuntimeIssue: JSON.stringify({
                     v: 1,
@@ -50,6 +50,13 @@ describe('buildActivityBadgeState', () => {
                     occurredAt: 1,
                 }),
                 metadata: { path: '', host: '' },
+                // Failure attention is anchored to the committed failure seq the Home projects for this viewer.
+                viewer: createSessionViewerFixture({
+                    latestFailureSeq: 5,
+                    readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: 1 },
+                    relevance: { relevant: true, reasons: ['owned_by_me'] },
+                    attention: { needsAttention: true, reasons: ['failed', 'unread'], primary: 'failed', presentation: 'full' },
+                }),
             } as any],
             numericInboxCount: 0,
             hasNonNumericInboxAttention: false,

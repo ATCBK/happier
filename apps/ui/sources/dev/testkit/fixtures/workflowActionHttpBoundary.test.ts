@@ -1,4 +1,7 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+// The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { installWorkflowActionHttpBoundary } from './workflowActionHttpBoundary';
 import { initializeRealAppRuntimeForTests } from '../harness/realAppRuntimeHarness';
 

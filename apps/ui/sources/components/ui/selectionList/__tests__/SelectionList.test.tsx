@@ -409,7 +409,8 @@ describe('SelectionList (orchestrator)', () => {
                 vi.advanceTimersByTime(220);
             });
             const releasedRoot = screen.findByTestId('sl') as unknown as { props: { style?: unknown } };
-            expect(flattenStyle(releasedRoot.props.style).minHeight).toBeUndefined();
+            // The held floor is released back to the container's own shrinkable minimum.
+            expect(flattenStyle(releasedRoot.props.style).minHeight).toBe(0);
             expect(flattenStyle(releasedRoot.props.style).height).toBeUndefined();
         } finally {
             vi.useRealTimers();

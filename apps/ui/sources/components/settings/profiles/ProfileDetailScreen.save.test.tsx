@@ -71,7 +71,8 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain',
                 v: options.useProfiles === undefined ? {} : { useProfiles: options.useProfiles } } });
-            if (path === '/v1/artifacts') return Response.json([]);
+            // An exact-kind read (shared launch Profiles) answers the filtered envelope.
+            if (path === '/v1/artifacts') return Response.json(new URL(String(url)).searchParams.has('kinds') ? { items: [], hasUnclassified: false, coverage: { status: 'complete', unclassifiedCount: 0 } } : []);
             if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
             if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
             if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });

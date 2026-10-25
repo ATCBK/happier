@@ -104,10 +104,11 @@ describe('original Account finite Project admission', () => {
             expect(new URL(String(url)).origin).toBe(serverUrl);
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v1/machines') return Response.json([{ id: 'alice-guest', kind: 'persistent', active: false,
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => [{ metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, id: 'alice-guest', kind: 'persistent', active: false,
                 installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
                 replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-                access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
+                access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' } }].find(row => row.id === id) ?? null);
             // D24 disclosure belongs to the ordinary share/approval surface;
             // requester transport must not impose another mandatory confirmation.
             expect(disclosure).not.toHaveBeenCalled();
@@ -157,9 +158,10 @@ describe('original Account finite Project admission', () => {
             expect(new URL(String(url)).origin).toBe(serverUrl);
             const path = new URL(String(url)).pathname;
             if (path === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
-            if (path === '/v1/machines') return Response.json([{ id: 'guest', kind: 'persistent', active: false, installationId: 'installation',
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => [{ metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, id: 'guest', kind: 'persistent', active: false, installationId: 'installation',
                 revokedAt: null, replacedByMachineId: null, dataEncryptionKey: 'sealed-key', runnerContentKeyBinding: null,
-                access: { custodian: { accountId: 'encrypted-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } }]);
+                access: { custodian: { accountId: 'encrypted-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } }].find(row => row.id === id) ?? null);
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
             const envelope = ExternalActionRequestEnvelopeV2Schema.parse(request.envelope);
             expect(request.machineId).toBe('guest');
@@ -209,10 +211,11 @@ describe('original Account finite Project admission', () => {
                 expect(parsedUrl.origin).toBe(serverUrl);
                 expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
                 if (parsedUrl.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-                if (parsedUrl.pathname === '/v1/machines') return Response.json([{ id: workspace.machineId, kind: 'persistent', active: false,
+                if (parsedUrl.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => [{ metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, id: workspace.machineId, kind: 'persistent', active: false,
                     installationId: 'guest-installation', revokedAt: null, replacedByMachineId: null,
                     dataEncryptionKey: null, runnerContentKeyBinding: null,
-                    access: { custodian: { accountId: 'finite-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
+                    access: { custodian: { accountId: 'finite-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }].find(row => row.id === id) ?? null);
                 const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
                 expect(request.machineId).toBe(workspace.machineId);

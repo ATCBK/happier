@@ -100,8 +100,10 @@ function createActivityAttentionSource(sessions: BadgeRuntimeSessionFixture[]) {
 }
 
 function setActivitySessions(sessions: BadgeRuntimeSessionFixture[]): void {
-    sessionsValue = sessions;
-    activityAttentionSourceValue = createActivityAttentionSource(sessions);
+    // Full Sessions carry agentState; without it a row reads as a list summary that owns no request counts.
+    const fullSessions = sessions.map((session) => ({ agentState: null, ...session }));
+    sessionsValue = fullSessions;
+    activityAttentionSourceValue = createActivityAttentionSource(fullSessions);
 }
 
 const EMPTY_BADGE_RUNTIME_MESSAGES = {};

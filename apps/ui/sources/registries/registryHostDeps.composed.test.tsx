@@ -6,6 +6,7 @@ import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness'
 import { createPlainPromptLibraryCatalogHomeFixture, createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptRegistrySkillFixture } from '@/dev/testkit/harness/promptMachineTransferBoundary';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { SkillLockV1Schema, encodeSkillRevisionV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
@@ -204,6 +205,12 @@ it('refreshes daemon-created sources in the UI and reads tokened sources through
             ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
         if (catalogResponse) return catalogResponse;
         if (request.path === '/v1/machines') return Response.json([machineRow]);
+        if (request.path === '/v1/machines/read-batch' && request.method === 'POST') {
+            // The batched read publishes the stored row; its bootstrap fields keep the installation identity.
+            const { runnerClaim: _bootstrapOnly, ...publishedFields } = machineRow;
+            return createMachineReadBatchResponseFixture(request.body, id => id === machineId
+                ? { ...createPlainMachineRowFixture({ id: machineId, accountId: 'registry-custodian' }), ...publishedFields } : null);
+        }
         if (!request.path.startsWith('/v1/actions/')) return undefined;
         expect(request.accountId).toBe('registry-requester');
         const body = request.body as Readonly<{ envelope: unknown; executionAuthorization?: unknown }>;

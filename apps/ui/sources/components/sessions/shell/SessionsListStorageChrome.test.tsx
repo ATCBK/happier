@@ -2,6 +2,9 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';

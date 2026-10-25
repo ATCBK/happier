@@ -15,7 +15,8 @@ describe('linked Zen task session status', () => {
         [{ latestTurnStatus: 'in_progress', thinking: true, thinkingAt: now }, 'working', 'working'],
         [{ hasPendingPermissionRequests: true, pendingRequestObservedAt: now }, 'needs_you', 'needs_you'],
         [{ latestTurnStatus: 'completed' }, 'ready_for_review', 'finished'],
-        [{ latestTurnStatus: 'failed' }, 'failed', 'needs_you'],
+        // A failed turn is an idle, danger-toned Session in the canonical awareness presentation.
+        [{ latestTurnStatus: 'failed' }, 'failed', 'idle'],
         [{ latestTurnStatus: 'cancelled' }, 'stopped', 'idle'],
     ] as const)('projects canonical session facts %j without deciding Done', (overrides, state, bucket) => {
         const session = createSessionListRenderableSessionFixture({ active: true, activeAt: now, ...overrides });

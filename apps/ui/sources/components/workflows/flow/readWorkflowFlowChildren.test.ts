@@ -17,7 +17,8 @@ describe('editor Flow definition reads', () => {
         expect(children['builtin:plan-with-a-panel']?.blocks.length).toBeGreaterThan(0);
         const projection = projectWorkflowFlow(parent, children);
         expect(projection.nodesById.get('left')?.childNodeIds).not.toEqual(projection.nodesById.get('right')?.childNodeIds);
-        expect(projection.nodes.some((node) => node.kind === 'action')).toBe(true);
+        // The nested built-in expands to its own planner steps; the parent itself has only workflow calls.
+        expect(projection.nodes.some((node) => node.kind === 'step')).toBe(true);
     });
 
     it('reports an unreadable child and honors cancellation instead of inventing its structure', async () => {

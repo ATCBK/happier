@@ -78,6 +78,8 @@ describe('socket public-link invalidation', () => {
             serverId: 'home-one',
             entityIds: ['session-public-link:same-session-id'],
             sessionListQueryAffects: false,
+            // A wake without typed change kinds conservatively reaches Account settings (c5ffa3b621).
+            accountSettingsAffects: true,
         });
         expect(JSON.stringify(observedHomeChange.mock.calls)).not.toContain('one-time-secret');
     });

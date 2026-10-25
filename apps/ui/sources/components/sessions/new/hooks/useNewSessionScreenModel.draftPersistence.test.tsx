@@ -590,7 +590,8 @@ vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useHeaderHeight: () => 0,
 }));
 
@@ -2879,7 +2880,8 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         const requestClose = vi.fn();
         const element = model?.simpleProps?.pathPopover?.renderContent?.({ requestClose });
         expect(element).toBeTruthy();
-        expect((element.type as { name?: string }).name).toBe('NewSessionPathSelectionContent');
+        // The popover wrapper reads recent paths at intent, then renders the shared path content.
+        expect((element.type as { name?: string }).name).toBe('NewSessionPopoverPathSelectionContent');
 
         const props = element.props as { onBeforeBrowseMachinePath?: unknown };
         expect(props.onBeforeBrowseMachinePath).not.toBe(requestClose);

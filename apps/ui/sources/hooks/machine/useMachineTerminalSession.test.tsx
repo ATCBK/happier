@@ -36,6 +36,7 @@ import {
     readTerminalSurfaceState,
     replaceTerminalSurfaceState,
 } from '@/components/sessions/terminal/terminalSurfaceStateCache';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -207,6 +208,10 @@ describe('useMachineTerminalSession', () => {
                     access: { custodian: { accountId: 'terminal-account', displayName: 'Terminal owner' },
                         role: 'manage', resourceMode: 'plain', accessState: 'ready' },
                 })))
+                // Account Machine Actions resolve their target through the batched Machine row read.
+                : request.path === '/v1/machines/read-batch' && request.method === 'POST'
+                ? createMachineReadBatchResponseFixture(request.body, id => ['machine', 'machine-cancel', 'machine-1'].includes(id)
+                    ? createPlainMachineRowFixture({ id, accountId: 'terminal-account' }) : null)
                 : request.path === '/v1/features' || request.path === '/v1/features/authenticated'
                 ? Response.json(createRootLayoutFeaturesResponse({ features: { terminal: {
                     embeddedPty: { enabled: true }, transport: { byteStream: { enabled: byteStreamEnabled } },

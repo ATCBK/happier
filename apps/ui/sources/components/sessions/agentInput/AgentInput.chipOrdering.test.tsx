@@ -1,5 +1,8 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import type { ReactTestRendererJSON } from 'react-test-renderer';
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 import { renderScreen as renderPanelScreen } from '@/dev/testkit';

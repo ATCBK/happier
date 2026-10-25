@@ -4,7 +4,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { getStorage } from '@/sync/domains/state/storage';
-import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { removeProviderMachineStateV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
@@ -206,7 +206,10 @@ describe('machine Account operations through captured HTTP', () => {
 
     it('stops captured cleanup when the Account retires after revoke', async () => {
         const { state, scope } = await serveMachineAccount();
-        state.onRevoke = disconnectActiveServerConnection;
+        // The captured Action Account retires with its Home credential, not a transport disconnect (af4706f44d).
+        state.onRevoke = async () => {
+            await TokenStorage.removeCredentialsForServerUrl('https://machine-revoke.example.test', { serverId: scope.serverId });
+        };
         await expect(cleanup(scope)).resolves.toMatchObject({ ok: false, machineRevoked: true,
             providerCleanup: 'pending', retryable: true });
         expect(state.mutations).toEqual([]);

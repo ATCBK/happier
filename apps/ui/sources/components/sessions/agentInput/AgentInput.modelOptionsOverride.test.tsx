@@ -170,7 +170,8 @@ vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: () => null,
 }));
 
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
+vi.mock('@/components/autocomplete/useActiveSuggestions', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/components/autocomplete/useActiveSuggestions')>()),
     useActiveSuggestions: () => [[], 0, () => {}, () => {}],
 }));
 

@@ -2,6 +2,9 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createSessionListRenderableSessionFixture, flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';

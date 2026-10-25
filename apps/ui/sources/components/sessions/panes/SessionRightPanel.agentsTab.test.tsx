@@ -87,7 +87,7 @@ describe('SessionRightPanel (core tabs)', () => {
         expect(screen.getTextContent()).toContain('1');
     });
 
-    it('renders git, files, navigation, agents, and services tabs and shows the git surface by default', async () => {
+    it('renders git, files, navigation, agents, browser, and services tabs and shows the git surface by default', async () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 
         const screen = await renderScreen(<SessionRightPanel sessionId="s1" scopeId="session:s1" />);
@@ -96,7 +96,8 @@ describe('SessionRightPanel (core tabs)', () => {
         expect(screen.findByTestId('session-rightpanel-tab:files')).toBeTruthy();
         expect(screen.findByTestId('session-rightpanel-tab:navigation')).toBeTruthy();
         expect(screen.findByTestId('session-rightpanel-tab:agents')).toBeTruthy();
-        expect(screen.findByTestId('session-rightpanel-tab:browser')).toBeNull();
+        // A Session publishes its retained Browser destination on desktop too.
+        expect(screen.findByTestId('session-rightpanel-tab:browser')).toBeTruthy();
         expect(screen.findByTestId('session-rightpanel-tab:services')).toBeTruthy();
         expect(screen.findByTestId('session-rightpanel-tab:reviews')).toBeNull();
         expect(screen.findByTestId('session-rightpanel-tab:terminal')).toBeNull();

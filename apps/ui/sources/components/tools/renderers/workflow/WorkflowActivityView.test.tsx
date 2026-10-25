@@ -92,7 +92,7 @@ beforeEach(async () => {
             if (parsed.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (parsed.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (parsed.pathname === '/v2/account/settings') return Response.json({ content: null, version: 0 });
-            if (parsed.pathname === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
+            if (parsed.pathname === '/v1/features' || parsed.pathname === '/v1/features/authenticated') return Response.json(FeaturesResponseSchema.parse({
                 features: { sessions: { enabled: true } },
                 capabilities: { session: { systemRecords: { protocolVersions: [1] } } },
             }));

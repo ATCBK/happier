@@ -6,6 +6,7 @@ import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/ar
 import { normalizePluginUiDestinationBindingV1, PluginUiDestinationBindingV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
@@ -251,6 +252,8 @@ describe('answering-client plugin origin preferences', () => {
             const approvalsBeforeStaleCallback = artifacts.list().length;
             expect(await capturedUiSelection(origin)).toEqual({ status: 'unavailable' });
             expect(artifacts.list()).toHaveLength(approvalsBeforeStaleCallback);
+            // A captured Action Account retires with its Home credential, not the focused lifetime (af4706f44d).
+            await TokenStorage.removeCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id });
             await expect(invoke('plugins.execution_origin.clear', { pluginId })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
             expect(writes).toBe(0);
         } finally { account.dispose(); bridge.dispose(); unpublish(); await connection.dispose(); }

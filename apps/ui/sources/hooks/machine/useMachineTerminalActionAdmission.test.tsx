@@ -11,7 +11,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState, replaceTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { useMachineTerminalSession } from './useMachineTerminalSession';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { EmbeddedTerminalPaneFrame } from '@/components/terminal/embedded/EmbeddedTerminalPaneFrame';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Modal } from '@/modal';
@@ -32,14 +32,23 @@ import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embed
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
+// The Home answers Machine list and batched row reads for the one Machine Bob owns.
+function serveBobMachine(request: Readonly<{ path: string; method: string; body?: unknown }>): Response | undefined {
+    const machine = createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' });
+    if (request.path === '/v1/machines') return Response.json([machine]);
+    if (request.path === '/v1/machines/read-batch' && request.method === 'POST') {
+        return createMachineReadBatchResponseFixture(request.body, id => id === machine.id ? machine : null);
+    }
+    return undefined;
+}
+
 async function serveTerminalApprovalHome(serverUrl: string) {
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'bob', encryptionMode: 'plain' });
     const home = await serveActionHomes({ homes: [{ key: 'session', serverUrl, accountId: 'bob', currentAccount: true,
         settings: { actionsSettingsV1: { v: 1, actions: { 'machines.terminal.open': { approvalRequiredSurfaces: ['ui'] } } } } }],
         route: request => artifacts.handle(`${request.path}${request.url.search}`, { method: request.method, headers: request.headers,
             ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) })
-            ?? (request.path === '/v1/machines'
-                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined) });
+            ?? serveBobMachine(request) });
     return { ...home, artifacts, async decline(count = 1) {
         await vi.waitFor(() => expect(artifacts.list()).toHaveLength(count));
         const result = await decideApprovalAsInbox(home.homes.session!.id, artifacts.list()[count - 1]!.id, 'cancel');
@@ -95,8 +104,7 @@ describe('Project terminal admission through canonical Machine Actions', () => {
     });
     it('opens an explicitly requested machine shell directly with default settings', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'session', serverUrl: 'https://terminal-direct.test', accountId: 'bob', currentAccount: true }],
-            route: request => request.path === '/v1/machines'
-                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
+            route: serveBobMachine });
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             rpc.mockReset(); rpc.mockResolvedValue({ ok: true, terminalId: 'direct-shell', reused: false });
@@ -297,8 +305,7 @@ describe('Project terminal admission through canonical Machine Actions', () => {
     it('requires the same Machine Action admission for a Session package-script process', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'session', serverUrl: 'https://session-terminal-admission.test', accountId: 'bob',
             settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }],
-            route: request => request.path === '/v1/machines'
-                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
+            route: serveBobMachine });
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             rpc.mockReset(); rpc.mockResolvedValue({ ok: true, terminalId: 'script-pty', reused: false });
@@ -338,8 +345,7 @@ describe('Project terminal admission through canonical Machine Actions', () => {
     it('opens one admitted requester shell and rejects retired Account interest before another open', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-admission.test', accountId: 'bob',
             settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }],
-            route: request => request.path === '/v1/machines'
-                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
+            route: serveBobMachine });
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             const serverId = home.homes.project!.id;

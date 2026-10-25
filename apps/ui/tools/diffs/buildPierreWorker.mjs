@@ -23,7 +23,8 @@ function copyFile(src, dst) {
     fs.cpSync(src, dst, { force: true });
 }
 
-function resolveWorkerDistDir({ repoRootDir, expoAppDir }) {
+/** The installed worker dist: app-local first, then the hoisted workspace root. */
+export function resolveWorkerDistDir({ repoRootDir, expoAppDir }) {
     const candidates = [
         path.resolve(expoAppDir, 'node_modules', '@pierre', 'diffs', 'dist', 'worker'),
         path.resolve(repoRootDir, 'node_modules', '@pierre', 'diffs', 'dist', 'worker'),

@@ -1,7 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { encodeBase64 } from '@/encryption/base64';
 import { createArtifact } from './apiArtifacts';
+
+// A native upload body is a staged cache file URI (41e7017938); read its bytes at the filesystem boundary.
+const fs = await vi.hoisted(async () => {
+    const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
+    return createExpoFileSystemFileMock();
+});
+vi.mock('expo-file-system', () => fs.module);
+
+async function readUploadBody(body: BodyInit | null | undefined): Promise<Uint8Array> {
+    const uri = body && typeof body === 'object' && 'uri' in body ? (body as { uri: unknown }).uri : undefined;
+    if (typeof uri === 'string') return new Uint8Array(fs.files.get(uri) ?? []);
+    return new Uint8Array(await new Response(body).arrayBuffer());
+}
 
 describe('Artifact finite upload HTTP transport', () => {
     it('sends binary bytes in one request-bound carrier without the JSON body cutoff', async () => {
@@ -13,7 +26,7 @@ describe('Artifact finite upload HTTP transport', () => {
         const request = async (path: string, init?: RequestInit) => {
             if (path === '/v1/artifacts/content/upload') {
                 expect(new Headers(init?.headers).get('content-type')).toBe('application/vnd.happier.artifact-upload-v1');
-                const wire = new Uint8Array(await new Response(init?.body).arrayBuffer());
+                const wire = await readUploadBody(init?.body);
                 const separator = wire.indexOf(10);
                 destination = JSON.parse(new TextDecoder().decode(wire.subarray(0, separator)));
                 received = wire.subarray(separator + 1);

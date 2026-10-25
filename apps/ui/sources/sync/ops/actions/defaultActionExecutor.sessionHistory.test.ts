@@ -39,8 +39,9 @@ describe('Session history through the UI Action front door', () => {
         const machine = createMachineFixture({ id: machineId, activeAt: Date.now() });
         getStorage().setState({ machines: { [machineId]: machine }, machineListByServerId: { [serverId]: [machine] },
             machineListStatusByServerId: { [serverId]: 'idle' } });
-        homes.answer(serverId, '/v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: machineId, accountId: 'alice' }),
-            installationId, installationPublicKey: encodeBase64(installation.publicKey) }] });
+        // The Action Machine is read by id through the Machine rows reader (a532f4a1e0).
+        homes.answer(serverId, `/v1/machines/${machineId}`, { body: { machine: { ...createPlainMachineRowFixture({ id: machineId, accountId: 'alice' }),
+            installationId, installationPublicKey: encodeBase64(installation.publicKey) } } });
         const input = { sessionId: 'diagnostic-session', limit: 25, format, includeMeta: true, includeStructuredPayload: true };
         const invocation = { caller: { kind: 'host' as const }, surface: 'ui' as const, authority: 'present_user' as const,
             callerPermissionMode: 'read-only' as const, callerInputConstraints: { models: null, permissionModes: ['read-only' as const] },

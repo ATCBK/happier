@@ -224,6 +224,8 @@ function completePartialStorageState(state: Partial<StorageState>): StorageState
         machines: {},
         machineListByServerId: {},
         machineListStatusByServerId: {},
+        machinePresenceById: {},
+        machinePresenceByServerId: {},
         sessionMessages: {},
         sessionLastViewed: {},
         sessionPending: {},
@@ -420,6 +422,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         useSessionOrganizationProjection: () => null,
         useSessionOrganizationProjections: () => emptySessionOrganizationProjectionsByServerId,
         useArtifacts: () => [],
+        // A stubbed store has no Artifact bodies to demand; the real owner is covered by its own hooks tests.
+        useInboxApprovalBodyHydration: () => undefined,
         useArtifact: () => null,
         useOpenApprovalSessionReferences: () => [],
         useOpenApprovalArtifactsForSession: () => [],

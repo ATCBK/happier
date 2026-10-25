@@ -145,6 +145,8 @@ describe('content availability decision sites', () => {
         'sync/engine/sessions/sessionSnapshot.ts',
         'sync/domains/session/listing/sessionListRenderable.ts',
         'sync/domains/session/listing/sessionListRenderableSessionProjection.ts',
+        // Retains an unchanged Session option by comparing its copied facts (254852ff45).
+        'components/workflows/screens/useWorkflowExistingSessionOptions.ts',
     ]);
 
     function listSources(dir: string): string[] {

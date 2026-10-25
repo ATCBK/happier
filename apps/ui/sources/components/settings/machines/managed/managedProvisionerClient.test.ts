@@ -4,6 +4,7 @@ import { ExternalActionRequestEnvelopeV1Schema, ExternalActionRequestEnvelopeV2S
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -31,11 +32,14 @@ describe('managed configurator uses the exact Home Action front door', () => {
             provenance: { v: 1, kind: 'account', authority: 'present_user' } })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token, secret: encodeBase64(new Uint8Array(32).fill(29), 'base64url') });
         let receipts = 0;
-        harness.answer(serverId, '/v1/machines', { body: [{ id: 'host', kind: 'persistent', installationId: 'installation',
+        const host = { id: 'host', kind: 'persistent', installationId: 'installation',
                 active: false, activeAt: 1, revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
                 storageMode: 'e2ee', metadata: 'opaque', metadataVersion: 1, daemonState: null, daemonStateVersion: 0,
                 keyBasis: { dataEncryptionKey: null, metadataVersion: 1, daemonStateVersion: 0 }, seq: 1, createdAt: 1, updatedAt: 1,
-                access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } }] });
+                access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } };
+        harness.answer(serverId, '/v1/machines', { body: [host] });
+        // The controller row is read through the batched Machine reader (one exact Machine per id).
+        harness.answer(serverId, '/v1/machines/host', { body: { machine: host } });
         harness.answer(serverId, '/v1/actions/machines.managed.acquire', { select: value => {
             const envelope = ExternalActionRequestEnvelopeV2Schema.parse(value);
             receipts++;
@@ -65,6 +69,8 @@ describe('managed configurator uses the exact Home Action front door', () => {
         harness.answer(serverId, '/v1/machines', { body: [{ id: 'host', kind: 'persistent', installationId: 'installation',
             active: false, revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] });
+        harness.answer(serverId, '/v1/machines/host', { body: { machine: { ...createPlainMachineRowFixture({ id: 'host', accountId: 'owner' }),
+            installationId: 'installation', active: false } } });
         // Native Action admission owns its ordinary Artifact; the UI does not create an outer Ask.
         harness.answer(serverId, '/v1/actions/machines.managed.acquire', { select: value => {
             const request = ExternalActionRequestEnvelopeV1Schema.parse(value);

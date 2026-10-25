@@ -4,6 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderHook } from '@/dev/testkit';
+import { createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -39,7 +40,7 @@ describe('Role override catalog projection', () => {
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 7 });
-                if (path === '/v1/artifacts') return Response.json([]);
+                if (path === '/v1/artifacts') return createArtifactListHttpResponse(new URL(String(url)), []);
                 return new Response(null, { status: 404 });
             },
         });

@@ -4,6 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { createDeferred, renderHook } from '@/dev/testkit';
+import { createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -62,7 +63,7 @@ describe('fresh Role catalog readiness', () => {
                     }
                     return Response.json({ content: { t: 'plain', v: sourceRaw }, version: sourceVersion });
                 }
-                if (path === '/v1/artifacts') return Response.json([]);
+                if (path === '/v1/artifacts') return createArtifactListHttpResponse(new URL(String(url)), []);
                 if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
                 if (path === '/v1/account/entity-rows/prompt-library') return Response.json({ status: 'listed',
                     rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision, content: { t: 'plain',

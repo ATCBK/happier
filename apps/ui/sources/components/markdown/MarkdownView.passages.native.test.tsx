@@ -100,10 +100,11 @@ describe('Native Markdown passages', () => {
           'markdown-source-range-trigger',
         ),
       );
-    expect(triggers.map((node) => node.props.disabled)).toEqual([
-      true,
+    // Only the marked block is interactive; inactive ranges pass pointers to their descendants.
+    expect(triggers.map((node) => node.props.focusable)).toEqual([
       false,
       true,
+      false,
     ]);
     await act(async () => triggers[1]!.props.onPress());
     expect(pressed).toEqual([markdown.indexOf('A replay')]);

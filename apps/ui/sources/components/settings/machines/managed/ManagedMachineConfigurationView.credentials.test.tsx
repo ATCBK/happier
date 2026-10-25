@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dimensions } from 'react-native';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderScreen, standardCleanup, flushHookEffects, pressTestInstanceAsync, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -113,6 +113,9 @@ async function setupHome() {
     harness.answer(serverId, '/v1/machines', { body: [controller, otherController].map(target => ({ id: target.machineId, kind: 'persistent',
         installationId: target.installationId, active: true, revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
         access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } })) });
+    // Controller rows are read through the batched Machine reader (one exact Machine per id).
+    for (const [index, target] of [controller, otherController].entries()) harness.answer(serverId, `/v1/machines/${target.machineId}`, { body: {
+        machine: { ...createPlainMachineRowFixture({ id: target.machineId, accountId: 'owner', machine: machines[index] }), installationId: target.installationId } } });
     for (const [actionId, result] of [
         ['machines.provisioners.list', { controller, provisioners: [provisioner] }],
         ['machines.provisioners.check', { available: true }],

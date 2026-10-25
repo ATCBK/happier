@@ -7,6 +7,7 @@ import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
@@ -51,7 +52,7 @@ describe('Session Role value row (Work tab top row)', () => {
             homes: [{ key: 'roles', serverUrl: 'https://roles.test', accountId: 'account-1', currentAccount: true }],
             route: request => {
                 if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                if (request.path === '/v1/artifacts') return Response.json([]);
+                if (request.path === '/v1/artifacts') return createArtifactListHttpResponse(request.url, []);
                 if (request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows: [{
                     key: 'role-overrides', revision: 1,
                     content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } },

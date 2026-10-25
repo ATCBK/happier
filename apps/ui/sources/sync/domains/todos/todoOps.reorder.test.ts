@@ -97,7 +97,7 @@ describe('anchored todo reorder through real Account storage and KV HTTP', () =>
             request: http.request, isCurrent: lifetime.isCurrent, signal: controller.signal,
         })).resolves.toBeUndefined();
         expect(await http.index()).toEqual({ undoneOrder: ['b', 'a'], completedOrder: ['completed'] });
-        expect(storage.getState().todoState).toBe(next);
+        expect(storage.getState().todoState).toEqual(next);
     });
 
     it('rebases on server additions and preserves current local titles, membership and versions at acknowledgement', async () => {
@@ -122,7 +122,7 @@ describe('anchored todo reorder through real Account storage and KV HTTP', () =>
         }
         http.acknowledge(() => storage.getState().applyTodos(next));
         await reorderTodos(credentials, 'a', { anchorId: 'b', placement: 'after' }, { request: http.request });
-        expect(storage.getState().todoState).toBe(next);
+        expect(storage.getState().todoState).toEqual(next);
         expect(await http.index()).toEqual({ undoneOrder: ['b', 'a'], completedOrder: ['completed'] });
     });
 
@@ -150,7 +150,7 @@ describe('anchored todo reorder through real Account storage and KV HTTP', () =>
             request: http.request, isCurrent: lifetime.isCurrent,
         })).rejects.toMatchObject({ code: 'todo_reorder_scope_changed' });
         expect(http.writes).toEqual([]);
-        expect(storage.getState().todoState).toBe(next);
+        expect(storage.getState().todoState).toEqual(next);
     });
 
     it.each(['completed source', 'deleted anchor'] as const)('refuses current server %s before saving', async change => {

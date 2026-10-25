@@ -106,7 +106,8 @@ describe('machineWorkspaceFileList', () => {
         const budget = (outgoing[0]?.params as { budgetMs: number }).budgetMs;
         expect(budget).toBeGreaterThan(0);
         expect(budget).toBeLessThanOrEqual(30_000);
-        expect(homes.requestsFor('/v1/machines/m1')[0]?.serverId).toBe(serverId);
+        // The exact Machine row is read through the Machine read batch (a532f4a1e0).
+        expect(homes.requestsFor('/v1/machines/read-batch')[0]?.serverId).toBe(serverId);
 
         // Abort while the genuine network acknowledgement is outstanding. The
         // same scoped RPC owner must surface cancellation rather than an empty

@@ -245,8 +245,15 @@ describe('Profile editor entity writer', () => {
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(secretMaterials);
             if (path === '/v2/account/settings' && init?.method !== 'POST') return Response.json({ content: { t: 'plain', v: accountSettings }, version: accountSettingsVersion });
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-            // The Home classifies every row it serves (coarse kind), so inventory sync has no hint to repair.
-            if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json([...artifacts.values()].map(row => ({ ...row, kind: 'other' })));
+            // The Home classifies every row it serves (coarse kind and exact kind hint), so inventory sync has no hint
+            // to repair; an exact-kind read answers the filtered envelope.
+            if (path === '/v1/artifacts' && init?.method !== 'POST') {
+                const rows = [...artifacts.values()].map(row => ({ ...row, kind: 'other', kindHint: 'launch-profile.v1' }));
+                const kinds = new URL(String(url)).searchParams.get('kinds');
+                return Response.json(kinds === null ? rows
+                    : { items: rows.filter(row => (JSON.parse(kinds) as string[]).includes(row.kindHint)), hasUnclassified: false,
+                        coverage: { status: 'complete', unclassifiedCount: 0 } });
+            }
             if (path.startsWith('/v1/artifacts/') && init?.method !== 'POST' && init?.method !== 'PUT') {
                 const artifact = artifacts.get(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
                 if (artifact) return Response.json({ ...artifact, kind: 'other' });

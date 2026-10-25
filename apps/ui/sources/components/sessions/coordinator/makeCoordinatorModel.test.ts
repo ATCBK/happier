@@ -21,6 +21,8 @@ const SETTINGS = {
 
 const CHECKOUT = { id: 'checkout', projectKey: PROJECT.projectKey, serverId: SERVER,
     machineId: 'machine', rootPath: '/work/payments', label: null, createdAtMs: 1, lastOpenedAtMs: null };
+// A Project key alone no longer places a Session; its accepted workspace membership does.
+const PROJECT_MEMBER = { projectId: PROJECT.projectKey, machineId: CHECKOUT.machineId, path: CHECKOUT.rootPath };
 
 function homeWideRule(
     ruleId: string,
@@ -49,7 +51,8 @@ describe('Make coordinator draft', () => {
         const draft = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            ownerMetadata: { projectId: PROJECT.projectKey },
+            ownerMetadata: PROJECT_MEMBER,
+            workspaceRefs: [CHECKOUT],
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: null,
@@ -128,7 +131,8 @@ describe('Make coordinator enable input', () => {
         const draft = buildMakeCoordinatorDraft({
             serverId: SERVER,
             sessionId: 's-new',
-            ownerMetadata: { projectId: PROJECT.projectKey },
+            ownerMetadata: PROJECT_MEMBER,
+            workspaceRefs: [CHECKOUT],
             settings: SETTINGS,
             ruleIds: { project: 'r-project', home: 'r-home' },
             ruleCensus: {

@@ -3,6 +3,7 @@ import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { preflightWorkspaceDestinationReplacement } from './sessionHandoffs';
 
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -52,12 +53,12 @@ describe('session handoff UI request client', () => {
         await setServerProfileIdentityForUrl(serverUrl, 'srv_fx14_owned');
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
         expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, { token })).toBe(true);
-        setRuntimeFetch(async url => {
+        setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
-            if (path === '/v1/machines') return Response.json([{ id: 'source-1', kind: 'persistent', active: true,
-                revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
-                access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
+            // The Action Machine is read by id through the Machine rows reader (a532f4a1e0).
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, id => (
+                id === 'source-1' ? createPlainMachineRowFixture({ id, accountId: 'owner' }) : null));
             throw new Error(`Unexpected boundary: ${path}`);
         });
     });

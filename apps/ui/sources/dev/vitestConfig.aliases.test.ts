@@ -83,10 +83,13 @@ describe('vitest config aliases', () => {
             ? config.resolve.alias
             : [];
 
-        const enrichedMarkdownAlias = aliasEntries.find((entry) => entry.find === 'react-native-enriched-markdown');
+        const matches = (find: unknown, id: string) => find instanceof RegExp ? find.test(id) : find === id;
+        const enrichedMarkdownAlias = aliasEntries.find((entry) => matches(entry.find, 'react-native-enriched-markdown'));
 
         expect(enrichedMarkdownAlias, 'expected enriched markdown to use a node-safe test stub').toBeTruthy();
         expect(enrichedMarkdownAlias?.replacement).toContain('reactNativeEnrichedMarkdownStub.tsx');
+        // Only the public native view is stubbed; package subpaths keep the real patched logic.
+        expect(matches(enrichedMarkdownAlias?.find, 'react-native-enriched-markdown/lib/module/web/streamingReveal.js')).toBe(false);
     });
 
     it('stubs posthog-react-native so tracking imports do not load optional Expo native packages', async () => {

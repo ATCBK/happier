@@ -119,8 +119,9 @@ describe('fetchAndApplyArtifactsList artifact data-key unwrapping', () => {
 
         expect(decryptEncryptionKeys).toHaveBeenCalledTimes(1);
         expect(decryptEncryptionKeys.mock.calls[0]![0]).toEqual(['env-a', 'env-b', 'env-c']);
+        // Equal updatedAt rows apply in the transport keyset order (updatedAt desc, id desc; 7c4980006c).
         expect(applyArtifacts.mock.calls[0]![0].map((artifact: { title: string }) => artifact.title))
-            .toEqual(['title-a', 'title-b', 'title-c']);
+            .toEqual(['title-c', 'title-b', 'title-a']);
     });
 
     it('does not re-open an envelope whose unwrapped key is already cached', async () => {
@@ -144,7 +145,7 @@ describe('fetchAndApplyArtifactsList artifact data-key unwrapping', () => {
         expect(decryptEncryptionKeys).toHaveBeenCalledTimes(1);
         expect(applyArtifacts).toHaveBeenCalledTimes(2);
         expect(applyArtifacts.mock.calls[1]![0].map((artifact: { title: string }) => artifact.title))
-            .toEqual(['title-a', 'title-b']);
+            .toEqual(['title-b', 'title-a']);
     });
 
     it('re-opens only the artifact whose envelope rotated', async () => {
@@ -175,7 +176,7 @@ describe('fetchAndApplyArtifactsList artifact data-key unwrapping', () => {
         expect(decryptEncryptionKeys).toHaveBeenCalledTimes(2);
         expect(decryptEncryptionKeys.mock.calls[1]![0]).toEqual(['env-b-rotated']);
         expect(applyArtifacts.mock.calls[1]![0].map((artifact: { title: string }) => artifact.title))
-            .toEqual(['title-a', 'title-b']);
+            .toEqual(['title-b', 'title-a']);
     });
 
     it('drops the cached key when a rotated envelope fails to open', async () => {

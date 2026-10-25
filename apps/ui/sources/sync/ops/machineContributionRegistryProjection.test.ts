@@ -698,7 +698,8 @@ describe('machine contribution registry projection ops', () => {
             pending.forEach((release, index) => release({ protocolVersion: 1, projection: v2Projection(index + 1) }));
             await Promise.allSettled([first, second]);
         }
-        await expect(first).resolves.toMatchObject({ supported: true, projection: { generation: 1 } });
+        // Replaced key material retires the first captured Account (af4706f44d); it never adopts the second read.
+        await expect(first).resolves.toMatchObject({ supported: false });
         await expect(second).resolves.toMatchObject({ supported: true, projection: { generation: 2 } });
     });
 

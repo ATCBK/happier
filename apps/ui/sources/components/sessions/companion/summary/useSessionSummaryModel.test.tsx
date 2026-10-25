@@ -133,7 +133,7 @@ describe('useSessionSummaryModel', () => {
             metadata: { ...shellSession.metadata!, lifecycleState: 'stopped' } });
         storage.setState({ sessions: { [shellSession.id]: stopped } });
         const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: homeA }));
-        expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'sessionWork.states.stopped' });
+        expect(hook.getCurrent().status).toMatchObject({ state: 'stopped', statusText: 'sessionWork.states.stopped' });
         await act(async () => storage.setState({ sessions: { [shellSession.id]: { ...stopped,
             metadata: { ...stopped.metadata!, lifecycleState: 'running' } } } }));
         expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'status.offline' });

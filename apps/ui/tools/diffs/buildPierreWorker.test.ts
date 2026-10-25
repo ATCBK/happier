@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, test } from 'vitest';
 import { fileURLToPath } from 'node:url';
 
-import { buildPierreWorkerAssets } from './buildPierreWorker.mjs';
+import { buildPierreWorkerAssets, resolveWorkerDistDir } from './buildPierreWorker.mjs';
 
 const fixtureRoots: string[] = [];
 
@@ -51,7 +51,12 @@ test('publishes a matching versioned worker and helper, removing only previous P
 });
 
 test('rewrites the real installed portable worker to its emitted helper', () => {
-    const installedWorkerDir = fileURLToPath(new URL('../../node_modules/@pierre/diffs/dist/worker', import.meta.url));
+    // The workspace installs hoisted; read the copy the builder itself resolves.
+    const installedWorkerDir = resolveWorkerDistDir({
+        repoRootDir: fileURLToPath(new URL('../../../..', import.meta.url)),
+        expoAppDir: fileURLToPath(new URL('../..', import.meta.url)),
+    });
+    assert.ok(installedWorkerDir, 'installed @pierre/diffs worker dist');
     const installedPackage = JSON.parse(fs.readFileSync(path.resolve(installedWorkerDir, '../../package.json'), 'utf8'));
     const inputs = fixture({ version: installedPackage.version });
     fs.cpSync(installedWorkerDir, inputs.workerDistDir, { recursive: true });

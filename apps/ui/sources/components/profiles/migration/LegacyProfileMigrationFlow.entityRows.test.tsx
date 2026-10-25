@@ -28,6 +28,7 @@ import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit/render/rende
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -176,7 +177,7 @@ describe('Legacy Profile guided source preparation', () => {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: rawSettings }, version: settingsVersion });
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-            if (path === '/v1/artifacts') return Response.json([]);
+            if (path === '/v1/artifacts') return createArtifactListHttpResponse(requested, []);
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({
                 resources: ['auth-private', 'extra-private'].map(resourceId => ({ resourceId, encryptionMode: 'plain',
                     entry: { ref: formatSharedSavedSecretRefV1(resourceId), source: 'shared_resource', relationship: 'owner',

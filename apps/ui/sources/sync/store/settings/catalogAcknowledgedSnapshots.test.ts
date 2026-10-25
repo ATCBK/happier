@@ -24,20 +24,22 @@ describe('acknowledged catalog display evidence', () => {
         { domain: 'notifications', subscribe: subscribeNotificationChannelCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedNotificationChannelCatalog(scope,
             [], revision, current), read: () => getNotificationChannelCatalogValue(scope) },
         { domain: 'acknowledgements', subscribe: subscribeConnectedMetadataCatalog, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
-            { kind: 'acknowledgements', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope) },
+            { kind: 'acknowledgements', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope),
+            staleEvidence: { acknowledgementsStale: true } },
         { domain: 'presentation', subscribe: subscribeConnectedMetadataCatalog, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
-            { kind: 'presentation', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope) },
+            { kind: 'presentation', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope),
+            // The shared connected-metadata snapshot keeps one staleness flag per acknowledged kind.
+            staleEvidence: { presentationStale: true } },
         { domain: 'remote hosts', subscribe: subscribeRemoteHostCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedRemoteHostCatalog(scope,
             [], revision, current), read: () => getRemoteHostCatalogSnapshot(scope) },
     ];
-    it.each(cases)('keeps $domain evidence stale and suppresses equal, older or retired receipts', ({ publish, read, subscribe }) => {
+    it.each(cases)('keeps $domain evidence stale and suppresses equal, older or retired receipts', ({ publish, read, subscribe, staleEvidence }) => {
         publish(5, true);
         const acknowledged = read();
         const notify = vi.fn();
         const unsubscribe = subscribe(notify);
         onTestFinished(unsubscribe);
-        expect(acknowledged).toMatchObject('acknowledgementsStale' in acknowledged!
-            ? { acknowledgementsStale: true } : { stale: true });
+        expect(acknowledged).toMatchObject(staleEvidence ?? { stale: true });
         publish(4, true);
         expect(read()).toBe(acknowledged);
         publish(6, false);

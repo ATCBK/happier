@@ -11,7 +11,6 @@ import { upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { withUiPromptLibraryArtifactReader, createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { captureLazyActionAccountContext } from './actionAccountContext';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { listPromptInvocationsForActions, resolvePromptInvocationForActions } from './resolvePromptInvocations';
 
 describe('Account-bound prompt invocations', () => {
@@ -76,7 +75,8 @@ describe('Account-bound prompt invocations', () => {
       if (url.pathname === '/v1/account/encryption/currentness') return new Response(JSON.stringify({ mode: 'plain', version: 0,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }));
       if (retireDuringOtherBody && url.origin === otherUrl && url.pathname === '/v1/artifacts/same-id') {
-        retireActiveServerAccountScopeLifetime();
+        // The captured Action Account retires with its Home credential (af4706f44d).
+        await TokenStorage.removeCredentialsForServerUrl(fixture.home.serverUrl, { serverId: fixture.home.id });
         retirementObserved = true;
       }
       const boundary = url.origin === otherUrl ? otherBoundary : fixture.boundary;

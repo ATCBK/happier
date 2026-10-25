@@ -57,9 +57,10 @@ describe('Usage model prices through captured UI Account Actions', () => {
         const currentCatalog = () => refreshed ? { ...catalog, models: { reference: { inputUsdPerMillion: 6, outputUsdPerMillion: 4 } },
             provenance: { ...catalog.provenance, revision: 'refreshed' } } : catalog;
         home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://price-actions.test', accountId: 'account-a' }],
-            route: request => {
+            route: async request => {
                 if (request.path === '/v1/account/usage/prices') {
-                    if (retireOnRead) retireActiveServerAccountScopeLifetime();
+                    // The captured Action Account retires with its Home credential (af4706f44d).
+                    if (retireOnRead) await TokenStorage.removeCredentialsForServerUrl('https://price-actions.test', { serverId: home!.homes.a!.id });
                     return denied ? new Response('denied', { status: 403 }) : Response.json(currentCatalog());
                 }
                 if (request.path === '/v1/account/usage/prices/refresh') {

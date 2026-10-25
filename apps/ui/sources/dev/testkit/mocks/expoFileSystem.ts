@@ -43,7 +43,9 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         const content = files.get(uri);
         if (!content) throw new Error('File does not exist');
         writes(uri, bytes);
-        content.splice(Math.min(offset ?? content.length, content.length), bytes.length, ...bytes);
+        // Overwrite/extend in place; spreading a large chunk into splice overflows the call stack.
+        const start = Math.min(offset ?? content.length, content.length);
+        for (let index = 0; index < bytes.length; index += 1) content[start + index] = bytes[index]!;
     });
     class Directory {
         readonly uri: string;

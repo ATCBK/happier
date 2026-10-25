@@ -152,9 +152,10 @@ describe('ArtifactPassageSelection on iOS/Android', () => {
           'markdown-source-range-trigger',
         ),
       );
-    expect(triggers.filter((node) => !node.props.disabled)).toHaveLength(1);
+    // Inactive ranges pass pointers to their descendants; only the marked block is focusable.
+    expect(triggers.filter((node) => node.props.focusable === true)).toHaveLength(1);
     await act(async () =>
-      triggers.find((node) => !node.props.disabled)!.props.onPress(),
+      triggers.find((node) => node.props.focusable === true)!.props.onPress(),
     );
     expect(opened).toEqual(['thread-1']);
   });
@@ -196,7 +197,7 @@ describe('ArtifactPassageSelection on iOS/Android', () => {
     const screen = await renderScreen(<ArtifactPassageSelection artifactId="runbook" markdown={markdown} revision={revision}
       margin={{ passages: [first, second].map((start, index) => ({ id: `thread-${index}`, location: { state: 'exact', range: { start, end: start + 8 } } })),
         focusedId: null, onFocus: () => {}, onOpen: id => opened.push(id), onOpenThreadList: list, renderCard: () => null }} />);
-    const trigger = screen.findAllByType('Pressable').find(node => String(node.props.testID ?? '').startsWith('markdown-source-range-trigger') && !node.props.disabled)!;
+    const trigger = screen.findAllByType('Pressable').find(node => String(node.props.testID ?? '').startsWith('markdown-source-range-trigger') && node.props.focusable === true)!;
     await act(async () => trigger.props.onPress());
     expect(opened).toEqual([]);
     expect(list).toHaveBeenCalledTimes(1);
