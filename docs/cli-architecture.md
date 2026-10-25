@@ -1247,6 +1247,11 @@ session to the daemon; its temporary plain/requested-tmux launch metadata is not
 terminal fallback. Ordinary daemon tmux fallbacks retain their warning.
 Hosted clients of supported Codex App Server and OpenCode server runtimes use the same ownership:
 their shared attached-terminal supervisor persists and reports the actual presenter.
+In development source, the tmux host adapter uses the requested `TMUX_TMPDIR` for
+host creation and records it in the attachment for subsequent control and attach.
+The shared tmux spawn owner creates a missing socket root before contacting tmux;
+passing the root only into the pane's environment would create the host on the
+ambient server while recording a different attachment endpoint.
 For these shared provider-attach runtimes, the hosted native TUI is optional:
 `spawnHooks.resolveDaemonTerminalPresentation` keeps the controller headless,
 and `createSharedProviderLocalControl.onTerminalExit` releases the local-control
