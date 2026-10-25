@@ -2,6 +2,7 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 import { isSessionRunnerWindowsHostedLaunchV1, readSessionRunnerDaemonLaunchRefusalV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 
 import type { TrackedSession } from '@/daemon/types';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 
 import {
   isSessionRunnerColdResumeSupported,
@@ -23,9 +24,15 @@ function isActiveTrackedRunner(tracked: TrackedSession): boolean {
 }
 
 function hasExactProcessWitness(tracked: TrackedSession): boolean {
+  const runner = resolveTrackedSessionRunnerIdentity(tracked);
   return !!normalizeString(tracked.processCommandHash)
     && Number.isInteger(tracked.processStartTimeMs)
-    && (tracked.processStartTimeMs ?? -1) >= 0;
+    && (tracked.processStartTimeMs ?? -1) >= 0
+    && !!runner
+    && Number.isInteger(runner.pid) && runner.pid > 0
+    && !!normalizeString(runner.processCommandHash)
+    && Number.isInteger(runner.processStartTimeMs)
+    && (runner.processStartTimeMs ?? -1) >= 0;
 }
 
 function hasSpawnOptions(tracked: TrackedSession): boolean {

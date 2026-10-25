@@ -8,12 +8,61 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
 
-import { retireExactTerminalControlServiceability } from './retireTerminalControlServiceability';
+import { readRetainedPlainRunnerExitMarker, retireExactTerminalControlServiceability, retireStoppedPlainRunnerControlServiceability } from './retireTerminalControlServiceability';
 import { recoverStrandedTerminalControlServiceability } from './recoverStrandedTerminalControlServiceability';
+import { writeSessionMarker } from '../sessionRegistry';
+import type { TrackedSession } from '../types';
 
 describe('retireExactTerminalControlServiceability', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it.each(['exact', 'missing', 'other PID'] as const)('requires the executable birth for wrapped exit-marker recovery (%s)', async witness => {
+        await withConfiguredDaemonTestHome({ prefix: 'wrapped-exit-marker-' }, async ({ homeDir }) => {
+            const runnerPid = 999_123_456;
+            const tracked: TrackedSession = { pid: runnerPid + 1, sessionRunnerPid: runnerPid,
+                startedBy: 'daemon', happySessionId: 'wrapped-exit', processStartTimeMs: 100,
+                ...(witness === 'missing' ? {} : { runnerProcessIdentity: {
+                    pid: witness === 'exact' ? runnerPid : runnerPid + 2,
+                    processStartTimeMs: witness === 'exact' ? 200 : 100, processCommandHash: 'a'.repeat(64),
+                } }),
+            };
+            await writeSessionMarker({ pid: runnerPid, happySessionId: 'wrapped-exit',
+                startedBy: 'daemon', processStartTimeMs: witness === 'exact' ? 200 : 100 });
+            const marker = await readRetainedPlainRunnerExitMarker(tracked);
+            if (witness === 'exact') expect(marker).toMatchObject({ pid: runnerPid, processStartTimeMs: 200 });
+            else expect(marker).toBeNull();
+        });
+    });
+
+    it('supplies one exact executable witness to the real stopped-runner publication', async () => {
+        await withConfiguredDaemonTestHome({ prefix: 'wrapped-retirement-' }, async () => {
+            const pid = 999_123_456;
+            const sessionId = 'wrapped-retirement';
+            const tracked: TrackedSession = { pid: pid + 1, sessionRunnerPid: pid, startedBy: 'daemon',
+                happySessionId: sessionId, processStartTimeMs: 100,
+                runnerProcessIdentity: { pid, processStartTimeMs: 200, processCommandHash: 'a'.repeat(64) } };
+            vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200,
+                data: String(url).includes('/v2/sessions/') ? { session: createSessionRecordFixture({ id: sessionId,
+                    encryptionMode: 'plain', metadataLayoutVersion: 0, metadataVersion: 1,
+                    metadata: JSON.stringify({ path: '/repo', hostPid: pid, hostProcessStartTimeMs: 200,
+                        lifecycleState: 'running', terminal: { mode: 'plain' } }) }) }
+                    : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }));
+            const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+                success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 },
+            } });
+            await expect(retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked,
+                publishRetirement: (expectedRunner?: { pid: number; startTimeMs: number }) => {
+                    if (!expectedRunner) throw new Error('Retirement owner omitted executable witness');
+                    return retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
+                        sessionId, terminalMode: 'plain', expectedRunner, stoppedAt: 1234 });
+                },
+            })).resolves.toBe('retired');
+            expect(SessionMetadataTuplePatchV1Schema.parse(patch.mock.calls[0]?.[1])).toMatchObject({
+                target: { ownerMetadata: { t: 'plain', v: { runtime: { lifecycleState: 'stopped', lifecycleStateSince: 1234 } } } },
+            });
+        });
     });
 
     it.each(['current', 'already-retired', 'replacement'] as const)(

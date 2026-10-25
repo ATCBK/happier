@@ -8,6 +8,7 @@ import type {
   PlannedRunnerRestartSignalResult,
 } from './types';
 import type { TrackedSession } from '../types';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
 import type { OwnerRemainderCapture } from '../processes/endOwnerRemainder';
 import { SessionRunnerRestartAdmissionUnsupportedError, type SessionRunnerRestartAdmissionRelease } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
@@ -84,11 +85,19 @@ export async function requestPlannedRunnerRestart(
   const expectedProcessCommandHash =
     params.tracked.processCommandHash?.trim() ?? '';
   const expectedProcessStartTimeMs = params.tracked.processStartTimeMs;
+  // Public restart/model guards describe the executable. The launcher remains
+  // the physical signal/tree and map key, so validate both without relabeling either birth.
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(params.tracked);
+  const expectedRunner = runnerIdentity ? { ...runnerIdentity } : null;
   if (
     !Number.isInteger(expectedPid)
     || expectedPid <= 0
     || !Number.isInteger(expectedProcessStartTimeMs)
     || (expectedProcessStartTimeMs ?? -1) < 0
+    || !expectedRunner
+    || !Number.isInteger(expectedRunner.pid) || expectedRunner.pid <= 0
+    || !Number.isInteger(expectedRunner.processStartTimeMs)
+    || (expectedRunner.processStartTimeMs ?? -1) < 0
   ) {
     return {
       signaled: false,
@@ -160,6 +169,13 @@ export async function requestPlannedRunnerRestart(
         notSignaledReason = 'unsafe_process';
         return false;
       }
+      const currentRunner = resolveTrackedSessionRunnerIdentity(params.tracked);
+      if (currentRunner?.pid !== expectedRunner.pid
+        || currentRunner?.processStartTimeMs !== expectedRunner.processStartTimeMs
+        || currentRunner?.processCommandHash !== expectedRunner.processCommandHash) {
+        notSignaledReason = 'runner_identity_changed';
+        return false;
+      }
       return true;
     };
     const exactProcessWitnessIsCurrent = async (): Promise<boolean> => {
@@ -171,6 +187,15 @@ export async function requestPlannedRunnerRestart(
       });
       if (!safe) {
         notSignaledReason = 'unsafe_process';
+        return false;
+      }
+      if ((expectedRunner.pid !== expectedPid || expectedRunner.processStartTimeMs !== expectedProcessStartTimeMs)
+        && !await isProcessSafeToSignal({
+          pid: expectedRunner.pid,
+          expectedProcessCommandHash: expectedRunner.processCommandHash,
+          expectedProcessStartTimeMs: expectedRunner.processStartTimeMs,
+        })) {
+        notSignaledReason = 'runner_identity_changed';
         return false;
       }
       return trackedWitnessIsCurrent();

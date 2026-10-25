@@ -94,9 +94,9 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
         onFinalTrackedSessionExitStaged: async () => {
           await resolveTrackedSessionTerminalHostExitCandidate({ tracked, pid, happyHomeDir: homeDir, attachmentInfo: null });
         } });
-      const retire = async (stoppedAt?: number) => {
+      const retire = async (stoppedAt?: number, expectedRunner = { pid, startTimeMs: identity.processStartTimeMs }) => {
         const input = { credentials: { token: 'fixture', encryption: null }, sessionId, terminalMode: 'plain' as const,
-          expectedRunner: { pid, startTimeMs: identity.processStartTimeMs }, stoppedAt };
+          expectedRunner, stoppedAt };
         const retirement = await retireExactTerminalControlServiceability(input);
         retirementResult = retirement;
         expect(retirement).toBe(unreported ? 'superseded' : 'retired');
@@ -110,7 +110,8 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
         if (wiring === 'unreported-dead-runner') { nativeChild!.kill('SIGTERM'); await nativeExited; }
         const stop = createStopSession({ pidToTrackedSession: sessions, areTrackedRunnersExited: observeExit,
           waitForTrackedRunnersExit: observeExit, retireAbsentTerminalControlServiceability: ({ stoppedAt }) =>
-            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked, publishRetirement: () => retire(stoppedAt) }),
+            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked,
+              publishRetirement: expectedRunner => retire(stoppedAt, expectedRunner) }),
           recoverStrandedTerminalControlServiceability: input => recoverStrandedTerminalControlServiceability({
             ...input, credentials: { token: 'fixture', encryption: null }, currentMachineId: 'fixture-machine',
             loadTerminalHostAdapters: async () => ({}),

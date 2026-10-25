@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import type { TrackedSession } from '@/daemon/types';
+import { adoptTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 
 import {
   isRequestAuthSourceCutoverRequirementCurrent,
@@ -33,6 +34,20 @@ function trackedSession(overrides: Partial<TrackedSession> = {}): TrackedSession
 describe('request-auth source cutover requirement', () => {
   const currentCapabilityPath =
     '/tmp/materialized/csm-1/request-auth/capability.json';
+
+  it('guards a wrapped source cutover with the executable witness, including birth-only changes', () => {
+    const tracked = trackedSession({ spawnOptions: { ...trackedSession().spawnOptions!,
+      environmentVariables: { HAPPIER_OPENCODE_BROKER_STATE_PATH: '/tmp/retained/broker.state.json' } } });
+    const runner = { pid: 4343, processStartTimeMs: 20_000, processCommandHash: 'child-hash' };
+    adoptTrackedSessionRunnerIdentity(tracked, runner);
+    const resolved = resolveRequestAuthSourceCutoverRequirement({ tracked, currentCapabilityPath });
+    expect(resolved).toMatchObject({ status: 'required', requirement: { runnerPid: 4343,
+      processStartTimeMs: 20_000, processCommandHash: 'child-hash' } });
+    if (resolved.status !== 'required') throw new Error('Missing source cutover requirement');
+    expect(isRequestAuthSourceCutoverRequirementCurrent({ requirement: resolved.requirement, tracked, currentCapabilityPath })).toBe(true);
+    adoptTrackedSessionRunnerIdentity(tracked, { ...runner, processStartTimeMs: 20_001 });
+    expect(isRequestAuthSourceCutoverRequirementCurrent({ requirement: resolved.requirement, tracked, currentCapabilityPath })).toBe(false);
+  });
 
   it('keeps a same-generation runner that already carries the current V2 capability path', () => {
     const tracked = trackedSession({

@@ -11,6 +11,7 @@ import { logger } from '@/ui/logger';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { readSessionMarkerForPid, type DaemonSessionMarker } from '../sessionRegistry';
 import type { TrackedSession } from '../types';
+import { resolveTrackedSessionRunnerIdentity } from './sessionReportCorrelation';
 
 import { clearTerminalControlServiceabilityProjection } from '../startup/terminalControlServiceabilityProjection';
 
@@ -21,8 +22,9 @@ export type TerminalControlServiceabilityRetirementTarget = Readonly<{ attachmen
 
 /** The existing marker is the recovery obligation; a live or unrecorded runner cannot defer publication. */
 export async function readRetainedPlainRunnerExitMarker(tracked: TrackedSession): Promise<DaemonSessionMarker | null> {
-    const pid = tracked.sessionRunnerPid ?? tracked.pid;
-    const startTimeMs = tracked.runnerProcessIdentity?.processStartTimeMs ?? tracked.processStartTimeMs;
+    const runner = resolveTrackedSessionRunnerIdentity(tracked);
+    if (!runner) return null;
+    const { pid, processStartTimeMs: startTimeMs } = runner;
     if (!tracked.happySessionId || startTimeMs === undefined
         || isPidPresent(pid) || (pid !== tracked.pid && isPidPresent(tracked.pid))) return null;
     const marker = await readSessionMarkerForPid(pid);
@@ -35,10 +37,15 @@ export async function readRetainedPlainRunnerExitMarker(tracked: TrackedSession)
 export async function retireStoppedPlainRunnerControlServiceability(params: Readonly<{
     sessionId: string;
     trackedSession: TrackedSession;
-    publishRetirement: () => Promise<ExactTerminalControlServiceabilityRetirement>;
+    publishRetirement: (expectedRunner: Readonly<{ pid: number; startTimeMs: number }>) => Promise<ExactTerminalControlServiceabilityRetirement>;
 }>): Promise<RetainedPlainRunnerRetirement> {
     try {
-        return await params.publishRetirement();
+        const runner = resolveTrackedSessionRunnerIdentity(params.trackedSession);
+        const startTimeMs = runner?.processStartTimeMs;
+        if (!runner || typeof startTimeMs !== 'number' || !Number.isInteger(startTimeMs) || startTimeMs < 0) {
+            throw new Error('terminal_control_serviceability_retirement_runner_or_host_unresolved');
+        }
+        return await params.publishRetirement({ pid: runner.pid, startTimeMs });
     } catch (error) {
         if (params.trackedSession.happySessionId !== params.sessionId
             || !await readRetainedPlainRunnerExitMarker(params.trackedSession)) throw error;

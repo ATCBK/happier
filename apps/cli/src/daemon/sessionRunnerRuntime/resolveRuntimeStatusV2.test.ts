@@ -13,7 +13,7 @@ const state = {
   daemonId: null,
   observedAtMs: 100,
   runner: {
-    pid: 123,
+    pid: 456,
     runtimeId: null,
     cliVersion: null,
     entrypointVersion: null,
@@ -118,6 +118,7 @@ describe('resolveSessionRunnerRuntimeStatusV2', () => {
   });
 
   it('re-observes the direct tracked PID when no separate runner PID exists', async () => {
+    const directState = { ...state, runner: { ...state.runner, pid: 123 } };
     const readProcessIdentityByPidFn = vi.fn(async (pid: number) => ({
       pid,
       processStartTimeMs: 1_500,
@@ -125,12 +126,12 @@ describe('resolveSessionRunnerRuntimeStatusV2', () => {
     }));
 
     await expect(resolveSessionRunnerRuntimeStatusV2({
-      state,
+      state: directState,
       tracked: tracked({ sessionRunnerPid: undefined }),
       readProcessIdentityByPidFn,
     })).resolves.toEqual({
       v: 2,
-      state,
+      state: directState,
       runnerProcessIdentity: {
         pid: 123,
         processStartTimeMs: 1_500,

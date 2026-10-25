@@ -2968,6 +2968,17 @@ the queued/blocked lifecycle behind those codes.
 
 ## Automatic session-runner refresh (0.3 development)
 
+Public runner status, model transitions and restart guards identify the executable
+runner through `resolveTrackedSessionRunnerIdentity`: its PID, process birth and
+command hash travel together. For a wrapper launch, V1 status and its V2 birth
+witness describe the reported child, never the launcher paired with the child's
+birth. Restart admission rechecks that executable witness through the final signal
+boundary. The launcher retains separate physical custody: the tracking-map key,
+restart reservation, completion/exit observation, remainder-tree root and signal
+target still belong to its own PID and birth witness. A changed executable or
+launcher refuses the restart before signalling; source-cutover guards use the
+same executable identity. This is current 0.3 development behavior.
+
 `hdev daemon restart-session-runners --on-update on|off` changes the optional local
 `restartSessionRunnersOnUpdate` setting through the existing locked settings writer,
 without contacting the daemon. It defaults off. Once startup reattach and control

@@ -5197,15 +5197,12 @@ export async function startDaemonSessionControlRuntime(
     pidToTrackedSession: params.pidToTrackedSession,
     retireAbsentTerminalControlServiceability: async ({ sessionId, trackedSession, metadataContext, stoppedAt }) =>
       await retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession,
-        publishRetirement: () => retireTerminalControlServiceabilityForCurrentAccount({
+        publishRetirement: expectedRunner => retireTerminalControlServiceabilityForCurrentAccount({
         sessionId,
         ...(metadataContext ? { metadataContext } : {}),
         terminalMode: 'plain',
         stoppedAt,
-        expectedRunner: {
-          pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
-          startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs,
-        },
+        expectedRunner,
       }, trackedSession.requesterWorkAttributionV1 ?? trackedSession.spawnOptions?.requesterWorkAttributionV1) }),
     retireUpstreamAuthorityBeforeProcessStop: async (pid) =>
       await retireUpstreamAuthorityBeforeProcessStop({

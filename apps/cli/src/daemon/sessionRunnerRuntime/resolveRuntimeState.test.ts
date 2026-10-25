@@ -5,8 +5,26 @@ import { resolveSessionRunnerRuntimeState, resolveTrackedSessionRunnerActivity }
 import { restartSessionRunnerOnCurrentRuntime } from '../plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 import { requestPlannedRunnerRestart } from '../plannedRunnerRestart/requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { adoptTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
+import { resolveSessionRunnerRuntimeStatusV2 } from './resolveRuntimeStatusV2';
 
 describe('resolveSessionRunnerRuntimeState', () => {
+  it('projects one executable identity for a wrapped runner without borrowing launcher evidence', async () => {
+    const tracked: TrackedSession = { pid: 123, startedBy: 'daemon', happySessionId: 'wrapped',
+      processStartTimeMs: 100, processCommandHash: 'launcher-hash', processCommand: 'launcher' };
+    adoptTrackedSessionRunnerIdentity(tracked, { pid: 456, processStartTimeMs: 200,
+      processCommandHash: 'runner-hash',
+      processCommand: 'node /cli/versions/0.3.0/package-dist/index.mjs codex --happy-starting-mode remote --started-by daemon' });
+    const state = resolveSessionRunnerRuntimeState({ sessionId: 'wrapped', tracked,
+      currentIdentity: { status: 'known', source: 'launch_spec', comparableId: 'version:0.3.0' } });
+    const readProcessIdentityByPidFn = vi.fn(async (pid: number) => ({ pid, processStartTimeMs: 200, command: 'runner' }));
+    const status = await resolveSessionRunnerRuntimeStatusV2({ state, tracked, readProcessIdentityByPidFn });
+    expect(status.state.runner).toMatchObject({ pid: 456, processCommandHash: 'runner-hash', runtimeId: 'version:0.3.0' });
+    expect(status.runnerProcessIdentity).toEqual({ pid: status.state.runner.pid, processStartTimeMs: 200 });
+    expect(readProcessIdentityByPidFn.mock.calls).toEqual([[456]]);
+    expect(tracked.pid).toBe(123);
+  });
+
   it('does not make a refresh hold itself or another Session effect', () => {
     const tracked: TrackedSession = { pid: 123, startedBy: 'daemon', happySessionId: 'session' };
     const operations = [

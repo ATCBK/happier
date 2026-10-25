@@ -1,6 +1,7 @@
 import type { TrackedSession } from '@/daemon/types';
 import type { RpcHandlerActiveExecution } from '@/api/rpc/types';
 import type { SessionRunnerDaemonEntrypointSourceV1 } from '@happier-dev/protocol';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 
 import {
   isGenerationAttestedComparableId,
@@ -95,6 +96,7 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
   observedAtMs?: number;
 }>): SessionRunnerRuntimeState {
   const tracked = params.tracked ?? null;
+  const processIdentity = tracked ? resolveTrackedSessionRunnerIdentity(tracked) : null;
   const sessionId = normalizeString(params.sessionId) || normalizeString(tracked?.happySessionId);
   const runnerCommand = tracked ? readTrackedSessionRunnerProcessCommand(tracked) : undefined;
   const runnerIdentity = tracked
@@ -124,11 +126,11 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
     daemonId: normalizeString(params.daemonId) || null,
     observedAtMs: params.observedAtMs ?? Date.now(),
     runner: {
-      pid: tracked?.pid ?? null,
+      pid: tracked?.sessionRunnerPid ?? tracked?.pid ?? null,
       runtimeId: runnerIdentity.status === 'known' ? runnerIdentity.comparableId : null,
       cliVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
       entrypointVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
-      processCommandHash: normalizeString(tracked?.processCommandHash) || null,
+      processCommandHash: normalizeString(processIdentity?.processCommandHash) || null,
       entrypointSource: runnerIdentity.status === 'known' ? runnerIdentity.source : 'unknown',
       startedBy: readStartedBy(tracked?.startedBy),
       startingMode: readSessionRunnerStartingModeFromProcessCommand(runnerCommand),

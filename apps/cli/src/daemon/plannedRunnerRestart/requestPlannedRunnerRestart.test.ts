@@ -14,6 +14,8 @@ import { requestConnectedServiceSessionRestartSignal } from '../connectedService
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createSessionRunnerRestartAdmission, prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { adoptTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
+import { isPidSafeHappySessionProcess } from '../pidSafety';
 
 function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
   return {
@@ -28,6 +30,39 @@ function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('requestPlannedRunnerRestart', () => {
+  it.each(['direct', 'stable', 'reused child PID', 'replaced child', 'same PID conflicting birth'] as const)('revalidates executable custody and physical launcher custody at the signal boundary (%s)', async change => {
+    const tracked = makeTracked();
+    const runner = { pid: change === 'same PID conflicting birth' ? tracked.pid : 4343,
+      processStartTimeMs: 20_000, processCommandHash: 'child-hash' };
+    if (change !== 'direct') adoptTrackedSessionRunnerIdentity(tracked, runner);
+    const reads: number[] = [];
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    let childBirth = runner.processStartTimeMs;
+    try {
+      const result = await requestPlannedRunnerRestart({ sessionId: 'sess-1', tracked,
+        deferral: { kind: 'none' }, restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: params => isPidSafeHappySessionProcess(params, {
+          readProcessIdentityByPidFn: async pid => { reads.push(pid); return { pid, command: 'fixture',
+            processStartTimeMs: pid === tracked.pid ? tracked.processStartTimeMs : childBirth }; },
+        }),
+        canSignal: () => {
+          if (change === 'reused child PID') childBirth++;
+          if (change === 'replaced child') adoptTrackedSessionRunnerIdentity(tracked, { ...runner, pid: 4444 });
+          return true;
+        },
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: tracked.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      });
+      expect(result).toEqual(change === 'stable' || change === 'direct' ? { signaled: true }
+        : { signaled: false, notSignaledReason: 'runner_identity_changed' });
+      if (change === 'stable' || change === 'direct') {
+        expect(kill).toHaveBeenCalledExactlyOnceWith(4242, 'SIGTERM');
+        // Two final-generation probes; a direct runner must never pay for a second identity.
+        expect(reads).toEqual(change === 'direct' ? [4242, 4242] : [4242, 4343, 4242, 4343]);
+      } else expect(kill).not.toHaveBeenCalled();
+    } finally { kill.mockRestore(); }
+  });
+
   it('does not signal when its live receiving hold is lost after readiness', async () => {
     const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
     const admission = createSessionRunnerRestartAdmission(() => rpc);

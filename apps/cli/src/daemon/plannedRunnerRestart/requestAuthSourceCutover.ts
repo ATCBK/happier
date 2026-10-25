@@ -3,6 +3,7 @@ import {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import type { TrackedSession } from '@/daemon/types';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
 
 const REMOTE_REQUEST_AUTH_SOURCES = [
@@ -208,13 +209,15 @@ export function resolveRequestAuthSourceCutoverRequirement(
   }
 
   const sessionId = normalizeOptionalString(input.tracked.happySessionId);
+  const runner = resolveTrackedSessionRunnerIdentity(input.tracked);
   const processCommandHash =
-    normalizeOptionalString(input.tracked.processCommandHash);
-  const processStartTimeMs = input.tracked.processStartTimeMs;
+    normalizeOptionalString(runner?.processCommandHash);
+  const processStartTimeMs = runner?.processStartTimeMs;
   if (
     !sessionId
-    || !Number.isInteger(input.tracked.pid)
-    || input.tracked.pid <= 0
+    || !runner
+    || !Number.isInteger(runner.pid)
+    || runner.pid <= 0
     || !processCommandHash
     || typeof processStartTimeMs !== 'number'
     || !Number.isInteger(processStartTimeMs)
@@ -250,7 +253,7 @@ export function resolveRequestAuthSourceCutoverRequirement(
     status: 'required',
     requirement: {
       sessionId,
-      runnerPid: input.tracked.pid,
+      runnerPid: runner.pid,
       processCommandHash,
       processStartTimeMs,
       source: retainedSource.source,
@@ -267,8 +270,9 @@ export function isRequestAuthSourceCutoverRequirementCurrent(
   }>,
 ): boolean {
   const sessionId = normalizeOptionalString(input.tracked.happySessionId);
+  const runner = resolveTrackedSessionRunnerIdentity(input.tracked);
   const processCommandHash =
-    normalizeOptionalString(input.tracked.processCommandHash);
+    normalizeOptionalString(runner?.processCommandHash);
   const retainedSource =
     input.requirement.source.kind
       === 'dev_request_auth_capability'
@@ -297,9 +301,9 @@ export function isRequestAuthSourceCutoverRequirementCurrent(
   const currentCapabilityPath =
     normalizeOptionalString(input.currentCapabilityPath);
   return sessionId === input.requirement.sessionId
-    && input.tracked.pid === input.requirement.runnerPid
+    && runner?.pid === input.requirement.runnerPid
     && processCommandHash === input.requirement.processCommandHash
-    && input.tracked.processStartTimeMs
+    && runner?.processStartTimeMs
       === input.requirement.processStartTimeMs
     && currentCapabilityPath !== null
     && canonicalAbsolutePathsEqual(

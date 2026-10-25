@@ -1,4 +1,5 @@
 import type { TrackedSession } from '@/daemon/types';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import type {
   SessionRunnerRestartDisabledReason,
@@ -96,15 +97,16 @@ function normalizeString(value: unknown): string {
 export function captureRunnerRestartIdentityWitness(
   tracked: TrackedSession,
 ): RunnerRestartIdentityWitness {
+  const processIdentity = resolveTrackedSessionRunnerIdentity(tracked);
   const runnerIdentity =
     resolveSessionRunnerEntrypointIdentityFromProcessCommand(
       readTrackedSessionRunnerProcessCommand(tracked),
     );
   return Object.freeze({
-    pid: tracked.pid,
-    processStartTimeMs: tracked.processStartTimeMs,
+    pid: tracked.sessionRunnerPid ?? tracked.pid,
+    processStartTimeMs: processIdentity?.processStartTimeMs,
     processCommandHash: normalizeString(
-      tracked.processCommandHash,
+      processIdentity?.processCommandHash,
     ),
     runnerEntrypointIdentity:
       runnerIdentity.status === 'known'
@@ -129,10 +131,11 @@ function isActivePid(value: unknown): value is number {
 
 export function summarizeSessionRunnerEndpoint(tracked: TrackedSession): RestartSessionRunnerEndpointSummary {
   const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(readTrackedSessionRunnerProcessCommand(tracked));
+  const processIdentity = resolveTrackedSessionRunnerIdentity(tracked);
   return {
-    pid: tracked.pid,
+    pid: tracked.sessionRunnerPid ?? tracked.pid,
     cliVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
-    processCommandHash: normalizeString(tracked.processCommandHash) || null,
+    processCommandHash: normalizeString(processIdentity?.processCommandHash) || null,
     entrypointVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
   };
 }
@@ -210,12 +213,12 @@ function validateRestartContext(input: Readonly<{
     return skipped('runner_identity_changed', sessionId);
   }
 
-  if (isActivePid(input.request.expectedRunnerPid) && input.request.expectedRunnerPid !== tracked.pid) {
+  if (isActivePid(input.request.expectedRunnerPid) && input.request.expectedRunnerPid !== (tracked.sessionRunnerPid ?? tracked.pid)) {
     return skipped('runner_identity_changed', sessionId);
   }
 
   const expectedHash = normalizeString(input.request.expectedProcessCommandHash);
-  const actualHash = normalizeString(tracked.processCommandHash);
+  const actualHash = normalizeString(resolveTrackedSessionRunnerIdentity(tracked)?.processCommandHash);
   if (expectedHash && expectedHash !== actualHash) {
     return skipped('runner_identity_changed', sessionId);
   }
