@@ -414,7 +414,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Setup Bun
@@ -493,7 +493,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -501,7 +501,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -585,7 +585,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -632,7 +632,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -687,7 +687,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -695,7 +695,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -752,7 +752,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -760,7 +760,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -818,7 +818,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -826,7 +826,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -904,7 +904,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -912,7 +912,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -974,7 +974,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -982,7 +982,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -1041,7 +1041,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1049,7 +1049,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -1189,7 +1189,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1238,7 +1238,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1296,7 +1296,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -1358,7 +1358,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -1420,7 +1420,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -1501,7 +1501,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1565,7 +1565,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1656,7 +1656,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1725,7 +1725,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1787,7 +1787,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1844,7 +1844,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1904,7 +1904,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -1954,7 +1954,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2005,7 +2005,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2057,7 +2057,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2093,7 +2093,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2203,7 +2203,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2211,7 +2211,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -2384,7 +2384,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2392,7 +2392,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -2461,7 +2461,7 @@ jobs:
         if: env.ACT != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2469,7 +2469,7 @@ jobs:
         if: env.ACT == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Enable Corepack
         uses: ./.github/actions/enable-corepack-yarn
@@ -2642,7 +2642,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -2806,7 +2806,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 

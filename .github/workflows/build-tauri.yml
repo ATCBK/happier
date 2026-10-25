@@ -137,7 +137,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: "22.x"
   UI_REPO: ${{ github.repository }}
 
 jobs:
@@ -230,7 +229,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Checkout trusted candidate planning control
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -421,7 +420,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -564,7 +563,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
 
@@ -835,7 +834,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Download and verify admitted finalized desktop assets
         env:
@@ -884,7 +883,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign
@@ -958,7 +957,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Resolve desktop-setup applicability
         id: plan
@@ -1111,7 +1110,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Enable trusted control Yarn
         uses: ./.github/actions/enable-corepack-yarn

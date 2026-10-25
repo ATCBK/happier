@@ -133,7 +133,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Enforce stable publishing gate
         if: ${{ inputs.channel == 'stable' && inputs.allow_stable != true }}
         run: exit 1
@@ -233,7 +233,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Enable Corepack (Yarn)
@@ -299,7 +299,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Enable Corepack (Yarn)
@@ -413,7 +413,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Enable Corepack (Yarn)
@@ -498,7 +498,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Enable trusted control Yarn
         uses: ./.github/actions/enable-corepack-yarn
       - name: Install artifact verifier dependencies
@@ -564,7 +564,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Enable trusted control Yarn
         uses: ./.github/actions/enable-corepack-yarn
       - name: Install artifact verifier dependencies
