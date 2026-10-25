@@ -1,4 +1,4 @@
-import type { RuntimeConfigOutcomeChangeKeyV1, RuntimeConfigOutcomeTimingV1 } from '@happier-dev/protocol';
+import type { RuntimeConfigOutcomeChangeKeyV1 } from '@happier-dev/protocol';
 
 import { resolveClaudeDefaultEffortForModel } from '@/backends/claude/utils/claudeEffort';
 
@@ -6,8 +6,9 @@ import type { ControlRuntime } from './controlRuntime';
 import {
   aggregateApplyOutcome,
   controlResultToChangeOutcome,
+  isDeferredTiming,
+  readVerifiedRuntimeConfigEffort,
   type ControlAttemptResult,
-  type ControlScheduleTiming,
 } from './outcome';
 import {
   applyPermissionModeControl,
@@ -87,13 +88,6 @@ function describeChangeKeys(desired: ClaudeDesiredRuntimeConfig): string {
   return keys.join(',') || 'none';
 }
 
-// Timings that mean "not yet effective" (mirror of the outcome aggregation set).
-const DEFERRED_CHANGE_TIMINGS: ReadonlySet<RuntimeConfigOutcomeTimingV1> = new Set([
-  'scheduled_for_next_prompt',
-  'queued_until_safe_window',
-  'next_idle',
-]);
-
 function modeChangeKey(desired: ClaudeDesiredRuntimeConfig): RuntimeConfigOutcomeChangeKeyV1 {
   const target = resolveTargetModeMarker({ permissionMode: desired.permissionMode, agentModeId: desired.agentModeId });
   return target.kind === 'cyclable' && target.markers[0] === 'plan' ? 'sessionMode' : 'permissionMode';
@@ -161,11 +155,11 @@ export function createClaudeUnifiedTuiControlController(
     reasoningEffort?: string | null | undefined;
     modeMarker?: ClaudeTuiModeMarker | null | undefined;
   }>): void {
-    const model = update.model ?? lastVerified.model;
+    const model = update.model !== undefined ? update.model : lastVerified.model;
     lastVerified = {
       model,
-      reasoningEffort: update.reasoningEffort
-        ?? (model === lastVerified.model ? lastVerified.reasoningEffort : null),
+      reasoningEffort: update.reasoningEffort !== undefined ? update.reasoningEffort
+        : (model === lastVerified.model ? lastVerified.reasoningEffort : null),
       modeMarker: update.modeMarker ?? lastVerified.modeMarker,
       verifiedAtMs: nowMs(),
     };
@@ -173,12 +167,13 @@ export function createClaudeUnifiedTuiControlController(
 
   function recordVerified(key: RuntimeConfigOutcomeChangeKeyV1, change: RuntimeConfigChangeOutcome): void {
     if (change.status !== 'applied') return;
-    const effective = typeof change.effective === 'string' ? change.effective : null;
+    const effective = typeof change.effective === 'string' ? change.effective : undefined;
     if (key === 'model') {
       recordVerifiedConfig({ model: effective });
-    } else if (key === 'reasoningEffort') {
-      recordVerifiedConfig({ reasoningEffort: effective });
-    } else if (key === 'permissionMode' || key === 'sessionMode') {
+    }
+    const effort = readVerifiedRuntimeConfigEffort({ status: change.status, timing: change.timing, changes: [change] });
+    if (effort !== null) recordVerifiedConfig({ reasoningEffort: effort });
+    if (key === 'permissionMode' || key === 'sessionMode') {
       const marker = effective as ClaudeTuiModeMarker | null;
       recordVerifiedConfig({ modeMarker: marker });
     }
@@ -258,10 +253,10 @@ export function createClaudeUnifiedTuiControlController(
           if (effortChange) {
             // The effort control in this same batch already (or will) replace ultracode.
             if (effortChange.status === 'applied') {
-              if (effortChange.timing !== undefined && DEFERRED_CHANGE_TIMINGS.has(effortChange.timing)) {
+              if (isDeferredTiming(effortChange.timing)) {
                 return {
                   kind: 'scheduled',
-                  timing: effortChange.timing as ControlScheduleTiming,
+                  timing: effortChange.timing,
                   reason: 'effort_control_deferred',
                 };
               }
@@ -425,6 +420,11 @@ export function createClaudeUnifiedTuiControlController(
       changes.push(change);
       emitChange(change);
       recordVerified(plan.key, change);
+      if (change.reason === 'delivered_unverified') {
+        // A submitted command may have changed Claude; the earlier command witness cannot skip restoration.
+        if (plan.key === 'model') recordVerifiedConfig({ model: null, reasoningEffort: null });
+        if (plan.key === 'reasoningEffort' || plan.key === 'launchOption') recordVerifiedConfig({ reasoningEffort: null });
+      }
       if (result.kind === 'scheduled') scheduled = plan.stash(scheduled);
     }
     return { changes, scheduled };
@@ -541,6 +541,10 @@ export function createClaudeUnifiedTuiControlController(
 
     getLastVerifiedRuntimeConfig(): ClaudeUnifiedVerifiedRuntimeConfig {
       return lastVerified;
+    },
+
+    getPendingRuntimeConfig(): ClaudeDesiredRuntimeConfig {
+      return pending;
     },
 
     isControlInFlight(): boolean {

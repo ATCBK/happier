@@ -89,6 +89,17 @@ describe('createClaudeUnifiedTuiControlController — ordering and aggregation',
 describe('createClaudeUnifiedTuiControlController — ultracode (session-only setting)', () => {
   const ULTRACODE_OK = ['Set effort level to ultracode', '╭─────╮', '│ >   │', '╰─────╯'].join('\n');
 
+  it('does not reuse effort verification across an Ultracode control', async () => {
+    const port = createFakeControlPort({ captures: [IDLE, IDLE, ULTRACODE_OK, IDLE, IDLE, EFFORT_OK] });
+    const controller = await controllerFor(port);
+    controller.reconcileFromStatusline({ model: 'claude-opus-4-7', reasoningEffort: 'high' });
+
+    await controller.applyDesiredRuntimeConfig({ desired: { ultracode: true } });
+    expect(controller.getLastVerifiedRuntimeConfig().reasoningEffort).toBe('ultracode');
+    await controller.applyDesiredRuntimeConfig({ desired: { reasoningEffort: 'high' } });
+    expect(port.sentLiteral).toContain('/effort high');
+  });
+
   it('applies ultracode via /effort ultracode under the launchOption change key', async () => {
     const port = createFakeControlPort({ captures: [IDLE, IDLE, ULTRACODE_OK] });
     const controller = await controllerFor(port);

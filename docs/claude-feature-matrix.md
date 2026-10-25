@@ -72,7 +72,10 @@ sidechains, provider errors and synthesized presentation messages cannot confirm
 requested model. Launch effort is paired with the first genuine assistant observation
 only; later model observations do not reapply the old launch effort. Native control
 verification also clears effort observed for a different model, so an effort request
-for the new model must be verified again.
+for the new model must be verified again. A submitted but unverified native command
+also invalidates its command verification, so restoring the previous selection is
+not skipped. Verified Ultracode and ordinary effort controls update the same native
+effort witness.
 Claude still owns inbound delivery
 policy: its [non-interactive messaging contract](https://code.claude.com/docs/en/cross-session-messaging#non-interactive-sessions)
 does not expose the terminal approval dialog in `-p` sessions. Happier does not
