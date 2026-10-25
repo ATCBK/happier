@@ -1337,6 +1337,10 @@ The existing add operation also replaces the manual metadata for an existing
 model id; omitting `reasoningEffortLevels` on that update clears its declaration.
 The Account Provider Action writer persists it with the manual model; catalog
 merging remains owned by `packages/protocol/src/providers/catalog/merge.ts`.
+Import and migration conflict review compare declared effort tiers alongside the
+model id and name, while ignoring provenance timestamps. Explicit imports preserve
+existing tiers when the incoming model omits that declaration and refuse conflicting
+declared tiers rather than silently discarding them.
 The merger fills absent reasoning facts with `reasoningControls: 'supported'`
 and the shared `reasoning_effort` option. Probe-reported reasoning facts and
 curated/static reasoning facts take precedence, including explicit unsupported

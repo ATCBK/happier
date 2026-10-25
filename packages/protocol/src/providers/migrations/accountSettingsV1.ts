@@ -10,6 +10,7 @@ import {
   ProviderMigrationSourceProfileIdSchema,
   ProviderSettingsV1Schema,
   assertProviderSettingsV1WithinLimits,
+  readProviderManualModelFactsV1,
   type ProviderSettingsMigrationSourceOutcomeV1,
 } from '../settings/v1.js';
 import { readOwnRecordValue } from '../ownRecordValue.js';
@@ -124,10 +125,6 @@ function hasSecretBindingConflict(
     if (compareScope(readOwnRecordValue(current?.byMachineId, machineId), bindings)) return true;
   }
   return false;
-}
-
-function hasEquivalentManualModelFacts(left: ProviderManualModelV1, right: ProviderManualModelV1): boolean {
-  return left.id === right.id && left.name === right.name;
 }
 
 function validEnvironmentNameList(value: readonly string[] | undefined): boolean {
@@ -337,7 +334,7 @@ export function migrateProviderAccountSettingsV1(
     const modelsById = new Map(existingModels.map((model) => [model.id, model]));
     for (const model of candidate.manualModels ?? []) {
       const existing = modelsById.get(model.id);
-      if (existing && !hasEquivalentManualModelFacts(existing, model)) {
+      if (existing && !sameStrictJsonValue(readProviderManualModelFactsV1(existing), readProviderManualModelFactsV1(model))) {
         return { ok: false, changed: false, providerSettings, reason: 'migration_conflict' };
       }
       if (!existing) modelsById.set(model.id, model);

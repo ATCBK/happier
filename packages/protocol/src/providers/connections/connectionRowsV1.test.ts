@@ -362,4 +362,25 @@ describe('Provider catalog explicit connection import', () => {
       secretBindings: { account: { apiKey: 'happier:shared-secret:v1:' } },
     })).toEqual({ status: 'invalid' });
   });
+
+  it('retains stored manual tiers for unspecified import metadata and refuses a conflicting declaration without writing', async () => {
+    const current = ProviderConnectionsCatalogV1Schema.parse({ ...catalog,
+      connections: [...catalog.connections, candidate.connection],
+      secretBindingsByConnectionId: { ...catalog.secretBindingsByConnectionId, [candidate.connection.id]: candidate.secretBindings },
+      manualModelsByConnectionId: { ...catalog.manualModelsByConnectionId,
+        [candidate.connection.id]: candidate.manualModels.map(model => ({ ...model, reasoningEffortLevels: ['low', 'high'] })) } });
+    let commits = 0;
+    const read = (levels?: Array<'low' | 'high'>) => loadProviderConnectionsCatalogV1({ mode: 'plain', material: null,
+      readRow: async () => ({ status: 'present', revision: 5,
+        content: sealProviderConnectionsContentV1({ mode: 'plain', material: null, catalog: current }) }),
+      importConnection: { candidate: { ...candidate,
+        manualModels: candidate.manualModels.map(model => ({ ...model, ...(levels ? { reasoningEffortLevels: levels } : {}) })) },
+        isCurrent: () => true, commitCatalog: async () => { commits++; return { status: 'applied' }; } },
+    });
+    await expect(read(['high'])).resolves.toEqual({ status: 'conflict' });
+    for (const levels of [undefined, ['low', 'high'] as Array<'low' | 'high'>]) {
+      await expect(read(levels)).resolves.toMatchObject({ status: 'unchanged', catalog: { catalog: current } });
+    }
+    expect(commits).toBe(0);
+  });
 });

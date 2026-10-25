@@ -233,6 +233,26 @@ describe('provider account-settings migration', () => {
       .toEqual([{ id: 'deepseek-chat', addedAt: 10 }]);
   });
 
+  it('refuses to merge a different manual reasoning declaration into the winning model', () => {
+    const winner = migrateProviderAccountSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1, {
+      migratedAt: 20, candidates: [{ ...candidate('pc_winner'),
+        manualModels: [{ id: 'deepseek-chat', reasoningEffortLevels: ['low', 'high'], addedAt: 10 }] }],
+      pendingCustomProfileIds: [],
+    });
+    if (!winner.ok) throw new Error('expected winner');
+    const migrate = (levels: Array<'low' | 'high'>) => migrateProviderAccountSettingsV1(winner.providerSettings, {
+      migratedAt: 21, candidates: [{ ...candidate('pc_loser'), sourceProfileId: 'second-source',
+        manualModels: [{ id: 'deepseek-chat', reasoningEffortLevels: levels, addedAt: 21 }] }],
+      pendingCustomProfileIds: [],
+    });
+    expect(migrate(['high'])).toMatchObject({ ok: false, reason: 'migration_conflict' });
+    const equivalent = migrate(['low', 'high']);
+    expect(equivalent.ok).toBe(true);
+    if (!equivalent.ok) throw new Error('expected equivalent declaration reuse');
+    expect(equivalent.providerSettings.manualModelsByConnectionId.pc_winner)
+      .toEqual([{ id: 'deepseek-chat', reasoningEffortLevels: ['low', 'high'], addedAt: 10 }]);
+  });
+
   it('converges named custom connections by recorded source provenance, not structural guessing', () => {
     const customCandidate = (connectionId: string) => ({
       kind: 'connection',

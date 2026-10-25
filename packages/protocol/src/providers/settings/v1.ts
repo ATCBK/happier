@@ -28,6 +28,15 @@ export type ProviderManualModelV1 = z.infer<typeof ProviderManualModelV1Schema>;
 export const ProviderManualModelInputV1Schema = lazyZodSchema(() => z.omit(ProviderManualModelV1Schema, { addedAt: true }));
 export type ProviderManualModelInputV1 = z.infer<typeof ProviderManualModelInputV1Schema>;
 
+/** Import and conflict review compare declared model facts, not provenance timestamps. */
+export function readProviderManualModelFactsV1(model: ProviderManualModelV1): Readonly<{
+  id: string;
+  name: string | null;
+  reasoningEffortLevels: ProviderManualModelV1['reasoningEffortLevels'] | null;
+}> {
+  return { id: model.id, name: model.name ?? null, reasoningEffortLevels: model.reasoningEffortLevels ?? null };
+}
+
 /** Migration addresses an existing retained identity, never a newly authored Profile. */
 export const ProviderMigrationSourceProfileIdSchema = ProfileRecordIdV1Schema;
 

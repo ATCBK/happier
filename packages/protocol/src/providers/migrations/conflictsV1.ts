@@ -16,7 +16,8 @@ import type {
   ProviderSettingsMigrationPendingConflictV1,
   ProviderSettingsV1,
 } from '../settings/v1.js';
-import { ProviderMigrationSourceProfileIdSchema } from '../settings/v1.js';
+import { ProviderMigrationSourceProfileIdSchema, readProviderManualModelFactsV1 } from '../settings/v1.js';
+import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import type {
   ProviderAccountSettingsMigrationCandidateV1,
   ProviderAccountSettingsMigrationContextV1,
@@ -68,9 +69,9 @@ function accountBindings(candidate: ConnectionCandidate): readonly [string, stri
     compareProviderCanonicalStringsV1(left, right));
 }
 
-function modelFacts(candidate: ConnectionCandidate): readonly Readonly<{ id: string; name: string | null }>[] {
+function modelFacts(candidate: ConnectionCandidate) {
   return (candidate.manualModels ?? [])
-    .map((model) => ({ id: model.id, name: model.name ?? null }))
+    .map(readProviderManualModelFactsV1)
     .sort((left, right) => compareProviderCanonicalStringsV1(left.id, right.id));
 }
 
@@ -91,9 +92,9 @@ function pairConflictKinds(left: ConnectionCandidate, right: ConnectionCandidate
     const prior = leftBindings.get(slot);
     if (prior !== undefined && prior !== secretId) kinds.add('credential_binding');
   }
-  const leftModels = new Map(modelFacts(left).map((model) => [model.id, model.name] as const));
+  const leftModels = new Map(modelFacts(left).map((model) => [model.id, model] as const));
   for (const model of modelFacts(right)) {
-    if (leftModels.has(model.id) && leftModels.get(model.id) !== model.name) kinds.add('manual_model');
+    if (leftModels.has(model.id) && !sameStrictJsonValue(leftModels.get(model.id), model)) kinds.add('manual_model');
   }
   if (left.selectedModel && right.selectedModel
     && (left.selectedModel.agentTargetKey !== right.selectedModel.agentTargetKey
@@ -121,13 +122,14 @@ function persistedWinnerConflict(input: Readonly<{
     if (existing !== undefined && existing !== secretId) kinds.add('credential_binding');
   }
   const existingModels = readOwnRecordValue(input.settings.manualModelsByConnectionId, input.winnerId) ?? [];
-  const existingModelsById = new Map(existingModels.map((model) => [model.id, model.name ?? null] as const));
-  const relevantModels: Array<Readonly<{ id: string; name: string | null }>> = [];
+  const existingModelsById = new Map(existingModels.map((model) => [model.id, readProviderManualModelFactsV1(model)] as const));
+  const relevantModels: Array<ReturnType<typeof readProviderManualModelFactsV1>> = [];
   for (const model of modelFacts(input.candidate)) {
-    if (existingModelsById.has(model.id)) {
-      relevantModels.push({ id: model.id, name: existingModelsById.get(model.id) ?? null });
+    const existing = existingModelsById.get(model.id);
+    if (existing) {
+      relevantModels.push(existing);
+      if (!sameStrictJsonValue(existing, model)) kinds.add('manual_model');
     }
-    if (existingModelsById.has(model.id) && existingModelsById.get(model.id) !== model.name) kinds.add('manual_model');
   }
   let relevantDefault: unknown = null;
   let existingModelChoice: ProviderSettingsMigrationModelChoiceV1 | null = null;

@@ -7,6 +7,7 @@ import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Sc
 import type { ProviderConnectionV1 } from './v1.js';
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '../selection/v1.js';
 import type { ProviderManualModelV1, SavedSecretSlotBindingsV1 } from '../settings/v1.js';
+import { readProviderManualModelFactsV1 } from '../settings/v1.js';
 import { addProviderConnectionV1, addOrUpdateProviderManualModelV1, bindProviderConnectionSecretV1 } from '../settings/operationsV1.js';
 import { readOwnRecordValue } from '../ownRecordValue.js';
 import { parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
@@ -101,7 +102,12 @@ export function prepareProviderConnectionImportV1(catalog: ProviderConnectionsCa
     }
     for (const model of readOwnRecordValue(incoming.data.manualModelsByConnectionId, connection.id) ?? []) {
       const previous = readOwnRecordValue(settings.manualModelsByConnectionId, connection.id)?.find(entry => entry.id === model.id);
-      if (previous && model.name !== undefined && previous.name !== model.name) return { status: 'conflict' };
+      // Import fills missing facts; unspecified metadata preserves deliberate user declarations.
+      if (previous && !sameStrictJsonValue(readProviderManualModelFactsV1(previous), readProviderManualModelFactsV1({
+        ...previous, ...model,
+        name: model.name ?? previous.name,
+        reasoningEffortLevels: model.reasoningEffortLevels ?? previous.reasoningEffortLevels,
+      }))) return { status: 'conflict' };
       if (!previous) settings = addOrUpdateProviderManualModelV1(settings, { connectionId: connection.id, model, addedAt: model.addedAt });
     }
     const next = splitProviderSettingsV1(settings).catalog;

@@ -104,6 +104,34 @@ describe('classifyLegacyProfileMigrationConflictsV1', () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  it('classifies tier-only same-batch and persisted conflicts and invalidates reviewed tier facts', () => {
+    const source = { ...candidate('source', 'pc-source', 'same-secret'),
+      manualModels: [{ id: 'deepseek-reasoner', name: 'Reasoner', reasoningEffortLevels: ['high' as const], addedAt: 10 }] };
+    const winner = { ...candidate('winner', 'pc-winner', 'same-secret'),
+      manualModels: [{ id: 'deepseek-reasoner', name: 'Reasoner', reasoningEffortLevels: ['low' as const], addedAt: 1 }] };
+    const sameBatch = classifyLegacyProfileMigrationConflictsV1(DEFAULT_PROVIDER_SETTINGS_V1, context([source, winner]));
+    expect(sameBatch.candidates).toEqual([]);
+    expect(sameBatch.pendingConflicts?.map(entry => entry.kinds)).toEqual([['manual_model'], ['manual_model']]);
+    const settings = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
+      connections: [winner.connection], secretBindingsByConnectionId: { 'pc-winner': winner.secretBindings },
+      manualModelsByConnectionId: { 'pc-winner': winner.manualModels } });
+    const classified = classifyLegacyProfileMigrationConflictsV1(settings, context([source]));
+    const conflict = classified.pendingConflicts?.[0];
+    expect(conflict).toMatchObject({ existingConnectionId: 'pc-winner', kinds: ['manual_model'] });
+    if (!conflict) throw new Error('expected tier conflict');
+    const changedSource = { ...source, manualModels: [{ ...source.manualModels[0], reasoningEffortLevels: ['medium' as const] }] };
+    const changedWinner = ProviderSettingsV1Schema.parse({ ...settings,
+      manualModelsByConnectionId: { 'pc-winner': [{ ...winner.manualModels[0], reasoningEffortLevels: ['medium'] }] } });
+    for (const [currentSettings, currentContext] of [
+      [settings, context([changedSource])], [changedWinner, context([source])],
+    ] as const) {
+      expect(applyProtocolPureReviewedConflict(currentSettings, currentContext, {
+        sourceProfileId: source.sourceProfileId, expectedCandidateFingerprint: conflict.candidateFingerprint,
+        decision: { kind: 'keep_existing', existingConnectionId: 'pc-winner' },
+      })).toMatchObject({ ok: false, reason: 'migration_conflict_changed' });
+    }
+  });
+
   it('keeps a persisted unresolved conflict pending when ordinary source facts become eligible, until exact review', () => {
     const original = candidate('deepseek', 'pc-candidate', 'legacy-secret');
     const existing = candidate('winner', 'pc-existing', 'existing-secret').connection;
