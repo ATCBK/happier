@@ -456,6 +456,15 @@ export class ApiMachineClient {
         this.rpcLifecycleRegistrations.push(machineRpcLifecycleRegistration);
     }
 
+    /** Invoke the registered machine control locally through its canonical handler. */
+    async invokeLocalMachineAction(
+        method: string,
+        request: unknown,
+        options?: Readonly<{ signal?: AbortSignal }>,
+    ): Promise<unknown> {
+        return await this.rpcHandlerManager.invokeLocal(method, request, options);
+    }
+
     onUpdate(listener: (update: Update) => boolean | void): () => void {
         this.updateListeners.add(listener);
         return () => {
