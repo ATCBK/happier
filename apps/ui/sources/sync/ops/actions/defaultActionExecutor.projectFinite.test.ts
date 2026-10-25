@@ -277,7 +277,7 @@ describe('Project finite delivery through the default UI Action host', () => {
             expect(reviewReads()).toHaveLength(1);
             expect(await executor.execute('approval.request.decide', { artifactId: created.artifactId, decision: 'approve' },
                 { serverId, surface: 'agent', authority: 'account_automation', defaultSessionId: 'requesting-session',
-                    actionsSettings: { v: 1, approvalWaivedSurfaces: { 'approval.request.decide': ['agent'] } } }))
+                    actionsSettings: { v: 1, actions: {}, approvalWaivedSurfaces: { 'approval.request.decide': ['agent'] } } }))
                 .toMatchObject({ ok: false, errorCode: 'present_user_required' });
             if (outcome === 'changed') {
                 current = { ...held, revision: 2, setupReview: { ...held.setupReview!, reviewedEffectDigest: 'changed-effect' } };

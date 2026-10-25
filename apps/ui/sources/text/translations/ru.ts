@@ -9208,6 +9208,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         voiceSurface: {
             reviewCredentials: 'Проверить учётные данные',
             connectAgent: 'Подключить',
+            setUpAgent: ({ agent }: { agent: string }) => `Настроить ${agent}`,
             installAgentRuntime: 'Установить',
             updateAgentRuntime: 'Обновить',
             reconnect: 'Переподключить',
@@ -13564,6 +13565,7 @@ settingsSession: {
         tts_failed: "Не удалось синтезировать речь.",
         turn_aborted: "Голосовой ход отменён.",
         authentication_required: "Подключите выбранного агента, чтобы использовать голосовой режим.",
+        agent_signed_out: ({ agent, machine }: { agent: string; machine: string }) => `У ${agent} нет подключённой учётной записи по умолчанию, и вход на ${machine} не выполнен.`,
         session_unavailable: "Выбранный сеанс больше недоступен для голосового режима.",
         unsupported_runtime: "Установите среду выбранного агента, чтобы использовать голосовой режим.",
         update_required: "Обновите среду выбранного агента, чтобы использовать голосовой режим.",

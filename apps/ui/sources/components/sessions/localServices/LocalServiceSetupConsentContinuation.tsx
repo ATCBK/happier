@@ -106,8 +106,8 @@ function RetainedSetupContinuation(props: Parameters<typeof LocalServiceSetupCon
             setOperationId(result.operation.operationId);
             return;
         }
-        // Remembering resumes the held setup; its own completion releases the intent.
-        if (result && 'kind' in result && (result.kind === 'remembered' || result.kind === 'continued')) return;
+        // Remembered results carry an operation and are handled above; continued waits for its completion.
+        if (result && 'kind' in result && result.kind === 'continued') return;
         const settled = ProjectPrepareNoLaunchResultV1Schema.safeParse(result);
         if (settled.success) props.onComplete(settled.data.kind !== 'skippedForInvocation');
         else Modal.alert(t('common.error'), t('approvals.decisionError'));

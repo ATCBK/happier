@@ -211,7 +211,7 @@ describe('Team Group projections', () => {
         expect(moved.data?.map((row) => row.id)).toEqual(['g1', 'g2', 'g3']);
         expect(moved.data?.[0]?.name).toBe('Renamed');
         expect(moved.data?.[1]).toBe(lastGood[2]);
-        expect(runtimeFetchMock.mock.calls.map(([input]) => JSON.parse(input.init.body).cursor ?? null))
+        expect(runtimeFetchMock.mock.calls.map(([input]) => JSON.parse(String(input.init?.body)).cursor ?? null))
             .toEqual([null, 'cursor-1', null, 'fresh-1']);
 
         // Revalidation stops at the authoritative end even when the loaded

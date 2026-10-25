@@ -64,7 +64,7 @@ import {
  */
 export type CurrentUiContextVoiceInvocationOutcome =
     | Readonly<{ ok: true; result?: PluginUiJsonValueV1 }>
-    | Readonly<{ ok: false; code: Extract<PluginSurfaceActionDispatchOutcome, { ok: false }>['code']; errorCode?: string; actionHandlerInvocation?: 'notStarted' }>;
+    | Readonly<{ ok: false; code: Extract<PluginSurfaceActionDispatchOutcome, { ok: false }>['code'] | 'outcome_unknown'; errorCode?: string; actionHandlerInvocation?: 'notStarted' }>;
 
 export type CurrentUiContextVoiceCommandInvocationInput = Readonly<{
     commandId: string;

@@ -10457,6 +10457,7 @@ const enVoiceAssistant = {
 const enVoiceSurface = {
   reviewCredentials: 'Review credentials',
   connectAgent: 'Connect',
+  setUpAgent: ({ agent }: { agent: string }) => `Set up ${agent}`,
   installAgentRuntime: 'Install',
   updateAgentRuntime: 'Update',
   reconnect: 'Reconnect',
@@ -16617,6 +16618,7 @@ const enSettingsVoice = {
       tts_failed: 'Speech synthesis failed.',
       turn_aborted: 'Voice turn canceled.',
       authentication_required: 'Connect the selected agent to use Voice.',
+      agent_signed_out: ({ agent, machine }: { agent: string; machine: string }) => `${agent} has no default connected account, and it isn’t signed in on ${machine}.`,
       session_unavailable:
         'The selected session is no longer available for Voice.',
       unsupported_runtime: 'Install the selected agent runtime to use Voice.',

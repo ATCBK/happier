@@ -2227,6 +2227,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     voiceSurface: {
       reviewCredentials: '檢查認證資料',
       connectAgent: '連線',
+      setUpAgent: ({ agent }: { agent: string }) => `設定 ${agent}`,
       installAgentRuntime: '安裝',
       updateAgentRuntime: '更新',
       reconnect: '重新連線',
@@ -10965,6 +10966,7 @@ settingsSession: {
         tts_failed: "語音合成失敗。",
         turn_aborted: "語音輪次已取消。",
         authentication_required: "連線所選代理程式以使用語音。",
+        agent_signed_out: ({ agent, machine }: { agent: string; machine: string }) => `${agent} 沒有預設的已連線帳戶，也沒有在 ${machine} 上登入。`,
         session_unavailable: "所選工作階段已無法用於語音。",
         unsupported_runtime: "安裝所選代理程式執行階段以使用語音。",
         update_required: "更新所選代理程式執行階段以使用語音。",

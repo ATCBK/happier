@@ -9128,6 +9128,7 @@ localTailscale: {
   voiceSurface: {
     reviewCredentials: '認証情報を確認',
     connectAgent: '接続',
+    setUpAgent: ({ agent }: { agent: string }) => `${agent} を設定`,
     installAgentRuntime: 'インストール',
     updateAgentRuntime: '更新',
     reconnect: '再接続',
@@ -14004,6 +14005,7 @@ settingsSession: {
         tts_failed: "音声合成に失敗しました。",
         turn_aborted: "音声ターンが中止されました。",
         authentication_required: "音声を使用するには、選択したエージェントを接続してください。",
+        agent_signed_out: ({ agent, machine }: { agent: string; machine: string }) => `${agent} にはデフォルトの接続済みアカウントがなく、${machine} でもサインインしていません。`,
         session_unavailable: "選択したセッションは音声では利用できなくなりました。",
         unsupported_runtime: "音声を使用するには、選択したエージェントのランタイムをインストールしてください。",
         update_required: "音声を使用するには、選択したエージェントのランタイムを更新してください。",

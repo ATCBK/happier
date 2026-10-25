@@ -8496,6 +8496,7 @@ export const zhHans: TranslationStructure = {
   voiceSurface: {
     reviewCredentials: '检查凭据',
     connectAgent: '连接',
+    setUpAgent: ({ agent }: { agent: string }) => `设置 ${agent}`,
     installAgentRuntime: '安装',
     updateAgentRuntime: '更新',
     reconnect: '重新连接',
@@ -13236,6 +13237,7 @@ settingsSession: {
         tts_failed: "语音合成失败。",
         turn_aborted: "语音轮次已取消。",
         authentication_required: "连接所选代理以使用语音。",
+        agent_signed_out: ({ agent, machine }: { agent: string; machine: string }) => `${agent} 没有默认的已连接账户，也没有在 ${machine} 上登录。`,
         session_unavailable: "所选会话已无法用于语音。",
         unsupported_runtime: "安装所选代理运行时以使用语音。",
         update_required: "更新所选代理运行时以使用语音。",
