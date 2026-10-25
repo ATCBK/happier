@@ -12,6 +12,7 @@ import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHomeAccountRoster } from '@/hooks/home/useHomeAccountRoster';
 import {
@@ -81,6 +82,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
     props: Readonly<{ context: HomeAdministrationContext; header?: React.ReactNode }>,
 ) {
     const { theme } = useUnistyles();
+    const bottomPadding = usePageListBottomPadding();
     const router = useRouter();
     const locale = usePreferredLanguage();
     const { context } = props;
@@ -329,7 +331,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
                 backgroundColor: theme.colors.surface.base,
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
-            contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+            contentContainerStyle={{ paddingBottom: bottomPadding }}
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

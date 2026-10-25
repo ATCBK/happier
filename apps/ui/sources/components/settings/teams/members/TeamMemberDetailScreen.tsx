@@ -17,7 +17,7 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { teamReadFailureLabel } from '@/components/settings/teams/teamMutationPresentation';
+import { teamReadFailureLabel, useTeamReadFailureAction } from '@/components/settings/teams/teamMutationPresentation';
 import { useTeamMemberGroups, type TeamMemberGroups } from '@/hooks/teams/useTeamMemberGroups';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import {
@@ -84,6 +84,7 @@ const MemberGroupsSection = React.memo(function MemberGroupsSection(props: Reado
     groups: TeamMemberGroups;
 }>) {
     const router = useRouter();
+    const readFailureAction = useTeamReadFailureAction();
     const { context, groups } = props;
 
     if (!context.team.capabilities.viewRoster) return null;
@@ -96,11 +97,7 @@ const MemberGroupsSection = React.memo(function MemberGroupsSection(props: Reado
             kind="error"
             size="line"
             title={teamReadFailureLabel(groups.error)}
-            action={groups.error.retryable ? {
-                label: t('teams.unavailable.retry'),
-                onPress: () => void groups.reload(),
-                testID: 'team-member-groups-retry',
-            } : undefined}
+            action={readFailureAction(groups.error, { onPress: () => void groups.reload(), testIDPrefix: 'team-member-groups' })}
             accessibilitySemantics="alert"
         />
     ) : null;

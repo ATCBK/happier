@@ -1,3 +1,8 @@
+import * as React from 'react';
+import { isActionTurnedOffErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import type { AttentionBannerAction } from '@/components/ui/lists/AttentionBanner';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { t } from '@/text';
@@ -17,9 +22,51 @@ import { t } from '@/text';
  * invalid response is a load failure; settled refusals retain their typed meaning.
  */
 export function teamReadFailureLabel(failure: HomeDomainFailure<string> | ScopedSnapshotError): string {
+    // A read the person turned off in Settings, Actions never reached the Home. It is not a load
+    // failure; the Action front door's own copy says so and where to turn it back on.
+    if (isActionTurnedOffErrorCode(failure.code)) return t('actionConfirmations.turnedOffMessage');
     if (failure.kind === 'unreachable') return t('teams.unavailable.offline');
     if (failure.kind === 'unknown' || failure.kind === 'invalid') return t('teams.errors.loadFailed');
     return teamMutationFailureLabel({ ...failure, code: failure.code ?? null });
+}
+
+type TeamReadFailureRetry = Readonly<{ onPress: () => void; testIDPrefix?: string }>;
+
+/**
+ * The one way forward a failed Team read offers: the repair route for an Action turned off in
+ * Settings (a retry could not help), Retry when asking again can, nothing for a settled refusal.
+ * Test ids derive from the surface's prefix so `<prefix>-retry` stays what it was.
+ */
+export function teamReadFailureAction(
+    failure: HomeDomainFailure<string> | ScopedSnapshotError,
+    retry: TeamReadFailureRetry,
+    openActionSettings: () => void,
+): AttentionBannerAction | undefined {
+    if (isActionTurnedOffErrorCode(failure.code)) {
+        return {
+            label: t('actionConfirmations.openActionSettings'),
+            onPress: openActionSettings,
+            testID: retry.testIDPrefix ? `${retry.testIDPrefix}-open-actions-settings` : undefined,
+        };
+    }
+    if (!failure.retryable) return undefined;
+    return {
+        label: t('teams.unavailable.retry'),
+        onPress: retry.onPress,
+        testID: retry.testIDPrefix ? `${retry.testIDPrefix}-retry` : undefined,
+    };
+}
+
+/** `teamReadFailureAction` bound to the page's own router, which a Team page already navigates with. */
+export function useTeamReadFailureAction(): (
+    failure: HomeDomainFailure<string> | ScopedSnapshotError,
+    retry: TeamReadFailureRetry,
+) => AttentionBannerAction | undefined {
+    const router = useRouter();
+    return React.useCallback(
+        (failure, retry) => teamReadFailureAction(failure, retry, () => router.push('/settings/actions')),
+        [router],
+    );
 }
 
 export function teamMutationFailureLabel(failure: HomeDomainFailure<string>, context?: 'authentication_policy'): string {

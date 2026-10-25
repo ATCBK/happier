@@ -8,7 +8,7 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-import { teamMutationFailureLabel, teamReadFailureLabel } from './teamMutationPresentation';
+import { teamMutationFailureLabel, teamReadFailureAction, teamReadFailureLabel } from './teamMutationPresentation';
 
 describe('teamReadFailureLabel', () => {
     it('distinguishes transport loss from a retryable server answer and access refusal', () => {
@@ -17,6 +17,33 @@ describe('teamReadFailureLabel', () => {
         expect(teamReadFailureLabel({ kind: 'invalid', retryable: false, code: null })).toBe('teams.errors.loadFailed');
         expect(teamReadFailureLabel({ kind: 'forbidden', retryable: false, code: 'team_not_found' })).toBe('teams.errors.forbidden');
         expect(teamReadFailureLabel({ kind: 'unsupported', retryable: false, code: null })).toBe('teams.unavailable.updateRequired');
+    });
+});
+
+describe('a Team read the person turned off in Settings, Actions', () => {
+    const turnedOff = { kind: 'unknown' as const, retryable: false, code: 'action_disabled' };
+
+    it('says it is turned off rather than that loading failed', () => {
+        expect(teamReadFailureLabel(turnedOff)).toBe('actionConfirmations.turnedOffMessage');
+    });
+
+    it('leads to Actions settings instead of offering a retry that cannot help', () => {
+        const retry = vi.fn();
+        const openActionSettings = vi.fn();
+        const action = teamReadFailureAction(turnedOff, { onPress: retry, testIDPrefix: 'team-x' }, openActionSettings);
+        expect(action).toMatchObject({ label: 'actionConfirmations.openActionSettings', testID: 'team-x-open-actions-settings' });
+        action!.onPress();
+        expect(openActionSettings).toHaveBeenCalledOnce();
+        expect(retry).not.toHaveBeenCalled();
+    });
+
+    it('still offers Retry for a retryable failure and nothing for a settled refusal', () => {
+        const retry = vi.fn();
+        const action = teamReadFailureAction({ kind: 'unknown', retryable: true, code: null }, { onPress: retry, testIDPrefix: 'team-x' }, vi.fn());
+        expect(action).toMatchObject({ label: 'teams.unavailable.retry', testID: 'team-x-retry' });
+        action!.onPress();
+        expect(retry).toHaveBeenCalledOnce();
+        expect(teamReadFailureAction({ kind: 'forbidden', retryable: false, code: null }, { onPress: retry }, vi.fn())).toBeUndefined();
     });
 });
 

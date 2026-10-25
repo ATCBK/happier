@@ -72,11 +72,22 @@ const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/
 const TEAM_GET_PATH = '/v1/teams/get';
 const MEMBERS_LIST_PATH = '/v1/teams/members/list';
 
-async function renderMembers(serverId: string, split = false) {
+async function renderMembers(serverId: string, split = false, bottomChromeHeight = 0) {
     const { TeamMembersScreen } = await import('./TeamMembersScreen');
     const { NavigationContext, useNavigation } = await import('@react-navigation/native');
+    const { SessionCockpitChromeRegistryProvider, useSessionCockpitBottomChromeHeightSetter } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+    function FloatingTabBar() {
+        const setHeight = useSessionCockpitBottomChromeHeightSetter();
+        React.useEffect(() => setHeight(bottomChromeHeight), [setHeight]);
+        return null;
+    }
     function NativeRoute({ children }: React.PropsWithChildren) {
-        return <NavigationContext.Provider value={useNavigation()}>{children}</NavigationContext.Provider>;
+        return (
+            <SessionCockpitChromeRegistryProvider>
+                <FloatingTabBar />
+                <NavigationContext.Provider value={useNavigation()}>{children}</NavigationContext.Provider>
+            </SessionCockpitChromeRegistryProvider>
+        );
     }
     const { HappierListDetailLayout } = await import('@happier-dev/plugin-ui/presentation');
     const page = <TeamMembersScreen serverId={serverId} teamId="team-1" />;
@@ -132,6 +143,18 @@ describe('TeamMembersScreen', () => {
         await vi.waitFor(() => expect(screen.findAllByType('Redirect' as never)[0]?.props.href).toBe(`/settings/teams/${encodeURIComponent(serverId)}/team-1/members/membership-1`));
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-members-virtualized-list');
     });
+    it('keeps the last roster row, and its Load more control, clear of the phone floating tab bar', async () => {
+        const serverId = await addHome(teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ viewRoster: true }) }));
+        harness.answer(serverId, MEMBERS_LIST_PATH, { body: { items: [teamMembershipFixture()], nextCursor: 'cursor-2' } });
+
+        const floatingTabBarHeight = 83;
+        const screen = await renderMembers(serverId, false, floatingTabBarHeight);
+        await waitForTestId(screen, 'team-members-load-more');
+
+        const contentContainerStyle = virtualizedBoundary.props?.contentContainerStyle as { paddingBottom: number };
+        expect(contentContainerStyle.paddingBottom).toBeGreaterThanOrEqual(floatingTabBarHeight);
+    });
+
     it('finishes approved leave even when the own-entry row was virtualized away', async () => {
         const serverId = await addHome(teamSummaryFixture({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({ leave: true }) }));
         const { Modal } = await import('@/modal');

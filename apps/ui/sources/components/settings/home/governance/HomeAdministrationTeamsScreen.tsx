@@ -11,6 +11,7 @@ import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
 import { TeamRow } from '@/components/settings/teams/TeamRow';
 import { teamDetailPath, teamsCreatePath } from '@/components/settings/teams/teamsRoutes';
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
@@ -47,6 +48,7 @@ const HomeTeams = React.memo(function HomeTeams(
     props: Readonly<{ context: HomeAdministrationContext; header?: React.ReactNode }>,
 ) {
     const { theme } = useUnistyles();
+    const bottomPadding = usePageListBottomPadding();
     const router = useRouter();
     const openTeam = React.useCallback((address: TeamAddress) => router.push(teamDetailPath(address)), [router]);
     const { context } = props;
@@ -297,7 +299,7 @@ const HomeTeams = React.memo(function HomeTeams(
                 backgroundColor: theme.colors.surface.base,
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
-            contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+            contentContainerStyle={{ paddingBottom: bottomPadding }}
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

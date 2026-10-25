@@ -16,13 +16,14 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
 import { teamAddressKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { t } from '@/text';
 
 import { TeamRow } from './TeamRow';
 import { teamCredentialCreatePath, teamDetailPath, teamsCreatePath, type TeamCredentialSourceHint } from './teamsRoutes';
 import type { TeamsDirectoryRow, TeamsDirectoryUnavailableHome } from './teamsDirectoryViewState';
-import { teamsUnavailableHomeReason, teamsUnavailableHomeStateKind } from './teamsDirectoryViewState';
+import { teamsUnavailableHomeReason, teamsUnavailableHomeSettingsAction, teamsUnavailableHomeStateKind } from './teamsDirectoryViewState';
 import { TeamsCollectionAddButton } from './collection/TeamsCollectionRail';
 import {
     readLastVisitedTeamsCollectionTeam,
@@ -52,6 +53,7 @@ const UnavailableHomes = React.memo(function UnavailableHomes(props: Readonly<{
     testIDPrefix?: string;
     retryTestID?: string;
 }>) {
+    const router = useRouter();
     if (props.homes.length === 0) return null;
 
     const prefix = props.testIDPrefix ?? 'teams-home-unavailable';
@@ -79,7 +81,7 @@ const UnavailableHomes = React.memo(function UnavailableHomes(props: Readonly<{
                         testID: index === 0 ? props.retryTestID ?? 'teams-directory-retry' : `${prefix}:${home.serverId}:retry`,
                         label: t('teams.unavailable.retry'),
                         onPress: props.onRetry,
-                    } : undefined}
+                    } : teamsUnavailableHomeSettingsAction(home, () => router.push('/settings/actions'))}
                 />
             ))}
         </ItemGroup>
@@ -197,6 +199,7 @@ const TeamsDirectoryPage = React.memo(function TeamsDirectoryPage(props: Readonl
     sourceHint: TeamCredentialSourceHint | null;
 }>) {
     const { theme } = useUnistyles();
+    const bottomPadding = usePageListBottomPadding();
     const router = useRouter();
     const { sourceHint } = props;
     const [query, setQuery] = React.useState('');
@@ -255,7 +258,7 @@ const TeamsDirectoryPage = React.memo(function TeamsDirectoryPage(props: Readonl
                     backgroundColor: theme.colors.surface.base,
                     ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
                 }}
-                contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+                contentContainerStyle={{ paddingBottom: bottomPadding }}
                 initialNumToRender={6}
                 maxToRenderPerBatch={4}
                 windowSize={7}

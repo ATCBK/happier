@@ -18,6 +18,7 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
 import { useTeamInvitations } from '@/hooks/teams/useTeamInvitations';
 import { Modal } from '@/modal';
 import { randomUUID } from '@/platform/randomUUID';
@@ -31,7 +32,7 @@ import { formatCalendarDate } from '@/utils/datetime/cachedIntlFormatters';
 
 import { TeamSection } from '../TeamSection';
 import { teamPageHeaderMeta, type TeamSectionContext } from '../teamSectionContext';
-import { teamMutationFailureLabel, teamReadFailureLabel } from '../teamMutationPresentation';
+import { teamMutationFailureLabel, teamReadFailureLabel, useTeamReadFailureAction } from '../teamMutationPresentation';
 import { presentHomeInvitePeople } from '@/components/settings/home/governance/HomeInvitePeopleDialog';
 import { TeamLinkDelivery } from '../TeamLinkDelivery';
 import { partitionTeamInvitations, resolveTeamInvitationPresentation } from './teamInvitationPresentation';
@@ -112,6 +113,8 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
     header?: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
+    const readFailureAction = useTeamReadFailureAction();
+    const bottomPadding = usePageListBottomPadding();
     const { context } = props;
     const [busy, setBusy] = React.useState(false);
     const [notice, setNotice] = React.useState<string | null>(null);
@@ -492,9 +495,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                         <AttentionBanner
                             testID="team-invitations-unavailable"
                             title={teamReadFailureLabel(invitations.error)}
-                            action={invitations.error.retryable
-                                ? { label: t('teams.unavailable.retry'), onPress: () => void invitations.reload(), testID: 'team-invitations-retry' }
-                                : undefined}
+                            action={readFailureAction(invitations.error, { onPress: () => void invitations.reload(), testIDPrefix: 'team-invitations' })}
                         />
                     ) : invitations.hasMore && invitations.rows.length > 0 ? (
                         <ItemGroup>
@@ -515,7 +516,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                 backgroundColor: theme.colors.surface.base,
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
-            contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+            contentContainerStyle={{ paddingBottom: bottomPadding }}
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

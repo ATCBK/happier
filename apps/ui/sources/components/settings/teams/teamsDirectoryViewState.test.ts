@@ -135,6 +135,17 @@ describe('resolveTeamsDirectoryViewState', () => {
         expect(state.kind).toBe('ready');
     });
 
+    it('names a Teams read the person turned off in Settings, Actions, with no retry that cannot help', () => {
+        const state = resolveTeamsDirectoryViewState({
+            homes: [{ serverId: 'alpha', state: 'capable' }],
+            homeNamesByServerId: HOME_NAMES,
+            snapshotsByServerId: { alpha: snapshot('alpha', null, { status: 'error', error: { kind: 'unknown', retryable: false, code: 'action_disabled' } }) },
+        });
+        expect(state.unavailableHomes).toEqual([{ serverId: 'alpha', homeName: 'Alpha', reason: 'turned_off', retryable: false }]);
+        expect(teamsUnavailableHomeReason(state.unavailableHomes[0]!)).toContain('Settings → Actions');
+        expect(teamsUnavailableHomeStateKind(state.unavailableHomes[0]!)).toBe('unavailable');
+    });
+
     it('presents a failed HTTP feature probe as a load error while keeping Teams unadmitted', () => {
         const admission = resolveTeamsSettingsAdmission({
             serverIds: ['alpha'],

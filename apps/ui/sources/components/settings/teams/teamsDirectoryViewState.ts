@@ -6,6 +6,7 @@ import type { TeamsHomeAdmissionEntry } from '@/sync/domains/teams/teamsSettings
 import { teamAddressKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';
 import type { TeamsDirectorySnapshot } from '@/sync/store/teams/teamsSnapshots';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { isActionTurnedOffErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { t } from '@/text';
 import type { SurfaceStateKind } from '@/components/ui/surfaces/SurfaceStateCard';
 
@@ -30,7 +31,7 @@ export type TeamsDirectoryRow = Readonly<{
 export type TeamsDirectoryUnavailableHome = Readonly<{
     serverId: string;
     homeName: string;
-    reason: 'loading' | 'offline' | 'error' | 'denied' | 'unsupported' | 'credential_unreadable';
+    reason: 'loading' | 'offline' | 'error' | 'denied' | 'unsupported' | 'turned_off' | 'credential_unreadable';
     retryable: boolean;
 }>;
 
@@ -67,6 +68,8 @@ export function teamsUnavailableReason(
     error: ScopedSnapshotError | null | undefined,
 ): Readonly<{ reason: TeamsDirectoryUnavailableHome['reason']; retryable: boolean }> {
     if (!error) return { reason: 'loading', retryable: false };
+    // The person turned the read off in Settings, Actions: the Home was never asked.
+    if (isActionTurnedOffErrorCode(error.code)) return { reason: 'turned_off', retryable: false };
     if (error.kind === 'forbidden' || error.kind === 'unauthorized') {
         return { reason: 'denied', retryable: false };
     }
@@ -79,10 +82,21 @@ export function teamsUnavailableHomeReason(home: Pick<TeamsDirectoryUnavailableH
         case 'loading': return t('teams.directory.loading');
         case 'denied': return t('teams.errors.forbidden');
         case 'unsupported': return t('teams.unavailable.updateRequired');
+        case 'turned_off': return t('actionConfirmations.turnedOffMessage');
         case 'offline': return t('teams.unavailable.offline');
         case 'error': return t('teams.errors.loadFailed');
         case 'credential_unreadable': return t('homeGovernance.credentialUnreadableTitle');
     }
+}
+
+/** The way forward for a Home whose read was turned off in Settings, Actions: the setting itself. */
+export function teamsUnavailableHomeSettingsAction(
+    home: Pick<TeamsDirectoryUnavailableHome, 'reason'>,
+    openActionSettings: () => void,
+): Readonly<{ label: string; onPress: () => void }> | undefined {
+    return home.reason === 'turned_off'
+        ? { label: t('actionConfirmations.openActionSettings'), onPress: openActionSettings }
+        : undefined;
 }
 
 /** The directory page and its rail present the same settled Home failure. */
@@ -91,7 +105,8 @@ export function teamsUnavailableHomeStateKind(home: Pick<TeamsDirectoryUnavailab
         case 'loading': return 'loading';
         case 'denied': return 'denied';
         case 'offline': return 'unavailable';
-        case 'unsupported': return 'unavailable';
+        case 'unsupported':
+        case 'turned_off': return 'unavailable';
         default: return 'error';
     }
 }

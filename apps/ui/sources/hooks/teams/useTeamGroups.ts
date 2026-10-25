@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/protocol/teams';
 
 import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
-import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { homeDomainFailureFromSnapshotError } from '@/sync/domains/teams/teamSnapshotFailure';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopedTeamResourceKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';
 import {
@@ -76,18 +76,9 @@ export function useTeamGroup(params: Readonly<{
                 ? 'error' as const
                 : 'ready' as const,
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
-        error: snapshot?.error ? toRosterFailure(snapshot.error) : null,
+        error: snapshot?.error ? homeDomainFailureFromSnapshotError(snapshot.error) : null,
         reload,
     }), [snapshot, reload]);
-}
-
-/**
- * The snapshot's failure in the shape every Team roster already renders. Both
- * describe the same Home answer; only the typed domain code is absent, because
- * a list read has no domain refusal to carry beyond its reachability outcome.
- */
-function toRosterFailure(error: ScopedSnapshotError): HomeDomainFailure {
-    return Object.freeze({ kind: error.kind, retryable: error.retryable, code: null });
 }
 
 /**
@@ -157,7 +148,7 @@ export function useTeamGroups(params: Readonly<{
             rows,
             status,
             isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
-            error: snapshot?.error ? toRosterFailure(snapshot.error) : null,
+            error: snapshot?.error ? homeDomainFailureFromSnapshotError(snapshot.error) : null,
             hasMore: (snapshot?.nextCursor ?? null) !== null,
             loadMore,
             reload,

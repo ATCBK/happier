@@ -34,6 +34,8 @@ installSettingsViewCommonModuleMocks({
         useNavigation: () => ({ setOptions: vi.fn() }),
         useLocalSearchParams: () => ({}),
     }),
+    // The Actions policy a person sets lives in the real store.
+    storage: 'real',
 });
 
 const harness = createHomeGovernanceHarness();
@@ -256,6 +258,31 @@ describe('TeamGroupsScreen', () => {
 
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-retry');
         expect(screen.getTextContent()).toContain('teams.errors.forbidden');
+    });
+
+    it('says the Groups read is turned off in Settings and leads there, with no retry', async () => {
+        const serverId = await addManagedHome();
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+        const previous = storage.getState().settings.actionsSettingsV1;
+        const disabled = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'teams.groups.list': { enabled: false } } });
+        storage.getState().applySettingsLocal({ actionsSettingsV1: disabled });
+        harness.answer(serverId, '/v2/account/settings', { body: {
+            version: 1, content: { t: 'plain', v: { actionsSettingsV1: disabled } },
+        } });
+        try {
+            const screen = await renderGroups(serverId);
+            await waitForTestId(screen, 'team-groups-unavailable');
+
+            expect(screen.getTextContent()).toContain('actionConfirmations.turnedOffMessage');
+            expect(screen.getTextContent()).not.toContain('teams.errors.loadFailed');
+            expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-retry');
+            await screen.pressByTestIdAsync('team-groups-open-actions-settings');
+            expect(routerPush).toHaveBeenCalledWith('/settings/actions');
+            expect(harness.requestsFor(GROUPS_LIST_PATH)).toHaveLength(0);
+        } finally {
+            storage.getState().applySettingsLocal({ actionsSettingsV1: previous });
+        }
     });
 
     it('reads Groups for a plain viewer and offers no create control', async () => {

@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useIsInsideModalBoundary } from '@/modal/context/ModalBoundaryContext';
 import { useScrollViewWheelScrollTo } from '@/components/ui/scroll/useScrollViewWheelScrollTo';
 import { PopoverScrollSourceProvider } from '@/components/ui/popover';
+import { BASE_CONTENT_PADDING_BOTTOM } from '@/components/ui/lists/pageListBottomPadding';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance/KeyboardAwareScrollView';
 import { ListPresentationProvider, useContainedPageScope, type ListPresentation } from './listPresentation';
@@ -18,7 +19,6 @@ import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { HAPPIER_PAGE_METRICS, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { PageFrame } from '@/components/ui/layout/PageFrame';
 
-const BASE_CONTENT_PADDING_BOTTOM = Platform.select({ ios: 34, default: 16 }) ?? 16;
 
 export interface ItemListProps extends ScrollViewProps {
     children: React.ReactNode;

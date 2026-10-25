@@ -15,7 +15,7 @@ import type {
 } from '@happier-dev/protocol/teams';
 import { teamCredentialResourcesQueryKeyV1, mergeTeamCredentialUsagePages } from '@happier-dev/protocol/teams';
 import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
-import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { homeDomainFailureFromSnapshotError } from '@/sync/domains/teams/teamSnapshotFailure';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
@@ -76,15 +76,6 @@ export type TeamCredentialResourcesProjection = Readonly<{
 const NO_RESOURCES: readonly TeamCredentialResourceSummaryV1[] = Object.freeze([]);
 const NO_CATALOG: readonly TeamCredentialResourceCatalogEntryV1[] = Object.freeze([]);
 
-/**
- * The administration snapshot's failure in the shape Team surfaces render.
- * The typed domain code is absent because this list read has no domain refusal
- * to carry beyond its reachability outcome.
- */
-function toProjectionFailure(error: ScopedSnapshotError): HomeDomainFailure {
-    return Object.freeze({ kind: error.kind, retryable: error.retryable, code: null });
-}
-
 export type TeamCredentialResourceProjection = Readonly<{
     resource: TeamCredentialResourceSummaryV1 | null;
     status: 'loading' | 'refreshing' | 'ready' | 'error';
@@ -132,7 +123,7 @@ export function useTeamCredentialResource(params: Readonly<{
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
         resolved: snapshot?.status === 'ready'
             || (snapshot?.status === 'error' && snapshot.error?.retryable === false),
-        error: snapshot?.error ? toProjectionFailure(snapshot.error) : null,
+        error: snapshot?.error ? homeDomainFailureFromSnapshotError(snapshot.error) : null,
         reload,
     }), [resource, snapshot, reload]);
 }
@@ -175,7 +166,7 @@ export function useTeamCredentialResourceCatalog(params: Readonly<{
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
         resolved: snapshot?.status === 'ready'
             || (snapshot?.status === 'error' && snapshot.error?.retryable === false),
-        error: snapshot?.error ? toProjectionFailure(snapshot.error) : null,
+        error: snapshot?.error ? homeDomainFailureFromSnapshotError(snapshot.error) : null,
         reload,
     }), [snapshot, reload]);
 }
@@ -243,7 +234,7 @@ export function useTeamCredentialResources(params: Readonly<{
             ? 'loading' as const
             : snapshot.status,
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
-        error: snapshot?.error ? toProjectionFailure(snapshot.error) : null,
+        error: snapshot?.error ? homeDomainFailureFromSnapshotError(snapshot.error) : null,
         hasMore,
         loadMore,
         retry,

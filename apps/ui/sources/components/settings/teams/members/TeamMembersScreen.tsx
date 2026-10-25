@@ -30,7 +30,8 @@ import { TeamMemberAddAction } from './TeamMemberAddAction';
 import { TeamLeaveAction } from './TeamLeaveAction';
 import { teamMemberRowSubtitle } from './teamMemberPresentation';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
-import { teamReadFailureLabel } from '../teamMutationPresentation';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
+import { teamReadFailureLabel, useTeamReadFailureAction } from '../teamMutationPresentation';
 
 const MEMBER_AVATAR_SIZE = 36;
 const MEMBER_CHUNK_SIZE = 12;
@@ -128,7 +129,9 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
     header?: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
+    const bottomPadding = usePageListBottomPadding();
     const router = useRouter();
+    const readFailureAction = useTeamReadFailureAction();
     const view = useHappierCollectionIndexView();
     const { context } = props;
     const language = getPreferredLanguage();
@@ -283,11 +286,7 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
                 <AttentionBanner
                     testID="team-members-unavailable"
                     title={teamReadFailureLabel(roster.error!)}
-                    action={roster.error?.retryable ? {
-                        label: t('teams.unavailable.retry'),
-                        onPress: roster.reload,
-                        testID: 'team-members-retry',
-                    } : undefined}
+                    action={readFailureAction(roster.error!, { onPress: roster.reload, testIDPrefix: 'team-members' })}
                 />
             ));
         } else if (roster.hasMore && roster.rows.length > 0) {
@@ -334,9 +333,8 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
                     <SurfaceStateCard kind="denied" size="line" title={t('teams.denied.title')} />
                 ) : roster.error ? (
                     <SurfaceStateCard kind={roster.error.retryable ? 'error' : 'denied'} size="line"
-                        title={teamReadFailureLabel(roster.error)} action={roster.error.retryable ? {
-                            label: t('teams.unavailable.retry'), onPress: roster.reload, testID: 'team-members-retry',
-                        } : undefined} />
+                        title={teamReadFailureLabel(roster.error)}
+                        action={readFailureAction(roster.error, { onPress: roster.reload, testIDPrefix: 'team-members' })} />
                 ) : roster.status === 'ready' ? (
                     <SurfaceStateCard kind="empty" size="line" title={t('teams.members.emptyTitle')}
                         reason={t('teams.members.emptyBody')} />
@@ -357,7 +355,7 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
                 backgroundColor: theme.colors.surface.base,
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
-            contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+            contentContainerStyle={{ paddingBottom: bottomPadding }}
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}
