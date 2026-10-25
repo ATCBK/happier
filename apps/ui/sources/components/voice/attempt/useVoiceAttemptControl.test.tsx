@@ -297,15 +297,18 @@ describe('useVoiceAttemptControl start admission', () => {
             providerContributionId: 'happier.voice.openai/realtime',
             settingFieldPath: 'voice', value: 'coral', displayName: 'Coral',
         };
+        const preparedInstructionsFor = { serverId: 'srv_attempt_home', sessionId: 'target-session' };
         setVoiceSessionSnapshot({ adapterId: applied.providerContributionId, sessionId: 'target-session',
-            status: 'connected', mode: 'listening', canStop: true, inUseVoice: applied });
+            status: 'connected', mode: 'listening', canStop: true, inUseVoice: applied, preparedInstructionsFor });
         const hook = await renderBothOwners();
         expect(hook.getCurrent().control).toHaveProperty('inUseVoice', applied);
+        expect(hook.getCurrent().control).toHaveProperty('preparedInstructionsFor', preparedInstructionsFor);
         await act(async () => seedVoiceSettings({ providerId: 'off' }));
         expect(hook.getCurrent().control).toHaveProperty('inUseVoice', applied);
         await act(async () => setVoiceSessionSnapshot({ adapterId: null, sessionId: null,
             status: 'disconnected', mode: 'idle', canStop: false }));
         expect(hook.getCurrent().control).toHaveProperty('inUseVoice', null);
+        expect(hook.getCurrent().control).toHaveProperty('preparedInstructionsFor', null);
         await hook.unmount();
     });
 
