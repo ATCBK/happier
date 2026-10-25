@@ -31,7 +31,7 @@ import * as z from 'zod/mini';
 import { actionStartTargetUnavailableV1 } from './executor/actionStartDiagnostics.js';
 import { resolveInputOptions, resolveTypedInputFieldOptions, normalizeResolvedOptions, tryNormalizeExecutionBackendOptionValue, readReviewNarratorOptions, buildAgentInventorySelectionArgs } from '../inputs/inputOptions.js';
 import { ProjectDefinitionInspectOutputSchema } from './projectDefinitionActionFamily.js';
-import { ProjectPrepareInputV1Schema } from './projectActionFamily.js';
+import { ProjectPrepareInputV1Schema, readProjectSetupTrustRequestOperationV1 } from './projectActionFamily.js';
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from './pluginExecutionOriginActionFamily.js';
 import { NpmRegistryProfileActionIdV1Schema, NpmRegistryProfileActionInputSchemasV1 } from './npmRegistryProfileActionFamily.js';
 import { PluginAccountAdministrationActionIdSchema, PluginAccountAdministrationActionInputSchemas } from './pluginAccountAdministrationActionFamily.js';
