@@ -106,7 +106,7 @@ const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') 
 const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
 const artifactInventoryReads = () => home.requests.filter(request => request.input === null
     && new URL(request.path, request.serverUrl).pathname === '/v1/artifacts');
-const artifactHeaderRoute = '/v1/artifacts?limit=500&kind=other';
+const artifactHeaderRoute = '/v1/artifacts?limit=500&kinds=%5B%22workflow-definition.v1%22%5D';
 // Freeze or shorten a real filtered HTTP page. Keep the canonical transport
 // envelope instead of answering a kind-selected read with the old raw array.
 async function artifactHeaderPage(selectedIds?: readonly string[]): Promise<unknown> {
