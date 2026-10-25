@@ -16,6 +16,7 @@ installPopoverCommonModuleMocks({
         const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeNativeMock({ platformOS: 'ios' }, {
             useWindowDimensions: () => viewport,
+            Dimensions: { get: () => ({ ...viewport, scale: 1, fontScale: 1 }) },
         });
     },
 });

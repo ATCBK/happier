@@ -58,7 +58,7 @@ const styles = StyleSheet.create((theme) => ({
     pill: {
         maxWidth: '100%', minWidth: 0, flexShrink: 1, height: VOICE_TOP_BAR_PILL_HEIGHT,
         flexDirection: 'row', alignItems: 'center', paddingRight: theme.space.s2,
-        borderRadius: VOICE_TOP_BAR_PILL_HEIGHT / 2, backgroundColor: theme.colors.state.neutral.background,
+        borderRadius: VOICE_TOP_BAR_PILL_HEIGHT / 2, backgroundColor: theme.colors.surface.selected,
     },
     // Concentric: the trailing well sits as far from the capsule's end as from its top and bottom
     // ((56 − 32) / 2 desktop, (58 − 34) / 2 phone).
