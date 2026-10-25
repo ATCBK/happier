@@ -1081,6 +1081,7 @@ export type ProvidersActionInputById = {
                         kind: 'managed';
                         endpointTemplateIds: string[];
                         sharing?: 'connectionMachine' | undefined;
+                        sourceEnvelopeTransport?: 'cpx-v1' | undefined;
                         dependencies?: string[] | undefined;
                         connectedAccounts?: {
                             purpose: string;

@@ -4340,6 +4340,10 @@ export type ExecutionRunControlActionResultById = {
         })[];
         nextCursor: number;
         done: boolean;
+        preparedInstructionsFor?: {
+            serverId: string;
+            sessionId: string;
+        } | undefined;
     };
     readonly "execution.run.stream.cancel": {
         [x: string]: unknown;

@@ -582,6 +582,11 @@ export type MachineProcessesActionResultById = {
                         } | undefined;
                         execution?: 'primary' | 'portable' | undefined;
                         serviceState?: 'running' | 'stopping' | 'stopped' | 'failed' | 'starting' | 'detecting' | 'healthy' | 'unhealthy' | undefined;
+                        diagnostics?: {
+                            code: string;
+                            severity: 'error' | 'info' | 'warning';
+                            message?: string | undefined;
+                        }[] | undefined;
                         readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                         endpointUrl?: string | undefined;
                         startedAtMs?: number | undefined;
@@ -601,7 +606,7 @@ export type MachineProcessesActionResultById = {
                                 addressLabel?: string | undefined;
                                 folderLabel?: string | undefined;
                                 iconToken?: string | undefined;
-                                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                             } | undefined;
                             sessionId?: string | undefined;
                             serviceTarget?: {
@@ -644,7 +649,7 @@ export type MachineProcessesActionResultById = {
                                 addressLabel?: string | undefined;
                                 folderLabel?: string | undefined;
                                 iconToken?: string | undefined;
-                                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                             } | undefined;
                         } | {
                             targetId: string;
@@ -655,7 +660,7 @@ export type MachineProcessesActionResultById = {
                                 addressLabel?: string | undefined;
                                 folderLabel?: string | undefined;
                                 iconToken?: string | undefined;
-                                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                             } | undefined;
                         } | {
                             targetId: string;
@@ -666,7 +671,7 @@ export type MachineProcessesActionResultById = {
                                 addressLabel?: string | undefined;
                                 folderLabel?: string | undefined;
                                 iconToken?: string | undefined;
-                                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                             } | undefined;
                         } | {
                             targetId: string;
@@ -677,7 +682,7 @@ export type MachineProcessesActionResultById = {
                                 addressLabel?: string | undefined;
                                 folderLabel?: string | undefined;
                                 iconToken?: string | undefined;
-                                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                             } | undefined;
                             sourceId?: string | undefined;
                         } | undefined;

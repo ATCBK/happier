@@ -757,6 +757,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "ui.voice_global.end",
   "ui.voice_global.glance.close",
   "ui.voice_global.glance.open",
+  "ui.voice_global.history.clear",
   "ui.voice_global.hold_begin",
   "ui.voice_global.hold_cancel",
   "ui.voice_global.hold_release",
@@ -3051,6 +3052,12 @@ export type GeneratedActions = Readonly<{
       readonly glance: Readonly<{
         readonly close: (input: PublicActionInputById["ui.voice_global.glance.close"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.glance.close">>;
         readonly open: (input: PublicActionInputById["ui.voice_global.glance.open"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.glance.open">>;
+      }> ;
+      readonly history: Readonly<{
+        readonly clear: (input: PublicActionInputById["ui.voice_global.history.clear"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.history.clear">>;
+        readonly export: (input: PublicActionInputById["ui.voice_global.history.export"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.history.export">>;
+        readonly loadOlder: (input: PublicActionInputById["ui.voice_global.history.load_older"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.history.load_older">>;
+        readonly search: (input: PublicActionInputById["ui.voice_global.history.search"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.history.search">>;
       }> ;
       readonly holdBegin: (input: PublicActionInputById["ui.voice_global.hold_begin"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.hold_begin">>;
       readonly holdCancel: (input: PublicActionInputById["ui.voice_global.hold_cancel"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.hold_cancel">>;
@@ -5523,6 +5530,12 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         glance: {
           close: (input: PublicActionInputById["ui.voice_global.glance.close"], options?: ActionExecutionOptions) => execute("ui.voice_global.glance.close", input, options),
           open: (input: PublicActionInputById["ui.voice_global.glance.open"], options?: ActionExecutionOptions) => execute("ui.voice_global.glance.open", input, options),
+        },
+        history: {
+          clear: (input: PublicActionInputById["ui.voice_global.history.clear"], options?: ActionExecutionOptions) => execute("ui.voice_global.history.clear", input, options),
+          export: (input: PublicActionInputById["ui.voice_global.history.export"], options?: ActionExecutionOptions) => execute("ui.voice_global.history.export", input, options),
+          loadOlder: (input: PublicActionInputById["ui.voice_global.history.load_older"], options?: ActionExecutionOptions) => execute("ui.voice_global.history.load_older", input, options),
+          search: (input: PublicActionInputById["ui.voice_global.history.search"], options?: ActionExecutionOptions) => execute("ui.voice_global.history.search", input, options),
         },
         holdBegin: (input: PublicActionInputById["ui.voice_global.hold_begin"], options?: ActionExecutionOptions) => execute("ui.voice_global.hold_begin", input, options),
         holdCancel: (input: PublicActionInputById["ui.voice_global.hold_cancel"], options?: ActionExecutionOptions) => execute("ui.voice_global.hold_cancel", input, options),

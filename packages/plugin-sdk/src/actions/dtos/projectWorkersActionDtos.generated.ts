@@ -558,6 +558,11 @@ export type ProjectWorkersActionResultById = {
                 } | undefined;
                 execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'running' | 'starting' | 'stopped' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'failed' | undefined;
+                diagnostics?: {
+                    code: string;
+                    severity: 'error' | 'info' | 'warning';
+                    message?: string | undefined;
+                }[] | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
                 startedAtMs?: number | undefined;
@@ -577,7 +582,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
                     serviceTarget?: {
@@ -620,7 +625,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -631,7 +636,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -642,7 +647,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -653,7 +658,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sourceId?: string | undefined;
                 } | undefined;
@@ -733,6 +738,11 @@ export type ProjectWorkersActionResultById = {
                 } | undefined;
                 execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'running' | 'starting' | 'stopped' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'failed' | undefined;
+                diagnostics?: {
+                    code: string;
+                    severity: 'error' | 'info' | 'warning';
+                    message?: string | undefined;
+                }[] | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
                 startedAtMs?: number | undefined;
@@ -752,7 +762,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
                     serviceTarget?: {
@@ -795,7 +805,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -806,7 +816,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -817,7 +827,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -828,7 +838,7 @@ export type ProjectWorkersActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sourceId?: string | undefined;
                 } | undefined;

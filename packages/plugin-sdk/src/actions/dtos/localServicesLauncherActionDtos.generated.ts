@@ -165,6 +165,11 @@ export type LocalServicesLauncherActionResultById = {
             } | undefined;
             execution?: 'primary' | 'portable' | undefined;
             serviceState?: 'starting' | 'running' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'stopped' | 'failed' | undefined;
+            diagnostics?: {
+                code: string;
+                severity: 'error' | 'info' | 'warning';
+                message?: string | undefined;
+            }[] | undefined;
             readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
             endpointUrl?: string | undefined;
             startedAtMs?: number | undefined;
@@ -184,7 +189,7 @@ export type LocalServicesLauncherActionResultById = {
                     addressLabel?: string | undefined;
                     folderLabel?: string | undefined;
                     iconToken?: string | undefined;
-                    tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                    tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
                 serviceTarget?: {
@@ -227,7 +232,7 @@ export type LocalServicesLauncherActionResultById = {
                     addressLabel?: string | undefined;
                     folderLabel?: string | undefined;
                     iconToken?: string | undefined;
-                    tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                    tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                 } | undefined;
             } | {
                 targetId: string;
@@ -238,7 +243,7 @@ export type LocalServicesLauncherActionResultById = {
                     addressLabel?: string | undefined;
                     folderLabel?: string | undefined;
                     iconToken?: string | undefined;
-                    tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                    tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                 } | undefined;
             } | {
                 targetId: string;
@@ -249,7 +254,7 @@ export type LocalServicesLauncherActionResultById = {
                     addressLabel?: string | undefined;
                     folderLabel?: string | undefined;
                     iconToken?: string | undefined;
-                    tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                    tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                 } | undefined;
             } | {
                 targetId: string;
@@ -260,7 +265,7 @@ export type LocalServicesLauncherActionResultById = {
                     addressLabel?: string | undefined;
                     folderLabel?: string | undefined;
                     iconToken?: string | undefined;
-                    tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                    tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sourceId?: string | undefined;
             } | undefined;
@@ -349,6 +354,11 @@ export type LocalServicesLauncherActionResultById = {
                 } | undefined;
                 execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'starting' | 'running' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'stopped' | 'failed' | undefined;
+                diagnostics?: {
+                    code: string;
+                    severity: 'error' | 'info' | 'warning';
+                    message?: string | undefined;
+                }[] | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
                 startedAtMs?: number | undefined;
@@ -368,7 +378,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
                     serviceTarget?: {
@@ -411,7 +421,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -422,7 +432,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -433,7 +443,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -444,7 +454,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sourceId?: string | undefined;
                 } | undefined;
@@ -512,7 +522,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
             sessionId?: string | undefined;
             serviceTarget?: {
@@ -555,7 +565,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -566,7 +576,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -577,7 +587,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -588,7 +598,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
             sourceId?: string | undefined;
         } | undefined;
@@ -608,7 +618,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
             sessionId?: string | undefined;
             serviceTarget?: {
@@ -651,7 +661,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -662,7 +672,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -673,7 +683,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
         } | {
             targetId: string;
@@ -684,7 +694,7 @@ export type LocalServicesLauncherActionResultById = {
                 addressLabel?: string | undefined;
                 folderLabel?: string | undefined;
                 iconToken?: string | undefined;
-                tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
             } | undefined;
             sourceId?: string | undefined;
         } | undefined;
@@ -770,6 +780,11 @@ export type LocalServicesLauncherActionResultById = {
                 } | undefined;
                 execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'starting' | 'running' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'stopped' | 'failed' | undefined;
+                diagnostics?: {
+                    code: string;
+                    severity: 'error' | 'info' | 'warning';
+                    message?: string | undefined;
+                }[] | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
                 startedAtMs?: number | undefined;
@@ -789,7 +804,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
                     serviceTarget?: {
@@ -832,7 +847,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -843,7 +858,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -854,7 +869,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                 } | {
                     targetId: string;
@@ -865,7 +880,7 @@ export type LocalServicesLauncherActionResultById = {
                         addressLabel?: string | undefined;
                         folderLabel?: string | undefined;
                         iconToken?: string | undefined;
-                        tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
+                        tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sourceId?: string | undefined;
                 } | undefined;

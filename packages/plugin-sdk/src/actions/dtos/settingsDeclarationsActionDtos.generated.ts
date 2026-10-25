@@ -205,7 +205,7 @@ export type SettingsDeclarationsActionInputById = {
             expectedSettingsVersion: number;
             expectedSecretId: string | null;
             expectedSecretUpdatedAt: number | null;
-            operation: 'review' | 'inspect' | 'remove';
+            operation: 'inspect' | 'remove' | 'review';
             machineId?: string | null | undefined;
             expectedRecipientContractDigest?: string | undefined;
         } | {
