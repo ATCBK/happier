@@ -17,7 +17,7 @@ const pending = new Map<string, {
 }>();
 const reloadAfterPending = new Set<string>();
 type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
-  isCredentialCurrent?(): boolean | Promise<boolean>; maintainSource?: false }>;
+  isCredentialCurrent?(): boolean | Promise<boolean> }>;
 
 type CliCatalogInput = Readonly<{
   expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal; credentials?: StoredCredentials;
@@ -48,12 +48,7 @@ function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reobserve:
     if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
     if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
     const readSnapshot = () => input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
-    const catalog = readSnapshot()?.providerConnectionsCatalog;
-    // A ready destination has already admitted any required source-preference
-    // handoff. Current reobservation needs the row, not optional source/history
-    // maintenance; inactive destinations retain the existing activation path.
-    const refreshInput: RefreshInput = { credentials, operationContext: input.operationContext, signal: input.signal,
-      ...(catalog?.status === 'ready' && typeof catalog.revision === 'number' ? { maintainSource: false } : {}) };
+    const refreshInput: RefreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };
     let resolveReadable!: (catalog: ProviderConnectionsCatalogSnapshotV1) => void;
     const readable = new Promise<ProviderConnectionsCatalogSnapshotV1>(resolve => { resolveReadable = resolve; });
     const observeReadable = () => {
@@ -94,6 +89,8 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
   const current = () => readSnapshot()?.scopeKey === scopeKey
     && (context ? context.credentials.token === input.credentials.token : getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken);
   if (!current() || input.signal?.aborted) return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
+  const previousCatalog = readSnapshot()?.providerConnectionsCatalog;
+  const sourceCleanupPending = previousCatalog?.status === 'ready' && previousCatalog.cleanup?.status === 'cleanup-pending';
   const existing = context ? undefined : pending.get(key);
   if (existing) {
     // Pending covers observation through publication, never optional history.
@@ -124,7 +121,7 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
       let catalog: ProviderConnectionsCatalogSnapshotV1;
       let publishedReady: ProviderConnectionsCatalogSnapshotV1 | undefined;
       try {
-        catalog = input.maintainSource === false ? await store.readCatalogForMutation() : await store.readCatalog({ onReadyBeforeCleanup: async ready => {
+        catalog = await store.readCatalog({ sourceCleanupPending, onReadyBeforeCleanup: async ready => {
           if (!context && reloadAfterPending.has(key)) return;
           if (await publish(ready)) {
             if (!context && reloadAfterPending.has(key)) return;
@@ -182,6 +179,5 @@ export async function refreshDemandedActiveProviderConnectionsCatalog(input: Rea
   if (catalog === undefined) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await refresh({ credentials, signal: input.signal,
-    ...(catalog.status === 'ready' && typeof catalog.revision === 'number' ? { maintainSource: false } : {}) }, 'change');
+  await refresh({ credentials, signal: input.signal }, 'change');
 }

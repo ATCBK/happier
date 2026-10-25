@@ -24,6 +24,30 @@ const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [conn
   manualModelsByConnectionId: { pc_one: [{ id: 'model/a', addedAt: 1 }] } };
 
 describe('Provider connection catalog row owner', () => {
+  it.each(['present', 'deleted', 'absent'] as const)('skips post-cutover maintenance but still initializes an absent destination (%s)', async state => {
+    let initialized = false;
+    let sourceReads = 0;
+    let historyReads = 0;
+    let publications = 0;
+    const loaded = await loadProviderConnectionsCatalogV1({ mode: 'plain', material: null,
+      readRow: async () => state === 'absent' && !initialized ? { status: 'absent' }
+        : state === 'deleted' ? { status: 'deleted', revision: 3 }
+          : { status: 'present', revision: 3, content: { t: 'plain', v: catalog } },
+      onReadyBeforeCleanup: async () => { publications++; },
+      transfer: {
+        needsSourceCleanup: () => false,
+        readSourceSnapshot: async () => { sourceReads++; return { raw: {}, version: 4 }; },
+        initializeCatalog: async () => { initialized = true; return { status: 'updated', revision: 3, cursor: 1 }; },
+        replaceSource: async () => ({ status: 'applied', settingsVersion: 5 }),
+        normalizeHistory: async () => { historyReads++; return { status: 'complete' }; },
+      } });
+    expect(loaded).toMatchObject({ status: 'ready', revision: 3 });
+    expect(initialized).toBe(state === 'absent');
+    expect(sourceReads).toBe(state === 'absent' ? 1 : 0);
+    expect(historyReads).toBe(state === 'absent' ? 1 : 0);
+    expect(publications).toBe(1);
+  });
+
   it('projects retired fields from retained default selections without losing selected intent', () => {
     const selection = { v: 1, ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_one', modelId: 'model/a' }, updatedAt: 1 };
     const retained = { ...selection, retired: true, ref: { ...selection.ref, retired: true } };

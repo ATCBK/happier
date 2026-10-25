@@ -164,7 +164,8 @@ function createCapturedStore(input: Readonly<{
     await verifyCurrent();
     return admitted.mode === context.mode ? catalog : { status: 'unavailable' as const, reason: 'account-mode-mismatch' };
   });
-  const readCatalog = async (options?: Pick<Parameters<typeof loadProviderConnectionsCatalogV1>[0], 'onReadyBeforeCleanup' | 'hasPendingCleanup'>) => runWithRequesterSessionCurrentnessCheckpoint(async () => {
+  const readCatalog = async (options?: Pick<Parameters<typeof loadProviderConnectionsCatalogV1>[0], 'onReadyBeforeCleanup' | 'hasPendingCleanup'>
+    & Readonly<{ sourceCleanupPending?: boolean }>) => runWithRequesterSessionCurrentnessCheckpoint(async () => {
     const context = await readStorageContext('identity');
     let initializeSource = false;
     const catalog = await loadProviderConnectionsCatalogV1({ ...context, signal: input.signal, readRow: async () => {
@@ -177,6 +178,13 @@ function createCapturedStore(input: Readonly<{
       await verifyCurrent();
       await options.onReadyBeforeCleanup?.(ready);
     } : undefined, transfer: {
+      needsSourceCleanup: () => {
+        const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+        return options?.sourceCleanupPending === true || snapshot?.rawSettings === undefined
+          || Object.hasOwn(snapshot.rawSettings, 'providerSettingsV1')
+          || snapshot.providerConnectionsCatalog?.status === 'ready'
+            && snapshot.providerConnectionsCatalog.cleanup?.status === 'cleanup-pending';
+      },
       readSourceSnapshot: async () => {
         let source = await readSourceSnapshot();
         // Only actual personal bindings in this inactive source require S2 promotion.

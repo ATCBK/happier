@@ -15,6 +15,8 @@ import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 export { listProviderConnectionsCatalogSavedSecretRefsV1, rewriteProviderConnectionsCatalogSavedSecretRefsV1 } from './connectionRowsV1.js';
 export { readRetainedProviderConnectionsCatalogV1 } from './connectionRowsV1.js';
 export type ProviderConnectionsSourceTransferV1 = Readonly<{
+  /** A current source owner can prove cleanup unnecessary; absent rows still initialize. */
+  needsSourceCleanup?(): boolean;
   readSourceSnapshot(): Promise<Readonly<{ raw: Readonly<Record<string, unknown>>; version: number }>>;
   initializeCatalog(input: Readonly<{ catalog: ProviderConnectionsCatalogV1; expectedRevision: 'absent'; sourceSettingsVersion: number }>):
     Promise<ReturnType<typeof ProviderConnectionsRowMutationResponseV1Schema.parse>>;
@@ -209,6 +211,10 @@ async function loadTransferredCatalog(input: LoadInput): Promise<ProviderConnect
     catalog = await readCatalog(input);
   }
   if (catalog.status !== 'ready') return catalog;
+  if (!source && transfer.needsSourceCleanup?.() === false) {
+    await input.onReadyBeforeCleanup?.(catalog);
+    return catalog;
+  }
   try { source ??= await transfer.readSourceSnapshot(); }
   catch {
     await input.onReadyBeforeCleanup?.(catalog);

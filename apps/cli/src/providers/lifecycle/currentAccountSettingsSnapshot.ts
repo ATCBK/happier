@@ -1,4 +1,16 @@
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { isDeepStrictEqual } from 'node:util';
+
+/** Material delivery consumes these facts; picker/model preferences and row revisions are independent. */
+export function sameProviderConnectionsDirectMaterial(
+  admitted: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+  current: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+): boolean {
+  if (admitted === current) return true;
+  if (admitted?.status !== 'ready' || current?.status !== 'ready') return false;
+  return (['connections', 'accountGrants', 'machineGrants', 'secretBindingsByConnectionId'] as const)
+    .every(field => isDeepStrictEqual(admitted.catalog[field], current.catalog[field]));
+}
 
 /** Cleanup reports wrap an admitted row without changing its revision or catalog. */
 export function sameProviderConnectionsCatalogAuthority(

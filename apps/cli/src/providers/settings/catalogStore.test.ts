@@ -28,6 +28,28 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 
+it('does no source or history GETs for repeated post-cutover catalog reads', async () => {
+  const credentials = { token: 'provider-cutover-cost', encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+    settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+  const reads: string[] = [];
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+      status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    return emptyAccountSettingsHistoryCaptureResponse(path) ?? { status: 404, data: {} };
+  });
+  const store = createCliProviderConnectionsStore({ credentials });
+  for (let index = 0; index < 25; index++) expect(await store.readCatalog()).toMatchObject({ status: 'ready' });
+  expect(reads.filter(path => path.startsWith('/v2/account/settings'))).toEqual([]);
+  expect(reads.filter(path => path === '/v1/account/entity-rows/provider-connections')).toHaveLength(25);
+});
+
 it.each([
   { revision: 4, custody: 'daemon' }, { revision: 'absent', custody: 'daemon' },
   { revision: 4, custody: 'requester' }, { revision: 'absent', custody: 'requester' },
@@ -185,9 +207,8 @@ it.each(['readCatalogForMutation', 'readCatalog', 'prepare', 'refresh'] as const
   expect(profileReadsAtRow).toBe(1);
   if (method === 'readCatalog' || method === 'readCatalogForMutation') {
     expect(method === 'readCatalog' ? admissionProfileReads : profileReads).toBe(1);
-    // History owns an independent preparation because it can outlive first-ready
-    // publication. Recheck disclosure afterwards, irrespective of catalog count.
-    expect(profileReads).toBe(method === 'readCatalog' ? 3 : 1);
+    // Post-cutover reads have no source/history maintenance preparation.
+    expect(profileReads).toBe(1);
   }
   f.retire();
   if (method === 'prepare' || method === 'refresh') {
@@ -199,6 +220,10 @@ it.each(['readCatalogForMutation', 'readCatalog', 'prepare', 'refresh'] as const
 
 it.each([false, true])('requires fresh requester authority before history cleanup within a catalog read (revoked=%s)', async revoked => {
   const f = await createProjectSessionRuntimeFixture();
+  await f.bootstrap.savedSecretOperationContext.commitProviderConnectionsCatalog({ expectedSettingsVersion: 0, catalog: {
+    status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+    cleanup: { status: 'cleanup-pending', reason: 'history-incomplete' },
+  } });
   const get = vi.mocked(axios.get).getMockImplementation()!;
   let writes = 0;
   vi.mocked(axios.get).mockImplementation(async (url, options) => {
@@ -232,6 +257,10 @@ it.each([false, true])('requires fresh requester authority before history cleanu
 
 it('keeps one history read checkpoint after public catalog readiness has returned', async () => {
   const f = await createProjectSessionRuntimeFixture();
+  await f.bootstrap.savedSecretOperationContext.commitProviderConnectionsCatalog({ expectedSettingsVersion: 0, catalog: {
+    status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+    cleanup: { status: 'cleanup-pending', reason: 'history-incomplete' },
+  } });
   const get = vi.mocked(axios.get).getMockImplementation()!;
   let profileReads = 0;
   let historyReads = 0;
@@ -260,7 +289,7 @@ it('keeps one history read checkpoint after public catalog readiness has returne
     return history ?? get(url, options);
   });
   try {
-    expect(await prepareProviderConnectionsCatalogForCli({
+    expect(await refreshProviderConnectionsCatalogForCli({
       expectedScopeKey: f.bootstrap.savedSecretOperationContext.readSnapshot()!.scopeKey!,
       operationContext: f.bootstrap.savedSecretOperationContext,
     })).toMatchObject({ status: 'ready' });
@@ -320,7 +349,9 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
   let observedRevision = revision;
   const credentials = { token: 'provider-cold-demand', encryption: null };
   const scopeKey = resolveAccountSettingsScopeKey(credentials);
-  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+  let raw: Readonly<Record<string, unknown>> = { providerSettingsV1: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, defaultsByAgentTargetKey: {} } };
+  let settingsVersion = 4;
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(raw), rawSettings: raw,
     settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey,
     ...(mode !== 'cold' ? { providerConnectionsCatalog: { status: 'ready' as const, revision: 6, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } : {}),
   });
@@ -344,7 +375,7 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
       return { status: 200, data: { status: 'present', revision: observedRevision,
         content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
     }
-    if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: settingsVersion, content: { t: 'plain', v: raw } } };
     if (path === '/v2/account/settings/history') {
       enterHistory(); await historyReleased;
       return { status: 200, data: { snapshots: [] } };
@@ -352,6 +383,14 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     const history = emptyAccountSettingsHistoryCaptureResponse(path);
     if (history) return history;
     throw new Error(`Unexpected cold Provider HTTP boundary: ${path}`);
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    expect(new URL(String(url)).pathname).toBe('/v2/account/settings');
+    const mutation = AccountSettingsV2UpdateRequestSchema.parse(body);
+    if (mutation.content.t !== 'plain') throw new Error('Plain fixture requires Plain settings');
+    raw = mutation.content.v;
+    settingsVersion++;
+    return { status: 200, data: { success: true, version: settingsVersion } };
   });
   let admitted: Awaited<ReturnType<typeof prepareProviderConnectionsCatalogForCli>> | undefined;
   // Existing active current readers no longer own optional maintenance. Start
@@ -365,8 +404,14 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     .then(catalog => { admitted = catalog; return catalog; });
   await rowEntered;
   const publications: (number | 'absent')[] = [];
-  const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
-    if (next?.providerConnectionsCatalog?.status === 'ready') publications.push(next.providerConnectionsCatalog.revision);
+  const unsubscribe = subscribeActiveAccountSettingsSnapshot((previous, next) => {
+    // Source contraction also publishes a genuine preference change. Count
+    // newly admitted row revisions, not all Account publications carrying it.
+    if (next?.providerConnectionsCatalog?.status === 'ready'
+      && (previous?.providerConnectionsCatalog?.status !== 'ready'
+        || previous.providerConnectionsCatalog.revision !== next.providerConnectionsCatalog.revision)) {
+      publications.push(next.providerConnectionsCatalog.revision);
+    }
   });
   const readers = mode === 'repeated-reobserve' ? Array.from({ length: 12 }, () =>
     refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })) : [];
