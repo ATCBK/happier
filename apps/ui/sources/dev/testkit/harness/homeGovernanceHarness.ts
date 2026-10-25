@@ -794,22 +794,62 @@ export function installHomeGovernanceBoundaries(harness: HomeGovernanceHarness):
 }
 
 /**
- * Waits for a Home Administration render the way the runner already decided
- * these waits should be bounded.
+ * Waits for a Home Administration render behind this harness's real request
+ * boundary, and fails with the assertion itself once the render has stopped
+ * moving.
  *
- * `vi.waitFor` applies a 1 s cutoff — a default meant for a quick synchronous
- * poll. What these suites wait on is a React render behind this harness's real
- * request boundary, on a fork-capped runner whose `testTimeout`
- * (`apps/ui/vitest.config.ts`) was deliberately raised so "unrelated load
- * doesn't cause spurious failures". The 1 s poll silently overrode that
- * decision, which is why this family reads red on a busy host and green on a
- * quiet one while the bytes never changed. A subordinate wait must not impose a
- * shorter competing cutoff than the case containing it, so the budget is read
- * from the runner's own resolved configuration rather than chosen here.
+ * The wait keeps going while the case makes progress: the harness serves a
+ * request, or the assertion fails differently (the rendered tree changed). A
+ * busy host only slows that progress down, so a slow render still settles
+ * green. Once neither has moved for {@link HOME_GOVERNANCE_QUIET_MS}, the state
+ * the assertion waits for is not coming, and the wait rejects with the
+ * assertion's own error instead of letting the case run into its timeout
+ * ("Test timed out" hides what never rendered and costs the full budget).
+ * The outer bound is still the runner's own `testTimeout`, never a second,
+ * shorter deadline for a case that keeps progressing.
  */
-export function waitForHomeGovernance<T>(assertion: () => T | Promise<T>): Promise<T> {
-    return vi.waitFor(assertion, { timeout: resolveRunnerTestTimeoutMs() });
+export async function waitForHomeGovernance<T>(assertion: () => T | Promise<T>): Promise<T> {
+    let lastProgressAt = readWallClock();
+    let lastFailure: string | undefined;
+    const harness = installed.current;
+    const listeners = harness ? homeRequestListeners.get(harness) : undefined;
+    const onRequest = () => { lastProgressAt = readWallClock(); };
+    listeners?.add(onRequest);
+    try {
+        const outcome = await vi.waitFor(async (): Promise<{ held: true; value: T } | { held: false; error: unknown }> => {
+            try {
+                return { held: true, value: await assertion() };
+            } catch (error) {
+                const failure = error instanceof Error ? error.message : String(error);
+                const at = readWallClock();
+                if (failure !== lastFailure) {
+                    lastFailure = failure;
+                    lastProgressAt = at;
+                }
+                if (at - lastProgressAt >= HOME_GOVERNANCE_QUIET_MS) return { held: false, error };
+                throw error;
+            }
+        }, { timeout: resolveRunnerTestTimeoutMs() });
+        if (!outcome.held) throw outcome.error;
+        return outcome.value;
+    } finally {
+        listeners?.delete(onRequest);
+    }
 }
+
+/**
+ * How long a waited-for render may show no progress before the wait reports
+ * its assertion, derived from measurement: across the 339 suites that use
+ * this wait (2026-10-25, four shard partitions on a loaded worker), the
+ * longest stretch a passing wait spent with no harness request and an
+ * unchanged failure was 4.8 s (a production refetch timer under real timers);
+ * most were under 2.5 s. Four times that maximum keeps a slow host green while
+ * a render that is not coming fails in a third of the case budget.
+ */
+const HOME_GOVERNANCE_QUIET_MS = 20_000;
+// Captured at module evaluation so a case that installs fake timers later
+// still measures quiet in real time, the same clock `vi.waitFor` bounds with.
+const readWallClock = Date.now;
 
 function resolveRunnerTestTimeoutMs(): number {
     // Vitest keeps the resolved project config on the worker that runs the

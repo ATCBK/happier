@@ -188,3 +188,36 @@ it('retains both named Account approval requirements when seeding them in sequen
         'machines.processes.stop': { approvalRequiredSurfaces: ['ui'] },
     } } } } });
 });
+
+it('fails a wait whose render stopped moving with its own assertion, inside the case budget', async () => {
+    installHomeGovernanceBoundaries(homes);
+    const started = Date.now();
+    await expect(waitForHomeGovernance(() => expect('rendered').toBe('awaited')))
+        .rejects.toThrow("expected 'rendered' to be 'awaited'");
+    expect(Date.now() - started).toBeLessThan(40_000);
+});
+
+it('keeps waiting past the quiet window while the Home keeps serving requests', async () => {
+    installHomeGovernanceBoundaries(homes);
+    const serverUrl = 'https://governance-progress.test';
+    const serverId = await homes.addHome({ name: 'Progress', serverUrl, accountId: 'owner' });
+    homes.answer(serverId, '/v1/progress-probe', { body: { ok: true } });
+    let reached = false;
+    const later = setTimeout(() => { reached = true; }, 25_000);
+    let done = false;
+    const traffic = (async () => {
+        while (!done) {
+            await homes.request(`${serverUrl}/v1/progress-probe`, undefined);
+            await new Promise(resolve => setTimeout(resolve, 2_000));
+        }
+    })();
+    try {
+        // The failure stays identical throughout, so only the served requests count as progress.
+        await waitForHomeGovernance(() => expect(reached).toBe(true));
+    } finally {
+        clearTimeout(later);
+        done = true;
+        await traffic;
+    }
+    expect(homes.requestsFor('/v1/progress-probe').length).toBeGreaterThan(10);
+});
