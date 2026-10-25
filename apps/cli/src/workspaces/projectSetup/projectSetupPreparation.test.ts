@@ -360,6 +360,10 @@ describe('current Project setup effect and preparation admission', () => {
         expect(await prepareProjectSetup({ ...native.input, skipForInvocation: true, nativeIo: { resolveTool: async () => null } })).toMatchObject({ kind: 'refused', code: 'native_tool_unavailable' });
         const env = await fixture({ version: 1, environment: { kind: 'toolchain', tool: 'mise', configPath: 'missing.toml' } });
         expect(await prepareProjectSetup({ ...env.input, skipForInvocation: true })).toMatchObject({ kind: 'refused', code: 'native_configuration_missing' });
+        const partial = await fixture({ version: 1, environment: { kind: 'toolchain', tool: 'devbox', configPath: 'devbox.json' } },
+            { 'devbox.json': JSON.stringify({ packages: [], include: ['unresolved.json'] }) });
+        expect(await prepareProjectSetup({ ...partial.input, skipForInvocation: true }))
+            .toMatchObject({ kind: 'refused', code: 'native_environment_dynamic_unsupported' });
         const secret = await fixture({ version: 1, environmentVariables: [{ name: 'TOKEN', kind: 'secret', required: true }] });
         expect(await prepareProjectSetup({ ...secret.input, skipForInvocation: true })).toMatchObject({ kind: 'refused', code: 'project_environment_binding_unavailable' });
         const contained = await fixture({ version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }], setupInputs: ['escape.bin'] } });

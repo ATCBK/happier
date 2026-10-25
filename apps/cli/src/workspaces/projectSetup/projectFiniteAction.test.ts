@@ -275,6 +275,77 @@ describe('authenticated finite Project Action owner', () => {
         };
     }
 
+    it.each([
+        ['nix_flake', 'flake.nix', '2.35.2', '{ outputs = inputs: {}; }'],
+        ['devenv', 'devenv.nix', '2.4.0', '{ pkgs, ... }: { env.NATIVE_VALUE = "prepared"; }'],
+    ] as const)('reviews unevaluated %s before native effects and resumes the original Project Run after human approval', async (tool, configPath, version, content) => {
+        const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner', tokenEpoch: 1,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+        const h = await harness({ version: 1, environment: { kind: 'toolchain', tool, configPath } }, 1, 'machine', token);
+        await writeFile(join(h.root, configPath), content);
+        const evaluated = join(h.root, 'native-evaluated');
+        Object.assign(h.runtime, {
+            nativeIo: { resolveTool: async (id: string) => ({ executablePath: `/managed/${id}`, version: id === 'make' ? '1' : version }) },
+            environmentIo: createProjectNativeEnvironmentIoForHost({
+                // The installed-tool OS boundary substitutes a real supervised
+                // process; admission, review, native production and PTY stay real.
+                resolveTool: async () => ({ executablePath: process.execPath, version, args: ['-e',
+                    `require('node:fs').writeFileSync(${JSON.stringify(evaluated)},'evaluated');process.stdout.write('\\0HAPPIER_NATIVE_ENV_V1\\0NATIVE_VALUE=prepared\\0');`, '--'] }),
+            }),
+        });
+        const scope = { accountId: 'owner', machineId: 'machine' };
+        try {
+            expect(await h.rpcInvoke('projects.script.run', { workspace: h.address,
+                selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } }))
+                .toMatchObject({ operation: { operationId: 'operation' } });
+            await expect.poll(() => {
+                const snapshot = h.operationRuntime.store.get(scope, 'operation');
+                return snapshot?.setupReview?.code ?? snapshot?.error?.errorCode ?? snapshot?.state;
+            }).toBe('project_setup_consent_required');
+            const review = ProjectSetupConsentFailureDetailsV1Schema.parse(h.operationRuntime.store.get(scope, 'operation')!.setupReview);
+            expect(review.reviewedEffect).toMatchObject({ environment: { selection: { kind: 'toolchain', tool, configPath } },
+                files: [expect.objectContaining({ file: configPath, digest: expect.any(String) })] });
+            await expect(access(evaluated)).rejects.toMatchObject({ code: 'ENOENT' });
+            expect(h.spawned).toEqual([]);
+            h.waiveSetupApproval();
+            expect(await h.rpcInvoke('projects.prepare', { workspace: h.address, phase: 'setup', heldOperationId: 'operation',
+                expectedEffectDigest: review.reviewedEffectDigest, consentScope: 'thisTime' },
+            { ...h.context, callerAuthority: 'present_user', transportRequestId: 'approve-native-evaluation' }))
+                .toMatchObject({ operation: { operationId: 'operation' } });
+            await expect.poll(() => h.spawned.length).toBe(1);
+            expect(await readFile(evaluated, 'utf8')).toBe('evaluated');
+            expect(h.spawned[0]!.params).toMatchObject({ file: '/managed/make', args: ['-f', join(h.root, 'Makefile'), 'check'],
+                options: { cwd: h.root, env: { NATIVE_VALUE: 'prepared' } } });
+            h.spawned[0]!.pty.exit(0);
+            expect(await h.operationRuntime.runner.waitForTerminal(scope, 'operation')).toMatchObject({ state: 'succeeded' });
+            expect(h.operationRuntime.store.list(scope).items).toHaveLength(1);
+            expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
+        } finally { await h.operationRuntime.runner.retireProjectFiniteOperations(); }
+    });
+
+    it.each(['missing', 'unqualified'] as const)('retains the typed refusal for a %s selected Nix tool without native evaluation or host fallback', async mode => {
+        const h = await harness({ version: 1, environment: { kind: 'toolchain', tool: 'nix_flake', configPath: 'flake.nix' } });
+        await writeFile(join(h.root, 'flake.nix'), '{ outputs = inputs: {}; }');
+        const evaluated = join(h.root, 'must-not-evaluate');
+        const tool = mode === 'missing' ? null : { executablePath: process.execPath, version: '2.35.999', args: ['-e',
+            `require('node:fs').writeFileSync(${JSON.stringify(evaluated)},'unexpected');`, '--'] };
+        Object.assign(h.runtime, { nativeIo: { resolveTool: async (id: string) => id === 'nix' ? tool : { executablePath: `/managed/${id}`, version: '1' } },
+            environmentIo: createProjectNativeEnvironmentIoForHost({ resolveTool: async () => tool }) });
+        h.waiveSetupApproval();
+        try {
+            const result = await h.rpcInvoke('projects.script.run', { workspace: h.address,
+                selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } });
+            if (mode === 'missing') expect(result).toMatchObject({ ok: false, errorCode: 'native_tool_unavailable' });
+            else {
+                expect(result).toMatchObject({ operation: { operationId: 'operation' } });
+                expect(await h.operationRuntime.runner.waitForTerminal({ accountId: 'owner', machineId: 'machine' }, 'operation'))
+                    .toMatchObject({ state: 'failed', error: { errorCode: 'native_version_not_characterized' } });
+            }
+            await expect(access(evaluated)).rejects.toMatchObject({ code: 'ENOENT' });
+            expect(h.spawned).toEqual([]);
+        } finally { await h.operationRuntime.runner.retireProjectFiniteOperations(); }
+    });
+
     it.for([{ commands: [] }, { commands: ['echo must-not-run'] }])('retries the original built-in native environment through public Stop while retaining the same FIFO reservation, setup $commands', async ({ commands }, { task }) => {
         const h = await harness({ version: 1, environment: { kind: 'toolchain', tool: 'mise', configPath: 'mise.toml' },
             workspace: { setup: commands.map(command => ({ kind: 'command', command })) } }, 1);

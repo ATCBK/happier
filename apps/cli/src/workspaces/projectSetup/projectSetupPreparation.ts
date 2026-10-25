@@ -213,7 +213,14 @@ export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInp
         const environmentSelection = manifest?.environment ?? { kind: 'host' as const };
         const selectedEnvironment = await resolveProjectEnvironmentSelection({ root, selection: environmentSelection });
         if (selectedEnvironment.kind === 'refused') return refuse(selectedEnvironment.code);
-        if (selectedEnvironment.coverage === 'partial') return refuse('native_environment_dynamic_unsupported');
+        // Unevaluated Nix is a passive inspection fact, not an unsupported
+        // environment. Review its bytes here; the qualified native producer
+        // evaluates only after the existing setup-effect consent is admitted.
+        if (selectedEnvironment.coverage === 'partial'
+            && (selectedEnvironment.diagnostics.length === 0
+                || selectedEnvironment.diagnostics.some(diagnostic => diagnostic.code !== 'unevaluated_nix'))) {
+            return refuse('native_environment_dynamic_unsupported');
+        }
         const environment = selectedEnvironment.selection;
         const environmentReviewInputs: ProjectNativeFileFact[] = selectedEnvironment.file !== undefined && selectedEnvironment.content !== undefined
             ? [{ file: selectedEnvironment.file, content: selectedEnvironment.content }] : [];
