@@ -5,6 +5,19 @@ import { getActionSpec, PublicActionIdSchema } from './actionSpecs.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('local Voice Action contract', () => {
+  it('exposes History reads and export while preserving destructive clear approval', () => {
+    for (const operation of ['search', 'load_older', 'export', 'clear']) {
+      const actionId = ActionIdSchema.parse(`ui.voice_global.history.${operation}`);
+      const spec = getActionSpec(actionId);
+      expect(spec.executionPlacement).toBe('client');
+      expect(spec.surfaces).toMatchObject({ agent: true, mcp: true, plugin: true });
+      expect(spec.inputSchema.safeParse(operation === 'export' ? { range: 'all', query: 'release' } : {}).success).toBe(true);
+      expect(spec.inputSchema.safeParse({ sessionId: 'ordinary-session' }).success).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId, spec,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(operation === 'clear');
+      if (operation === 'search' || operation === 'load_older') expect(spec.sideEffectClass).toBe('read');
+    }
+  });
   it('declares the exact local conversation and Brief operation identities', () => {
     for (const id of ['get', 'start', 'end', 'set_muted', 'recover', 'dismiss', 'hold_begin', 'hold_release', 'hold_cancel', 'turn_control',
       'brief.request', 'brief.retry', 'brief.stop', 'brief.close', 'glance.open', 'glance.close', 'transcript.set_visible',
@@ -75,7 +88,10 @@ describe('local Voice Action contract', () => {
     }
     for (const muted of [true, false]) {
       expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted },
-        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(!muted);
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(false);
+      const required = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+      expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted }, settings: required,
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
       expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted },
         context: { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId } } }).required).toBe(false);
     }

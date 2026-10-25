@@ -100,6 +100,18 @@ export type VoiceControlsActionInputById = {
     readonly "ui.voice_global.dictation.dismiss": {
         commandId: string;
     };
+    readonly "ui.voice_global.history.search": {
+        query?: string | undefined;
+        refresh?: boolean | undefined;
+    };
+    readonly "ui.voice_global.history.load_older": {
+        query?: string | undefined;
+    };
+    readonly "ui.voice_global.history.export": {
+        range: 'loaded' | 'all';
+        query?: string | undefined;
+    };
+    readonly "ui.voice_global.history.clear": Record<string, never>;
     readonly "ui.voice_global.reset": Record<string, never>;
     readonly "ui.voice_agent.teleport": {
         [x: string]: unknown;
@@ -150,6 +162,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -195,6 +232,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.start": {
@@ -240,6 +302,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -285,6 +372,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.end": {
@@ -330,6 +442,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -375,6 +512,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.set_muted": {
@@ -420,6 +582,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -465,6 +652,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.recover": {
@@ -510,6 +722,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -555,6 +792,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.dismiss": {
@@ -600,6 +862,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -645,6 +932,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.turn_control": {
@@ -690,6 +1002,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -735,6 +1072,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.hold_begin": {
@@ -780,6 +1142,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -825,6 +1212,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.hold_release": {
@@ -870,6 +1282,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -915,6 +1352,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.hold_cancel": {
@@ -960,6 +1422,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1005,6 +1492,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.brief.request": {
@@ -1066,6 +1578,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1111,6 +1648,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.glance.close": {
@@ -1156,6 +1718,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1201,6 +1788,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.transcript.set_visible": {
@@ -1246,6 +1858,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1291,6 +1928,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.companion.reveal": {
@@ -1336,6 +1998,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1381,6 +2068,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.position.set": {
@@ -1426,6 +2138,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1471,6 +2208,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.setup.open": {
@@ -1516,6 +2278,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1561,6 +2348,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.setup.close": {
@@ -1606,6 +2418,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1651,6 +2488,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.open_conversation": {
@@ -1696,6 +2558,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1741,6 +2628,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.setup.microphone.permission.request": {
@@ -1787,6 +2699,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1833,6 +2770,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.setup.system_settings.open": {
@@ -1878,6 +2840,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     } | {
         status: 'unavailable';
@@ -1923,6 +2910,31 @@ export type VoiceControlsActionResultById = {
                 value: VoiceProviderSettingsJsonValueV1;
                 displayName: string;
             } | null;
+            presentation?: {
+                attemptId: string | null;
+                surfaceState: 'connecting' | 'error' | 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'reconnecting' | 'permission_required' | 'interrupted';
+                live: boolean;
+                muted: boolean;
+                canStart: boolean;
+                canStop: boolean;
+                canMute: boolean;
+                canCommitInput: boolean;
+                canDismissFailedAttempt: boolean;
+                canDismissEnded: boolean;
+                failureKind: 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'mic_permission_revoked' | 'mic_ended' | 'mic_plateau' | 'transport_disconnect' | 'provider_error' | 'provider_auth_invalid' | 'provider_setup_required' | 'execution_machine_unavailable' | 'reconnect_exhausted' | 'audio_context_suspended' | 'stt_timeout' | 'tts_failed' | 'turn_aborted' | 'authentication_required' | 'session_unavailable' | 'unsupported_runtime' | 'update_required' | 'feature_unavailable' | 'service_temporarily_unavailable' | null;
+                failureMessage: string | null;
+                recovery: {
+                    action: 'retry' | 'reconnect' | 'open_settings' | 'open_settings_then_reconnect' | 'review_credentials' | 'select_execution_machine' | 'select_speech_engine' | 'connect_agent' | 'install_agent_runtime' | 'update_agent_runtime' | 'none' | null;
+                    label: string;
+                    icon: 'microphone' | 'gear' | 'arrow-clockwise';
+                    runtimeTarget: {
+                        agentId: string;
+                        pluginId: string;
+                        machineId: string;
+                        serverIdentityId: string;
+                    } | null;
+                } | null;
+            } | undefined;
         };
     };
     readonly "ui.voice_global.dictation.start": {
@@ -1956,6 +2968,47 @@ export type VoiceControlsActionResultById = {
     } | {
         status: 'unavailable';
         code: 'dictation_field_unmounted' | 'dictation_field_unavailable' | 'dictation_consent_required' | 'dictation_microphone_unavailable' | 'dictation_capture_unavailable' | 'dictation_state_changed' | 'dictation_cancelled' | 'dictation_failed';
+    };
+    readonly "ui.voice_global.history.search": {
+        sessionId: string | null;
+        loadedRowCount: number;
+        hasMore: boolean | null;
+        rows: {
+            id: string;
+            role: 'user' | 'assistant';
+            text: string;
+            createdAt: number;
+            providerLabel: string;
+            source: {
+                pluginId: string;
+                contributionId: string;
+            } | null;
+        }[];
+    };
+    readonly "ui.voice_global.history.load_older": {
+        sessionId: string | null;
+        loadedRowCount: number;
+        hasMore: boolean | null;
+        rows: {
+            id: string;
+            role: 'user' | 'assistant';
+            text: string;
+            createdAt: number;
+            providerLabel: string;
+            source: {
+                pluginId: string;
+                contributionId: string;
+            } | null;
+        }[];
+    };
+    readonly "ui.voice_global.history.export": {
+        fileName: string;
+        mimeType: 'application/json';
+        rowCount: number;
+        range: 'loaded' | 'all';
+    };
+    readonly "ui.voice_global.history.clear": {
+        cleared: boolean;
     };
     readonly "ui.voice_global.reset": JsonValue;
     readonly "ui.voice_agent.teleport": JsonValue;

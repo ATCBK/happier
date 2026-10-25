@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { SessionVoicePreferenceV1Schema } from '../sessions/instructions/sessionVoicePreferenceV1.js';
+import { VoiceAttemptPresentationSchema } from '../voice/attemptPresentation.js';
 
 export const VOICE_CONVERSATION_ACTION_IDS = [
   'ui.voice_global.get', 'ui.voice_global.start', 'ui.voice_global.end', 'ui.voice_global.set_muted',
@@ -14,6 +15,8 @@ export const VOICE_CONVERSATION_ACTION_IDS = [
   'ui.voice_global.setup.microphone.permission.request', 'ui.voice_global.setup.system_settings.open',
   'ui.voice_global.dictation.start', 'ui.voice_global.dictation.finish',
   'ui.voice_global.dictation.cancel', 'ui.voice_global.dictation.dismiss',
+  'ui.voice_global.history.search', 'ui.voice_global.history.load_older',
+  'ui.voice_global.history.export', 'ui.voice_global.history.clear',
 ] as const;
 export type VoiceConversationActionId = typeof VOICE_CONVERSATION_ACTION_IDS[number];
 export function isVoiceConversationActionId(value: string): value is VoiceConversationActionId {
@@ -28,6 +31,20 @@ export function isVoiceDictationActionId(value: string): value is VoiceDictation
 export function voiceDictationOperation(actionId: VoiceDictationActionId): VoiceDictationOperation {
   return actionId.slice('ui.voice_global.dictation.'.length) as VoiceDictationOperation;
 }
+
+export type VoiceHistoryActionId = Extract<VoiceConversationActionId, `ui.voice_global.history.${string}`>;
+export function isVoiceHistoryActionId(value: string): value is VoiceHistoryActionId {
+  return value.startsWith('ui.voice_global.history.') && isVoiceConversationActionId(value);
+}
+
+const HistorySearchInputSchema = lazyZodSchema(() => z.strictObject({ query: z.optional(z.string()), refresh: z.optional(z.boolean()) }));
+const HistoryPageInputSchema = lazyZodSchema(() => z.strictObject({ query: z.optional(z.string()) }));
+const HistoryExportInputSchema = lazyZodSchema(() => z.strictObject({ range: z.enum(['loaded', 'all']), query: z.optional(z.string()) }));
+export const VoiceHistorySnapshotSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.nullable(z.string()), loadedRowCount: z.number().check(z.int(), z.minimum(0)), hasMore: z.nullable(z.boolean()),
+  rows: z.array(z.strictObject({ id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), createdAt: z.number(),
+    providerLabel: z.string(), source: z.nullable(z.strictObject({ pluginId: z.string(), contributionId: z.string() })) })),
+}));
 
 const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const AddressSchema = lazyZodSchema(() => z.strictObject({ serverId: IdSchema, sessionId: IdSchema }));
@@ -75,6 +92,10 @@ export const VoiceConversationActionInputSchemas = {
   'ui.voice_global.dictation.finish': DictationInputSchema,
   'ui.voice_global.dictation.cancel': DictationInputSchema,
   'ui.voice_global.dictation.dismiss': DictationInputSchema,
+  'ui.voice_global.history.search': HistorySearchInputSchema,
+  'ui.voice_global.history.load_older': HistoryPageInputSchema,
+  'ui.voice_global.history.export': HistoryExportInputSchema,
+  'ui.voice_global.history.clear': z.strictObject({}),
 } as const;
 
 /** The adapter's accepted voice for this attempt, never its saved next-attempt preference. */
@@ -93,6 +114,8 @@ export const VoiceConversationStatusSchema = lazyZodSchema(() => z.strictObject(
   canHoldToTalk: z.boolean(), muted: z.boolean(), canDismissFailedAttempt: z.boolean(), canDismissEnded: z.boolean(),
   recoveryAction: z.nullable(IdSchema), availability: z.enum(['ready', 'recoverable', 'setup', 'unavailable']),
   inUseVoice: z.nullable(VoiceConversationInUseVoiceSchema),
+  /** Read projection; older callers may omit it. No control input or authority is carried here. */
+  presentation: z.optional(VoiceAttemptPresentationSchema),
 }));
 export type VoiceConversationStatus = z.infer<typeof VoiceConversationStatusSchema>;
 export const VoiceConversationActionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
@@ -136,6 +159,11 @@ export const VoiceConversationActionOutputSchemas = {
   'ui.voice_global.dictation.finish': VoiceDictationActionResultSchema,
   'ui.voice_global.dictation.cancel': VoiceDictationActionResultSchema,
   'ui.voice_global.dictation.dismiss': VoiceDictationActionResultSchema,
+  'ui.voice_global.history.search': VoiceHistorySnapshotSchema,
+  'ui.voice_global.history.load_older': VoiceHistorySnapshotSchema,
+  'ui.voice_global.history.export': z.strictObject({ fileName: z.string(), mimeType: z.literal('application/json'),
+    rowCount: z.number().check(z.int(), z.minimum(0)), range: z.enum(['loaded', 'all']) }),
+  'ui.voice_global.history.clear': z.strictObject({ cleared: z.boolean() }),
 } as const;
 
 /** What a person reads in Settings, approvals and the form. Agents read `description`. */
@@ -168,6 +196,10 @@ const VOICE_CONVERSATION_ACTION_SUMMARIES = {
   'ui.voice_global.dictation.finish': 'Finish Dictation and insert recognized words into the same editable field without sending.',
   'ui.voice_global.dictation.cancel': 'Cancel Dictation for the exact mounted field without inserting words.',
   'ui.voice_global.dictation.dismiss': 'Dismiss the exact mounted field’s Dictation failure.',
+  'ui.voice_global.history.search': 'Search loaded direct-media Voice History text and provider names. Discovers the History carrier on first use; refresh explicitly reloads it. Voice Agent and session-scoped conversations remain in ordinary Session history.',
+  'ui.voice_global.history.load_older': 'Load the next older page of direct-media Voice History, optionally filtering the loaded rows.',
+  'ui.voice_global.history.export': 'Export loaded or all direct-media Voice History to this client’s download or share target, optionally filtered. Uses the canonical streaming JSON serializer.',
+  'ui.voice_global.history.clear': 'Delete the direct-media Voice History carrier and retire its local rows. Ordinary Session and Voice Agent history are unaffected.',
 } as const satisfies Record<(typeof VOICE_CONVERSATION_ACTION_IDS)[number], string>;
 
 export const VOICE_CONVERSATION_ACTION_SPECS = VOICE_CONVERSATION_ACTION_IDS.map((id): PreNormalizedActionSpec => ({
@@ -196,18 +228,28 @@ export const VOICE_CONVERSATION_ACTION_SPECS = VOICE_CONVERSATION_ACTION_IDS.map
     'ui.voice_global.open_conversation': 'Open Voice conversation',
     'ui.voice_global.dictation.start': 'Start field Dictation', 'ui.voice_global.dictation.finish': 'Finish field Dictation',
     'ui.voice_global.dictation.cancel': 'Cancel field Dictation', 'ui.voice_global.dictation.dismiss': 'Dismiss field Dictation failure',
+    'ui.voice_global.history.search': 'Search Voice History', 'ui.voice_global.history.load_older': 'Load older Voice History',
+    'ui.voice_global.history.export': 'Export Voice History', 'ui.voice_global.history.clear': 'Clear Voice History',
   }[id],
-  description: 'Use the answering client’s existing Voice lifecycle, input, recovery and Inbox Brief owners. Mutations require the captured attempt identity; navigation cannot retarget them. Spoken requests cannot decide approvals.',
+  description: isVoiceHistoryActionId(id) ? VOICE_CONVERSATION_ACTION_SUMMARIES[id]
+    : 'Use the answering client’s existing Voice lifecycle, input, recovery and Inbox Brief owners. Mutations require the captured attempt identity; navigation cannot retarget them. Spoken requests cannot decide approvals.',
   safety: id === 'ui.voice_global.start' || id === 'ui.voice_global.recover' || id === 'ui.voice_global.hold_begin'
     || id === 'ui.voice_global.set_muted' || id === 'ui.voice_global.dictation.start'
     || id === 'ui.voice_global.setup.microphone.permission.request'
+    || id === 'ui.voice_global.history.clear'
     || id === 'ui.voice_global.brief.request' || id === 'ui.voice_global.brief.retry' ? 'danger' : 'safe',
-  sideEffectClass: id === 'ui.voice_global.get' ? 'read' : 'write',
+  sideEffectClass: id === 'ui.voice_global.get' || (isVoiceHistoryActionId(id) && id !== 'ui.voice_global.history.clear') ? 'read' : 'write',
   requiredAuthority: 'account_automation', executionPlacement: 'client', placements: ['command_palette'],
   bindings: { mcpToolName: id.replaceAll('.', '_') },
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
   inputSchema: VoiceConversationActionInputSchemas[id], outputSchema: VoiceConversationActionOutputSchemas[id],
-  inputHints: { description: VOICE_CONVERSATION_ACTION_SUMMARIES[id], fields: isVoiceDictationActionId(id)
+  inputHints: { description: VOICE_CONVERSATION_ACTION_SUMMARIES[id], fields: isVoiceHistoryActionId(id)
+    ? id === 'ui.voice_global.history.clear' ? [] : [
+      { path: 'query', title: 'Search text or provider', widget: 'text' },
+      ...(id === 'ui.voice_global.history.search' ? [{ path: 'refresh', title: 'Refresh history', widget: 'boolean' as const }] : []),
+      ...(id === 'ui.voice_global.history.export' ? [{ path: 'range', title: 'Export range', widget: 'select' as const, required: true,
+        options: [{ value: 'loaded', label: 'Loaded history' }, { value: 'all', label: 'All history' }] }] : []),
+    ] : isVoiceDictationActionId(id)
     ? [{ path: 'commandId', title: 'Mounted field command', widget: 'text', required: true }]
     : id === 'ui.voice_global.get' ? [{ path: 'target', title: 'Where Voice would start', widget: 'json' }]
     : id === 'ui.voice_global.start' ? [
