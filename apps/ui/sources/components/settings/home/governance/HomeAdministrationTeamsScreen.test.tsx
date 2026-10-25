@@ -269,7 +269,10 @@ describe('HomeAdministrationTeamsScreen', () => {
         });
         await harness.selectHomes([home]);
         harness.answer(home, GOVERNANCE_PATH, { body: homeGovernanceProjectionFixture() });
-        harness.answer(home, TEAMS_LIST_PATH, { status: 503, body: { error: 'teams_unavailable' } });
+        // A transient server answer. `teams_unavailable` is the Home's 404 "no Teams here" refusal
+        // (`teamErrorHttpStatusV1`): the Action front door classifies it by code as unsupported,
+        // which no retry can change, so a 503 carrying it is not a Home that could not answer.
+        harness.answer(home, TEAMS_LIST_PATH, { status: 503, body: { error: 'service_unavailable' } });
 
         const screen = await renderHomeTeams(home);
         await waitForHomeGovernance(() => {

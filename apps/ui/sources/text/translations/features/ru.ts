@@ -270,6 +270,7 @@ const actionConfirmationTranslations = { ru: {
         homeUnavailable: 'Это одобрение относится к Home, недоступному на этом устройстве. Подключите Home повторно, чтобы принять решение.',
         turnedOffTitle: 'Действие выключено',
         turnedOffMessage: 'Это действие выключено, поэтому ничего не изменилось. Включить его снова можно в Настройки → Действия.',
+        turnedOffReadMessage: 'Это действие выключено, поэтому ничего не загружено. Включить его снова можно в Настройки → Действия.',
         openActionSettings: 'Открыть настройки Действий',
     } } as const satisfies Pick<Record<string, ActionConfirmationTranslations>, "ru">;
 

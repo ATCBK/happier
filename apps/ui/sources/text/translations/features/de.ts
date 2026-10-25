@@ -264,6 +264,7 @@ const actionConfirmationTranslations = { de: {
         homeUnavailable: 'Diese Freigabe gehört zu einem Home, das auf diesem Gerät nicht verfügbar ist. Verbinde dieses Home erneut, um zu entscheiden.',
         turnedOffTitle: 'Aktion ausgeschaltet',
         turnedOffMessage: 'Diese Aktion ist ausgeschaltet, deshalb wurde nichts geändert. Du kannst sie unter Einstellungen → Aktionen wieder einschalten.',
+        turnedOffReadMessage: 'Diese Aktion ist ausgeschaltet, deshalb wurde nichts geladen. Du kannst sie unter Einstellungen → Aktionen wieder einschalten.',
         openActionSettings: 'Aktionseinstellungen öffnen',
     } } as const satisfies Pick<Record<string, ActionConfirmationTranslations>, "de">;
 

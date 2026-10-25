@@ -274,7 +274,7 @@ describe('TeamGroupsScreen', () => {
             const screen = await renderGroups(serverId);
             await waitForTestId(screen, 'team-groups-unavailable');
 
-            expect(screen.getTextContent()).toContain('actionConfirmations.turnedOffMessage');
+            expect(screen.getTextContent()).toContain('actionConfirmations.turnedOffReadMessage');
             expect(screen.getTextContent()).not.toContain('teams.errors.loadFailed');
             expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-retry');
             await screen.pressByTestIdAsync('team-groups-open-actions-settings');

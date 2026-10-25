@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { usePageListBottomPadding } from '@/components/ui/lists/pageListBottomPadding';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { Text } from '@/components/ui/text/Text';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -156,6 +157,7 @@ function getActionSettingsEntryStatusText(
 export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const router = useRouter();
     const { theme } = useUnistyles();
+    const bottomPadding = usePageListBottomPadding();
     const styles = stylesheet;
     const [searchQuery, setSearchQuery] = React.useState('');
     const rawSettings = useSetting('actionsSettingsV1');
@@ -336,7 +338,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                     backgroundColor: theme.colors.surface.base,
                     ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
                 }}
-                contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
+                contentContainerStyle={{ paddingBottom: bottomPadding }}
                 initialNumToRender={6}
                 maxToRenderPerBatch={4}
                 windowSize={7}

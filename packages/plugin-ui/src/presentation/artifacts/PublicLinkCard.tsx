@@ -31,8 +31,10 @@ export type HappierPublicLinkCardProps = Readonly<{
   copyControl?: ReactNode;
   qr?: ReactNode;
   qrControl?: ReactNode;
+  /** Null withdraws "new link" for the same reason. */
   newControl: ReactNode;
   turnOffControl: ReactNode;
+  /** Null withdraws the whole offer to make a link: the Home cannot publish until it is set up. */
   createControl: ReactNode;
   expiryControl: ReactNode;
   usesControl: ReactNode;
@@ -70,7 +72,7 @@ export function HappierPublicLinkCard(props: HappierPublicLinkCardProps) {
         {props.qr ? <View style={styles.qr} testID="session-public-link-qr-code">{props.qr}</View> : null}
         <View style={styles.actions}>{props.qrControl}{props.newControl}<View style={styles.grow} />{props.turnOffControl}</View>
       </> : null}
-      {!props.published && !props.configuring && props.loaded ? <>
+      {!props.published && !props.configuring && props.loaded && props.createControl ? <>
         <Text style={meta}>{props.description}</Text>
         <View style={styles.actions}>{props.createControl}</View>
       </> : null}

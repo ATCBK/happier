@@ -441,6 +441,25 @@ describe('SessionPublicLinkSection', () => {
         expect(publication.getPublicLink).toHaveBeenCalledTimes(1);
     });
 
+    it('withdraws the options and every create control once the Home refuses publication for setup, and offers them again on a fresh open', async () => {
+        publication.getPublicLink.mockResolvedValue(null);
+        publication.createPublicLink.mockRejectedValue(new SessionAccessApiError('public_share_isolation_unavailable', 503));
+        const screen = await renderScreen(<PublicLink />);
+        await vi.waitFor(() => expect(status(screen)).toBe('Off'));
+        await makeLink(screen);
+        await vi.waitFor(() => expect(screen.findByTestId('session-public-link-mutation-error')).not.toBeNull());
+
+        expect(screen.findByTestId('session-public-link-options')).toBeNull();
+        expect(screen.findByTestId('session-public-link-options-create')).toBeNull();
+        expect(screen.findByTestId('session-public-link-create')).toBeNull();
+        expect(publication.createPublicLink).toHaveBeenCalledTimes(1);
+
+        // A fresh open owns no remembered refusal, so a repaired Home offers Create again.
+        const sibling = await renderScreen(<PublicLink />);
+        await vi.waitFor(() => expect(status(sibling)).toBe('Off'));
+        expect(sibling.findByTestId('session-public-link-create')).not.toBeNull();
+    });
+
     it('clears the card mutation refusal when its Home and Account scope changes', async () => {
         publication.getPublicLink.mockResolvedValue(null);
         publication.createPublicLink.mockRejectedValue(new SessionAccessApiError('public_share_isolation_unavailable', 503));

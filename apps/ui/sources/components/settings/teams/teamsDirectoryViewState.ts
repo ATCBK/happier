@@ -82,7 +82,7 @@ export function teamsUnavailableHomeReason(home: Pick<TeamsDirectoryUnavailableH
         case 'loading': return t('teams.directory.loading');
         case 'denied': return t('teams.errors.forbidden');
         case 'unsupported': return t('teams.unavailable.updateRequired');
-        case 'turned_off': return t('actionConfirmations.turnedOffMessage');
+        case 'turned_off': return t('actionConfirmations.turnedOffReadMessage');
         case 'offline': return t('teams.unavailable.offline');
         case 'error': return t('teams.errors.loadFailed');
         case 'credential_unreadable': return t('homeGovernance.credentialUnreadableTitle');

@@ -834,7 +834,7 @@ describe('DocumentShareSheet', () => {
         expect(host.publicRequests.filter(request => request.method === 'POST')).toHaveLength(1);
     });
 
-    it('keeps a refused public link inline with its options intact until a deliberate retry succeeds', async () => {
+    it('withdraws the options after a setup refusal and offers Create again when the row is reopened on a repaired Home', async () => {
         host.publicCreateError = 'public_share_isolation_unavailable';
         const screen = await renderScreen(<DocumentShareSheet artifactId="wf-1" kind="workflow-definition.v1" />);
         await settle();
@@ -847,17 +847,25 @@ describe('DocumentShareSheet', () => {
         await settle();
 
         expect(screen.findByTestId('session-public-link-mutation-error')).not.toBeNull();
-        expect(screen.findByTestId('session-public-link-options-create')).not.toBeNull();
+        expect(screen.findByTestId('session-public-link-options')).toBeNull();
+        expect(screen.findByTestId('session-public-link-options-create')).toBeNull();
+        expect(screen.findByTestId('session-public-link-create')).toBeNull();
         expect(screen.findByTestId('document-share-public-link')?.props.accessibilityLabel).toContain('Off');
         expect(host.publicShare).toBeNull();
         expect(modal.alert).not.toHaveBeenCalled();
         expect(screen.getTextContent()).toContain(t('session.collaboration.pane.linkUnavailable'));
 
+        // A fresh open owns no remembered refusal: once the Home is set up, Create works again.
         host.publicCreateError = null;
-        await screen.pressByTestIdAsync('session-public-link-options-create');
+        const reopened = await renderScreen(<DocumentShareSheet artifactId="wf-1" kind="workflow-definition.v1" />);
         await settle();
-        expect(screen.findByTestId('session-public-link-mutation-error')).toBeNull();
-        expect(screen.findByTestId('session-public-link-url')).not.toBeNull();
+        await reopened.pressByTestIdAsync('document-share-public-link');
+        expect(reopened.findByTestId('session-public-link-mutation-error')).toBeNull();
+        await reopened.pressByTestIdAsync('session-public-link-create');
+        await reopened.pressByTestIdAsync('session-public-link-expiry:30');
+        await reopened.pressByTestIdAsync('session-public-link-options-create');
+        await settle();
+        expect(reopened.findByTestId('session-public-link-url')).not.toBeNull();
         expect(host.publicShare?.expiresAt).toBeGreaterThan(Date.now() + 29 * 24 * 60 * 60 * 1000);
     });
 

@@ -24,7 +24,7 @@ describe('a Team read the person turned off in Settings, Actions', () => {
     const turnedOff = { kind: 'unknown' as const, retryable: false, code: 'action_disabled' };
 
     it('says it is turned off rather than that loading failed', () => {
-        expect(teamReadFailureLabel(turnedOff)).toBe('actionConfirmations.turnedOffMessage');
+        expect(teamReadFailureLabel(turnedOff)).toBe('actionConfirmations.turnedOffReadMessage');
     });
 
     it('leads to Actions settings instead of offering a retry that cannot help', () => {

@@ -24,7 +24,7 @@ import { t } from '@/text';
 export function teamReadFailureLabel(failure: HomeDomainFailure<string> | ScopedSnapshotError): string {
     // A read the person turned off in Settings, Actions never reached the Home. It is not a load
     // failure; the Action front door's own copy says so and where to turn it back on.
-    if (isActionTurnedOffErrorCode(failure.code)) return t('actionConfirmations.turnedOffMessage');
+    if (isActionTurnedOffErrorCode(failure.code)) return t('actionConfirmations.turnedOffReadMessage');
     if (failure.kind === 'unreachable') return t('teams.unavailable.offline');
     if (failure.kind === 'unknown' || failure.kind === 'invalid') return t('teams.errors.loadFailed');
     return teamMutationFailureLabel({ ...failure, code: failure.code ?? null });

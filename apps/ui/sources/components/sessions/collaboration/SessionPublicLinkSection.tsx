@@ -232,6 +232,10 @@ export function SessionPublicLinkCard(props: Readonly<{
         })
         : null), [props.shareUrl, props.serverUrl, publicShare?.publicUrl, publicShare?.token]);
     const busy = creating || revoking;
+    // The Home said publication needs setup, so offering the options again could only fail again.
+    // The refusal lives with this open card: a fresh open (or a Home change) starts clear and asks
+    // the Home once more, so a repaired Home needs no remembered flag to recover.
+    const setupBlocked = mutationFailure?.code === 'public_share_isolation_unavailable';
     const mutationsDisabled = props.readOnly || props.pendingApproval || busy;
     const creationDisabled = mutationsDisabled || (!networkOff && props.networkConsequenceStatus !== undefined
         && props.networkConsequenceStatus !== 'ready');
@@ -290,7 +294,7 @@ export function SessionPublicLinkCard(props: Readonly<{
             testID={props.testID}
             published={on}
             loaded={props.loaded}
-            configuring={configuring}
+            configuring={configuring && !setupBlocked}
             shareUrl={shareUrl}
             title={t('session.sharing.publicLink')}
             status={on ? t('session.collaboration.pane.linkOn') : t('session.collaboration.pane.linkOff')}
@@ -356,7 +360,7 @@ export function SessionPublicLinkCard(props: Readonly<{
                     onPress={() => setShowQr((current) => !current)}
                 />
             ) : null}
-            newControl={<ToolbarButton
+            newControl={setupBlocked ? null : <ToolbarButton
                 testID="session-public-link-new"
                 label={t('session.collaboration.pane.newLink')}
                 icon={<Icon name="arrow-clockwise" size={14} color={theme.colors.text.secondary} />}
@@ -371,7 +375,7 @@ export function SessionPublicLinkCard(props: Readonly<{
                 busy={revoking}
                 onPress={() => { void turnOff(); }}
             />}
-            createControl={<ToolbarButton
+            createControl={setupBlocked ? null : <ToolbarButton
                 testID="session-public-link-create"
                 label={t('session.sharing.createPublicLink')}
                 tone={props.presentation === 'inline' ? 'default' : 'primary'}
