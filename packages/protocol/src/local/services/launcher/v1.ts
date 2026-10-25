@@ -11,6 +11,7 @@ import { QualifiedProjectTrustProjectV1Schema } from '../../../workspaces/projec
 import { ProjectSetupReviewV1Schema } from '../../../actions/projectSetupConsentFailure.js';
 import { ActionSurfaceSchema } from '../../../actions/metadata.js';
 import { ActionExecuteFailureSchema } from '../../../actions/actionExecutionResult.js';
+import { PluginDiagnosticDataV1Schema } from '../../../daemon/pluginContributionIntrospection.js';
 
 export const LocalServiceLaunchTargetSourceV1Schema = lazyZodSchema(() => z.enum([
   'package_script',
@@ -125,6 +126,8 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     execution: z.optional(z.enum(['primary', 'portable'])),
     // Observed managed lifetime is separate from an available launcher action/HTTP readiness.
     serviceState: z.optional(z.enum(['starting', 'running', 'detecting', 'healthy', 'unhealthy', 'stopping', 'stopped', 'failed'])),
+    /** Supervisor-bounded and sanitized failure presentation; no private diagnostic details. */
+    diagnostics: z.optional(z.array(z.pick(PluginDiagnosticDataV1Schema, { code: true, severity: true, message: true }))),
     readiness: z.optional(z.enum(['ready', 'not_ready', 'not_reported'])),
     endpointUrl: z.optional(z.string().check(z.url())),
     startedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),

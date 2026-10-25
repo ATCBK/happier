@@ -60,6 +60,17 @@ describe('LocalServiceLauncherSnapshotV1Schema', () => {
     expect(LocalServiceLaunchTargetV1Schema.safeParse({ ...target, execution: 'automatic' }).success).toBe(false);
   });
 
+  it('accepts failure diagnostics as code, severity and sanitized message only', () => {
+    const target = { id: 'native-worker', source: 'managed_service', machineId: 'machine-a',
+      title: 'Worker', confidence: 'high', state: 'available', serviceState: 'unhealthy', actions: ['manage'],
+      diagnostics: [{ code: 'native_service_output', severity: 'info', message: 'Native worker failed [REDACTED]' }] };
+    expect(LocalServiceLaunchTargetV1Schema.parse(target)).toEqual(target);
+    for (const privateFields of [{ details: { env: { TOKEN: 'private' } } }, { remediation: { kind: 'retry' } }]) {
+      expect(LocalServiceLaunchTargetV1Schema.safeParse({ ...target,
+        diagnostics: [{ ...target.diagnostics[0], ...privateFields }] }).success).toBe(false);
+    }
+  });
+
   it('retains the source-qualified declaration on a sessionless native service target', () => {
     const target = {
       id: 'declaration:workspace-a:web', source: 'managed_service', machineId: 'machine-a',

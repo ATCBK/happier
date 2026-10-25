@@ -20,6 +20,8 @@ import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local
 import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState, selectLocalServiceLaunchTargets } from '../../../../../../apps/ui/sources/sync/domains/local/services/launch/store';
+import { buildLocalServiceRows } from '../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
 
 function previewServerBoundary() {
     const registrations = new Map<string, unknown>();
@@ -237,6 +239,69 @@ describe('createLocalServicesDaemonRuntime', () => {
             ]);
             await observe();
             expect(publications).toBe(4);
+        } finally { await runtime.stop(); await owner.dispose(); }
+    });
+
+    it.each(['running', 'unknown'] as const)('carries only failed native diagnostics to Services rows without republishing equal %s observations', async initialPhase => {
+        let phase: 'running' | 'unknown' | 'stopped' = initialPhase;
+        let observedAt = 1_000;
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            // Literal Project commands never reach plugin dependency installation.
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, now: () => observedAt, projectManagedServices: owner, runTargets: () => [],
+            scan: async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }) });
+        try {
+            const handle = await owner.superviseProject({
+                workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
+                declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'native-worker' } },
+                cwd: process.cwd(), serviceId: 'native-worker', specIdentity: 'native-worker', isCurrent: () => true,
+                requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
+                // Native lifecycle callbacks are the external-system boundary. Supervision, sanitization,
+                // daemon projection, wire parsing and the Services data model remain real.
+                processSpec: { mode: { kind: 'native',
+                    instance: { adapter: { pluginId: 'fixture.plugin', localId: 'worker' }, nativeResourceId: 'exact-worker' },
+                    lifecycle: {
+                        inspect: async () => ({ phase, readiness: phase === 'running' ? 'ready' : 'not_ready', endpoint: null }),
+                        logs: async () => 'Native worker failed with fixture-service-secret',
+                        stop: async () => { phase = 'stopped'; return { status: 'stopped' }; },
+                    } } },
+                authorizeLaunch: async () => ({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+                    env: { FIXTURE_SERVICE_TOKEN: 'fixture-service-secret' }, release: async () => undefined }),
+            });
+            await runtime.refreshInventoryNow();
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await runtime.launcherRoutes.getSnapshot({ scope: 'machine' }));
+            const targets = selectLocalServiceLaunchTargets(applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), snapshot));
+            const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: targets, sessionId: null, scope: 'machine' });
+            expect(row?.target.id).toBe(handle.serviceId);
+            if (initialPhase === 'unknown') {
+                const retainedOutput = handle.snapshot().diagnostics.find(diagnostic => diagnostic.code === 'native_service_output');
+                expect(retainedOutput).toMatchObject({ severity: 'info', message: expect.stringContaining('Native worker failed') });
+                expect(row?.target).toHaveProperty('diagnostics', expect.arrayContaining([retainedOutput]));
+                expect(JSON.stringify(snapshot)).not.toContain('fixture-service-secret');
+                expect(JSON.stringify(snapshot)).not.toContain('FIXTURE_SERVICE_TOKEN');
+            } else {
+                expect(row?.target).not.toHaveProperty('diagnostics');
+            }
+            let publications = 0;
+            runtime.inventoryRegistry.subscribe(() => { publications++; });
+            for (let index = 0; index < 75; index++) {
+                observedAt += 10_000;
+                await runtime.refreshInventoryNow();
+            }
+            expect(publications).toBe(0);
+            if (initialPhase === 'unknown') {
+                phase = 'running';
+                await handle.waitUntilHealthy();
+                expect(handle.snapshot().diagnostics.some(diagnostic => diagnostic.code === 'native_service_output')).toBe(true);
+                observedAt += 10_000;
+                await runtime.refreshInventoryNow();
+                expect(publications).toBe(1);
+                const recovered = LocalServiceLauncherSnapshotV1Schema.parse(await runtime.launcherRoutes.getSnapshot({ scope: 'machine' }));
+                expect(recovered.targets[0]).not.toHaveProperty('diagnostics');
+            }
         } finally { await runtime.stop(); await owner.dispose(); }
     });
 

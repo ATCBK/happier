@@ -1487,6 +1487,12 @@ uses its already-admitted container IDs and a bounded Docker tail. The superviso
 sanitizes and retains this output as `native_service_output`; it is a bounded
 failure diagnostic, not a long-lived Service output reader.
 
+The development Local Services launcher feed carries only diagnostic code,
+severity and sanitized message while a managed lifetime is failed or unhealthy.
+The strict launcher target schema and existing Services row target carry those
+facts to the client; recovery omits them even if the supervisor retains earlier
+diagnostics. Private diagnostic details and remediation never enter this projection.
+
 Complete Project binding reads join an in-flight establishment at this owner and
 re-read its published handle before returning. A pending Start or Move therefore
 keeps its native read pending rather than publishing a Machine-unavailable

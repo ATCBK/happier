@@ -102,6 +102,12 @@ function managedTarget(handle: ProjectManagedServiceHandle): LocalServiceLaunchT
         subtitle: handle.cwd, confidence: 'high',
         state: snapshot.state === 'starting' ? 'starting' : 'available',
         serviceState: snapshot.state,
+        // The supervisor owns sanitization and retention bounds. Publish only its
+        // presentation fields while failed; private details/remediation stay local.
+        ...((snapshot.state === 'failed' || snapshot.state === 'unhealthy') && snapshot.diagnostics.length > 0
+            ? { diagnostics: snapshot.diagnostics.map(({ code, severity, message }) => ({
+                code, severity, ...(message !== undefined ? { message } : {}),
+            })) } : {}),
         ...(unavailableReason ? { unavailableReason } : {}),
         ...(snapshot.startedAtMs !== null ? { startedAtMs: snapshot.startedAtMs } : {}),
         startedByAccountId: handle.requester.accountId,
