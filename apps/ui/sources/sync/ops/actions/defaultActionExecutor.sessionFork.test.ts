@@ -499,7 +499,7 @@ describe('default Action executor Session lifecycle contracts', () => {
       { sessionId: 'sess_parent', targetMachineId: 'machine_2' }, { ...context(), serverId: parentServerId });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3)[0]?.params).toHaveProperty('accountServerId', parentServerId);
-    expect(homes.requestsFor('/v1/machines?includeRevoked=true')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
+    // The handoff reads its Machines by id on the parent Home, not the include-revoked census (01f84d17e3).
     expect(homes.requestsFor('/v1/machines/read-batch')).toContainEqual(expect.objectContaining({
       serverId: parentServerId, input: expect.objectContaining({ machineIds: expect.arrayContaining(['machine_1']) }),
     }));

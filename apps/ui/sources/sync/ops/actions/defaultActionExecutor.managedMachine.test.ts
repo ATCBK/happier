@@ -17,12 +17,22 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { captureLazyActionAccountContext } from './actionAccountContext';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 
 installApprovalCommonModuleMocks();
+// The census list and the by-id Machine rows reader (a532f4a1e0) answer from the same external rows.
+function answerMachineRows(url: URL, init: RequestInit | undefined, rows: unknown): Response {
+    if (url.pathname === '/v1/machines') return Response.json(rows);
+    const list = Array.isArray(rows) ? rows as ReadonlyArray<{ id: string; access?: { custodian?: { accountId?: string } } }> : [];
+    // A by-id read returns a full published row; the census rows here carry only the fields each case is about.
+    return createMachineReadBatchResponseFixture(init?.body, id => {
+        const row = list.find(candidate => candidate.id === id);
+        return row ? { ...createPlainMachineRowFixture({ id, accountId: row.access?.custodian?.accountId ?? 'account-a' }), ...row } : null;
+    });
+}
 beforeAll(loadSyncSingletonForTests);
 afterEach(() => { resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); actionOperationStore.reset(); vi.restoreAllMocks(); });
 
@@ -46,7 +56,7 @@ describe('managed native UI Action frontdoor', () => {
                 desired: 'stop', desiredWhen: 'now', allocation: 'bound', creationState: 'active', intentRevision: 3,
                 retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
             });
-            if (url.pathname === '/v1/machines') return Response.json([]);
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, []);
             expect(url.pathname).toBe('/v1/actions/machines.managed.delete');
             const requestId = String((JSON.parse(String(init?.body)) as { requestId: string }).requestId);
             actionOperationStore.mergeSnapshots({ serverId: target.id, snapshots: [ActionOperationSnapshotV1Schema.parse({
@@ -90,7 +100,7 @@ describe('managed native UI Action frontdoor', () => {
             expect(url.origin).toBe(target.serverUrl);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            if (url.pathname === '/v1/machines') return Response.json([
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, [
                 { ...createPlainMachineRowFixture({ id: 'controller', accountId: 'account-a' }), runnerContentKeyBinding: null },
             ]);
             expect(url.pathname).toBe(`/v1/actions/${actionId}`);
@@ -151,7 +161,7 @@ describe('managed native UI Action frontdoor', () => {
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             // This foreign fixture deliberately has no installed-key discovery;
             // refusal must come from that real missing custody, not a mock assertion.
-            if (url.pathname === '/v1/machines') return Response.json([]);
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, []);
             if (url.pathname === '/v1/machines/managed/actions/get') return Response.json({
                 id: 'managed-a', homeId: 'srv_native_move', custodianAccountId: ownership === 'own' ? 'account-a' : 'other-account',
                 controller: current, launch: { provider: { pluginId: 'happier.machine.lima', localId: 'lima' }, schemaVersion: 1, name: 'Guest', choices: {} },
@@ -184,7 +194,7 @@ describe('managed native UI Action frontdoor', () => {
             const url = new URL(String(rawUrl));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            if (url.pathname === '/v1/machines') return Response.json([{ id: 'foreign-controller', kind: 'persistent', active: false,
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, [{ id: 'foreign-controller', kind: 'persistent', active: false,
                 installationId: 'foreign-installation', revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
                 runnerContentKeyBinding: null, access: { custodian: { accountId: 'controller-owner', displayName: 'Owner' },
                     role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
@@ -220,7 +230,7 @@ describe('managed native UI Action frontdoor', () => {
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            if (url.pathname === '/v1/machines') return Response.json([{ id: 'controller-a', kind: 'persistent', active: false,
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, [{ id: 'controller-a', kind: 'persistent', active: false,
                 installationId: 'installation-a', revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null,
                 runnerContentKeyBinding: null, access: { custodian: { accountId: 'account-a', displayName: 'Owner' },
                     role: 'manage', resourceMode: 'plain', accessState: 'ready' } }]);
@@ -316,7 +326,7 @@ describe('managed native UI Action frontdoor', () => {
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: null, version: 0 });
-            if (url.pathname === '/v1/machines') return Response.json([{ id: 'controller-a', kind: 'persistent', active: false,
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, [{ id: 'controller-a', kind: 'persistent', active: false,
                 revokedAt: null, replacedByMachineId: null, installationId: 'installation-a', dataEncryptionKey: null,
                 storageMode: 'e2ee', metadata: 'opaque Account ciphertext', metadataVersion: 1, daemonState: null,
                 daemonStateVersion: 0, keyBasis: { dataEncryptionKey: null, metadataVersion: 1, daemonStateVersion: 0 },
@@ -382,7 +392,7 @@ describe('managed native UI Action frontdoor', () => {
                 intentRevision: 3, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
                 observation: { observedAt: 1, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
             });
-            if (url.pathname === '/v1/machines') return Response.json({ machines: [] });
+            if (url.pathname === '/v1/machines' || url.pathname === '/v1/machines/read-batch') return answerMachineRows(url, init, { machines: [] });
             expect(url.pathname).toBe('/v1/actions/machines.managed.power.set');
             const envelope: unknown = JSON.parse(String(init?.body));
             expect(envelope).toMatchObject({ v: 1, target: { kind: 'machine', machineId: 'controller-a' },

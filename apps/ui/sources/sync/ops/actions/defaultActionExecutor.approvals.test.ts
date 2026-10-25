@@ -110,13 +110,12 @@ async function invitationApproval(actionId: 'teams.invitations.create' | 'teams.
         },
     };
     const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
-    homes.answer(homeId, '/v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' }),
+    const machineRow = { ...createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' }),
         installationId: 'installation-1', installationPublicKey: encodeBase64(installation.publicKey, 'base64'),
-        revokedAt: null, replacedByMachineId: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }] });
-    homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: {
-        ...createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' }),
-        id: target.machineId, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-    } } });
+        revokedAt: null, replacedByMachineId: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
+    homes.answer(homeId, '/v1/machines', { body: [machineRow] });
+    // The original Account Machine is read by id (a532f4a1e0): it is the same Home row, installation identity included.
+    homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: { ...machineRow, kind: 'persistent' } } });
     if (!signed) {
         // Retained host-CLI approvals remain replayable; current CLI admission
         // does not grant automation permission to create a fresh invitation proposal.
@@ -1114,11 +1113,13 @@ describe('createDefaultActionExecutor approvals', () => {
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
         const credential = homes.findByServerUrl('https://approval-actions.test')?.token;
         if (!credential) throw new Error('missing_original_account_credential');
-        homes.answer(homeId, '/v1/machines', { body: [{ id: machineId, kind: 'persistent', active: true,
+        const foreignMachine = { ...createPlainMachineRowFixture({ id: machineId, accountId: 'foreign-owner' }), kind: 'persistent', active: true,
             installationId, installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
             replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
             access: { custodian: { accountId: 'foreign-owner', displayName: 'Owner' }, role: 'manage',
-                resourceMode: 'plain', accessState: 'ready' } }] });
+                resourceMode: 'plain', accessState: 'ready' } } as const;
+        homes.answer(homeId, '/v1/machines', { body: [foreignMachine] });
+        homes.answer(homeId, `/v1/machines/${machineId}`, { body: { machine: foreignMachine } });
         const actionId = 'machines.managed.rebuild';
         const nativeInput = { homeId: 'srv_approval_home', managedMachineId: 'foreign-child', kind: 'rebuild',
             expectedRevision: 4, reviewedEffectDigest: 'a'.repeat(64) };

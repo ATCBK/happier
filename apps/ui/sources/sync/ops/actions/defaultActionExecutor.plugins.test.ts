@@ -7,6 +7,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
@@ -52,11 +53,17 @@ beforeEach(async () => {
     await homes.reset();
     await loadSyncSingletonForTests();
     serverId = await homes.addHome({ name: 'Plugin Home', serverUrl: 'https://plugin-actions.test', serverIdentityId: 'srv_plugin_home', accountId: 'owner', currentAccount: true });
-    homes.answer(serverId, '/v1/machines', { body: ['admitted', 'other'].map(id => ({ ...ExternalActionMachineBootstrapV1Schema.parse({
+    const machineRows = ['admitted', 'other'].map(id => ({ ...ExternalActionMachineBootstrapV1Schema.parse({
         id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
         installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-    }), installationPublicKey: encodeBase64(installMachineKey.publicKey) })) });
+    }), installationPublicKey: encodeBase64(installMachineKey.publicKey) }));
+    homes.answer(serverId, '/v1/machines', { body: machineRows });
+    // An external Action's Machine is read by id through the Machine rows reader (a532f4a1e0); the by-id row is a full published row.
+    // runnerClaim is bootstrap discovery only; the stored Machine row does not carry it.
+    for (const { runnerClaim: _runnerClaim, ...machine } of machineRows) homes.answer(serverId, `/v1/machines/${machine.id}`, { body: {
+        machine: { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'owner' }), ...machine },
+    } });
     for (const actionId of ['plugins.install', 'plugins.disable'] as const) homes.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
         const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
         return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-signed-install', binding: {

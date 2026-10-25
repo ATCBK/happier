@@ -405,12 +405,12 @@ describe('Project finite delivery through the default UI Action host', () => {
         // Own non-finite Open uses its incumbent RPC. Foreign custody is the
         // reachable Account HTTP path whose lost acknowledgement must not replay.
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
-        const machine = { ...createPlainMachineRowFixture({ id: 'source', accountId: 'custodian' }), ...ExternalActionMachineBootstrapV1Schema.parse({
+        const machine = { ...createPlainMachineRowFixture({ id: 'source', accountId: 'custodian' }), ...omitRunnerClaim(ExternalActionMachineBootstrapV1Schema.parse({
             id: 'source', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
             installationId: 'source-installation',
             dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
             access: { custodian: { accountId: 'custodian', displayName: 'Custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        }), installationPublicKey: encodeBase64(installation.publicKey) };
+        })), installationPublicKey: encodeBase64(installation.publicKey) };
         homes.answer(requesterHomeId, '/v1/machines', { body: [machine] });
         homes.answer(requesterHomeId, 'GET /v1/machines/source', { body: { machine } });
         homes.answer(requesterHomeId, '/v1/actions/projects.open/execution-authorization', { select: body => {
@@ -768,6 +768,8 @@ describe('Project finite delivery through the default UI Action host', () => {
         // Mis-bound current Machine discovery is a Home boundary condition;
         // no internal approval or replay collaborator is replaced.
         homes.answer(requesterHomeId, '/v1/machines', { body: [] });
+        // The exact Machine read is the same Home discovery (a532f4a1e0), so it no longer binds the Machine either.
+        homes.answer(requesterHomeId, 'GET /v1/machines/source', { body: { machine: null } });
         expect(await decideApprovalAsInbox(serverId, approval.artifactId, 'approve'))
             .toMatchObject({ ok: false, errorCode: 'admission_unavailable' });
         expect(homes.requestsFor('/v1/actions/approval.request.decide')).toEqual([]);
@@ -812,12 +814,12 @@ describe('Project finite delivery through the default UI Action host', () => {
             installationPublicKey: encodeBase64(controllerInstallation.publicKey),
             access: { custodian: { accountId: 'carol', displayName: 'Carol' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
         homes.answer(exactHome, `/v1/machines/${machineId}`, { body: { machine } });
-        let machineReads = 0;
-        homes.answer(exactHome, '/v1/machines', { select: () => {
-            machineReads += 1;
-            return { body: managedWake ? [machine, controllerChanged && machineReads > 2
-                ? { ...controller, installationId: 'replacement-controller-installation' } : controller] : [machine] };
-        } });
+        // The controller is replaced once Home has minted the authorization naming it, so every later
+        // discovery read (the census or the exact read by id, a532f4a1e0) sees the replacement.
+        const currentController = () => controllerChanged && mintedEnvelope !== undefined
+            ? { ...controller, installationId: 'replacement-controller-installation' } : controller;
+        homes.answer(exactHome, '/v1/machines', { select: () => ({ body: managedWake ? [machine, currentController()] : [machine] }) });
+        if (managedWake) homes.answer(exactHome, `/v1/machines/${controller.id}`, { select: () => ({ body: { machine: currentController() } }) });
         foreignDisclosure.mockResolvedValue(false);
         homes.answer(exactHome, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const workspace = { serverId: capturedServerId, workspaceId: 'alice-workspace', machineId, rootPath: '/repo' };

@@ -6,8 +6,9 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { storage } from '@/sync/domains/state/storage';
 import { enqueuePendingMessageV2, updatePendingRequestedActionV2 } from '@/sync/engine/pending/pendingQueueV2';
@@ -78,7 +79,8 @@ describe('accepted managed input native prerequisite', () => {
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://server-a', serverIdentityId: 'srv_home_a', accountId,
             credentials: { token: createAccountTokenForTests(accountId, { currentAccount: true }) },
-            request: async (input, init) => {
+            // Session reads by id use the batch wire; the boundary answers it from the per-Session facts below.
+            request: createSessionReadBatchFetchBoundary(async (input, init) => {
                 const url = new URL(String(input));
                 expect(url.origin).toBe('https://server-a');
                 if (url.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
@@ -91,6 +93,8 @@ describe('accepted managed input native prerequisite', () => {
                 if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
                 if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'guest-a', accountId })]);
                 if (url.pathname === '/v1/machines/guest-a') return Response.json({ machine: createPlainMachineRowFixture({ id: 'guest-a', accountId }) });
+                if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'guest-a' ? createPlainMachineRowFixture({ id, accountId }) : null);
                 if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/active') {
                     // Keep the authoritative initial list and later refreshes on
                     // the same real Session, rather than racing a store override.
@@ -123,7 +127,7 @@ describe('accepted managed input native prerequisite', () => {
                     desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
                     observation: { observedAt: 10, availability: 'present', power: observedPower, storage: 'retained', daemon: observedPower === 'running' ? 'connected' : 'disconnected' },
                 });
-            },
+            }),
         });
         expect(connection.home).toMatchObject({ id: profileId, serverIdentityId: 'srv_home_a' });
         await sync.refreshSessions();

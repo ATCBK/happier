@@ -56,10 +56,13 @@ describe('requester credential disclosure at the human Action front door', () =>
         if (!token) throw new Error('Missing Bob credentials');
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
         const machineId = 'alice-controller';
-        harness.answer(serverId, '/v1/machines', { body: [{ id: machineId, kind: 'persistent', active: true,
+        const controller = { ...createPlainMachineRowFixture({ id: machineId, accountId: 'alice' }), kind: 'persistent', active: true,
             installationId: 'alice-installation', ...(scenario === 'missing-key' ? {} : { installationPublicKey: encodeBase64(installation.publicKey) }),
             revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] });
+            access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } } as const;
+        harness.answer(serverId, '/v1/machines', { body: [controller] });
+        // An external Action's Machine is read by id through the Machine rows reader (a532f4a1e0).
+        harness.answer(serverId, `/v1/machines/${machineId}`, { body: { machine: controller } });
         const actionId = 'machines.managed.rebuild';
         const nativeInput = { homeId, managedMachineId: 'alice-child', kind: 'rebuild', expectedRevision: 4,
             reviewedEffectDigest: 'a'.repeat(64) };
@@ -157,10 +160,12 @@ describe('requester credential disclosure at the human Action front door', () =>
         harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const custodian = { accountId: 'alice', displayName: 'Alice' };
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
-        harness.answer(serverId, '/v1/machines', { body: [{ id: 'alice-machine', kind: 'persistent', active: true,
+        const machine = { ...createPlainMachineRowFixture({ id: 'alice-machine', accountId: 'alice' }), kind: 'persistent', active: true,
             installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey),
             revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-            access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } }] });
+            access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } } as const;
+        harness.answer(serverId, '/v1/machines', { body: [machine] });
+        harness.answer(serverId, '/v1/machines/alice-machine', { body: { machine } });
         harness.answer(serverId, '/v1/machines/alice-machine/access', { body: {
             machineId: 'alice-machine', custodian,
             access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' },

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { createMachineFixture, createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
@@ -266,17 +266,22 @@ describe('sync.sendMessage wake-after-send', () => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/auth/ping') return Response.json({});
+            const machineRow = (machine: Machine) => ({
+                ...createPlainMachineRowFixture({ id: machine.id, accountId: activeScope.accountId }),
+                active: machine.active,
+                activeAt: machine.activeAt,
+                revokedAt: machine.revokedAt ?? null,
+                replacedByMachineId: machine.replacedByMachineId ?? null,
+            });
             if (path === '/v1/machines') {
                 const machines = Object.values(storage.getState().machines);
-                return Response.json((machines.length > 0 ? machines : [createMachine({ id: 'm1' })])
-                    .map(machine => ({
-                        ...createPlainMachineRowFixture({ id: machine.id, accountId: activeScope.accountId }),
-                        active: machine.active,
-                        activeAt: machine.activeAt,
-                        revokedAt: machine.revokedAt ?? null,
-                        replacedByMachineId: machine.replacedByMachineId ?? null,
-                    })));
+                return Response.json((machines.length > 0 ? machines : [createMachine({ id: 'm1' })]).map(machineRow));
             }
+            // Exact Machine reads answer from the same Home rows as the census, so a replaced Machine reads as replaced.
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, id => {
+                const machine = storage.getState().machines[id];
+                return machine ? machineRow(machine) : createPlainMachineRowFixture({ id, accountId: activeScope.accountId });
+            });
             const machineResponse = createPlainMachineReadHttpResponseFixture(path, init, activeScope.accountId);
             if (machineResponse) return machineResponse;
             return Response.json({}, { status: 404 });
