@@ -1,12 +1,40 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '../../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '../../../../../ui/sources/dev/testkit/fixtures/featureFixtures';
+import { installVitestRnShim } from '../../../../../ui/sources/dev/vitestRnShim';
+import { installLocalStorageMock } from '../../../../../ui/sources/auth/storage/tokenStorage.web.testHelpers';
 import { AccountSettingsV2UpdateRequestSchema, type AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { createNativeSessionBoundary, createVoiceSessionRuntimeThroughNativeFactory } from '@/agent/runtime/bridges/executionRun/testkit/nativeSessionContext';
 import { VoiceAgentManager } from './VoiceAgentManager';
 
+// CLI collection has no native stylesheet runtime; preserve the real UI owners
+// beneath their canonical platform boundary.
+vi.mock('react-native-unistyles', async () => {
+  const { createUnistylesMock } = await import('../../../../../ui/sources/dev/testkit/mocks/unistyles');
+  return createUnistylesMock();
+});
+vi.mock('expo-updates', async () => {
+  const { createExpoUpdatesMock } = await import('../../../../../ui/sources/dev/testkit/mocks/expoUpdates');
+  return createExpoUpdatesMock();
+});
+vi.mock('expo-file-system', async () => {
+  const { createExpoFileSystemFileMock } = await import('../../../../../ui/sources/dev/testkit/mocks/expoFileSystem');
+  return createExpoFileSystemFileMock().module;
+});
+vi.mock('react-native-typography', async () => {
+  const { createReactNativeTypographyMock } = await import('../../../../../ui/sources/dev/testkit/mocks/reactNativeTypography');
+  return createReactNativeTypographyMock();
+});
+vi.mock('@shopify/react-native-skia', async () => {
+  const { createReactNativeSkiaMock } = await import('../../../../../ui/sources/dev/testkit/mocks/reactNativeSkia');
+  return createReactNativeSkiaMock();
+});
+
+installVitestRnShim();
+const browserStorage = installLocalStorageMock();
+afterAll(() => browserStorage.restore());
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { createVoiceToolHandlers } = await import('../../../../../ui/sources/voice/tools/handlers');

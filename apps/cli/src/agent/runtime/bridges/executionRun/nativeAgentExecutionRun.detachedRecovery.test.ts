@@ -14,13 +14,15 @@ import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/act
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
-it.each(['public', 'narrowed'] as const)('keeps detached %s native approvals on the active input authority', async source => {
+it.each(['public', 'narrowed', 'no_tools'] as const)('keeps detached %s native approvals on the active input authority', async source => {
     const runId = `authority-${source}`;
-    const permissionMode = source === 'public' ? 'read_only' : 'yolo';
+    const permissionMode = source === 'public' ? 'read_only' : source === 'no_tools' ? 'no_tools' : 'yolo';
     const admitted = resolveExecutionRunInputAuthority({ permissionMode,
         ...(source === 'narrowed' ? {
             causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' },
             effectiveCallerPermissionMode: 'read-only',
+        } : source === 'no_tools' ? {
+            causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
         } : {}),
     });
     if (!admitted.ok) throw new Error(admitted.error);
@@ -31,8 +33,8 @@ it.each(['public', 'narrowed'] as const)('keeps detached %s native approvals on 
     let readWitness: (() => AgentInvocationTurnAdmissionWitness | null) | undefined;
     let expectedAttribution: ReturnType<typeof materializeActionRequestAttributionV1>;
     let suppliedAttribution: typeof expectedAttribution;
-    const approve = (name: string) => context.services.interactions.requestApproval({ kind: 'approval', title: 'Native tool',
-        subject: { kind: 'tool', name, input: { path: '/repo/a' } } });
+    const approve = (name: string, input: Record<string, unknown> = { path: '/repo/a' }) => context.services.interactions.requestApproval({ kind: 'approval', title: 'Native tool',
+        subject: { kind: 'tool', name, input } });
     const factory = {
         async open(): Promise<never> { throw new Error('Retained input must use the conversation'); },
         async openConversation(_request: AgentExecutionRunOpenRequest, current: AgentExecutionRunRuntimeContextV1): Promise<AgentExecutionRunConversationRuntimeV1> {
@@ -49,8 +51,17 @@ it.each(['public', 'narrowed'] as const)('keeps detached %s native approvals on 
                     expect(options).toMatchObject({ permissionIntent: 'read-only' });
                     expect(input.causalPermissionAuthority).toEqual(admitted.causalPermissionAuthority);
                     listener?.({ kind: 'turn-start', turnId: input.delivery.turnId, startedBy: 'host' });
-                    await expect(approve('Read')).resolves.toMatchObject({ status: 'approved' });
+                    await expect(approve('Read')).resolves.toMatchObject({ status: source === 'no_tools' ? 'declined' : 'approved' });
                     await expect(approve('Write')).resolves.toMatchObject({ status: 'declined' });
+                    await expect(approve('mcp__happier__settings_get', { anchor: 'voiceConversations.minSpeechMs' }))
+                        .resolves.toMatchObject({ status: 'approved' });
+                    await expect(approve('mcp__happier__session_stop', { sessionId: 'other-session' }))
+                        .resolves.toMatchObject({ status: 'declined' });
+                    await expect(approve('mcp__happier__settings_invoke', { anchor: 'voicePrivacy.forgetVoiceAgentMemory' }))
+                        .resolves.toMatchObject({ status: 'declined' });
+                    await expect(approve('mcp__happier__action_execute', {
+                        actionId: 'settings.set', input: { anchor: 'voiceConversations.minSpeechMs', value: 1100 },
+                    })).resolves.toMatchObject({ status: 'declined' });
                     listener?.({ kind: 'turn-complete', turnId: input.delivery.turnId });
                     return { status: 'admitted' };
                 },
