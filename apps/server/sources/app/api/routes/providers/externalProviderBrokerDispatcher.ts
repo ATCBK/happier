@@ -8,7 +8,9 @@ import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/au
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1, TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema, TeamCredentialExternalProviderApplicationRequestV1Schema, TeamCredentialResourceTestApplicationRequestV1Schema, type TeamCredentialResourceTestApplicationRequestV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import { TeamCredentialUsageLimitDenialV1Schema } from '@happier-dev/protocol/teams';
 import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
-import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER,
+    PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER, PROVIDER_BROKER_APPLICATION_LIMIT_RESETS_AT_HEADER,
+    type ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
 
 import { readMachineTunnelFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
@@ -53,13 +55,14 @@ export function mapProviderBrokerApplicationFailure(
     reason?: 'incompatible';
     applicationCode?: TeamCredentialBrokerApplicationFailureCodeV1;
 }> {
-    const code = headers['x-happier-provider-broker-error-code'];
+    const code = headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER];
+    if (statusCode === 413 && code === 'request_too_large') return { error: 'invalid_request' };
     if (statusCode === 499 && code === 'request_cancelled') return { error: 'request_cancelled' };
     if (statusCode === 403 && code === 'team_credential_usage_limit') {
         const detail = TeamCredentialUsageLimitDenialV1Schema.safeParse({
-            metric: headers['x-happier-provider-broker-limit-metric'],
-            remaining: headers['x-happier-provider-broker-limit-remaining'],
-            resetsAtUtc: headers['x-happier-provider-broker-limit-resets-at'],
+            metric: headers[PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER],
+            remaining: headers[PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER],
+            resetsAtUtc: headers[PROVIDER_BROKER_APPLICATION_LIMIT_RESETS_AT_HEADER],
         });
         return detail.success
             ? { error: 'team_credential_usage_limit', retryAtMs: Date.parse(detail.data.resetsAtUtc) }
@@ -70,7 +73,7 @@ export function mapProviderBrokerApplicationFailure(
     if (statusCode === 403 && (code === 'resource_changed' || code === 'resource_unavailable'
         || code === 'operation_not_current' || code === 'session_not_active')) return { error: 'resource_unavailable' };
     if (statusCode === 403 && code === 'update_required') return { error: 'broker_unavailable', reason: 'incompatible' };
-    if (statusCode === 403 && code === 'broker_unavailable') return { error: 'broker_unavailable' };
+    if ((statusCode === 403 || statusCode === 503) && code === 'broker_unavailable') return { error: 'broker_unavailable' };
     if (statusCode === 400) return { error: 'invalid_request' };
     if (statusCode === 403) return { error: 'policy_denied' };
     return { error: 'upstream_unavailable' };
@@ -256,7 +259,7 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
         for (const line of lines) { const split = line.indexOf(':'); if (split > 0) headers[line.slice(0, split).toLowerCase()] = line.slice(split + 1).trim(); }
         if (statusCode >= 400) {
             await relay.stream.close();
-            const applicationCode = TeamCredentialBrokerApplicationFailureCodeV1Schema.safeParse(headers['x-happier-provider-broker-error-code']);
+            const applicationCode = TeamCredentialBrokerApplicationFailureCodeV1Schema.safeParse(headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]);
             logger.warn({ module: 'provider-broker-carrier', stage: 'application_response',
                 code: applicationCode.success ? applicationCode.data : 'application_refusal_unclassified', statusCode });
             return { ok: false, ...mapProviderBrokerApplicationFailure(statusCode, headers),

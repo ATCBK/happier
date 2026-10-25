@@ -229,7 +229,7 @@ describe('Connected Services Team credential broker source', () => {
     readResource.mockRejectedValueOnce(new Error('Home unreachable'));
     // The shared operation owner denies an uncertain read without retiring custody;
     // the next authoritative read can recover the same operation.
-    await expect(opened.sourceCurrentness.isCurrent()).resolves.toBe(false);
+    await expect(opened.sourceCurrentness.isCurrent()).resolves.toBeNull();
     revision = 8;
     await expect(opened.sourceCurrentness.isCurrent()).resolves.toBe(true);
     // A real withdrawal of the resource still ends the operation.

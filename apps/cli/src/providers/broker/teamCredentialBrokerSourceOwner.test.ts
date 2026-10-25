@@ -20,6 +20,7 @@ import {
 } from './teamCredentialBrokerSourceOwner';
 import { createConnectedServicesBrokerSourceOpen } from './connectedServicesSource';
 import { logger } from '@/ui/logger';
+import { createPrivateProviderBrokerStreamLifetime } from './daemonProviderBrokerRuntime';
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -29,24 +30,34 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
-function sourceCustodyHarness() {
-  const source = {
+function sourceCustodyHarness(sourceKind: 'connected_account' | 'connected_pool' = 'connected_account') {
+  const accountSource = {
     v: 1, kind: 'connected_account',
     target: { kind: 'account', account: {
       service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'account-1',
     } },
     credentialIncarnation: 'credential-incarnation-1',
   } as const;
+  const source = sourceKind === 'connected_account' ? accountSource : {
+    v: 1 as const, kind: 'connected_pool' as const,
+    target: { kind: 'group' as const, service: accountSource.target.account.service, groupId: 'pool-1' },
+    poolIncarnation: 'pool-incarnation-1',
+  };
   const application = {
     agentTargetKey: 'agent:codex',
     implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
     endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses',
   } as const;
   const unusedBoundary = (): never => { throw new Error('Unexpected effect boundary'); };
+  let targetReadError = false;
   const purposes = createConnectedAccountPurposeBindingOwner({
     store: { read: async () => ({ v: 1, bindings: [] }), update: unusedBoundary, subscribe: () => ({ dispose() {} }) },
     selectTarget: unusedBoundary,
-    resolveTarget: async () => ({ displayName: 'Account 1', account: source.target.account }),
+    resolveTarget: async target => {
+      if (targetReadError) throw new Error('Connected Account Home unavailable');
+      return { displayName: 'Account 1', account: accountSource.target.account,
+        ...(target.kind === 'group' ? { group: { groupId: target.groupId, generation: 1 } } : {}) };
+    },
     materializeAccount: unusedBoundary,
     projectTargetAccounts: unusedBoundary,
     assertTargetAccountMaterializable: unusedBoundary,
@@ -66,6 +77,7 @@ function sourceCustodyHarness() {
   const childRequest = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', headers: {}, body: null }));
   const childCleanup = vi.fn(async () => { childCurrent = false; });
   let pauseAfterJoin = false;
+  let failReadAfterJoin = false;
   let readPause: ReturnType<typeof deferred<void>> | null = null;
   let readEntered: ReturnType<typeof deferred<void>> | null = null;
   // The fixture bridges the source's custody port into the real semantic/join
@@ -84,6 +96,10 @@ function sourceCustodyHarness() {
         pauseAfterJoin = false;
         readPause = deferred();
       }
+      if (failReadAfterJoin) {
+        failReadAfterJoin = false;
+        sourceReadError = true;
+      }
       return joined.status === 'established' ? joined.value.projection : null;
     },
     retire: async () => await managed.retireManagedProviderExplicitStart(operation),
@@ -93,14 +109,16 @@ function sourceCustodyHarness() {
   };
   let enabled = true;
   let sourceReadError = false;
-  const readResource = async (): Promise<TeamCredentialResourceSummaryV1> => {
+  let sourceMissing = false;
+  const readResource = vi.fn(async (): Promise<TeamCredentialResourceSummaryV1 | null> => {
     if (sourceReadError) throw new Error('Home unavailable');
+    if (sourceMissing) return null;
     if (readPause) { readEntered?.resolve(undefined); await readPause.promise; }
     return {
       id: 'resource-1', teamId: 'team-1', custodianAccountId: 'custodian-1', sourceOwnerDisplayName: null,
       displayName: 'Shared Codex', enabled, revision: 7, source,
       disclosureCeiling: 'brokered_only', sessionUsePolicy: 'personal_allowed',
-      sourcePresentation: { kind: 'connected_service', service: source.target.account.service },
+      sourcePresentation: { kind: 'connected_service', service: accountSource.target.account.service },
       directExportSupport: 'unsupported', activeUsageLimitCount: 0, requestPolicy: null,
       brokerPlacement: { kind: 'machine', machineId: 'broker-machine' },
       allMembersDeliveryMode: null, groupGrants: [], memberGrants: [],
@@ -110,7 +128,7 @@ function sourceCustodyHarness() {
         narrowDisclosure: false, widenDisclosure: false, refreshDirectMaterial: false, disable: false, enable: false, delete: false },
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
     };
-  };
+  });
   const owner = createTeamCredentialBrokerSourceOwner({
     machineId: 'broker-machine', custody, selectConnectedServicesSourceMember: async () => null,
     openConnectedServicesSource: createConnectedServicesBrokerSourceOpen({
@@ -120,7 +138,7 @@ function sourceCustodyHarness() {
     openProviderConnectionSource: unusedBoundary,
   });
   return {
-    managed, childRequest, childCleanup,
+    managed, childRequest, childCleanup, readResource, owner, source, application,
     acquire: (signal: AbortSignal) => owner.acquire({
       source, application, resourceId: 'resource-1', resourceRevision: 7, brokerMachineId: 'broker-machine',
       operation: { kind: 'session', sessionId: 'session-1' }, signal,
@@ -135,6 +153,10 @@ function sourceCustodyHarness() {
     resumeRead() { readPause?.resolve(undefined); readPause = null; },
     revokeSource() { enabled = false; },
     failSourceReads() { sourceReadError = true; },
+    failSourceReadAfterJoin() { failReadAfterJoin = true; },
+    failTargetReads() { targetReadError = true; },
+    restoreSourceReads() { sourceReadError = false; targetReadError = false; },
+    deleteSource() { sourceMissing = true; },
   };
 }
 
@@ -231,6 +253,135 @@ function request(
 }
 
 describe('Team credential broker source owner', () => {
+  it('retires retained custody on a definite missing Home resource', async () => {
+    const harness = sourceCustodyHarness();
+    try {
+      const acquired = await harness.acquire(new AbortController().signal);
+      if (!acquired.ok) throw new Error('Expected source custody');
+      harness.deleteSource();
+      await expect(acquired.projection.access.request({ method: 'POST', pathAndQuery: '/v1/responses' })).rejects.toMatchObject({
+        failure: { reasonCode: 'source_unavailable' },
+      });
+      expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(0);
+      expect(harness.childCleanup).toHaveBeenCalledOnce();
+      expect(harness.childRequest).not.toHaveBeenCalled();
+    } finally {
+      await harness.managed.dispose();
+    }
+  });
+
+  it.each(['resource', 'joined'] as const)('preserves an incumbent Pool gateway across repeated unknown %s reads after request cleanup without another acquire attempt', async phase => {
+    const harness = sourceCustodyHarness('connected_pool');
+    const lifetime = createPrivateProviderBrokerStreamLifetime({
+      sourceOwner: harness.owner, application: harness.application,
+      operation: { kind: 'session', sessionId: 'session-1' },
+    });
+    const input = { source: harness.source, application: harness.application,
+      resourceId: 'resource-1', expectedResourceRevision: 7, brokerMachineId: 'broker-machine',
+      operation: { kind: 'session' as const, sessionId: 'session-1' }, modelId: 'gpt-5', sourceRevision: 'source-v1' };
+    try {
+      const first = await lifetime.acquireSource(input);
+      if (!first || 'reasonCode' in first) throw new Error('Expected Pool source');
+      harness.failSourceReads();
+      await expect(first.access.request({ method: 'POST', pathAndQuery: '/v1/responses' })).rejects.toMatchObject({
+        failure: { reasonCode: 'source_unavailable' },
+      });
+      harness.readResource.mockClear();
+      if (phase === 'joined') {
+        harness.restoreSourceReads();
+        harness.failSourceReadAfterJoin();
+      }
+      for (let request = 0; request < 2; request++) {
+        await expect(lifetime.acquireSource(input)).resolves.toMatchObject({ ok: false, reasonCode: 'resource_unavailable' });
+      }
+      expect(harness.readResource).toHaveBeenCalledTimes(phase === 'joined' ? 4 : 2);
+      expect(harness.childCleanup).not.toHaveBeenCalled();
+      expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(1);
+      harness.restoreSourceReads();
+      const recovered = await lifetime.acquireSource(input);
+      if (!recovered || 'reasonCode' in recovered) throw new Error('Expected recovered Pool source');
+      await expect(recovered.access.request({ method: 'POST', pathAndQuery: '/v1/responses' })).resolves.toMatchObject({ status: 200 });
+      expect(harness.childRequest).toHaveBeenCalledOnce();
+    } finally {
+      await lifetime.close();
+      await harness.managed.dispose();
+    }
+  });
+
+  it('rechecks retained source custody only for matching feed facts and service identities', async () => {
+    const harness = sourceCustodyHarness();
+    try {
+      const acquired = await harness.acquire(new AbortController().signal);
+      if (!acquired.ok) throw new Error('Expected source custody');
+      harness.readResource.mockClear();
+      for (let arrival = 0; arrival < 20; arrival++) {
+        await harness.managed.revalidateManagedProviderExplicitStarts(undefined, undefined, {
+          facts: ['saved-secrets', 'provider-connections', 'connected-services'],
+          connectedServiceRefs: [{ pluginId: 'other.plugin', localId: 'unrelated' }],
+        });
+      }
+      await harness.managed.revalidateManagedProviderExplicitStarts(undefined, undefined, {
+        facts: ['connected-services'], connectedServiceRefs: [],
+      });
+      expect(harness.readResource).not.toHaveBeenCalled();
+      await harness.managed.revalidateManagedProviderExplicitStarts(undefined, undefined, {
+        facts: ['connected-services'],
+        connectedServiceRefs: [{ pluginId: 'happier.agent.codex', localId: 'openai-codex' }],
+      });
+      expect(harness.readResource).toHaveBeenCalledOnce();
+      harness.readResource.mockClear();
+      await harness.managed.revalidateManagedProviderExplicitStarts(undefined, undefined, { facts: ['connected-catalog'] });
+      expect(harness.readResource).toHaveBeenCalledOnce();
+      harness.revokeSource();
+      await expect(harness.managed.revalidateManagedProviderExplicitStarts(undefined, undefined, {
+        facts: ['teams'],
+      })).resolves.toBe(1);
+      expect(harness.childCleanup).toHaveBeenCalledOnce();
+    } finally {
+      await harness.managed.dispose();
+    }
+  });
+
+  it.each(['acquire', 'request', 'target_request'] as const)('releases only the joined view on an unknown %s read and keeps shared custody recoverable', async phase => {
+    const harness = sourceCustodyHarness();
+    const providerRequest = { method: 'POST' as const, pathAndQuery: '/v1/responses', timeoutMs: 1_000 };
+    try {
+      const sibling = await harness.acquire(new AbortController().signal);
+      if (!sibling.ok) throw new Error('Expected sibling custody');
+      if (phase === 'acquire') {
+        const paused = harness.pauseRead(true);
+        const opening = harness.acquire(new AbortController().signal);
+        await paused;
+        harness.failSourceReads();
+        harness.resumeRead();
+        await expect(opening).resolves.toMatchObject({ ok: false, reasonCode: 'source_unavailable' });
+      } else {
+        const caller = await harness.acquire(new AbortController().signal);
+        if (!caller.ok) throw new Error('Expected caller custody');
+        if (phase === 'target_request') harness.failTargetReads();
+        else harness.failSourceReads();
+        await expect(caller.projection.access.request(providerRequest)).rejects.toMatchObject({
+          failure: { ok: false, reasonCode: 'source_unavailable' },
+        });
+      }
+      expect(harness.childRequest).not.toHaveBeenCalled();
+      expect(harness.childCleanup).not.toHaveBeenCalled();
+      expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(1);
+      harness.restoreSourceReads();
+      await expect(sibling.projection.access.request(providerRequest)).resolves.toMatchObject({ status: 200 });
+      harness.revokeSource();
+      await expect(sibling.projection.access.request(providerRequest)).rejects.toMatchObject({
+        failure: { ok: false, reasonCode: 'source_unavailable' },
+      });
+      expect(harness.childRequest).toHaveBeenCalledOnce();
+      expect(harness.childCleanup).toHaveBeenCalledOnce();
+      expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(0);
+    } finally {
+      harness.resumeRead();
+      await harness.managed.dispose();
+    }
+  });
+
   it('retains the failed Connected Services prerequisite in the typed refusal and safe log', async () => {
     const harness = sourceCustodyHarness();
     const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
@@ -274,7 +425,8 @@ describe('Team credential broker source owner', () => {
       await paused;
       await closeCaller();
       harness.resumeRead();
-      await work;
+      if (phase === 'acquire') await work;
+      else await expect(work).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
       expect(harness.childRequest).not.toHaveBeenCalled();
       expect(sibling.projection.isCurrent()).toBe(true);
       expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(1);
@@ -282,7 +434,7 @@ describe('Team credential broker source owner', () => {
       await expect(harness.managed.revalidateManagedProviderExplicitStarts(new AbortController().signal)).resolves.toBe(0);
       await expect(sibling.projection.access.request(providerRequest)).resolves.toMatchObject({ status: 200 });
       harness.revokeSource();
-      await expect(sibling.projection.access.request(providerRequest)).resolves.toMatchObject({ status: 403 });
+      await expect(sibling.projection.access.request(providerRequest)).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
       expect(harness.childRequest).toHaveBeenCalledOnce();
       expect(harness.childCleanup).toHaveBeenCalledOnce();
       expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(0);
@@ -505,7 +657,7 @@ describe('Team credential broker source owner', () => {
       method: 'POST',
       body: undefined,
       timeoutMs: 1_000,
-    })).resolves.toMatchObject({ ok: false, status: 403 });
+    })).rejects.toMatchObject({ failure: { ok: false, reasonCode: 'source_unavailable' } });
     expect(current.access.request).not.toHaveBeenCalled();
     const firstRetry = acquired.projection.cleanup();
     const concurrentRetry = acquired.projection.cleanup();
@@ -571,7 +723,7 @@ describe('Team credential broker source owner', () => {
       method: 'POST',
       body: undefined,
       timeoutMs: 1_000,
-    })).resolves.toMatchObject({ ok: false, status: 403 });
+    })).rejects.toMatchObject({ failure: { ok: false, reasonCode: 'source_unavailable' } });
     expect(current.access.request).not.toHaveBeenCalled();
     expect(acquired.projection.isCurrent()).toBe(false);
     expect(current.cleanup).toHaveBeenCalledOnce();

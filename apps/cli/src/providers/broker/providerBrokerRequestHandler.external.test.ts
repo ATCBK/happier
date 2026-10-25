@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
 import type { ManagedProviderEndpointHttpAccess } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
-import { daemonExternalProviderRequestPolicyAcceptsResource } from './daemonProviderBrokerRuntime';
+import { teamCredentialBrokerResourceAcceptsMachine } from './teamCredentialBrokerSourceOwner';
 
 const binding = {
   v: 1 as const,
@@ -50,27 +50,18 @@ describe('Provider broker external authenticated context', () => {
         credentialSlotId: 'apiKey',
       }),
     };
-    const receiverAcceptsResource = () => daemonExternalProviderRequestPolicyAcceptsResource({
-      resource: poolResource,
-      bindingTeamId: binding.teamId,
-      registeredMachineId: 'broker-machine',
-    });
+    const receiverAcceptsResource = () => teamCredentialBrokerResourceAcceptsMachine(poolResource, 'broker-machine')
+      && poolResource.teamId === binding.teamId;
     expect(receiverAcceptsResource()).toBe(true);
-    expect(daemonExternalProviderRequestPolicyAcceptsResource({
-      resource: { ...poolResource, brokerPlacement: { kind: 'machine', machineId: 'broker-machine' } },
-      bindingTeamId: binding.teamId,
-      registeredMachineId: 'broker-machine',
-    })).toBe(true);
-    expect(daemonExternalProviderRequestPolicyAcceptsResource({
-      resource: { ...poolResource, brokerPlacement: { kind: 'machine', machineId: 'other-machine' } },
-      bindingTeamId: binding.teamId,
-      registeredMachineId: 'broker-machine',
-    })).toBe(false);
-    expect(daemonExternalProviderRequestPolicyAcceptsResource({
-      resource: { ...poolResource, enabled: false },
-      bindingTeamId: binding.teamId,
-      registeredMachineId: 'broker-machine',
-    })).toBe(false);
+    expect(teamCredentialBrokerResourceAcceptsMachine(
+      { ...poolResource, brokerPlacement: { kind: 'machine', machineId: 'broker-machine' } }, 'broker-machine',
+    )).toBe(true);
+    expect(teamCredentialBrokerResourceAcceptsMachine(
+      { ...poolResource, brokerPlacement: { kind: 'machine', machineId: 'other-machine' } }, 'broker-machine',
+    )).toBe(false);
+    expect(teamCredentialBrokerResourceAcceptsMachine(
+      { ...poolResource, enabled: false }, 'broker-machine',
+    )).toBe(false);
 
     const handler = createProviderBrokerRequestHandler({
       resolveTrustRoots: () => [], nowMs: Date.now,

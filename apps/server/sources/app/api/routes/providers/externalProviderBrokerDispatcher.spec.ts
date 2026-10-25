@@ -139,6 +139,12 @@ describe('external Provider broker dispatcher', () => {
         return { result, removeAbortListener, transportCloseCount: () => transportCloseCount };
     }
 
+    it('preserves the broker request-size refusal through the relay without classifying an upstream outage', async () => {
+        const response = new TextEncoder().encode('HTTP/1.1 413 Payload Too Large\r\nx-happier-provider-broker-error-code: request_too_large\r\nContent-Length: 0\r\n\r\n');
+        const { result } = await dispatchWithUpstreamResponse(response);
+        expect(result).toEqual({ ok: false, error: 'invalid_request', applicationCode: 'request_too_large' });
+    });
+
     function httpResponse(body: string) {
         return new TextEncoder().encode(
             `HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`,
@@ -172,13 +178,14 @@ describe('external Provider broker dispatcher', () => {
         expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage, code });
     });
 
-    it.each(['broker_unavailable', 'update_required'])('records the trusted application refusal %s without response content', async code => {
+    it('records the trusted update-required refusal without response content', async () => {
+        const code = 'update_required';
         const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
         const { result } = await dispatchWithUpstreamResponse(new TextEncoder().encode(
             `HTTP/1.1 403 Forbidden\r\nX-Happier-Provider-Broker-Error-Code: ${code}\r\nX-Private: private payload\r\n\r\nprivate body`,
         ));
         expect(result).toMatchObject({ ok: false, error: 'broker_unavailable' });
-        if (code === 'update_required') expect(result).toMatchObject({ reason: 'incompatible' });
+        expect(result).toMatchObject({ reason: 'incompatible' });
         expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'application_response', code, statusCode: 403 });
         expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
     });

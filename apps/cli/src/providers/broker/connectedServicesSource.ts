@@ -13,7 +13,8 @@ import type { TeamCredentialBrokerSourceOpenInput, TeamCredentialBrokerSourceOpe
 import { acquireBrokerSourceOperation } from './brokerSourceOperationAcquisition';
 import {
   isCLIProxyAPIBrokerApplication,
-  teamCredentialBrokerPlacementAcceptsMachine,
+  sameTeamCredentialBrokerSource,
+  teamCredentialBrokerResourceAcceptsMachine,
 } from './teamCredentialBrokerSourceOwner';
 
 type ConnectedSource = Extract<
@@ -24,10 +25,6 @@ type ConnectedSource = Extract<
 type ConnectedOpenInput = TeamCredentialBrokerSourceOpenInput & Readonly<{
   source: ConnectedSource;
 }>;
-
-function sameSource(left: TeamCredentialSourceBindingV1 | null, right: ConnectedSource): boolean {
-  return left !== null && JSON.stringify(left) === JSON.stringify(right);
-}
 
 type ConnectedSelectionInput = Pick<ConnectedOpenInput, 'source' | 'application' | 'signal'>;
 
@@ -100,7 +97,7 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
   projection: NonNullable<Awaited<ReturnType<ManagedProviderExplicitStartCustody['acquire']>>>;
   sourceCurrentness: Readonly<{
     sourceMember: TeamCredentialSourceMemberV1;
-    isCurrent(): Promise<boolean>;
+    isCurrent(): Promise<boolean | null>;
   }>;
   retire(): Promise<void>;
 }> | Readonly<{ unavailable: TeamCredentialBrokerSourceOpenFailureReason }>> {
@@ -113,10 +110,8 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
       // Source currentness is enabled, placement and source identity. The
       // revision is a policy fact the Home rechecks per request, so a policy
       // edit is not a source replacement (`04-private-iroh-broker-transport.md:272`).
-      return resource !== null
-        && resource.enabled
-        && teamCredentialBrokerPlacementAcceptsMachine(resource.brokerPlacement, request.brokerMachineId)
-        && sameSource(resource.source, request.source);
+      return teamCredentialBrokerResourceAcceptsMachine(resource, request.brokerMachineId)
+        && sameTeamCredentialBrokerSource(resource.source, request.source);
     };
     const chosen = await resolveConnectedServicesBrokerSelection(
       input.withRegistry,
@@ -166,6 +161,10 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
       endpointTemplateId: request.application.endpointTemplateId,
       operationClaim: { kind: 'providerBroker', operation: request.operation },
       purposeBindings,
+      retainedCurrentnessScope: {
+        facts: ['teams', 'connected-services', 'connected-catalog'],
+        connectedServiceRefs: [sourceMember.service],
+      },
       isSourceCurrent: async (signal) => (
         await readsResourceCurrent(signal) && await selection.isCurrent(signal)
       ),
@@ -175,13 +174,14 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
       callerSignal: request.signal,
     });
     if (!acquired) return { unavailable: 'managed_custody_unavailable' };
-    const { projection, retire, revalidateAuthorization } = acquired;
+    if ('unavailable' in acquired) return acquired;
+    const { projection, retire, revalidateSourceCurrentness } = acquired;
     return Object.freeze({
       projection,
       retire,
       sourceCurrentness: Object.freeze({
         sourceMember,
-        isCurrent: revalidateAuthorization,
+        isCurrent: revalidateSourceCurrentness,
       }),
     });
   };

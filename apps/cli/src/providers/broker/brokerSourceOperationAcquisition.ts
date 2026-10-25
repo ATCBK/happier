@@ -4,6 +4,7 @@ import type {
 } from '@/providers/connections/publicManagedRuntimeStart';
 import type { SharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { providerBrokerRetainedCurrentnessAffected, type ProviderBrokerRetainedCurrentnessInvalidation } from './brokerRetainedCurrentnessInvalidation';
 
 type AcquiredBrokerSourceOperation = Readonly<{
   projection: NonNullable<Awaited<ReturnType<ManagedProviderExplicitStartCustody['acquire']>>>;
@@ -11,6 +12,8 @@ type AcquiredBrokerSourceOperation = Readonly<{
   isAuthorizationCurrent(): boolean;
   /** Re-read authority; a cancelled read returns false without changing the last answer. */
   revalidateAuthorization(signal?: AbortSignal): Promise<boolean>;
+  /** Unknown reads refuse this join without declaring the shared source stale. */
+  revalidateSourceCurrentness(signal?: AbortSignal): Promise<boolean | null>;
   /** End the operation's custody claim. Idempotent and never double-retires. */
   retire(): Promise<void>;
 }>;
@@ -49,8 +52,9 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
   isSourceCurrent(signal: AbortSignal): Promise<boolean>;
   /** Present only where the retained claim can be revalidated in the background. */
   revalidateOperationAuthorization?: (signal?: AbortSignal) => Promise<boolean>;
+  retainedCurrentnessScope?: ProviderBrokerRetainedCurrentnessInvalidation;
   callerSignal: AbortSignal;
-}>): Promise<AcquiredBrokerSourceOperation | null> {
+}>): Promise<AcquiredBrokerSourceOperation | Readonly<{ unavailable: 'source_currentness_unknown' }> | null> {
   let authorizationCurrent = true;
   // Asserted so TypeScript does not narrow this closure-written local to 'current'.
   let lastSourceRead = 'current' as 'current' | 'stale' | 'unknown';
@@ -115,16 +119,28 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
     revalidateAuthorization,
     ...(revalidateOperationAuthorization
       ? {
-          revalidateRetainedCurrentness: async (signal: AbortSignal = input.callerSignal) => (
-            await input.isSourceCurrent(signal)
-              && await revalidateOperationAuthorization(signal)
-          ),
+          revalidateRetainedCurrentness: async (
+            signal: AbortSignal = input.callerSignal,
+            invalidation?: ProviderBrokerRetainedCurrentnessInvalidation,
+          ) => {
+            if (invalidation && input.retainedCurrentnessScope
+              && !providerBrokerRetainedCurrentnessAffected(invalidation, input.retainedCurrentnessScope)) {
+              return authorizationCurrent;
+            }
+            return await input.isSourceCurrent(signal) && await revalidateOperationAuthorization(signal);
+          },
         }
       : {}),
     operationClaim: input.operationClaim,
     signal,
   });
-  const acquired = await acquireProjection(input.callerSignal);
+  let acquired: Awaited<ReturnType<typeof acquireProjection>>;
+  try {
+    acquired = await acquireProjection(input.callerSignal);
+  } catch (error) {
+    if (lastSourceRead === 'unknown') return { unavailable: 'source_currentness_unknown' };
+    throw error;
+  }
   if (!acquired || input.callerSignal.aborted || !await revalidateAuthorization()) {
     if (acquired) {
       if (!input.callerSignal.aborted && lastSourceRead !== 'unknown') {
@@ -132,9 +148,14 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
       }
       await Promise.resolve(acquired.cleanup()).catch(() => undefined);
     }
-    return null;
+    return lastSourceRead === 'unknown' ? { unavailable: 'source_currentness_unknown' } : null;
   }
-  if (!input.sharedGateway) return Object.freeze({ projection: acquired, isAuthorizationCurrent, revalidateAuthorization, retire });
+  const withSourceCurrentness = (revalidate: typeof revalidateAuthorization) => async (signal?: AbortSignal) => {
+    const current = await revalidate(signal);
+    return lastSourceRead === 'unknown' ? null : current;
+  };
+  if (!input.sharedGateway) return Object.freeze({ projection: acquired, isAuthorizationCurrent, revalidateAuthorization,
+    revalidateSourceCurrentness: withSourceCurrentness(revalidateAuthorization), retire });
   let projection = acquired;
   // A surviving consumer retains authority, not a dead physical endpoint.
   // Rejoin the exact existing explicit-Start claim before dispatch, never
@@ -169,5 +190,6 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
     isCurrent: () => !retired && !retireInFlight && projection.isCurrent(),
     cleanup: async () => await projection.cleanup(),
   });
-  return Object.freeze({ projection: retainedProjection, isAuthorizationCurrent, revalidateAuthorization: ensureProjection, retire });
+  return Object.freeze({ projection: retainedProjection, isAuthorizationCurrent, revalidateAuthorization: ensureProjection,
+    revalidateSourceCurrentness: withSourceCurrentness(ensureProjection), retire });
 }

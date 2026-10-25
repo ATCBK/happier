@@ -297,8 +297,10 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
         let outcome: BrokerReleaseOutcome = 'abandoned';
         let reasonCode: BrokerReleaseReason = 'control_dial_failed';
         let control: Awaited<ReturnType<DaemonMachineIrohRuntime['openHttpTunnel']>> | null = null;
-        // One existing endpoint budget covers dial and DELETE; no phase owns
-        // a shorter application deadline and an ended Session needs no new grant.
+        // The broker release lifecycle (docs/providers.md) deliberately reuses
+        // the Provider endpoint wall budget: after listener withdrawal, remote
+        // cleanup gets one finite attempt before terminal abandonment. Dial and
+        // DELETE share it rather than starting separate phase budgets.
         const releaseSignal = AbortSignal.timeout(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs);
         try {
           // Never reuse the published bearer listener for control work. The

@@ -1,5 +1,6 @@
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { ManagedServiceResponse } from '@happier-dev/plugin-sdk/managed-services';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import { MANAGED_SERVICE_REQUEST_SIZE_ERROR_CODE } from '@/plugins/runtime/invocation/services/managedServiceRequestSize';
 
@@ -13,7 +14,7 @@ export function readProviderBrokerTransportFailure(error: unknown): ManagedServi
         statusText: 'Payload Too Large',
         headers: {
             'content-type': 'application/json',
-            'x-happier-provider-broker-error-code': 'request_too_large',
+            [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'request_too_large',
         },
         body: new Response(JSON.stringify({ type: 'error', error: {
             type: 'invalid_request_error', code: 'request_too_large',

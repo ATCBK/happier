@@ -7,6 +7,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry, RetainedManagedProviderRu
 import type { CapturedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
 import type { AccountConnectionProviderBrokerAccess, OpenAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
 import type { TrackedSession } from '@/daemon/types';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 import { materializeRunnerManagedProviderAgentBinding } from '../agentRuntime/materializeRunnerManagedProviderAgentBinding';
 
 /** The existing runner bridge consumes one projection for either placement.
@@ -34,8 +35,7 @@ export async function createRemoteManagedProviderSessionProjection<TLaunchAuthor
   const unavailable = (message: string) => new PluginError({ code: 'plugin_services_managed_provider_authority_unavailable', message });
   if (basis.deployment.kind !== 'managedLocal'
     || basis.deployment.managedRuntime.sharing !== 'connectionMachine'
-    || basis.deployment.gatewayPlacement.kind !== 'machine'
-    || basis.deployment.gatewayPlacement.machineId === input.machineId
+    || !isRemoteProviderGatewayPlacement(basis.deployment.gatewayPlacement, input.machineId)
     || !input.openBroker || !input.registry.prepareManagedProviderSessionBootstrap) {
     throw unavailable('Remote managed gateway authority is unavailable');
   }

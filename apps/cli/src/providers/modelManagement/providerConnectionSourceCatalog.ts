@@ -115,7 +115,8 @@ export function projectProviderConnectionSourceCatalog(input: Readonly<{
   const endpoint = endpoints[0];
   if (!endpoint) return { status: 'error', error: createProviderErrorV1('provider_incompatible_with_agent') };
   const application = input.delivery === 'brokered'
-    ? projectProviderConnectionBrokerApplication({ registry: input.registry, agentTargetKey: input.request.agentTargetKey, protocol: endpoint.protocol })
+    ? projectProviderConnectionBrokerApplication({ registry: input.registry, agentTargetKey: input.request.agentTargetKey,
+      protocol: endpoint.protocol, expectedApplication: input.request.application })
     : projectProviderBrokerApplication({ connection: record, agentTargetKey: input.request.agentTargetKey, protocol: endpoint.protocol });
   if (!application || input.request.application && !pluginJsonValuesEqual(application, input.request.application)) {
     return { status: 'error', error: createProviderErrorV1('provider_incompatible_with_agent') };

@@ -6,6 +6,7 @@ import type { ProviderBrokerApplicationBindingV1, ProviderWireProtocol } from '@
 import type { ProviderContributionRegistryView } from '@/providers/registry';
 import { projectManagedProviderBrokerApplication } from './applicationProjection';
 import { getProviderContribution } from '@/providers/registry';
+import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import type {
@@ -14,23 +15,40 @@ import type {
 } from './providerConnectionSource';
 import { acquireBrokerSourceOperation } from './brokerSourceOperationAcquisition';
 import { readProviderBrokerTransportFailure } from './providerBrokerTransportFailure';
+import { ProviderBrokerApplicationFailureError } from './providerBrokerApplicationFailure';
 
 const SOURCE_CREDENTIAL_HEADER = 'x-happier-provider-source-credential';
 
-/** Implementation of the private source-envelope transport, independent of an Agent. */
-export function readProviderConnectionBrokerImplementation(registry: ProviderContributionRegistryView) {
-  return getProviderContribution(registry, 'happier.provider.cliproxyapi/cliproxyapi');
+/** Exact requests admit their declared implementation without a catalog scan.
+ * Discovery requires a unique declaration because it has no selected identity. */
+export function readProviderConnectionBrokerImplementation(
+  registry: ProviderContributionRegistryView,
+  implementationIdentity?: ProviderBrokerApplicationBindingV1['implementationIdentity'],
+): ResolvedProviderContribution | null {
+  if (implementationIdentity) {
+    const provider = getProviderContribution(registry,
+      `${implementationIdentity.pluginId}/${implementationIdentity.localId}`);
+    return provider?.definition.managedRuntime?.sourceEnvelopeTransport === 'cpx-v1' ? provider : null;
+  }
+  let implementation: ResolvedProviderContribution | null = null;
+  for (const provider of registry.providersByContributionKey.values()) {
+    if (provider.definition.managedRuntime?.sourceEnvelopeTransport !== 'cpx-v1') continue;
+    if (implementation) return null;
+    implementation = provider;
+  }
+  return implementation;
 }
 
-/** This transport implements CLIProxyAPI's private source-envelope contract.
- * Its target is fixed; endpoint and protocol admission remain registry-owned. */
+/** The contribution declares this private transport; endpoint and protocol
+ * admission remain with the current registry's application projection. */
 export function projectProviderConnectionBrokerApplication(input: Readonly<{
   registry: ProviderContributionRegistryView;
   agentTargetKey: string;
   protocol: ProviderWireProtocol;
   expectedApplication?: ProviderBrokerApplicationBindingV1;
 }>): ProviderBrokerApplicationBindingV1 | null {
-  const identity = readProviderConnectionBrokerImplementation(input.registry)?.identity;
+  const identity = readProviderConnectionBrokerImplementation(input.registry,
+    input.expectedApplication?.implementationIdentity)?.identity;
   if (!identity) return null;
   if (input.expectedApplication && (
     input.expectedApplication.implementationIdentity.pluginId !== identity.pluginId
@@ -69,11 +87,11 @@ const PRIVATE_REQUEST_HEADERS = new Set([
   'accept-encoding',
 ]);
 
-function unavailable(status: 403 | 502): ManagedServiceResponse {
+function upstreamUnavailable(): ManagedServiceResponse {
   return Object.freeze({
     ok: false,
-    status,
-    statusText: status === 403 ? 'Source unavailable' : 'Upstream unavailable',
+    status: 502,
+    statusText: 'Upstream unavailable',
     headers: Object.freeze({}),
     body: null,
   });
@@ -215,13 +233,14 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
         endpointTemplateId: openInput.application.endpointTemplateId,
         operationClaim: { kind: 'providerBroker', operation: openInput.operation },
         purposeBindings: { v: 1, bindings: [] },
+        retainedCurrentnessScope: { facts: ['teams', 'provider-connections', 'saved-secrets'] },
         isSourceCurrent: async (signal) => await openInput.isCurrent(signal),
         ...(openInput.revalidateOperationAuthorization
           ? { revalidateOperationAuthorization: openInput.revalidateOperationAuthorization }
           : {}),
         callerSignal: openInput.signal,
       });
-      if (!acquired) return null;
+      if (!acquired || 'unavailable' in acquired) return null;
       const { projection, retire, isAuthorizationCurrent, revalidateAuthorization } = acquired;
       const send = async (
         requestInput: ManagedServiceRequest,
@@ -229,7 +248,7 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
       ): Promise<ManagedServiceResponse> => {
         if (!requestInput.pathAndQuery.startsWith('/') || requestInput.pathAndQuery.startsWith('//')) {
           lease.close();
-          return unavailable(403);
+          throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
         }
         const headers = requestHeaders(
           requestInput.headers,
@@ -239,7 +258,7 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
         );
         if (!headers) {
           lease.close();
-          return unavailable(403);
+          throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
         }
         let response: ManagedServiceResponse;
         try {
@@ -256,7 +275,8 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
           });
         } catch (error) {
           lease.close();
-          return readProviderBrokerTransportFailure(error) ?? unavailable(502);
+          if (error instanceof ProviderBrokerApplicationFailureError) throw error;
+          return readProviderBrokerTransportFailure(error) ?? upstreamUnavailable();
         }
         if ((response.status >= 300 && response.status < 400)
           || Object.entries(response.headers).some(([name, value]) => (
@@ -264,7 +284,7 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
           ))) {
           await response.body?.cancel().catch(() => undefined);
           lease.close();
-          return unavailable(502);
+          return upstreamUnavailable();
         }
         // Filter while the redaction lease still owns its sensitive values.
         // A bodyless response settles the lease synchronously in
@@ -288,9 +308,11 @@ export function createProviderConnectionCpxBridge(input: Readonly<{
       };
 
       const request = async (requestInput: ManagedServiceRequest): Promise<ManagedServiceResponse> => {
-        if (!await revalidateAuthorization()) return unavailable(403);
-        const firstLease = await openInput.acquireRequestCredential();
-        if (!firstLease) return unavailable(403);
+        if (!await revalidateAuthorization()) {
+          throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
+        }
+        const firstLease = await openInput.acquireRequestCredential().catch(() => null);
+        if (!firstLease) throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
         const first = await send(requestInput, firstLease);
         if (first.status !== 401) return first;
         const secondLease = await openInput.acquireRequestCredential();

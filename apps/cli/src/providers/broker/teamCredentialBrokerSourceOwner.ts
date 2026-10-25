@@ -10,7 +10,7 @@ import type {
   ManagedProviderEndpointAccessProjection,
 } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
-import type { TeamCredentialSourceCurrentness } from './teamCredentialSourceSnapshot';
+import { ProviderBrokerApplicationFailureError } from './providerBrokerApplicationFailure';
 import { logger } from '@/ui/logger';
 
 type ConnectedServicesSource = Extract<
@@ -34,9 +34,35 @@ export function teamCredentialBrokerPlacementAcceptsMachine(
     && (placement.kind === 'machine_pool' || placement.machineId === machineId);
 }
 
+/** Common receiver-side resource eligibility. Team, frozen revision and
+ * request-policy checks belong to each admission boundary; a policy-only
+ * revision change must not replace an already-open source. */
+export function teamCredentialBrokerResourceAcceptsMachine<T extends Readonly<{
+  enabled: boolean;
+  brokerPlacement: TeamCredentialBrokerPlacementV1 | null;
+  source: TeamCredentialSourceBindingV1 | null;
+}>>(
+  resource: T | null,
+  machineId: string,
+): resource is T & Readonly<{ source: TeamCredentialSourceBindingV1 }> {
+  return resource !== null
+    && resource.enabled
+    && resource.source !== null
+    && teamCredentialBrokerPlacementAcceptsMachine(resource.brokerPlacement, machineId);
+}
+
+/** Source adapters compare the exact admitted source representation. Resource
+ * test requests separately compare semantic JSON at their signed-input boundary. */
+export function sameTeamCredentialBrokerSource(
+  left: TeamCredentialSourceBindingV1,
+  right: TeamCredentialSourceBindingV1,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 /**
- * True when the signed request names the one executable application the
- * CLIProxyAPI contribution projects for this wire protocol. The contribution
+ * True when the signed request names an executable application whose
+ * contribution declares the private source-envelope transport. The contribution
  * owns that identity, so the generic broker hosts compare against its own
  * projection instead of repeating a Provider id.
  */
@@ -103,6 +129,7 @@ export type TeamCredentialBrokerSourceOpenFailureReason =
   | 'source_selection_unavailable'
   | 'resource_not_current'
   | 'purpose_binding_unavailable'
+  | 'source_currentness_unknown'
   | 'managed_custody_unavailable';
 
 export type TeamCredentialBrokerSourceAcquireResult =
@@ -155,7 +182,7 @@ export type TeamCredentialBrokerSourceOwner = Readonly<{
 
 type SourceOpenResult = Promise<Readonly<{
   projection: ManagedProviderEndpointAccessProjection;
-  sourceCurrentness: Pick<TeamCredentialSourceCurrentness, 'sourceMember' | 'isCurrent'>;
+  sourceCurrentness: Readonly<{ sourceMember: TeamCredentialSourceMemberV1; isCurrent(): Promise<boolean | null> }>;
   retire(): Promise<void>;
 }> | Readonly<{ unavailable: TeamCredentialBrokerSourceOpenFailureReason }> | null>;
 
@@ -324,18 +351,20 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
         });
       }
       const { projection, sourceCurrentness } = opened;
-      let sourceCurrent = await sourceCurrentness.isCurrent().catch(() => false);
+      let sourceCurrent = await sourceCurrentness.isCurrent().catch(() => null);
       if (rawInput.signal.aborted || !sourceCurrent || !readsCurrent(projection)) {
         logger.warnLocalFile('[provider-broker-source]', { stage: 'source_currentness', code: rawInput.signal.aborted ? 'request_cancelled' : 'source_not_current' });
         // Only a source that is not current retires the operation this open
         // would have joined; a caller that went away releases nothing shared.
-        if (!rawInput.signal.aborted && (!sourceCurrent || !readsCurrent(projection))) {
+        if (!rawInput.signal.aborted && sourceCurrent !== null
+          && (sourceCurrent === false || !readsCurrent(projection))) {
           await opened.retire().catch(() => undefined);
         }
         await Promise.resolve(projection.cleanup()).catch(() => undefined);
         return Object.freeze({
           ok: false as const,
           reasonCode: 'source_unavailable' as const,
+          ...(sourceCurrent === null ? { sourceOpenFailureReason: 'source_currentness_unknown' as const } : {}),
         });
       }
 
@@ -407,15 +436,9 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
             endpointUrl: projection.access.endpointUrl,
             async request(request: ManagedServiceRequest) {
               if (retired) {
-                return Object.freeze({
-                  ok: false,
-                  status: 403,
-                  statusText: 'Source unavailable',
-                  headers: Object.freeze({}),
-                  body: null,
-                });
+                throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
               }
-              sourceCurrent = await sourceCurrentness.isCurrent().catch(() => false);
+              sourceCurrent = await sourceCurrentness.isCurrent().catch(() => null);
               if (
                 retired
                 || rawInput.signal.aborted
@@ -425,16 +448,10 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
                 // A source that stopped being current invalidates the whole
                 // operation's gateway, so it is retired. A caller that merely
                 // went away releases only its own view.
-                const invalid = !retired && !rawInput.signal.aborted
-                  && (!sourceCurrent || !readsCurrent(projection));
+                const invalid = !retired && !rawInput.signal.aborted && sourceCurrent !== null
+                  && (sourceCurrent === false || !readsCurrent(projection));
                 await (invalid ? retireAndCleanup() : cleanup()).catch(() => undefined);
-                return Object.freeze({
-                  ok: false,
-                  status: 403,
-                  statusText: 'Source unavailable',
-                  headers: Object.freeze({}),
-                  body: null,
-                });
+                throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
               }
               return await projection.access.request(request);
             },
@@ -442,7 +459,7 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
           isCurrent: () => (
             !retired
             && !rawInput.signal.aborted
-            && sourceCurrent
+            && sourceCurrent === true
             && readsCurrent(projection)
           ),
           cleanup,

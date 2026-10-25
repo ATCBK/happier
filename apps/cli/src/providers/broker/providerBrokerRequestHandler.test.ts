@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/protocol';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
+import { mapProviderBrokerApplicationFailure } from '../../../../server/sources/app/api/routes/providers/externalProviderBrokerDispatcher';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(11));
 const payload: ProviderBrokerRouteGrantPayloadV1 = {
@@ -97,6 +98,8 @@ describe('createProviderBrokerRequestHandler', () => {
         expect(result).toMatchObject({ ok: true, response: { status: 413,
             headers: { 'x-happier-provider-broker-error-code': 'request_too_large' } } });
         if (!result.ok) throw new Error('expected transport size response');
+        expect(mapProviderBrokerApplicationFailure(result.response.status, result.response.headers))
+            .toEqual({ error: 'invalid_request' });
         expect(await new Response(result.response.body).json()).toMatchObject({ error: {
             code: 'request_too_large', type: 'invalid_request_error',
         } });

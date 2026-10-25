@@ -18,6 +18,14 @@ export const PROVIDER_BROKER_ROUTE_AUDIENCE_V1 = 'happier-provider-broker-route-
 export const PROVIDER_BROKER_OPEN_HTTP_PATH_V1 = '/v1/teams/credential-resources/broker/open' as const;
 export const PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1 = '/v1/teams/credential-resources/broker/admit' as const;
 export const PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1 = '/v1/teams/credential-resources/broker/models/authorize' as const;
+/** Private broker wire metadata; these never carry upstream credentials. */
+export const PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER = 'x-happier-provider-broker-close-request-id' as const;
+export const PROVIDER_BROKER_ENDPOINT_PATH_HEADER = 'x-happier-provider-endpoint-path' as const;
+export const PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER = 'x-happier-provider-broker-error-code' as const;
+export const PROVIDER_BROKER_MODEL_ID_HEADER = 'x-happier-provider-model-id' as const;
+export const PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER = 'x-happier-provider-broker-limit-metric' as const;
+export const PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER = 'x-happier-provider-broker-limit-remaining' as const;
+export const PROVIDER_BROKER_APPLICATION_LIMIT_RESETS_AT_HEADER = 'x-happier-provider-broker-limit-resets-at' as const;
 /** Home-owned Runner readiness admission route, with the same `:resourceId`
  * param the route registrar binds. One template so the daemon client and the
  * route registrar cannot drift. */

@@ -29,7 +29,8 @@ import type { TeamCredentialBrokerSourceOpenInput } from './teamCredentialBroker
 import {
   isCLIProxyAPIBrokerApplication,
   providerConnectionBrokerSourceMember,
-  teamCredentialBrokerPlacementAcceptsMachine,
+  sameTeamCredentialBrokerSource,
+  teamCredentialBrokerResourceAcceptsMachine,
 } from './teamCredentialBrokerSourceOwner';
 
 type ProviderConnectionSource = Extract<TeamCredentialSourceBindingV1, { kind: 'provider_connection' }>;
@@ -360,30 +361,26 @@ export async function isProviderConnectionBrokerSourceCurrent(input: Readonly<{
   localCandidateUrlsByConnectionId?: ResolveProviderConnectionBrokerSourceInput['localCandidateUrlsByConnectionId'];
   getAccountSettingsSnapshot: () => ActiveAccountSettingsSnapshot | null;
 }>): Promise<boolean> {
-  try {
-    const accountSnapshot = input.getAccountSettingsSnapshot();
-    if (!accountSnapshot) return false;
-    const current = resolveProviderConnectionBrokerSource({
-      source: input.expected.source,
-      machineId: input.expected.machineId,
-      endpointTemplateId: input.expected.endpoint.endpointTemplateId,
-      protocol: input.expected.endpoint.protocol,
-      expectedCredentialTransport: input.expected.credentialRef.transport,
-      accountSettings: accountSnapshot.settings,
-      providerSettings: readProviderSettingsForCli(accountSnapshot).settings,
-      ...(accountSnapshot.savedSecretResources
-        ? { savedSecretResources: accountSnapshot.savedSecretResources }
-        : {}),
-      registry: input.registry,
-      dnsEvidenceByEndpointUrl: input.dnsEvidenceByEndpointUrl,
-      ...(input.localCandidateUrlsByConnectionId
-        ? { localCandidateUrlsByConnectionId: input.localCandidateUrlsByConnectionId }
-        : {}),
-    });
-    return current.ok && sameSnapshot(current.snapshot, input.expected);
-  } catch {
-    return false;
-  }
+  const accountSnapshot = input.getAccountSettingsSnapshot();
+  if (!accountSnapshot) return false;
+  const current = resolveProviderConnectionBrokerSource({
+    source: input.expected.source,
+    machineId: input.expected.machineId,
+    endpointTemplateId: input.expected.endpoint.endpointTemplateId,
+    protocol: input.expected.endpoint.protocol,
+    expectedCredentialTransport: input.expected.credentialRef.transport,
+    accountSettings: accountSnapshot.settings,
+    providerSettings: readProviderSettingsForCli(accountSnapshot).settings,
+    ...(accountSnapshot.savedSecretResources
+      ? { savedSecretResources: accountSnapshot.savedSecretResources }
+      : {}),
+    registry: input.registry,
+    dnsEvidenceByEndpointUrl: input.dnsEvidenceByEndpointUrl,
+    ...(input.localCandidateUrlsByConnectionId
+      ? { localCandidateUrlsByConnectionId: input.localCandidateUrlsByConnectionId }
+      : {}),
+  });
+  return current.ok && sameSnapshot(current.snapshot, input.expected);
 }
 
 /** Direct material captures plaintext and therefore pins the exact Saved
@@ -564,13 +561,6 @@ export async function materializeProviderConnectionBrokerSource(input: Readonly<
   });
 }
 
-function sameSource(
-  left: TeamCredentialSourceBindingV1 | null,
-  right: ProviderConnectionSource,
-): boolean {
-  return left !== null && JSON.stringify(left) === JSON.stringify(right);
-}
-
 /**
  * Connects the exact Provider Connection owner to the private CPX/SVC09 data
  * plane. Registry and Settings authority are re-entered for every currentness
@@ -635,10 +625,8 @@ export function createProviderConnectionBrokerSourceOpen(input: Readonly<{
       const resource = await input.readResource(request.resourceId, signal);
       // Enabled, placement and source identity; never the policy revision,
       // which the Home rechecks per request (`04-private-iroh-broker-transport.md:272`).
-      return resource !== null
-        && resource.enabled
-        && teamCredentialBrokerPlacementAcceptsMachine(resource.brokerPlacement, request.brokerMachineId)
-        && sameSource(resource.source, request.source);
+      return teamCredentialBrokerResourceAcceptsMachine(resource, request.brokerMachineId)
+        && sameTeamCredentialBrokerSource(resource.source, request.source);
     };
     if (!await readsResourceCurrent()) return null;
 
@@ -751,7 +739,7 @@ export function createProviderConnectionBrokerSourceOpen(input: Readonly<{
         const currentSelection = await input.resolveExactSelection!({
           ...exactSelectionRequest.input,
           signal,
-        }).catch(() => null);
+        });
         if (!currentSelection
           || JSON.stringify(currentSelection) !== JSON.stringify(exactSelectionRequest.selection)) return false;
       }
@@ -812,11 +800,13 @@ export function createProviderConnectionBrokerSourceOpen(input: Readonly<{
         : {}),
       acquireRequestCredential,
     }).catch(() => null);
-    if (!projection || request.signal.aborted || !await isCurrent() || !projection.isCurrent()) {
-      if (projection) {
-        if (!request.signal.aborted) await projection.retire().catch(() => undefined);
-        await Promise.resolve(projection.cleanup()).catch(() => undefined);
+    if (!projection) return null;
+    const sourceCurrent = request.signal.aborted ? null : await isCurrent().catch(() => null);
+    if (request.signal.aborted || sourceCurrent !== true || !projection.isCurrent()) {
+      if (!request.signal.aborted && sourceCurrent !== null && (sourceCurrent === false || !projection.isCurrent())) {
+        await projection.retire().catch(() => undefined);
       }
+      await Promise.resolve(projection.cleanup()).catch(() => undefined);
       return null;
     }
     return Object.freeze({

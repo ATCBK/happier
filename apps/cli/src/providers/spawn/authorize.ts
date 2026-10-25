@@ -42,6 +42,7 @@ import {
   ProviderOperationAbandonedError,
 } from '../operationLifetime';
 import { resolveProviderConnectionForMachine } from '../registry/resolve';
+import { isRemoteProviderGatewayPlacement } from '../managed/gatewayPlacement';
 import { readProviderSettingsForCli } from '../settings/read';
 import { prepareProviderConnectionsCatalogForCli } from '../settings/hydrate';
 import { resolveProviderCredentialPlaintext } from './credentials';
@@ -867,8 +868,7 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     }
     const remotePlacement = connectionResolution.status === 'resolved'
       && connectionResolution.record.deployment.kind === 'managedLocal'
-      && connectionResolution.record.connection.gatewayPlacement?.kind === 'machine'
-      && connectionResolution.record.connection.gatewayPlacement.machineId !== input.machineId;
+      && isRemoteProviderGatewayPlacement(connectionResolution.record.connection.gatewayPlacement, input.machineId);
     const runtimeModelDescriptor =
       remotePlacement ? runtimeModelObservation?.model ?? null
         : input.runtimeModelDescriptor ?? runtimeModelObservation?.model ?? null;

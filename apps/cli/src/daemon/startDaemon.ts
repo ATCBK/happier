@@ -277,7 +277,6 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 import type { ProviderBrokerApplicationBindingV1, ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol';
 import type { TeamCredentialResourceSummaryV1 } from '@happier-dev/protocol/teams';
 import {
-  daemonExternalProviderRequestPolicyAcceptsResource,
   revalidateExternalProviderBrokerAuthorization,
   resolveRunnerCredentialSelectionCurrentness,
 } from '@/providers/broker/daemonProviderBrokerRuntime';
@@ -288,7 +287,7 @@ import {
 } from '@/providers/broker/connectedServicesSource';
 import {
   createTeamCredentialBrokerSourceOwner,
-  teamCredentialBrokerPlacementAcceptsMachine,
+  teamCredentialBrokerResourceAcceptsMachine,
 } from '@/providers/broker/teamCredentialBrokerSourceOwner';
 import {
   createTeamCredentialExternalModelCatalog,
@@ -3417,11 +3416,8 @@ export async function startDaemon(
                     const signal = request.signal ?? new AbortController().signal;
                     const resource = await readResource(authority.resourceId, signal);
                     if (
-                      !resource
-                      || !resource.enabled
+                      !teamCredentialBrokerResourceAcceptsMachine(resource, registeredMachineId)
                       || resource.teamId !== authority.teamId
-                      || !resource.source
-                      || !teamCredentialBrokerPlacementAcceptsMachine(resource.brokerPlacement, registeredMachineId)
                     ) return null;
                     const catalog = await resolveCatalog({
                       resource,
@@ -3474,20 +3470,16 @@ export async function startDaemon(
                     const signal = request.signal ?? new AbortController().signal;
                     const resource = await readResource(binding.resourceId, signal);
                     const route = classifyTeamCredentialRequestRouteV1(request.pathAndQuery);
-                    const source = resource?.source;
                     const protocol = route?.kind === 'openai_responses'
                       ? 'openai-responses'
                       : route?.kind === 'openai_chat_completions'
                         ? 'openai-chat'
                         : route?.kind === 'anthropic_messages' ? 'anthropic' : null;
                     if (
-                      !daemonExternalProviderRequestPolicyAcceptsResource({
-                        resource,
-                        bindingTeamId: binding.teamId,
-                        registeredMachineId,
-                      })
-                      || !source
+                      !teamCredentialBrokerResourceAcceptsMachine(resource, registeredMachineId)
+                      || resource.teamId !== binding.teamId
                     ) return null;
+                    const source = resource.source;
                     const producer = providerOperationsProducer;
                     if (!producer) return null;
                     const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
@@ -3618,13 +3610,10 @@ export async function startDaemon(
                     const signal = request.signal ?? new AbortController().signal;
                     const resource = await readResource(binding.resourceId, signal);
                     if (
-                      !resource
-                      || !resource.enabled
+                      !teamCredentialBrokerResourceAcceptsMachine(resource, registeredMachineId)
                       || resource.teamId !== binding.teamId
                       || resource.revision !== binding.expectedResourceRevision
-                      || !resource.source
                       || !pluginJsonValuesEqual(resource.source, binding.source)
-                      || !teamCredentialBrokerPlacementAcceptsMachine(resource.brokerPlacement, registeredMachineId)
                     ) return null;
                     const catalog = await resolveCatalog({
                       resource,

@@ -27,8 +27,10 @@ import {
   writeProviderBrokerApplicationFailure,
 } from './providerBrokerApplicationServer';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
+import { mapProviderBrokerApplicationFailure } from '../../../../server/sources/app/api/routes/providers/externalProviderBrokerDispatcher';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from './providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
+import { ProviderBrokerApplicationFailureError } from './providerBrokerApplicationFailure';
 
 const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
 const payload: ProviderBrokerRouteGrantPayloadV1 = {
@@ -156,7 +158,44 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
-  it.each(['completed', 'failed'] as const)('records response-body %s after upstream headers without replaying the request', async outcome => {
+  it('writes a typed source refusal from managed access through the handler and HTTP failure owner', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const source = TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection',
+      connectionId: 'pc_source', connectionSecurityFingerprint: 'connection-security:v1:source', credentialSlotId: 'apiKey' });
+    const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [{ keyId: 'home-1', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+      nowMs: () => 200,
+      resolveRequestPolicy: async () => ({ resourceRevision: 7, sourceRevision: payload.sourceRevision,
+        application: payload.application, source, policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
+      createRequestId: () => 'broker-source-refusal',
+      admit: async () => ({ ok: true, access: { endpointUrl: () => 'http://127.0.0.1:43120/v1',
+        // Managed access is the Provider effect boundary. Preserve the real
+        // broker handler, phase, signature and HTTP response path around it.
+        request: async () => { throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' }); },
+      } }),
+    }) });
+    try {
+      const target = await server.createStreamTarget({ authenticatedRemoteEndpointId: payload.initiator.endpointId,
+        authority: signedAuthority(), expected: expectedBinding });
+      const response = await requestThroughApplicationTarget(target);
+      expect(response).toContain('HTTP/1.1 403');
+      expect(response).toContain(`${PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER}: source_unavailable`);
+      expect(response).toContain('"code":"source_unavailable"');
+      expect(response).toContain('"resourceId":"resource-1"');
+      expect([...diagnostics.mock.calls, ...warnings.mock.calls]
+        .filter(([marker]) => marker === '[provider-broker-application]')).toEqual([
+        ['[provider-broker-application]', { stage: 'application_response', applicationRequestId: 'req-1', code: 'source_unavailable' }],
+      ]);
+    } finally {
+      await server.close();
+      diagnostics.mockRestore();
+      warnings.mockRestore();
+    }
+  });
+
+  it.each(['completed', 'failed'] as const)('records only response-body failure after upstream %s without replaying the request', async outcome => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const content = 'private upstream response sentinel';
@@ -198,16 +237,15 @@ describe('Provider broker target application integration', () => {
       const response = await requestThroughApplicationTarget({ ...target,
         onData: chunk => { if (chunk.includes(content)) failUpstream(); } });
       expect(response).toContain(content);
-      await vi.waitFor(() => expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', {
-        stage: 'response_body', applicationRequestId: 'req-1', outcome,
+      if (outcome === 'failed') await vi.waitFor(() => expect(warnings).toHaveBeenCalledWith('[provider-broker-application]', {
+        stage: 'response_body', applicationRequestId: 'req-1', outcome, httpStatus: 200,
         responseBytes: Buffer.byteLength(content),
       }));
       // A diagnostic must add zero upstream requests or per-chunk log records.
       expect(upstreamRequests).toBe(1);
-      expect(diagnostics.mock.calls.filter(([, record]) => record && typeof record === 'object'
-        && 'stage' in record && record.stage === 'response_body')).toHaveLength(1);
       const records = [...diagnostics.mock.calls, ...warnings.mock.calls]
         .filter(([marker]) => marker === '[provider-broker-application]');
+      expect(records).toHaveLength(outcome === 'failed' ? 1 : 0);
       expect(JSON.stringify(records)).not.toContain('private upstream');
     } finally {
       await server.close();
@@ -218,8 +256,9 @@ describe('Provider broker target application integration', () => {
     }
   });
 
-  it('correlates consecutive Team requests through policy, admission and upstream status without payloads', async () => {
+  it('keeps successful Team requests quiet and records one failed upstream response without payloads', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     let effects = 0;
     let requestIdsCreated = 0;
     const admissionIds: string[] = [];
@@ -250,28 +289,17 @@ describe('Provider broker target application integration', () => {
           body: JSON.stringify({ model: 'gpt-5', messages: [{ role: 'user', content: 'private prompt sentinel' }] }) });
         expect(response).toContain(turn === 0 ? 'HTTP/1.1 200' : 'HTTP/1.1 429');
       }
-      const records = diagnostics.mock.calls.filter(([marker]) => marker === '[provider-broker-application]').map(([, data]) => data);
-      const received = records.filter(record => record && typeof record === 'object' && 'stage' in record && record.stage === 'received');
-      expect(received).toHaveLength(2);
-      const requestIds = received.map(record => {
-        expect(record).toMatchObject({ applicationRequestId: expect.any(String), consumerId: 'session-1', grantId });
-        if (!record || typeof record !== 'object' || !('applicationRequestId' in record)) throw new Error('Missing request diagnostic');
-        return record.applicationRequestId;
-      });
-      expect(new Set(requestIds).size).toBe(2);
-      for (const [index, requestId] of requestIds.entries()) {
-        expect(records).toContainEqual(expect.objectContaining({ stage: 'upstream_response', applicationRequestId: requestId,
-          httpStatus: index === 0 ? 200 : 429 }));
-        const brokerRequestId = `broker-request-${index + 1}`;
-        expect(records).toContainEqual({ stage: 'request_context', applicationRequestId: requestId, brokerRequestId });
-        expect(records).toContainEqual({ stage: 'phase', phase: 'upstream_forward', brokerRequestId, outcome: 'completed' });
-      }
+      const records = [...diagnostics.mock.calls, ...warnings.mock.calls]
+        .filter(([marker]) => marker === '[provider-broker-application]').map(([, data]) => data);
+      expect(records).toEqual([{ stage: 'response_body', applicationRequestId: 'req-2',
+        httpStatus: 429, outcome: 'failed', responseBytes: 0 }]);
       expect(effects).toBe(2); // Diagnostics perform no extra Provider requests.
       expect(admissionIds).toEqual(['broker-request-1', 'broker-request-2']);
       expect(JSON.stringify(records)).not.toMatch(/private prompt sentinel|connection-security|Bearer|valueBase64Url/u);
     } finally {
       await server.close();
       diagnostics.mockRestore();
+      warnings.mockRestore();
     }
   });
 
@@ -328,7 +356,7 @@ describe('Provider broker target application integration', () => {
     { name: 'Error', code: 'ECONNRESET', expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
     { name: 'Error', code: 'ECONNRESET', statusCode: 400, expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
     { name: 'private credential name', code: 'private credential code', expected: { errorName: 'UnknownError' } },
-  ])('returns a typed application refusal and logs only safe exception metadata: $name/$statusCode', async ({ name, code, statusCode, expected }) => {
+  ])('returns a retryable typed application failure and logs only safe exception metadata: $name/$statusCode', async ({ name, code, statusCode, expected }) => {
     const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const server = await startProviderBrokerApplicationServer({
       handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
@@ -343,8 +371,11 @@ describe('Provider broker target application integration', () => {
       const response = await server.app.inject({ method: 'GET', url: '/v1/models', headers: {
         'request-id': 'private credential id', 'x-request-id': 'private credential id',
       } });
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(503);
       expect(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]).toBe('broker_unavailable');
+      expect(mapProviderBrokerApplicationFailure(response.statusCode, {
+        [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: String(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]),
+      })).toEqual({ error: 'broker_unavailable' });
       expect(response.json().error.code).toBe('broker_unavailable');
       expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', {
         stage: 'handler', code: 'exception', phase: 'handler', applicationRequestId: expect.any(String), ...expected,
@@ -523,6 +554,7 @@ describe('Provider broker target application integration', () => {
 
   it('admits a large inference body through the real transport and request policy and cancels upstream', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const input = 'x'.repeat(8 * 1024 * 1024);
     let admittedInput: unknown;
     let upstreamCancelled = false;
@@ -599,15 +631,16 @@ describe('Provider broker target application integration', () => {
         socket.once('error', reject);
       });
       await vi.waitFor(() => expect(upstreamCancelled).toBe(true));
-      await vi.waitFor(() => expect(diagnostics.mock.calls
-        .filter(([, record]) => record && typeof record === 'object' && 'stage' in record && record.stage === 'response_body')
-        .map(([, record]) => record && typeof record === 'object' && 'outcome' in record ? record.outcome : null))
-        .toEqual(['completed', 'cancelled']));
+      await vi.waitFor(() => expect([...diagnostics.mock.calls, ...warnings.mock.calls]
+        .filter(([marker]) => marker === '[provider-broker-application]').map(([, record]) => record))
+        .toEqual([{ stage: 'response_body', applicationRequestId: 'req-2', httpStatus: 200,
+          outcome: 'cancelled', responseBytes: expect.any(Number) }]));
     } finally {
       await server.close();
       upstream.closeAllConnections();
       await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
       diagnostics.mockRestore();
+      warnings.mockRestore();
     }
   });
 

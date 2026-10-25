@@ -1,5 +1,3 @@
-import { logger } from '@/ui/logger';
-
 type ProviderBrokerApplicationPhase =
     | 'request_policy'
     | 'home_admission'
@@ -27,18 +25,9 @@ export async function runProviderBrokerApplicationPhase<T>(
     brokerRequestId: string,
     run: () => Promise<T>,
 ): Promise<T> {
-    const record = (outcome: 'started' | 'completed' | 'failed'): void => {
-        try {
-            logger.infoFile('[provider-broker-application]', { stage: 'phase', phase, brokerRequestId, outcome });
-        } catch { /* Diagnostics cannot change request custody or its outcome. */ }
-    };
-    record('started');
     try {
-        const result = await run();
-        record('completed');
-        return result;
+        return await run();
     } catch (error) {
-        record('failed');
         // Admission contains source selection, Home admission and source open.
         // Preserve the innermost failed boundary rather than relabelling it.
         if (error instanceof ProviderBrokerApplicationPhaseError) throw error;

@@ -351,7 +351,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     }
   });
 
-  it('records fresh-stream admission and a later closed refusal without disclosing authority or errors', async () => {
+  it('keeps fresh-stream success quiet and records each closed refusal without disclosing authority or errors', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     let transport: Parameters<DaemonMachineIrohRuntime['openHttpTunnel']>[0] | undefined;
     let refused = false;
@@ -373,12 +373,9 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
           : brokerOpen(authority({ grantId: '09df506c-86a6-4569-a4dd-5c3256e0d152' }));
       } });
       await transport?.handshakeProvider?.();
+      expect(diagnostics.mock.calls.filter(([label]) => label === '[provider-broker-application]')).toHaveLength(0);
       refused = true;
       await expect(transport?.handshakeProvider?.()).rejects.toMatchObject({ code: 'session_not_active' });
-      expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
-        stage: 'carrier_admission', outcome: 'accepted', consumerId: 'session-1',
-        grantId: '09df506c-86a6-4569-a4dd-5c3256e0d152',
-      })]);
       expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
         stage: 'carrier_admission', outcome: 'refused', code: 'session_not_active', consumerId: 'session-1',
       })]);
@@ -392,6 +389,8 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
         stage: 'carrier_admission', outcome: 'failed', code: 'transport_error',
       })]);
+      expect(diagnostics.mock.calls.filter(([, record]) => record && typeof record === 'object'
+        && 'stage' in record && record.stage === 'carrier_admission')).toHaveLength(2);
       expect(refreshes).toBe(3); // One fresh Home check per demand, with no diagnostic probes/retries.
       expect(JSON.stringify(diagnostics.mock.calls)).not.toMatch(/private-capability|valueBase64Url|source-revision|private error sentinel|private code sentinel/u);
     } finally {

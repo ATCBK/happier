@@ -1,4 +1,5 @@
 import type { ManagedExecutableRef } from '@happier-dev/protocol';
+import type { ProviderBrokerRetainedCurrentnessInvalidation } from '@/providers/broker/brokerRetainedCurrentnessInvalidation';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { listRuntimeContributedActionDefinitions } from './invocation/actions/createCommittedContributedActionDeps';
 import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
@@ -572,7 +573,7 @@ export type ManagedProviderExplicitStartJoinInput = Readonly<{
     >;
     signal?: AbortSignal;
     isCurrent(): boolean;
-    revalidateRetainedCurrentness?(signal?: AbortSignal): Promise<boolean>;
+    revalidateRetainedCurrentness?(signal?: AbortSignal, invalidation?: ProviderBrokerRetainedCurrentnessInvalidation): Promise<boolean>;
     establish: ManagedProviderExplicitStartOperationInput['establish'];
 }>;
 
@@ -837,6 +838,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     revalidateManagedProviderExplicitStarts?(
         signal?: AbortSignal,
         selector?: Parameters<NonNullable<ResolvedExecutablePluginRuntimeRegistry['retireManagedProviderExplicitStart']>>[0],
+        invalidation?: ProviderBrokerRetainedCurrentnessInvalidation,
     ): Promise<number>;
     retireManagedProviderExplicitStarts?(
         lifecycleKind: 'publicExplicitStart' | 'providerBroker',
@@ -6269,6 +6271,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     async function revalidateManagedProviderExplicitStarts(
         signal?: AbortSignal,
         selector?: Parameters<typeof retireManagedProviderExplicitStart>[0],
+        invalidation?: ProviderBrokerRetainedCurrentnessInvalidation,
     ): Promise<number> {
         signal?.throwIfAborted();
         const operationId = selector
@@ -6281,9 +6284,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
             contributionQualifiedId:
                 `${selector.identity.pluginId}/providers/${selector.identity.localId}`,
         } : undefined;
-        const ordinary = await daemonManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim);
+        const ordinary = await daemonManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim, invalidation);
         return ordinary + (projectManagedServicesOwner === daemonManagedServicesOwner ? 0
-            : await projectManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim));
+            : await projectManagedServicesOwner.revalidateManagedProviderExplicitStarts(signal, claim, invalidation));
     }
 
     async function retireManagedProviderExplicitStarts(

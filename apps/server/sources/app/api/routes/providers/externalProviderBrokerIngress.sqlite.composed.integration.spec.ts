@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import Fastify from "fastify";
+import Fastify, { type RouteOptions } from "fastify";
 import * as privacyKit from "privacy-kit";
 
 import { db } from "@/storage/db";
@@ -29,6 +29,9 @@ import { updateMachinePool } from "@/app/machines/pools/machinePoolService";
 import { readExternalBrokerOperation, retireExternalBrokerOperationInTx } from "@/app/teams/credentials/externalBrokerOperation";
 import { resolveTeamCredentialBrokerPlacementFingerprint } from "@/app/teams/credentials/brokerPlacementResolver";
 import { updateTeamCredentialResourceInTx } from "@/app/teams/credentials/resourceUpdate";
+import { mapProviderBrokerApplicationFailure } from './externalProviderBrokerDispatcher';
+import { writeProviderBrokerApplicationFailure } from '../../../../../../cli/src/providers/broker/providerBrokerApplicationServer';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 /**
  * A Home that can actually serve this API also has the route-grant signing
@@ -1063,6 +1066,33 @@ describe("external Provider broker ingress network vertical (SQLite)", () => {
             },
         };
     }
+
+    it.each(['broker_unavailable', 'update_required'] as const)("preserves the real broker %s response at the public API edge", async reasonCode => {
+        const fixture = await createDirectBrokerIngressFixture(`application-${reasonCode}`);
+        const broker = Fastify();
+        broker.get('/v1/models', (_request, reply) => writeProviderBrokerApplicationFailure(reply, { ok: false, reasonCode }));
+        const dispatch: ExternalProviderBrokerDispatch = async () => {
+            // Substitute only the remote HTTP transport. The CLI's actual
+            // response writer, Home classifier and public ingress stay real.
+            const response = await broker.inject({ method: 'GET', url: '/v1/models' });
+            const headers = { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]:
+                String(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]) };
+            return { ok: false, ...mapProviderBrokerApplicationFailure(response.statusCode, headers) };
+        };
+        const app = Fastify();
+        // The fixture captures the production route registrations for its
+        // disconnect probes; install those same options on real Fastify here.
+        for (const route of fixture.register({ dispatch })) app.route(route as unknown as RouteOptions);
+        try {
+            const response = await app.inject({ method: 'GET', url: '/api/provider-broker/v1/models',
+                headers: { authorization: `Bearer ${fixture.token}` } });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toMatchObject({ error: { type: 'happier_provider_broker_error', code: 'broker_unavailable' } });
+        } finally {
+            await app.close();
+            await broker.close();
+        }
+    }, 180_000);
 
     it("authenticates at the edge and dispatches a strict target-free application DTO", async () => {
         const fixture = await createDirectBrokerIngressFixture("dto");

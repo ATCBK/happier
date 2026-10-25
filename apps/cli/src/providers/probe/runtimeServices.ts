@@ -18,6 +18,7 @@ import { readStoredCredentials } from '@/persistence';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createAccountScopedProviderCatalogReader, createAccountScopedProviderModelProjectionReader, type AccountScopedProviderReadInput } from '@/providers/modelManagement/remoteProjection';
 import { createAccountConnectionModelProjectionRequest } from '@/providers/broker/applicationProjection';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { readProviderModelNameCatalog, resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
 import {
@@ -1201,8 +1202,8 @@ export function createRuntimeProviderServices(input: Readonly<{
   ): Promise<T | Readonly<{ status: 'error'; error: ProviderErrorV1 }> | null> {
     const { connection } = context;
     const placement = connection.connection.gatewayPlacement;
-    if (connection.deployment.kind !== 'managedLocal' || placement?.kind !== 'machine'
-      || placement.machineId === identity.machineId) return null;
+    if (connection.deployment.kind !== 'managedLocal'
+      || !isRemoteProviderGatewayPlacement(placement, identity.machineId)) return null;
     if (!connection.authorization.authorized) return {
       status: 'error', error: createProviderErrorV1(connection.authorization.errorCode, identity),
     };

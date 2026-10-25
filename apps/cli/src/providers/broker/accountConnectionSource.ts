@@ -68,8 +68,9 @@ export function createAccountConnectionManagedConsumerSourceOpen(input: AccountC
     if (catalog.status !== 'ready') return null;
     const readSource = async () => await input.withRegistry(async registry => {
       const snapshot = input.getAccountSettingsSnapshot();
-      if (!snapshot || snapshot.scopeKey !== scopeKey || snapshot.scopeKey !== input.expectedAccountSettingsScopeKey
-        || snapshot.providerConnectionsCatalog?.status !== 'ready') return null;
+      if (!snapshot || snapshot.scopeKey !== scopeKey || snapshot.scopeKey !== input.expectedAccountSettingsScopeKey) return null;
+      // The catalog reader throws for loading/unreadable authority. Preserve
+      // that unknown through shared custody; only a ready row can prove loss.
       const resolved = resolveProviderConnectionForMachine({
         connectionId: payload.source.connectionId, machineId: input.machineId,
         providerSettings: readProviderSettingsForCli(snapshot).settings, registry, dnsEvidenceByEndpointUrl: new Map(),
@@ -135,9 +136,15 @@ export function createAccountConnectionManagedConsumerSourceOpen(input: AccountC
       sharedGateway: { homeId: input.homeId, accountId: input.accountId, connectionId: payload.source.connectionId,
         machineId: input.machineId, consumerId: JSON.stringify(payload.consumer) },
       isSourceCurrent, revalidateOperationAuthorization: async currentSignal => await input.admitConsumer(payload, currentSignal),
+      retainedCurrentnessScope: {
+        facts: ['teams', 'provider-connections', 'saved-secrets', 'connected-services', 'connected-catalog'],
+        connectedServiceRefs: source.purposeBindings.bindings.map(binding => (
+          binding.target.kind === 'account' ? binding.target.account.service : binding.target.service
+        )),
+      },
       callerSignal: signal,
     });
-    if (!opened) return null;
+    if (!opened || 'unavailable' in opened) return null;
     return {
       access: opened.projection.access,
       revalidate: async (currentSignal = signal) => {

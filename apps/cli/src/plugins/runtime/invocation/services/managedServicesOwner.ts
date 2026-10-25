@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Agent } from 'undici';
 import { loadUndici } from '@/utils/loadUndici';
+import type { ProviderBrokerRetainedCurrentnessInvalidation } from '@/providers/broker/brokerRetainedCurrentnessInvalidation';
 import { logger } from '@/ui/logger';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
@@ -2593,7 +2594,7 @@ export type ManagedProviderExplicitStartOperationInput = Readonly<{
     lifecycleKind?: 'publicExplicitStart' | 'providerBroker';
     retirementGroup?: Readonly<{ identity: string; onRetired(): Promise<void> }>;
     /** Re-enters the durable authority for the retained semantic claim. */
-    revalidateRetainedCurrentness?(signal?: AbortSignal): Promise<boolean>;
+    revalidateRetainedCurrentness?(signal?: AbortSignal, invalidation?: ProviderBrokerRetainedCurrentnessInvalidation): Promise<boolean>;
     establish(input: Readonly<{
         signal: AbortSignal;
         release(): Promise<void>;
@@ -2612,7 +2613,7 @@ type ManagedProviderExplicitStartOperationEntry = {
     readonly lifecycleKind: 'publicExplicitStart' | 'providerBroker';
     readonly retirementGroup: ManagedProviderExplicitStartOperationInput['retirementGroup'];
     cleanupComplete: boolean;
-    revalidateRetainedCurrentness: ((signal?: AbortSignal) => Promise<boolean>) | null;
+    revalidateRetainedCurrentness: NonNullable<ManagedProviderExplicitStartOperationInput['revalidateRetainedCurrentness']> | null;
     readonly abort: AbortController;
     establishment: Promise<ManagedProviderExplicitStartOperationOutcome>;
     terminal: boolean;
@@ -2889,6 +2890,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
     revalidateManagedProviderExplicitStarts(
         signal?: AbortSignal,
         selector?: Parameters<typeof managedProviderExplicitStartOperationEntryKey>[0],
+        invalidation?: ProviderBrokerRetainedCurrentnessInvalidation,
     ): Promise<number>;
     retireManagedProviderExplicitStarts(
         lifecycleKind: 'publicExplicitStart' | 'providerBroker',
@@ -4826,7 +4828,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             await retireExplicitStartOperation(entry);
             return true;
         },
-        async revalidateManagedProviderExplicitStarts(signal, selector) {
+        async revalidateManagedProviderExplicitStarts(signal, selector, invalidation) {
             signal?.throwIfAborted();
             const selected = selector ? resolveExplicitStartOperation(selector) : null;
             const entries = selector ? (selected ? [selected] : []) : [...semanticEntries.values()];
@@ -4855,7 +4857,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                         : entry.abort.signal;
                     const retainedCurrent =
                         established.projection.isCurrent() === true
-                        && await entry.revalidateRetainedCurrentness!(readSignal) === true;
+                        && await entry.revalidateRetainedCurrentness!(readSignal, invalidation) === true;
                     signal?.throwIfAborted();
                     current = retainedCurrent;
                 } catch {

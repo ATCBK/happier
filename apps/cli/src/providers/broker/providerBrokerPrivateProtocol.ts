@@ -4,7 +4,12 @@ import type { ProviderCredentialTransportV1, ProviderWireProtocol } from '@happi
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { logger } from '@/ui/logger';
-import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { ProviderBrokerAdmissionFailureCodeV1Schema,
+  PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER,
+} from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER,
+  PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER, PROVIDER_BROKER_MODEL_ID_HEADER,
+} from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 /** The worker authenticates to the carrier, independently of upstream auth. */
 export function teamCredentialBrokerLocalCredentialTransport(protocol: ProviderWireProtocol): ProviderCredentialTransportV1 {
@@ -16,19 +21,8 @@ export function teamCredentialBrokerLocalCredentialTransport(protocol: ProviderW
  * part of a Provider's `/v1` surface and never reach Provider dispatch. */
 export const PROVIDER_BROKER_PRIVATE_CLOSE_PATH =
   '/v1/_happier/provider-broker/close' as const;
-/** Optional UUID correlation only; never an authority or a Provider header. */
-export const PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER =
-  'x-happier-provider-broker-close-request-id' as const;
 export const PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH =
   '/v1/_happier/provider-broker/endpoint' as const;
-export const PROVIDER_BROKER_ENDPOINT_PATH_HEADER =
-  'x-happier-provider-endpoint-path' as const;
-export const PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER =
-  'x-happier-provider-broker-error-code' as const;
-/** Exact selected model for private Team endpoint materialization, not a
- * credential or an alternative application authority. */
-export const PROVIDER_BROKER_MODEL_ID_HEADER =
-  'x-happier-provider-model-id' as const;
 
 /** Both Account and Team applications project the admitted runtime endpoint,
  * never a protocol-derived prefix or the upstream origin/credential. */

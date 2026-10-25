@@ -19,7 +19,7 @@ export function createBrokerProviderRegistry(): ProviderContributionRegistryView
     })),
     catalog: { source: 'manual', manualModelPolicy: 'allowed' },
     managedRuntime: {
-      kind: 'managed', endpointTemplateIds: endpointTemplates.map((endpoint) => endpoint.id),
+      kind: 'managed', sourceEnvelopeTransport: 'cpx-v1', endpointTemplateIds: endpointTemplates.map((endpoint) => endpoint.id),
       connectedAccounts: [
         { purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
           title: { key: 'managedPurpose.openai.title', fallback: 'Use OpenAI upstream account' }, required: false,

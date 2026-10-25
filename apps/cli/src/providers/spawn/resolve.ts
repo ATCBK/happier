@@ -49,6 +49,7 @@ import type {
   ResolvedProviderContribution,
 } from '@/plugins/projection/registry/types';
 import { projectProviderRuntimeBindingBasis } from './runtimeBindingBasis';
+import { isRemoteProviderGatewayPlacement } from '../managed/gatewayPlacement';
 import { readProviderModelNameCatalog } from '../registry/contributions';
 import { projectProviderModelReasoningForAgent } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
@@ -317,7 +318,7 @@ export function resolveProviderProbeAuthorization(input: Readonly<{
   }
   if (input.request.deployment === 'managedLocal') {
     const placement = record.connection.gatewayPlacement;
-    if (placement?.kind === 'machine' && placement.machineId !== input.request.machineId) {
+    if (isRemoteProviderGatewayPlacement(placement, input.request.machineId)) {
       return { ok: false, error: createProviderErrorV1('provider_not_enabled_on_machine', context) };
     }
     const managedPurposeBindingSnapshot =

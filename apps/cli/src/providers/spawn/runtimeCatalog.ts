@@ -25,6 +25,7 @@ import {
   type ResolveManagedProviderPurposeBindingIntent,
 } from '../managed/resolvePurposeBindingSnapshot';
 import { createProviderCatalogRefreshFingerprint } from '../probe/catalog';
+import { isRemoteProviderGatewayPlacement } from '../managed/gatewayPlacement';
 import type { SavedSecretCatalogResourceInputV1 } from '@/settings/secrets/savedSecretCatalog';
 
 export type ProviderRuntimeCatalogModelObservation = Readonly<{
@@ -211,7 +212,7 @@ export async function resolveProviderRuntimeCatalogSelectionObservation(
       }
     }
     const placement = record.connection.gatewayPlacement;
-    if (placement?.kind === 'machine' && placement.machineId !== input.machineId) {
+    if (isRemoteProviderGatewayPlacement(placement, input.machineId)) {
       const unavailable = () => createProviderErrorV1('provider_endpoint_unavailable', {
         connectionId, machineId: placement.machineId,
       });

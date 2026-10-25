@@ -5,7 +5,23 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ManagedServiceRequest, ManagedServiceResponse } from '@happier-dev/plugin-sdk/managed-services';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
-import { createProviderConnectionCpxBridge } from './providerConnectionCpxBridge';
+import { createProviderConnectionCpxBridge, projectProviderConnectionBrokerApplication, readProviderConnectionBrokerImplementation } from './providerConnectionCpxBridge';
+import { ProviderContributionV1Schema } from '@happier-dev/plugin-sdk/providers';
+import { CLIPROXYAPI_PROVIDER_CONTRIBUTION } from '../../../../../packages/plugins/cliproxyapi/src/provider/contribution';
+import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
+
+function declaredBroker(pluginId: string, transport: boolean, localId = 'gateway'): ResolvedProviderContribution {
+  const definition = ProviderContributionV1Schema.parse({
+    ...CLIPROXYAPI_PROVIDER_CONTRIBUTION,
+    id: localId,
+    managedRuntime: {
+      ...CLIPROXYAPI_PROVIDER_CONTRIBUTION.managedRuntime,
+      ...(transport ? { sourceEnvelopeTransport: 'cpx-v1' } : { sourceEnvelopeTransport: undefined }),
+    },
+  });
+  return { identity: { pluginId, localId: definition.id }, pluginId, definition,
+    provenance: 'external', source: { kind: 'path' } };
+}
 
 const application = {
   agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -57,6 +73,68 @@ function custody(request: (input: ManagedServiceRequest) => Promise<ManagedServi
 }
 
 describe('Provider Connection CPX bridge', () => {
+  it('admits the bundled producer through its declared private source transport', () => {
+    const definition = ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION);
+    const provider: ResolvedProviderContribution = {
+      identity: application.implementationIdentity, pluginId: application.implementationIdentity.pluginId,
+      definition, provenance: 'first_party', source: { kind: 'bundled' },
+    };
+    const registry = { providersByContributionKey: new Map([
+      [`${provider.pluginId}/${provider.identity.localId}`, provider],
+    ]) };
+    expect(readProviderConnectionBrokerImplementation(registry)?.definition.managedRuntime?.sourceEnvelopeTransport).toBe('cpx-v1');
+    expect(projectProviderConnectionBrokerApplication({ registry, agentTargetKey: application.agentTargetKey,
+      protocol: application.protocol, expectedApplication: application })).toEqual(application);
+  });
+
+  it('admits an exact declared implementation without scanning unrelated Providers per request', () => {
+    let enumerations = 0;
+    class ProviderMap extends Map<string, ResolvedProviderContribution> {
+      override values() {
+        enumerations += 1;
+        return super.values();
+      }
+    }
+    const providers = new ProviderMap();
+    for (let index = 0; index < 100; index += 1) {
+      const provider = declaredBroker(`acme.broker-${index}`, true);
+      providers.set(`${provider.pluginId}/${provider.identity.localId}`, provider);
+    }
+    const selected = providers.get('acme.broker-42/gateway')!;
+    const registry = { providersByContributionKey: providers };
+    const expectedApplication = { ...application, implementationIdentity: selected.identity };
+    for (let request = 0; request < 100; request += 1) {
+      expect(projectProviderConnectionBrokerApplication({ registry, agentTargetKey: application.agentTargetKey,
+        protocol: application.protocol, expectedApplication })).toEqual(expectedApplication);
+    }
+    expect(enumerations).toBe(0);
+    const undeclared = declaredBroker('acme.no-transport', false);
+    providers.set(`${undeclared.pluginId}/${undeclared.identity.localId}`, undeclared);
+    expect(projectProviderConnectionBrokerApplication({ registry, agentTargetKey: application.agentTargetKey,
+      protocol: application.protocol, expectedApplication: { ...application, implementationIdentity: undeclared.identity } })).toBeNull();
+  });
+
+  it('selects an external declaration of the private source transport and refuses absent or ambiguous implementations', () => {
+    const external = declaredBroker('acme.source-broker', true);
+    const ordinary = declaredBroker('happier.provider.cliproxyapi', false, 'cliproxyapi');
+    const registry = { providersByContributionKey: new Map([
+      [`${ordinary.pluginId}/${ordinary.identity.localId}`, ordinary],
+      [`${external.pluginId}/${external.identity.localId}`, external],
+    ]) };
+    expect(readProviderConnectionBrokerImplementation(registry)).toBe(external);
+    expect(projectProviderConnectionBrokerApplication({ registry,
+      agentTargetKey: application.agentTargetKey, protocol: application.protocol }))
+      .toMatchObject({ implementationIdentity: external.identity });
+    expect(readProviderConnectionBrokerImplementation({ providersByContributionKey: new Map([
+      [`${ordinary.pluginId}/${ordinary.identity.localId}`, ordinary],
+    ]) })).toBeNull();
+    const second = declaredBroker('acme.other-broker', true);
+    registry.providersByContributionKey.set(`${second.pluginId}/${second.identity.localId}`, second);
+    expect(readProviderConnectionBrokerImplementation(registry)).toBeNull();
+    expect(projectProviderConnectionBrokerApplication({ registry,
+      agentTargetKey: application.agentTargetKey, protocol: application.protocol })).toBeNull();
+  });
+
   it('uses operation-scoped managed custody and injects only a private exact-source envelope', async () => {
     const managedRequest = vi.fn<(input: ManagedServiceRequest) => Promise<ManagedServiceResponse>>(async () => response());
     const managed = custody(managedRequest);
@@ -165,7 +243,7 @@ describe('Provider Connection CPX bridge', () => {
     });
     await expect(projection!.access.request({
       pathAndQuery: '/v1/messages', headers: { 'anthropic-version': 'caller-value' },
-    })).resolves.toMatchObject({ status: 403 });
+    })).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
     await projection!.access.request({ pathAndQuery: '/v1/messages', method: 'POST' });
     const source = JSON.parse(Buffer.from(
       managedRequest.mock.calls[0]![0].headers!['x-happier-provider-source']!, 'base64url',
@@ -201,7 +279,7 @@ describe('Provider Connection CPX bridge', () => {
     const projection = await open('openai-responses');
     await expect(projection!.access.request({ pathAndQuery: '/v1/responses' })).resolves.toMatchObject({ status: 502 });
     current = false;
-    await expect(projection!.access.request({ pathAndQuery: '/v1/responses' })).resolves.toMatchObject({ status: 403 });
+    await expect(projection!.access.request({ pathAndQuery: '/v1/responses' })).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
   });
 
   it('redacts bodyless response headers before releasing the request credential', async () => {

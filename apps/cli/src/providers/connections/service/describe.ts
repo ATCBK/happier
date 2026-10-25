@@ -24,6 +24,7 @@ import {
 } from '@/providers/operationLifetime';
 import type { ProviderConnectionRegistryProjection } from './types';
 import type { ProviderLocalInstallationReadResult } from '@/providers/discovery/installations';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 
 const EMPTY_RUNTIME_SUMMARY: ProviderConnectionRuntimeSummary = Object.freeze({
   health: 'not_checked', modelCount: null, checkedAt: null, endpoints: [],
@@ -227,7 +228,7 @@ export async function describeProviderConnections(
         : EMPTY_RUNTIME_PROJECTION;
       const gatewayRuntime = connection.deployment.kind === 'managedLocal'
         && managedRuntimeDeclaration && managedRuntimeDeclaration.connectedAccounts.length > 0
-        ? connection.gatewayPlacement?.kind === 'machine' && connection.gatewayPlacement.machineId !== input.machineId
+        ? isRemoteProviderGatewayPlacement(connection.gatewayPlacement, input.machineId)
           ? { status: 'not_checked' as const, reachability: 'not_checked' as const }
           : await deps.readSharedGatewayRuntime?.({ connectionId: connection.id, machineId: input.machineId })
             ?? { status: 'not_checked' as const, reachability: 'not_checked' as const }

@@ -40,6 +40,7 @@ import { startManagedProviderConsumerApplication } from '@/providers/broker/mana
 import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
 import { createManagedProviderExplicitStartCustody } from './publicManagedRuntimeStart';
 import { createProviderConnectionService } from './service';
+import { providerBrokerRetainedCurrentnessAffected, type ProviderBrokerRetainedCurrentnessInvalidation } from '@/providers/broker/brokerRetainedCurrentnessInvalidation';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
 import { waitForProcessExit } from '@/testkit/process/spawn';
@@ -140,7 +141,8 @@ it('revalidates only the exact broker claim and Home consumer before retiring it
       isAuthorizationCurrent: () => true,
       revalidateAuthorization: async () => true,
       // Home's consumer-binding read is the external currentness boundary.
-      revalidateRetainedCurrentness: async () => {
+      revalidateRetainedCurrentness: async (_signal?: AbortSignal, invalidation?: ProviderBrokerRetainedCurrentnessInvalidation) => {
+        if (invalidation && !providerBrokerRetainedCurrentnessAffected(invalidation, { facts: ['teams'] })) return true;
         homeReads.set(sessionId, (homeReads.get(sessionId) ?? 0) + 1);
         return currentConsumers.has(sessionId);
       },
@@ -155,6 +157,9 @@ it('revalidates only the exact broker claim and Home consumer before retiring it
       currentConsumers.delete('ended');
       currentConsumers.delete('unrelated-stale');
       homeReads.clear();
+      expect(await custody.revalidateRetainedClaims(undefined, undefined, { facts: ['saved-secrets'] })).toBe(0);
+      expect(homeReads.size).toBe(0);
+      for (const claim of claims.values()) expect(process.kill(claim.pid, 0)).toBe(true);
       expect(await custody.revalidateRetainedClaims(undefined, request('ended'))).toBe(1);
       expect(homeReads).toEqual(new Map([['ended', 1]]));
       expect(await waitForProcessExit(claims.get('ended')!.pid)).toBe(true);
@@ -166,7 +171,7 @@ it('revalidates only the exact broker claim and Home consumer before retiring it
       }
       expect(await custody.revalidateRetainedClaims(undefined, request('missing'))).toBe(0);
       expect(homeReads).toEqual(new Map([['ended', 1]]));
-      expect(await custody.revalidateRetainedClaims()).toBe(1);
+      expect(await custody.revalidateRetainedClaims(undefined, undefined, { facts: ['all'] })).toBe(1);
       expect(homeReads).toEqual(new Map([['ended', 1], ['unrelated-stale', 1], ['unrelated-live', 1]]));
       expect(await waitForProcessExit(claims.get('unrelated-stale')!.pid)).toBe(true);
       expect(process.kill(claims.get('unrelated-live')!.pid, 0)).toBe(true);

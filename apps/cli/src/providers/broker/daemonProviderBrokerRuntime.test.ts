@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { once } from 'node:events';
-import { AxiosError } from 'axios';
+import axios, { AxiosError } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -40,6 +40,9 @@ import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/inv
 import { createAccountConnectionBrokerSourceOpen, retireAccountConnectionBrokerSource } from './accountConnectionSource';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { projectProviderBrokerApplication } from './applicationProjection';
+import { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import {
   createConnectedServicesBrokerSourceMemberSelect,
   createConnectedServicesBrokerSourceOpen,
@@ -98,6 +101,7 @@ const source = {
 const closeTasks: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.all(closeTasks.splice(0).map((close) => close()));
+  resetActiveAccountSettingsSnapshotForTests();
 });
 
 describe('resolveRunnerCredentialSelectionCurrentness', () => {
@@ -836,18 +840,22 @@ describe('startDaemonProviderBrokerRuntime', () => {
     const cleanupB = vi.fn(async () => {});
     const retireB = vi.fn(async () => {});
     const retireOperation = vi.fn(async () => {});
+    let sourceACurrent = true;
     const ownerAcquire = vi.fn<TeamCredentialBrokerSourceOwner['acquire']>()
       .mockResolvedValueOnce({
         ok: true,
         sourceMemberKey: 'connected-account:A',
-        projection: { access: accessA, isCurrent: () => true, cleanup: cleanupA },
+        projection: { access: accessA, isCurrent: () => sourceACurrent, cleanup: cleanupA },
         retire: retireA,
       })
       // The incumbent managed-service owner retires the stale A operation
       // while rejecting the first B establishment. The stream must retry the
       // canonical owner, never return A for this request, and never select B
       // itself.
-      .mockResolvedValueOnce({ ok: false, reasonCode: 'source_unavailable' })
+      .mockImplementationOnce(async () => {
+        sourceACurrent = false;
+        return { ok: false, reasonCode: 'source_unavailable', sourceOpenFailureReason: 'managed_custody_unavailable' };
+      })
       .mockResolvedValueOnce({
         ok: true,
         sourceMemberKey: 'connected-account:B',
@@ -893,7 +901,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
     });
     if (!second || 'reasonCode' in second) throw new Error('Expected replacement Pool source');
     expect(ownerAcquire).toHaveBeenCalledTimes(3);
-    expect(retireA).toHaveBeenCalledOnce();
+    expect(retireA).not.toHaveBeenCalled();
     expect(cleanupA).toHaveBeenCalledOnce();
     expect(retireB).not.toHaveBeenCalled();
     await second?.access.request({
@@ -1626,8 +1634,8 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
       },
       retire: async input => await managed.retireManagedProviderExplicitStart(claim(input.operationClaim.operation)),
       retireExternalApiKey: unused,
-      revalidateRetainedClaims: async (signal, selector) => await managed.revalidateManagedProviderExplicitStarts(
-        signal, selector ? claim(selector.operationClaim.operation) : undefined,
+      revalidateRetainedClaims: async (signal, selector, invalidation) => await managed.revalidateManagedProviderExplicitStarts(
+        signal, selector ? claim(selector.operationClaim.operation) : undefined, invalidation,
       ),
       retireAll: async () => await managed.retireManagedProviderExplicitStarts('providerBroker'),
     };
@@ -1675,6 +1683,24 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
         agentTargetKey: 'agent:happier.agent.codex/codex', protocol: authority.payload.application.protocol });
       if (!application) throw new Error('Personal application unavailable');
       const { catalog, defaults } = splitProviderSettingsV1(settings);
+      const credentials = { token: 'retained-personal-catalog', encryption: null };
+      const scopeKey = resolveAccountSettingsScopeKey(credentials);
+      setActiveAccountSettingsSnapshot({ source: 'cache', scopeKey, settingsVersion: 1,
+        loadedAtMs: 1, settingsSecretsReadKeys: [], savedSecretResources: [], savedSecretCatalogState: 'ready',
+        settings: AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: defaults }),
+        providerConnectionsCatalog: { status: 'ready', revision: 1, catalog } });
+      let readCatalog = async () => catalog;
+      // Home HTTP is the boundary; refresh, loading publication, and source
+      // revalidation all run through their production owners.
+      const catalogHttp = vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+          status: 'present', revision: 2, content: { t: 'plain', v: await readCatalog() } } };
+        throw new Error(`Unexpected personal catalog HTTP boundary: ${path}`);
+      });
+      closeTasks.push(async () => { catalogHttp.mockRestore(); });
       const payload: SignedProviderBrokerRouteGrantV2['payload'] = { v: 2, grantId: 'personal-retained-grant',
         aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 200, homeId: 'home-1', accountId: 'custodian-account',
         initiatorTokenEpoch: 0, initiator: { ...authority.payload.initiator, accountId: 'custodian-account' },
@@ -1690,12 +1716,9 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
         Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), homeKey.secretKey,
       )).toString('base64url') } };
       const open = createAccountConnectionBrokerSourceOpen({ homeId: 'home-1', accountId: 'custodian-account',
-        machineId: 'broker-machine', expectedAccountSettingsScopeKey: 'retained-personal-scope', custody,
+        machineId: 'broker-machine', expectedAccountSettingsScopeKey: scopeKey, custody,
         withRegistry: async read => await read(registry),
-        getAccountSettingsSnapshot: () => ({ source: 'cache', scopeKey: 'retained-personal-scope', settingsVersion: 1,
-          loadedAtMs: 1, settingsSecretsReadKeys: [], savedSecretResources: [], savedSecretCatalogState: 'ready',
-          settings: AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: defaults }),
-          providerConnectionsCatalog: { status: 'ready', revision: 1, catalog } }),
+        getAccountSettingsSnapshot: getActiveAccountSettingsSnapshot,
         resolveBindingIntent: unused,
         admitConsumer: async signed => {
           const key = operationKey(signed.payload.consumer);
@@ -1717,6 +1740,11 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
         }),
       });
       return { homeId: 'home-1', accountId: 'custodian-account',
+        refreshCatalog: (read: typeof readCatalog = async () => catalog) => {
+          readCatalog = read;
+          return refreshActiveProviderConnectionsCatalog({ credentials }, { afterChange: true });
+        },
+        removeConnection: () => splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1).catalog,
         open: async (request: Parameters<typeof open>[0]) => {
           try { return await open(request); } catch (error) { personalOpenFailure = error; throw error; }
         },
@@ -1832,6 +1860,7 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
     };
     return {
       custody, homeReads, streamChecks, infer, admitStream, openInferenceStream, closeUnusedStream, abortUnusedStream, closeRuntime: runtime.close,
+      personalConnection,
       child: (consumer: Consumer = authority.payload.consumer) => children.get(operationKey(consumer))!,
       endConsumer: (consumer: Consumer = authority.payload.consumer) => consumers.set(operationKey(consumer), false),
       endOnRequest: () => { endConsumerOnRequest = true; },
@@ -1843,6 +1872,76 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
   }
 
   describe('retained consumer currentness through signed private acquisition', () => {
+    it('preserves a personal Gateway claim through loading and failed catalog refreshes, then serves the same claim', async () => {
+      const target = await startRetainedTarget(true);
+      const personal = target.personalConnection!;
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(1));
+      let failObservation!: (error: Error) => void;
+      const heldRow = new Promise<never>((_resolve, reject) => { failObservation = reject; });
+      let rowStarted!: () => void;
+      const rowRead = new Promise<void>(resolve => { rowStarted = resolve; });
+      const refresh = personal.refreshCatalog(async () => { rowStarted(); return heldRow; });
+      try {
+        expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog?.status).toBe('loading');
+        await rowRead;
+        await target.closeUnusedStream();
+        await vi.waitFor(() => expect(target.streamChecks).toHaveLength(2));
+        expect(target.child()).toMatchObject({ current: true, starts: 1, cleanupAttempts: 0 });
+      } finally {
+        failObservation(new Error('Catalog observation failed'));
+        await refresh;
+      }
+      expect(await refresh).toMatchObject({ status: 'unavailable' });
+      await target.closeUnusedStream();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(3));
+      expect(target.child()).toMatchObject({ current: true, starts: 1, cleanupAttempts: 0 });
+      expect(await personal.refreshCatalog()).toMatchObject({ status: 'ready' });
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(4));
+      expect(target.child()).toMatchObject({ current: true, starts: 1, cleanupAttempts: 0 });
+    });
+
+    it('retires a personal Gateway claim when a ready catalog confirms removal', async () => {
+      const target = await startRetainedTarget(true);
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(1));
+      const personal = target.personalConnection!;
+      expect(await personal.refreshCatalog(async () => personal.removeConnection())).toMatchObject({ status: 'ready' });
+      await target.closeUnusedStream();
+      await vi.waitFor(() => expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 }));
+    });
+
+    it.each(['account-replaced', 'lifetime-ended'] as const)('retires a personal Gateway claim after its Account is %s', async cause => {
+      const target = await startRetainedTarget(true);
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(1));
+      if (cause === 'account-replaced') {
+        setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, scopeKey: 'different-account' });
+      } else {
+        resetActiveAccountSettingsSnapshotForTests();
+      }
+      await target.closeUnusedStream();
+      await vi.waitFor(() => expect(target.child()).toMatchObject({ current: false, cleanupAttempts: 1 }));
+    });
+
+    it.each([false, true])('revalidates connected catalogs and skips unrelated service facts for a personal=%s source', async personal => {
+      const target = await startRetainedTarget(personal);
+      await target.infer();
+      await vi.waitFor(() => expect(target.streamChecks).toHaveLength(1));
+      target.homeReads.length = 0;
+      for (let arrival = 0; arrival < 20; arrival++) {
+        await target.custody.revalidateRetainedClaims(undefined, undefined, {
+          facts: ['connected-services'], connectedServiceRefs: [{ pluginId: 'unrelated.plugin', localId: 'accounts' }],
+        });
+      }
+      if (personal) await target.custody.revalidateRetainedClaims(undefined, undefined, { facts: ['connected-services'] });
+      expect(target.homeReads).toEqual([]);
+      await target.custody.revalidateRetainedClaims(undefined, undefined, { facts: ['connected-catalog'] });
+      expect(target.homeReads).toEqual([target.key(authority.payload.consumer)]);
+      expect(target.child().current).toBe(true);
+    });
+
     it('retains an active Run after stream close and retires its ended occurrence without retiring a same-source Session', async () => {
       const target = await startRetainedTarget();
       const run = { kind: 'execution_run' as const, executionRunId: 'run-1' };
@@ -2182,7 +2281,7 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
       }, phase === 'upstream_forward' ? { providerRequest: async () => { throw failure; } } : {});
       try {
         const response = await target.infer();
-        expect(response).toContain('HTTP/1.1 403');
+        expect(response).toContain('HTTP/1.1 503');
         expect(response).toContain('broker_unavailable');
         expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', expect.objectContaining({
           stage: 'handler', code: 'exception', phase, brokerRequestId: 'request-0',

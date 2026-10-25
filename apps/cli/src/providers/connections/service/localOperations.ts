@@ -13,6 +13,7 @@ import {
   resolveProviderContributionRegistryEntry,
 } from '@/providers/registry/lookup';
 import { providerManagedPurposeBindingError, resolveManagedProviderPurposeBindingSnapshot } from '@/providers/managed/resolvePurposeBindingSnapshot';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 import { prepareProviderConnectionCreationV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import { errorForProviderResolution, type ProviderConnectionServiceContext } from './context';
@@ -338,7 +339,7 @@ export function createProviderLocalOperations(context: ProviderConnectionService
         }
         const record = connectionResolution.record;
         const placement = record.connection.gatewayPlacement;
-        if (placement?.kind === 'machine' && placement.machineId !== input.machineId) {
+        if (isRemoteProviderGatewayPlacement(placement, input.machineId)) {
           return { status: 'wrong_machine' as const };
         }
 

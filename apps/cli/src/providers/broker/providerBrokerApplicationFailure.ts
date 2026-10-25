@@ -7,6 +7,14 @@ export type SessionBrokerApplicationOutcomeRecorder = (denial: SessionRuntimeTea
 
 export type ProviderBrokerApplicationFailure = Extract<Awaited<ReturnType<ProviderBrokerRequestHandler>>, { ok: false }>;
 
+/** Carries a host refusal through managed-service access to the one HTTP writer. */
+export class ProviderBrokerApplicationFailureError extends Error {
+    constructor(readonly failure: ProviderBrokerApplicationFailure) {
+        super('Provider broker application refused');
+        this.name = 'ProviderBrokerApplicationFailureError';
+    }
+}
+
 /** Provider-compatible refusal shared by target HTTP admission and local carrier admission. */
 export type ProviderBrokerApplicationFailureBodyV1 = Readonly<{
     type: 'error';

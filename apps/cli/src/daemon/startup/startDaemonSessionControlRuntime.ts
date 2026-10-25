@@ -52,6 +52,7 @@ import { createSessionStartupReadinessHandler } from './sessionStartupReadiness'
 import { readRequesterAgentStartPolicyV1 } from '../sessionEncryption/requesterAgentStartPolicy';
 import { createSharedManagedProviderSessionAccess, createSharedManagedProviderSessionStart } from './sharedManagedProviderSessionAccess';
 import { createRemoteManagedProviderSessionProjection } from './remoteManagedProviderSession';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 import type { ActionOperationRpcContext } from '../actionOperations/actionOperationRpcHandlers';
 import type { ConnectedServicePoolSelectionRead } from '@/api/machine/rpcHandlers.connectedAccounts';
 import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
@@ -8829,8 +8830,7 @@ export async function startDaemonSessionControlRuntime(
                 });
               const retainedBasis = scope.runtimeBindingBasis;
               if (retainedBasis.deployment.kind === 'managedLocal'
-                && retainedBasis.deployment.gatewayPlacement.kind === 'machine'
-                && retainedBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
+                && isRemoteProviderGatewayPlacement(retainedBasis.deployment.gatewayPlacement, params.machineId)) {
                 const metadata = tracked.spawnOptions?.providerBindingMetadataV1;
                 if (retained.custody !== 'daemonShared' || !metadata?.runtimeBindingBasis
                   || !sameProviderRuntimeBindingBasis(metadata.runtimeBindingBasis, retainedBasis)
@@ -9221,8 +9221,7 @@ export async function startDaemonSessionControlRuntime(
                   return false;
                 }
               };
-            if (runtimeBindingBasis.deployment.gatewayPlacement.kind === 'machine'
-              && runtimeBindingBasis.deployment.gatewayPlacement.machineId !== params.machineId) {
+            if (isRemoteProviderGatewayPlacement(runtimeBindingBasis.deployment.gatewayPlacement, params.machineId)) {
               return await createRemoteManagedProjection(runtimeBindingBasis, authorization.sessionBindingMetadata,
                 providerPluginHardRevocationRevisionAtAdmission, revalidateSessionProviderAuthority);
             }

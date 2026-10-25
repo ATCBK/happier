@@ -41,7 +41,7 @@ import type { RunnerCredentialSelectionBindingV1 } from '@happier-dev/protocol/e
 import type { ManagedServiceRequest, ManagedServiceResponse } from '@happier-dev/plugin-sdk/managed-services';
 import type { ManagedProviderEndpointHttpAccess } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import {
-  teamCredentialBrokerPlacementAcceptsMachine,
+  teamCredentialBrokerResourceAcceptsMachine,
   type TeamCredentialBrokerOperation,
   type TeamCredentialBrokerSourceOwner,
   type TeamCredentialBrokerSourceAcquireResult,
@@ -107,28 +107,6 @@ export type ProviderBrokerAccountConnectionAccess = Readonly<{
   retire(): Promise<void>;
 }>;
 
-/** Receiver-side resource check for the exact daemon addressed by the signed
- * relay request. Pool selection and membership currentness remain Home-owned;
- * this boundary only permits that selected Machine to reach fresh admission. */
-export function daemonExternalProviderRequestPolicyAcceptsResource(input: Readonly<{
-  resource: Pick<
-    TeamCredentialResourceSummaryV1,
-    'enabled' | 'teamId' | 'brokerPlacement' | 'source'
-  > | null;
-  bindingTeamId: string;
-  registeredMachineId: string;
-}>): boolean {
-  const { resource } = input;
-  return resource !== null
-    && resource.enabled
-    && resource.teamId === input.bindingTeamId
-    && teamCredentialBrokerPlacementAcceptsMachine(
-      resource.brokerPlacement,
-      input.registeredMachineId,
-    )
-    && resource.source !== null;
-}
-
 type RunnerCredentialSelectionCurrentnessInput = Readonly<{
   registeredMachineId: string;
   selection: RunnerCredentialSelectionBindingV1;
@@ -158,14 +136,8 @@ export async function resolveRunnerCredentialSelectionCurrentness(
   const resource = await input.readResource(input.selection.resourceId, input.signal);
   input.signal.throwIfAborted();
   if (
-    !resource
-    || !resource.enabled
+    !teamCredentialBrokerResourceAcceptsMachine(resource, input.selection.brokerMachineId)
     || resource.revision !== input.selection.revision
-    || !resource.source
-    || !teamCredentialBrokerPlacementAcceptsMachine(
-      resource.brokerPlacement,
-      input.selection.brokerMachineId,
-    )
   ) return 'source_unavailable';
 
   let rawEligibility: DaemonProviderTeamCredentialBrokerEligibilityResponseV1;
@@ -285,17 +257,6 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
   let closeInFlight: Promise<void> | null = null;
   let currentnessChecked = false;
 
-  const retireAcquired = async (
-    acquired: Extract<Awaited<ReturnType<TeamCredentialBrokerSourceOwner['acquire']>>, { ok: true }> | null,
-  ): Promise<void> => {
-    if (!acquired) return;
-    try {
-      await acquired.retire();
-    } finally {
-      await acquired.projection.cleanup();
-    }
-  };
-
   const releaseProjection = async (
     acquired: Extract<Awaited<ReturnType<TeamCredentialBrokerSourceOwner['acquire']>>, { ok: true }> | null,
   ): Promise<void> => {
@@ -394,10 +355,12 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
           // the old joined view, then re-enter the same source owner once so it
           // can establish the selector's still-current B. No request is
           // admitted with A after this refresh has failed.
-          if (!acquired?.ok && currentPoolSource) {
+          if (acquired && !acquired.ok
+            && acquired.sourceOpenFailureReason === 'managed_custody_unavailable'
+            && currentPoolSource && !currentPoolSource.projection.isCurrent()) {
             const previous = currentPoolSource;
             currentPoolSource = null;
-            await retireAcquired(previous).catch(() => undefined);
+            await releaseProjection(previous).catch(() => undefined);
             if (retired) return;
             acquired = await input.sourceOwner.acquire({
               source,
@@ -416,12 +379,10 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
             }).catch(() => null);
           }
           if (retired || !acquired?.ok || !acquired.projection.isCurrent()) {
-            // A stale Pool member A is deliberately retired so B can establish.
-            // A stream that closed while this refresh ran retires nothing: its
-            // operation may still be serving other streams.
+            // The source owner decides semantic retirement. A stale or closed
+            // joined view releases only this stream's projection.
             if (acquired?.ok) {
-              await (retired ? releaseProjection(acquired) : retireAcquired(acquired))
-                .catch(() => undefined);
+              await releaseProjection(acquired).catch(() => undefined);
             }
             if (!retired && acquired && !acquired.ok) {
               result = { ...brokerSourceAcquisitionFailure(acquired), reasonCode: 'resource_unavailable' };

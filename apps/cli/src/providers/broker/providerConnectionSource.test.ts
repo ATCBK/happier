@@ -335,7 +335,7 @@ describe('Provider Connection Team broker source', () => {
       application,
       modelId: 'gateway-model',
       sourceRevision: 'source-revision-stale',
-    })).resolves.toBeNull();
+    })).resolves.toMatchObject({ ok: false, reasonCode: 'resource_unavailable' });
     await staleLifetime.close();
     const controller = new AbortController();
     const modelList = await access.access.request({
@@ -394,7 +394,7 @@ describe('Provider Connection Team broker source', () => {
       headers: {},
       body: new TextEncoder().encode('{"model":"gateway-model"}'),
       signal: controller.signal,
-    })).resolves.toMatchObject({ status: 403 });
+    })).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
     // Disabling the resource is real authority loss: the refused request
     // leases no credential material and the operation is retired.
     expect(credentialValues).toEqual(['Bearer source-secret', 'Bearer source-secret']);
@@ -441,37 +441,50 @@ describe('Provider Connection Team broker source', () => {
     expect(openCpxProviderConnection).not.toHaveBeenCalled();
   });
 
-  it('retires semantic custody before cleaning a CPX projection rejected after open', async () => {
+  it.each(['gateway_stale', 'source_stale', 'source_unknown', 'selection_unknown'] as const)('cleans a rejected CPX join and retires only definite stale custody: %s', async failure => {
     const settings = accountSettings();
     const events: string[] = [];
+    let joined = false;
     const retire = vi.fn(async () => { events.push('retire'); });
     const cleanup = vi.fn(async () => { events.push('cleanup'); });
     const open = createProviderConnectionBrokerSourceOpen({
       machineId: 'machine-a',
-      readResource: async () => ({
-        source: resourceSource(settings),
-        brokerPlacement: { kind: 'machine' as const, machineId: 'machine-a' },
-        revision: 7,
-        enabled: true,
-      }),
+      readResource: async () => {
+        if (joined && failure === 'source_unknown') throw new Error('Home unavailable');
+        return {
+          teamId: 'team-a',
+          source: resourceSource(settings),
+          brokerPlacement: { kind: 'machine' as const, machineId: 'machine-a' },
+          revision: 7,
+          enabled: !(joined && failure === 'source_stale'),
+        };
+      },
+      resolveExactSelection: async () => {
+        if (joined && failure === 'selection_unknown') throw new Error('Home unavailable');
+        return { endpointTemplateId: 'responses', protocol: 'openai-responses',
+          credentialTransport: definition.credential!.transports[0]! };
+      },
       withRegistry: async (read) => await read(registry),
       getAccountSettingsSnapshot: () => snapshot(settings),
       collectDnsEvidence: async () => dnsEvidenceByEndpointUrl,
-      openCpxProviderConnection: async () => ({
-        access: {
-          endpointUrl: () => 'http://127.0.0.1:43123/v1',
-          request: async () => ({
-            ok: false,
-            status: 403,
-            statusText: 'Source unavailable',
-            headers: {},
-            body: null,
-          }),
-        },
-        isCurrent: () => false,
-        retire,
-        cleanup,
-      }),
+      openCpxProviderConnection: async () => {
+        joined = true;
+        return {
+          access: {
+            endpointUrl: () => 'http://127.0.0.1:43123/v1',
+            request: async () => ({
+              ok: false,
+              status: 403,
+              statusText: 'Source unavailable',
+              headers: {},
+              body: null,
+            }),
+          },
+          isCurrent: () => failure !== 'gateway_stale',
+          retire,
+          cleanup,
+        };
+      },
     });
 
     await expect(open({
@@ -479,11 +492,13 @@ describe('Provider Connection Team broker source', () => {
       resourceId: 'resource-a',
       resourceRevision: 7,
       brokerMachineId: 'machine-a',
-      operation: {
+      operation: failure === 'selection_unknown' ? { kind: 'session', sessionId: 'session-a' } : {
         kind: 'resource_test',
         actorAccountId: 'account-a',
         requestId: 'request-a',
       },
+      modelId: 'gateway-model',
+      sourceRevision: 'source-revision-a',
       application: {
         agentTargetKey: 'agent:happier.agent.codex/codex',
         implementationIdentity: {
@@ -495,9 +510,10 @@ describe('Provider Connection Team broker source', () => {
       },
       signal: new AbortController().signal,
     })).resolves.toBeNull();
-    expect(retire).toHaveBeenCalledOnce();
+    const unknown = failure === 'source_unknown' || failure === 'selection_unknown';
+    expect(retire).toHaveBeenCalledTimes(unknown ? 0 : 1);
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(events).toEqual(['retire', 'cleanup']);
+    expect(events).toEqual(unknown ? ['cleanup'] : ['retire', 'cleanup']);
   });
 
   it('projects only exact current source facts and materializes through the canonical credential owner', async () => {
@@ -658,6 +674,18 @@ describe('Provider Connection Team broker source', () => {
       endpointTemplateId: 'responses', ...sourceFacts(settings), registry, dnsEvidenceByEndpointUrl,
     });
     if (!resolved.ok) throw new Error('expected broker source snapshot');
+    await expect(isProviderConnectionBrokerSourceCurrent({
+      expected: resolved.snapshot,
+      registry,
+      dnsEvidenceByEndpointUrl,
+      getAccountSettingsSnapshot: () => snapshot(settings),
+    })).resolves.toBe(true);
+    await expect(isProviderConnectionBrokerSourceCurrent({
+      expected: resolved.snapshot,
+      registry,
+      dnsEvidenceByEndpointUrl,
+      getAccountSettingsSnapshot: () => ({ ...settings, providerConnectionsCatalog: { status: 'loading' } }),
+    })).rejects.toMatchObject({ code: 'provider_settings_invalid' });
     await expect(isProviderConnectionBrokerSourceCurrent({
       expected: resolved.snapshot,
       registry,
@@ -897,7 +925,7 @@ describe('Provider Connection Team broker source', () => {
       pathAndQuery: '/v1/responses',
       method: 'POST',
       body: new TextEncoder().encode('{}'),
-    })).resolves.toMatchObject({ status: 403 });
+    })).rejects.toMatchObject({ failure: { reasonCode: 'source_unavailable' } });
     expect(managedRequests).toHaveLength(1);
     await lifetime.close();
     expect(cleanup).toHaveBeenCalled();

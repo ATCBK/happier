@@ -13,6 +13,7 @@ import { resolveProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderCatalogDeclarationV1, ProviderBoundModelRef, ProviderConnectionId, ProviderCredentialTransportV1, ProviderBrokerApplicationBindingV1, ProviderModelDescriptorV1, ProviderWireProtocol, PersistedBackendTargetRefV2, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import { projectProviderConnectionBrokerApplication } from '@/providers/broker/providerConnectionCpxBridge';
+import { isRemoteProviderGatewayPlacement } from '@/providers/managed/gatewayPlacement';
 import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import type { TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams';
 import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
@@ -675,8 +676,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         const failure = resolutionFailures.get(connection.id);
         if (failure) return { connection, context: { status: 'error' as const, error: failure } };
         try {
-          if (connection.gatewayPlacement?.kind === 'machine'
-            && connection.gatewayPlacement.machineId !== request.machineId) {
+          if (isRemoteProviderGatewayPlacement(connection.gatewayPlacement, request.machineId)) {
             const sourceKind = connection.source.kind === 'custom' ? 'custom'
               : getProviderContribution(registry, connection.source.contributionKey)?.definition.kind;
             const demand = sourceKind === undefined || hasPickerDemand(connection.id, sourceKind);
@@ -1034,6 +1034,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
                     registry,
                     agentTargetKey: request.agentTargetKey,
                     protocol: sourceApplication.protocol,
+                    ...(request.application ? { expectedApplication: request.application } : {}),
                   })
                 : sourceApplication;
               const exactApplication = application && request.application
@@ -1387,6 +1388,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           registry,
           agentTargetKey: request.application.agentTargetKey,
           protocol: row.application.protocol,
+          expectedApplication: request.application,
         });
         if (!brokerApplication || !pluginJsonValuesEqual(brokerApplication, request.application)) return [];
         return [{
