@@ -112,6 +112,15 @@ function buildDemoGroups(state: DemoState): UpdatesGroup[] {
         remoteUpdateAdvertised: null,
         task: IDLE,
     });
+    const windows = buildRemoteCliUpdateItem({
+        machineId: 'windows', title: 'Happier CLI', online: true, platform: 'win32', happyCliVersion: '0.2.16-dev.9',
+        facts: {
+            currentVersion: '0.2.16-dev.9', latestVersion: '0.2.16-dev.9', channel: 'dev',
+            installSource: 'managed', updateCommand: 'hdev self update', canUpdateRemotely: false, lastUpdate: null,
+        },
+        remoteUpdateAdvertised: false,
+        task: IDLE,
+    });
     return [
         { id: 'app', kind: 'app', machineName: null, machineId: null, online: true, items: [app] },
         {
@@ -119,6 +128,7 @@ function buildDemoGroups(state: DemoState): UpdatesGroup[] {
             items: [thisCli, claude, codex, gh].filter((item): item is NonNullable<typeof item> => item != null),
         },
         { id: 'machine:studio', kind: 'machine', machineName: 'Studio-Mac-mini', machineId: 'studio', online: true, items: [remote] },
+        { id: 'machine:windows', kind: 'machine', machineName: 'Windows', machineId: 'windows', online: true, items: [windows] },
         { id: 'machine:nas', kind: 'machine', machineName: 'nas.local', machineId: 'nas', online: false, items: [offline] },
     ];
 }

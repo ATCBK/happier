@@ -9409,7 +9409,7 @@ settingsSession: {
             offline: 'Some machines are offline',
             checkedAt: ({ time }: { time: string }) => `Checked ${time}`,
             upToDateDescription: 'Happier, its command line and your agents are current.',
-            unknownDescription: 'Everything that could be checked is current. The rest is checked again when it can be reached.',
+            unknownDescription: "Some update information is unavailable or cached. See the affected rows for details.",
             offlineDescription: 'Everything reachable is current. Offline machines are checked when they’re back.',
         },
         settingsSubtitle: {
@@ -9455,6 +9455,9 @@ settingsSession: {
             appCheckFailed: 'Couldn’t check for a newer version.',
             appDownloadFailed: 'The download didn’t finish.',
             appInstallFailed: 'The update couldn’t be installed.',
+            cachedRelease: 'Cached release information; not refreshed here',
+            cachedReleaseChannel: ({ channel }: { channel: string }) => `Cached ${channel} release information; not refreshed here`,
+            manualUpdateInterruptsSessions: 'Update on this machine. Services may stop and running sessions may end.',
             latestUnknown: 'Couldn’t check for a newer version',
             rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} didn’t start on this machine, so it’s still on ${kept}.`,
             installedByYou: 'Installed by you',

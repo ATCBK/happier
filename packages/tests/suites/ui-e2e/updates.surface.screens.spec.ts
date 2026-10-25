@@ -159,6 +159,12 @@ test.describe('ui e2e: Updates surface screens (R13 e)', () => {
             if (section === 'pills' && state !== 'available') continue;
             await navigateSpa(page, `/dev/updates-demo?state=${state}&only=${section}`);
             await expect(page.getByTestId(`updates-demo.${section}`)).toBeVisible({ timeout: 120_000 });
+            if (section !== 'pills') {
+              const cachedCli = page.getByTestId('updates.row.windows:happier-cli');
+              await expect(cachedCli).toContainText('hdev self update');
+              await expect(cachedCli).not.toContainText('Up to date');
+              await expect(cachedCli.getByTestId('updates.row.windows:happier-cli.action')).toHaveCount(0);
+            }
             await page.waitForTimeout(300);
             const name = section === 'pills' ? `demo-${theme}-${size}-pills` : `demo-${theme}-${size}-${section}-${state}`;
             await page.getByTestId(`updates-demo.${section}`).screenshot({ path: join(screensDir, `${name}.png`) });

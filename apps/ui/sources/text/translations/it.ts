@@ -10260,7 +10260,7 @@ settingsSession: {
       offline: "Alcune macchine sono offline",
       checkedAt: ({ time }: { time: string }) => `Ultimo controllo: ${time}`,
       upToDateDescription: "Happier, la sua riga di comando e i tuoi agenti sono aggiornati.",
-      unknownDescription: "Tutto ciò che è stato possibile controllare è aggiornato. Il resto verrà ricontrollato appena sarà raggiungibile.",
+      unknownDescription: "Alcune informazioni sugli aggiornamenti non sono disponibili o sono in cache. Consulta le righe interessate.",
       offlineDescription: "Tutto ciò che è raggiungibile è aggiornato. Le macchine offline verranno controllate quando torneranno disponibili.",
     },
     settingsSubtitle: {
@@ -10306,6 +10306,9 @@ settingsSession: {
       appCheckFailed: "Non è stato possibile cercare una versione più recente.",
       appDownloadFailed: "Il download non è stato completato.",
       appInstallFailed: "Non è stato possibile installare l’aggiornamento.",
+      cachedRelease: "Informazioni sulla versione in cache; non aggiornate qui",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `Informazioni sulla versione ${channel} in cache; non aggiornate qui`,
+      manualUpdateInterruptsSessions: "Aggiorna su questa macchina. I servizi potrebbero arrestarsi e le sessioni attive potrebbero terminare.",
       latestUnknown: "Non è stato possibile cercare una versione più recente",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} non si è avviata su questa macchina, quindi resta alla ${kept}.`,
       installedByYou: "Installato da te",

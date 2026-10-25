@@ -207,4 +207,22 @@ describe('UpdatesPopoverButton', () => {
         await screen.update(<UpdatesContent model={{ ...model, sessionsRunningOn: new Set(['unrelated-group-id']) }} presentation="popover" />);
         expect(hasNote()).toBe(false);
     });
+
+    it.each(['unknown', 'unchecked', 'checking'] as const)('keeps a %s CLI row visible in the popover instead of collapsing it as current', async (state) => {
+        const item = {
+            id: 'windows:happier-cli', subject: { kind: 'happier-cli' }, machineId: 'windows', title: 'Happier CLI',
+            currentVersion: '0.2.16-dev.9', latestVersion: '0.2.16-dev.9', state, progressPercent: null, step: null,
+            managedBy: 'happier', action: { kind: 'manual', command: 'hdev self update' }, failure: null, skipped: false,
+        } as const;
+        const model: UpdatesContentModel = {
+            summary: { ...TWO, actionableCount: 0, phase: 'none', status: 'unknown' },
+            groups: [{ id: 'windows', kind: 'machine', machineName: 'Windows', machineId: 'windows', online: true, items: [item] }],
+            checkedAt: Date.now(), uncheckedMachineCount: 0, sessionsRunningOn: new Set(),
+            runItem: async () => {}, updateAll: async () => {}, stopAfterCurrent: () => {}, batch: null,
+            checkNow: () => {}, skipAppVersion: null, openWhatsNew: () => {}, whatsNewUnread: false,
+        };
+        const screen = await renderScreen(<UpdatesContent model={model} presentation="popover" />);
+        expect(screen.findAllByTestId('updates.row.windows:happier-cli').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('updates.row.windows:happier-cli.action')).toHaveLength(0);
+    });
 });

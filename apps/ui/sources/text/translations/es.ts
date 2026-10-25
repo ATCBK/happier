@@ -9943,7 +9943,7 @@ settingsSession: {
       offline: "Algunas máquinas están sin conexión",
       checkedAt: ({ time }: { time: string }) => `Última comprobación: ${time}`,
       upToDateDescription: "Happier, su línea de comandos y tus agentes están al día.",
-      unknownDescription: "Todo lo que se pudo comprobar está al día. El resto se volverá a comprobar cuando esté accesible.",
+      unknownDescription: "Parte de la información de actualización no está disponible o está en caché. Consulta las filas afectadas.",
       offlineDescription: "Todo lo accesible está al día. Las máquinas sin conexión se comprobarán cuando vuelvan.",
     },
     settingsSubtitle: {
@@ -9989,6 +9989,9 @@ settingsSession: {
       appCheckFailed: "No se pudo comprobar si hay una versión más reciente.",
       appDownloadFailed: "La descarga no terminó.",
       appInstallFailed: "No se pudo instalar la actualización.",
+      cachedRelease: "Información de versión en caché; no se actualiza aquí",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `Información de versión ${channel} en caché; no se actualiza aquí`,
+      manualUpdateInterruptsSessions: "Actualiza en esta máquina. Los servicios pueden detenerse y las sesiones activas pueden finalizar.",
       latestUnknown: "No se pudo comprobar si hay una versión más reciente",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} no arrancó en esta máquina, así que sigue en ${kept}.`,
       installedByYou: "Instalado por ti",

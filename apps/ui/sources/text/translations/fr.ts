@@ -9364,7 +9364,7 @@ settingsSession: {
             offline: 'Certaines machines sont hors ligne',
             checkedAt: ({ time }: { time: string }) => `Dernière vérification : ${time}`,
             upToDateDescription: 'Happier, sa ligne de commande et tes agents sont à jour.',
-            unknownDescription: 'Tout ce qui a pu être vérifié est à jour. Le reste sera vérifié dès qu’il sera joignable.',
+            unknownDescription: "Certaines informations de mise à jour sont indisponibles ou en cache. Consultez les lignes concernées.",
             offlineDescription: 'Tout ce qui est joignable est à jour. Les machines hors ligne seront vérifiées à leur retour.',
         },
         settingsSubtitle: {
@@ -9410,6 +9410,9 @@ settingsSession: {
             appCheckFailed: 'Impossible de vérifier s’il existe une version plus récente.',
             appDownloadFailed: 'Le téléchargement n’a pas abouti.',
             appInstallFailed: 'La mise à jour n’a pas pu être installée.',
+            cachedRelease: "Informations de version en cache ; non actualisées ici",
+            cachedReleaseChannel: ({ channel }: { channel: string }) => `Informations de version ${channel} en cache ; non actualisées ici`,
+            manualUpdateInterruptsSessions: "Mettez à jour sur cette machine. Les services peuvent s’arrêter et les sessions en cours peuvent se terminer.",
             latestUnknown: 'Impossible de vérifier s’il existe une version plus récente',
             rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} n’a pas démarré sur cette machine, elle reste donc en version ${kept}.`,
             installedByYou: 'Installé par toi',

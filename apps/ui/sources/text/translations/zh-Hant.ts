@@ -7997,7 +7997,7 @@ settingsSession: {
             offline: '部分機器目前離線',
             checkedAt: ({ time }: { time: string }) => `上次檢查：${time}`,
             upToDateDescription: 'Happier、其命令列工具和你的代理都已是最新版本。',
-            unknownDescription: '所有能檢查的項目都已是最新版本。其餘項目會在可連線時重新檢查。',
+            unknownDescription: "部分更新資訊無法取得或來自快取。請查看相關列以瞭解詳情。",
             offlineDescription: '所有可連線的項目都已是最新版本。離線的機器會在重新上線後檢查。',
         },
         settingsSubtitle: {
@@ -8043,6 +8043,9 @@ settingsSession: {
             appCheckFailed: '無法檢查是否有新版本。',
             appDownloadFailed: '下載未完成。',
             appInstallFailed: '無法安裝更新。',
+            cachedRelease: "快取的發行資訊；此處不會重新整理",
+            cachedReleaseChannel: ({ channel }: { channel: string }) => `快取的 ${channel} 發行資訊；此處不會重新整理`,
+            manualUpdateInterruptsSessions: "請在此電腦上更新。服務可能停止，執行中的工作階段可能結束。",
             latestUnknown: '無法檢查是否有新版本',
             rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} 未能在這台機器上啟動，因此仍維持 ${kept}。`,
             installedByYou: '由你安裝',

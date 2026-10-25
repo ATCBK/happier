@@ -9576,7 +9576,7 @@ settingsSession: {
       offline: "部分机器处于离线状态",
       checkedAt: ({ time }: { time: string }) => `上次检查：${time}`,
       upToDateDescription: "Happier、其命令行工具和你的代理都已是最新版本。",
-      unknownDescription: "所有能检查的内容都已是最新。其余部分会在可以连接时重新检查。",
+      unknownDescription: "部分更新信息不可用或来自缓存。请查看相关行以了解详情。",
       offlineDescription: "所有可连接的内容都已是最新。离线机器会在重新上线后检查。",
     },
     settingsSubtitle: {
@@ -9622,6 +9622,9 @@ settingsSession: {
       appCheckFailed: "无法检查是否有新版本。",
       appDownloadFailed: "下载未完成。",
       appInstallFailed: "无法安装更新。",
+      cachedRelease: "缓存的发布信息；此处不会刷新",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `缓存的 ${channel} 发布信息；此处不会刷新`,
+      manualUpdateInterruptsSessions: "请在此计算机上更新。服务可能停止，运行中的会话可能结束。",
       latestUnknown: "无法检查是否有新版本",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} 未能在这台机器上启动，因此仍保持 ${kept}。`,
       installedByYou: "由你安装",

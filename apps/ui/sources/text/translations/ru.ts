@@ -9896,7 +9896,7 @@ settingsSession: {
       offline: "Некоторые машины не в сети",
       checkedAt: ({ time }: { time: string }) => `Последняя проверка: ${time}`,
       upToDateDescription: "Happier, его командная строка и ваши агенты в актуальном состоянии.",
-      unknownDescription: "Всё, что удалось проверить, актуально. Остальное будет проверено, как только станет доступно.",
+      unknownDescription: "Часть сведений об обновлениях недоступна или взята из кэша. Подробности указаны в соответствующих строках.",
       offlineDescription: "Всё доступное актуально. Машины не в сети будут проверены, когда вернутся.",
     },
     settingsSubtitle: {
@@ -9942,6 +9942,9 @@ settingsSession: {
       appCheckFailed: "Не удалось проверить наличие новой версии.",
       appDownloadFailed: "Загрузка не завершилась.",
       appInstallFailed: "Не удалось установить обновление.",
+      cachedRelease: "Сведения о выпуске из кэша; здесь не обновляются",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `Сведения о выпуске ${channel} из кэша; здесь не обновляются`,
+      manualUpdateInterruptsSessions: "Обновите на этом компьютере. Службы могут остановиться, а активные сеансы — завершиться.",
       latestUnknown: "Не удалось проверить наличие новой версии",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `Версия ${target} не запустилась на этой машине, поэтому осталась ${kept}.`,
       installedByYou: "Установлено вами",

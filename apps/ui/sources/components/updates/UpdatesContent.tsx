@@ -24,11 +24,7 @@ type Presentation = 'popover' | 'screen';
 
 /** The popover lists only rows that need attention or are in flight; the screen lists every row. */
 function needsAttention(item: UpdateItem): boolean {
-    return item.state === 'available'
-        || item.state === 'required'
-        || item.state === 'running'
-        || item.state === 'ready'
-        || item.state === 'failed';
+    return item.state !== 'upToDate' && item.state !== 'offline';
 }
 
 /**

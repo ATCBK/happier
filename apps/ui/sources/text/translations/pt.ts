@@ -10049,7 +10049,7 @@ settingsSession: {
       offline: "Algumas máquinas estão offline",
       checkedAt: ({ time }: { time: string }) => `Última verificação: ${time}`,
       upToDateDescription: "O Happier, a linha de comando dele e seus agentes estão atualizados.",
-      unknownDescription: "Tudo o que pôde ser verificado está atualizado. O restante será verificado novamente quando estiver acessível.",
+      unknownDescription: "Algumas informações de atualização estão indisponíveis ou em cache. Veja as linhas afetadas para mais detalhes.",
       offlineDescription: "Tudo o que está acessível está atualizado. As máquinas offline serão verificadas quando voltarem.",
     },
     settingsSubtitle: {
@@ -10095,6 +10095,9 @@ settingsSession: {
       appCheckFailed: "Não foi possível verificar se há uma versão mais recente.",
       appDownloadFailed: "O download não terminou.",
       appInstallFailed: "Não foi possível instalar a atualização.",
+      cachedRelease: "Informações de versão em cache; não são atualizadas aqui",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `Informações de versão ${channel} em cache; não são atualizadas aqui`,
+      manualUpdateInterruptsSessions: "Atualize nesta máquina. Os serviços podem parar e as sessões em execução podem terminar.",
       latestUnknown: "Não foi possível verificar se há uma versão mais recente",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} não iniciou nesta máquina, então ela continua na ${kept}.`,
       installedByYou: "Instalado por você",

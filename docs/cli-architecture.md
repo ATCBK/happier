@@ -556,6 +556,17 @@ as `cliUpdate` on its first connect after start and again whenever `last-update.
 ring-filtered reader (`readCachedCliUpdateState`, `packages/cli-common/src/update`) used by the
 notice, the status, doctor repair and K5; doctor never writes it or calls npm itself.
 
+The development Updates UI labels these CLI release answers as cached, with their channel when
+known, on both the local-computer and remote-machine rows. Its Check for updates action refreshes
+app and machine-capability checks, not this cached CLI lookup. A cached version equal to or older
+than the running CLI therefore leaves the row's latest-version status unknown; it cannot certify
+that no newer release exists. A known newer cached version still offers the existing update path.
+Manual-only rows retain the producer's command and warn that services and sessions may stop.
+No new release lookup, cache writer, updater, or remote Windows update path is introduced.
+The popover keeps unknown and unchecked rows visible instead of counting them as current.
+Remote completion still follows the changed update outcome and running target version; a cached
+release answer no longer doubles as the completion proof.
+
 **Remote.** The daemon's `tool.systemTasks` capability lists `cli.update.v1` only when
 `canUpdateRemotely` (presence = capability; older daemons never list it). The kind starts
 `self update` detached from the daemon's own binary (output to `logs/cli-update-<ms>.log`) and

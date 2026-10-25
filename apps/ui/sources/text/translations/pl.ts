@@ -9937,7 +9937,7 @@ settingsSession: {
       offline: "Niektóre maszyny są offline",
       checkedAt: ({ time }: { time: string }) => `Ostatnio sprawdzono: ${time}`,
       upToDateDescription: "Happier, jego wiersz poleceń i Twoi agenci są aktualni.",
-      unknownDescription: "Wszystko, co udało się sprawdzić, jest aktualne. Resztę sprawdzimy ponownie, gdy będzie osiągalna.",
+      unknownDescription: "Niektóre informacje o aktualizacjach są niedostępne lub pochodzą z pamięci podręcznej. Szczegóły są w odpowiednich wierszach.",
       offlineDescription: "Wszystko, co osiągalne, jest aktualne. Maszyny offline sprawdzimy, gdy wrócą.",
     },
     settingsSubtitle: {
@@ -9983,6 +9983,9 @@ settingsSession: {
       appCheckFailed: "Nie udało się sprawdzić, czy jest nowsza wersja.",
       appDownloadFailed: "Pobieranie nie zostało ukończone.",
       appInstallFailed: "Nie udało się zainstalować aktualizacji.",
+      cachedRelease: "Informacje o wydaniu z pamięci podręcznej; nie są tutaj odświeżane",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `Informacje o wydaniu ${channel} z pamięci podręcznej; nie są tutaj odświeżane`,
+      manualUpdateInterruptsSessions: "Zaktualizuj na tym komputerze. Usługi mogą zostać zatrzymane, a aktywne sesje zakończone.",
       latestUnknown: "Nie udało się sprawdzić, czy jest nowsza wersja",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `Wersja ${target} nie uruchomiła się na tej maszynie, więc nadal działa ${kept}.`,
       installedByYou: "Zainstalowane przez Ciebie",

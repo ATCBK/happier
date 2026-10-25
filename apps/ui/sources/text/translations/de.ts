@@ -9377,7 +9377,7 @@ settingsSession: {
             offline: 'Einige Rechner sind offline',
             checkedAt: ({ time }: { time: string }) => `Zuletzt geprüft: ${time}`,
             upToDateDescription: 'Happier, die Kommandozeile und deine Agents sind auf dem neuesten Stand.',
-            unknownDescription: 'Alles, was geprüft werden konnte, ist aktuell. Der Rest wird erneut geprüft, sobald er erreichbar ist.',
+            unknownDescription: "Einige Update-Informationen fehlen oder stammen aus dem Zwischenspeicher. Details stehen in den betroffenen Zeilen.",
             offlineDescription: 'Alles Erreichbare ist aktuell. Offline-Rechner werden geprüft, sobald sie wieder da sind.',
         },
         settingsSubtitle: {
@@ -9423,6 +9423,9 @@ settingsSession: {
             appCheckFailed: 'Es konnte nicht nach einer neueren Version gesucht werden.',
             appDownloadFailed: 'Der Download wurde nicht abgeschlossen.',
             appInstallFailed: 'Das Update konnte nicht installiert werden.',
+            cachedRelease: 'Zwischengespeicherte Release-Informationen; hier nicht aktualisiert',
+            cachedReleaseChannel: ({ channel }: { channel: string }) => `Zwischengespeicherte ${channel}-Release-Informationen; hier nicht aktualisiert`,
+            manualUpdateInterruptsSessions: 'Auf diesem Rechner aktualisieren. Dienste können stoppen und laufende Sitzungen können beendet werden.',
             latestUnknown: 'Es konnte nicht nach einer neueren Version gesucht werden',
             rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} ist auf diesem Rechner nicht gestartet, daher bleibt er bei ${kept}.`,
             installedByYou: 'Von dir installiert',

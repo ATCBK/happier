@@ -9313,7 +9313,7 @@ settingsSession: {
             offline: 'Algunes màquines estan sense connexió',
             checkedAt: ({ time }: { time: string }) => `Última comprovació: ${time}`,
             upToDateDescription: 'Happier, la seva línia d’ordres i els teus agents estan al dia.',
-            unknownDescription: 'Tot el que s’ha pogut comprovar està al dia. La resta es tornarà a comprovar quan sigui accessible.',
+            unknownDescription: "Alguna informació d’actualització no està disponible o és en memòria cau. Consulta les files afectades.",
             offlineDescription: 'Tot el que és accessible està al dia. Les màquines sense connexió es comprovaran quan tornin.',
         },
         settingsSubtitle: {
@@ -9359,6 +9359,9 @@ settingsSession: {
             appCheckFailed: 'No s’ha pogut comprovar si hi ha una versió més nova.',
             appDownloadFailed: 'La baixada no ha acabat.',
             appInstallFailed: 'No s’ha pogut instal·lar l’actualització.',
+            cachedRelease: 'Informació de versió en memòria cau; no s’actualitza aquí',
+            cachedReleaseChannel: ({ channel }: { channel: string }) => `Informació de versió ${channel} en memòria cau; no s’actualitza aquí`,
+            manualUpdateInterruptsSessions: 'Actualitza en aquesta màquina. Els serveis es poden aturar i les sessions actives poden acabar.',
             latestUnknown: 'No s’ha pogut comprovar si hi ha una versió més nova',
             rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} no s’ha iniciat en aquesta màquina, així que continua amb la ${kept}.`,
             installedByYou: 'Instal·lat per tu',

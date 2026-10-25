@@ -10165,7 +10165,7 @@ settingsSession: {
       offline: "一部のマシンがオフラインです",
       checkedAt: ({ time }: { time: string }) => `最終確認: ${time}`,
       upToDateDescription: "Happier、コマンドライン、エージェントはすべて最新です。",
-      unknownDescription: "確認できたものはすべて最新です。残りは接続できたときに再確認します。",
+      unknownDescription: "一部の更新情報は利用できないか、キャッシュされています。該当する行で詳細を確認してください。",
       offlineDescription: "接続できるものはすべて最新です。オフラインのマシンは戻ったときに確認します。",
     },
     settingsSubtitle: {
@@ -10211,6 +10211,9 @@ settingsSession: {
       appCheckFailed: "新しいバージョンを確認できませんでした。",
       appDownloadFailed: "ダウンロードが完了しませんでした。",
       appInstallFailed: "アップデートをインストールできませんでした。",
+      cachedRelease: "キャッシュされたリリース情報（ここでは更新されません）",
+      cachedReleaseChannel: ({ channel }: { channel: string }) => `キャッシュされた ${channel} リリース情報（ここでは更新されません）`,
+      manualUpdateInterruptsSessions: "このマシンで更新してください。サービスが停止し、実行中のセッションが終了する場合があります。",
       latestUnknown: "新しいバージョンを確認できませんでした",
       rolledBack: ({ kept, target }: { kept: string; target: string }) => `${target} はこのマシンで起動しなかったため、${kept} のままです。`,
       installedByYou: "ユーザーがインストール",
