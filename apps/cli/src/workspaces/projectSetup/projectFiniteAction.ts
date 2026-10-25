@@ -160,6 +160,11 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         const parsed = PROJECT_ACTION_INPUT_SCHEMAS_V1[args.actionId].safeParse(args.input);
         if (!parsed.success) return failure('invalid_parameters');
         const request = { actionId: args.actionId, input: parsed.data } as FiniteRequest;
+        // Remembered consent is an approving-Account effect. Native preparation
+        // cannot reinterpret it as This time or become a second Trust writer.
+        if (request.actionId === 'projects.prepare' && request.input.consentScope === 'untilChanged') {
+            return failure('project_setup_consent_invalid');
+        }
         const nativeInvocations = new Set<ProjectNativeEffectCaptureForHost>();
         let nativeOperation: ProjectSetupOperationContext | undefined;
         let nativeCustody: ReturnType<typeof createProjectNativeInvocationCustody> | undefined;

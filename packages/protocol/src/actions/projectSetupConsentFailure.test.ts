@@ -4,22 +4,25 @@ import { ProjectPrepareInputV1Schema, readProjectSetupConsentFailureV1, readProj
 describe('Project setup requested human consent scope', () => {
     const workspace = { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/project' };
 
-    it('binds a retained one-time or Skip decision to its operation and reviewed digest', () => {
+    it('binds retained consent or Skip to its operation and reviewed digest', () => {
         const request = { workspace, phase: 'setup', heldOperationId: 'original', expectedEffectDigest: 'reviewed' };
         expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'thisTime' }).success).toBe(true);
         expect(ProjectPrepareInputV1Schema.safeParse({ ...request, skipForInvocation: true }).success).toBe(true);
         expect(ProjectPrepareInputV1Schema.safeParse(request).success).toBe(false);
         expect(ProjectPrepareInputV1Schema.safeParse({ ...request, expectedEffectDigest: undefined, consentScope: 'thisTime' }).success).toBe(false);
-        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'untilChanged' }).success).toBe(false);
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'untilChanged' }).success).toBe(true);
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'untilChanged', skipForInvocation: true }).success).toBe(false);
     });
 
     it('requires the existing reviewed effect digest when requesting either consent scope, without accepting authority input', () => {
         for (const consentScope of ['thisTime', 'untilChanged']) {
-            const request = { workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope };
+            const request = { workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope,
+                ...(consentScope === 'untilChanged' ? { heldOperationId: 'retained' } : {}) };
             expect(ProjectPrepareInputV1Schema.safeParse(request).success).toBe(true);
             expect(ProjectPrepareInputV1Schema.safeParse({ workspace, phase: 'setup', consentScope }).success).toBe(false);
             expect(ProjectPrepareInputV1Schema.safeParse({ ...request, authority: 'present_user' }).success).toBe(false);
         }
+        expect(ProjectPrepareInputV1Schema.safeParse({ workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope: 'untilChanged' }).success).toBe(false);
         expect(ProjectPrepareInputV1Schema.safeParse({ workspace, phase: 'setup' }).success).toBe(true);
         expect(ProjectPrepareInputV1Schema.safeParse({ workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope: 'forever' }).success).toBe(false);
     });

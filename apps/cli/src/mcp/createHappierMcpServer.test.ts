@@ -62,6 +62,8 @@ import { createRoleSourceReader } from '@/session/roles/roleSources';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
 import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { compileActionCliFields, findCompiledActionCliCommand } from '@/cli/actions/compiledCommands';
+import { parseActionCliInput, composeActionCliInput } from '@/cli/actions/parseCommandInput';
 
 const env = process.env;
 
@@ -662,6 +664,34 @@ describe('createHappierMcpServer real host admission', () => {
         ok: true, result: { input: { ...validInput, machineId: 'worker' }, calls: 1 },
       });
     } finally { await plugin.dispose(); await daemon.close(); }
+  });
+
+  it('exposes retained remembered-setup consent through native MCP discovery and the declared CLI command', async () => {
+    const sessionId = 'c666666666666666666666670';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer(hostClient(sessionId));
+    try {
+      await withMcpClient(runtime, async client => {
+        const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id: 'projects.prepare' } }));
+        expect(reply.isError).not.toBe(true);
+        const content = reply.content.find(item => item.type === 'text');
+        if (content?.type !== 'text') throw new Error('Missing discovery payload');
+        const discovered = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(JSON.parse(content.text)).actionSpec;
+        expect(discovered).toMatchObject({ id: 'projects.prepare', surfaces: { agent: true, mcp: true, cli: true } });
+        const spec = getActionSpec('projects.prepare');
+        const command = findCompiledActionCliCommand(['project', 'prepare']);
+        expect(command?.actionId).toBe(spec.id);
+        const fields = compileActionCliFields(spec);
+        const input = { workspace: { serverId: 'test-home', workspaceId: 'source-workspace', machineId: 'source', rootPath: '/source' },
+          phase: 'setup', heldOperationId: 'retained-setup', expectedEffectDigest: 'reviewed', consentScope: 'untilChanged' };
+        const parsed = parseActionCliInput({ ...fields, positionals: [] }, ['--input-json', JSON.stringify(input)]);
+        expect(parsed).toMatchObject({ ok: true, canonicalBase: input });
+        if (!parsed.ok) throw new Error(parsed.message);
+        expect(composeActionCliInput({ ...fields, parsed, canonicalSchema: spec.inputSchema,
+          context: { actionId: spec.id, invocationId: 'setup-consent', commandPath: ['project', 'prepare'] } }))
+          .toMatchObject({ ok: true, input });
+      });
+    } finally { await daemon.close(); }
   });
 
   it('discovers the callable Workflow validator named by start guidance over native MCP', async () => {

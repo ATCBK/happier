@@ -8,6 +8,7 @@ import { readRecord } from '../inputs/inputRecords.js';
 import { isRoleActionIdV1 } from '../prompts/roles/roleActionIdsV1.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
+import { isProjectSetupTrustRequestV1 } from './projectActionFamily.js';
 
 /** Safe Session relocation can contain an explicitly chosen workspace-writing effect. */
 export function isActionWorkspaceWriteV1(
@@ -67,7 +68,8 @@ export function isAutomationApprovalRequestSurface(
   // Pass-up still requires the authenticated manager at the question owner.
   if (surface === 'voice' && spec?.id === 'session.user_action.answer') return readRecord(input).disposition !== 'pass_up';
   return surface === 'agent' || surface === 'mcp' || surface === 'plugin'
-    || (surface === 'cli' && isLegacyWorkflowConversionInputV1(spec, input));
+    || (surface === 'cli' && (isLegacyWorkflowConversionInputV1(spec, input)
+      || isProjectSetupTrustRequestV1(spec?.id ?? '', input)));
 }
 
 /** Exact admitted operands, including their domain revision, bound by the approval owner. */
@@ -99,6 +101,7 @@ export function requiresPresentUserExecutionAuthorityForActionInputV1(
   input?: unknown,
 ): boolean {
   return spec.requiredAuthority === 'present_user'
+    || isProjectSetupTrustRequestV1(spec.id, input)
     || isPublicLinkCreationActionV1(spec.id)
     || isPresentUserSettingWriteV1(spec.id, input)
     || isLegacyWorkflowConversionInputV1(spec, input)

@@ -203,7 +203,7 @@ async function withTrustAccount<T>(scope: ServerAccountScope, signal: AbortSigna
 export function readProjectTrust(scope: ServerAccountScope, project: QualifiedProjectTrustProjectV1, signal?: AbortSignal): Promise<OpenedProjectTrustRead> {
     return withTrustAccount(scope, signal, client => client.read(project, signal));
 }
-/** Called only by the actual human review surface; server requirePresentUser is the grant authority. */
+/** Called by the human decision owner (UI control or approved Action); server requirePresentUser is the grant authority. */
 export function rememberReviewedProjectEffect(scope: ServerAccountScope, decision: RememberReviewedProjectEffect, signal?: AbortSignal): Promise<ProjectTrustMutationResponseV1> {
     return withTrustAccount(scope, signal, client => client.remember(decision, signal));
 }

@@ -1,4 +1,5 @@
-import { PROJECT_ACTION_INPUT_SCHEMAS_V1, PROJECT_ACTION_OUTPUT_SCHEMAS_V1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { PROJECT_ACTION_INPUT_SCHEMAS_V1, PROJECT_ACTION_OUTPUT_SCHEMAS_V1, PROJECT_FINITE_ACTION_RPC_METHODS_V1,
+    readProjectSetupTrustRequestOperationV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveProjectActionMachineV1 } from '@happier-dev/protocol/actions/executor/projectActionPlacement';
@@ -10,10 +11,41 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
+import { getActionOperation } from '@/sync/ops/actionOperations';
+import { decideProjectSetupConsent } from '@/components/projects/projectSetup/projectSetupConsentDecision';
 
 /** Delivery only: the incumbent executor already owns invocation authority, settings and approvals. */
 export function createUiProjectAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['projectAction']> {
     return async ({ actionId, input, context, executeCanonicalAction }) => {
+        if (actionId === 'projects.prepare') {
+            const request = PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(input);
+            if (request.success && request.data.consentScope === 'untilChanged') {
+                if (!account || context.authority !== 'present_user' || !canUsePrivateProjectAccountAction(account, context)) {
+                    return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+                }
+                account.assertCurrent();
+                const workspace = { ...request.data.workspace, serverId: account.serverId };
+                if (!areServerProfileIdentifiersEquivalent(account.serverId, request.data.workspace.serverId)) {
+                    return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+                }
+                const response = await getActionOperation({ serverId: account.serverId, accountId: account.accountId,
+                    machineId: workspace.machineId, operationId: request.data.heldOperationId!, requireCurrentDomainFacts: true,
+                    signal: context.signal });
+                account.assertCurrent();
+                const retained = readProjectSetupTrustRequestOperationV1({ ...request.data, workspace }, response);
+                const source = retained?.domainRef?.kind === 'projectCommand' ? retained.domainRef.sourceWorkspace : undefined;
+                if (!retained || retained.scope.accountId !== account.accountId || !source) {
+                    return { ok: false, errorCode: 'project_setup_review_unavailable', error: 'project_setup_review_unavailable' };
+                }
+                const decision = await decideProjectSetupConsent({ scope: { serverId: account.serverId, accountId: account.accountId },
+                    workspace: source, reviewedEffectDigest: request.data.expectedEffectDigest!, decision: 'untilChanged',
+                    operation: { serverId: account.serverId, snapshot: retained }, signal: context.signal });
+                if (decision.kind === 'remembered') return { operation: decision.operation };
+                const code = decision.kind === 'changed' ? 'project_setup_effect_changed'
+                    : decision.kind === 'unavailable' ? decision.code : 'project_setup_review_unavailable';
+                return { ok: false, errorCode: code, error: code };
+            }
+        }
         if (actionId !== 'projects.trust.list' && actionId !== 'projects.trust.revoke') {
             if (!account) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
             context.signal?.throwIfAborted();

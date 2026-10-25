@@ -1453,10 +1453,25 @@ async function prepareApprovalRequest(params: Readonly<{
   // The target's passive inspection owns setup review. Caller-provided preview
   // fields cannot become commands, consent, or an independent effect calculator.
   const setupInput = params.actionId === 'projects.prepare' ? ProjectPrepareInputV1Schema.safeParse(params.input) : null;
-  const inspectedSetup = setupInput?.success && setupInput.data.phase === 'setup' && params.deps.projectDefinitionAction
+  const retainedSetupResponse = setupInput?.success && setupInput.data.consentScope === 'untilChanged' && params.deps.actionOperationAction
+    ? await params.deps.actionOperationAction({ actionId: 'action.operations.get', input: {
+      serverId: setupInput.data.workspace.serverId, machineId: setupInput.data.workspace.machineId,
+      operationId: setupInput.data.heldOperationId!, refreshSetupReview: true,
+    }, context: params.context, signal: params.context.signal }) : undefined;
+  const retainedSetupFailure = readActionFailureEnvelope(retainedSetupResponse);
+  if (retainedSetupFailure) return retainedSetupFailure;
+  const retainedSetup = setupInput?.success && setupInput.data.consentScope === 'untilChanged'
+    ? readProjectSetupTrustRequestOperationV1(setupInput.data, retainedSetupResponse) : null;
+  if (setupInput?.success && setupInput.data.consentScope === 'untilChanged' && !retainedSetup) return {
+    ok: false, errorCode: 'project_setup_review_unavailable', error: 'project_setup_review_unavailable',
+  };
+  const inspectedSetup = setupInput?.success && setupInput.data.consentScope !== 'untilChanged' && setupInput.data.phase === 'setup' && params.deps.projectDefinitionAction
     ? ProjectDefinitionInspectOutputSchema.safeParse(await params.deps.projectDefinitionAction({ actionId: 'projects.inspect',
       input: { workspace: setupInput.data.workspace }, context: params.context })) : null;
-  const setupReview = inspectedSetup?.success ? inspectedSetup.data.setupReview : undefined;
+  const setupReview = retainedSetup?.setupReview ? {
+    reviewedEffectDigest: retainedSetup.setupReview.reviewedEffectDigest,
+    reviewedEffect: retainedSetup.setupReview.reviewedEffect,
+  } : inspectedSetup?.success ? inspectedSetup.data.setupReview : undefined;
   if (setupReview && setupInput?.success && setupInput.data.expectedEffectDigest
     && setupInput.data.expectedEffectDigest !== setupReview.reviewedEffectDigest) return {
       ok: false, errorCode: 'project_setup_effect_changed', error: 'project_setup_effect_changed',

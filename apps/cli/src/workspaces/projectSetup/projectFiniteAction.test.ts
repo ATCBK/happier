@@ -1133,7 +1133,7 @@ describe('authenticated finite Project Action owner', () => {
         const reviewed = ProjectSetupConsentFailureDetailsV1Schema.parse(h.operationRuntime.store.get(scope, 'operation')!.setupReview);
         // This contract compares consent intent, not concurrent operation-id
         // allocation. Admit each original request before asserting its receipt.
-        for (const [index, consentScope] of (['thisTime', 'untilChanged'] as const).entries()) {
+        for (const [index, consentScope] of (['thisTime'] as const).entries()) {
             const pending = await h.invoke('projects.prepare', {
                 workspace: h.address, phase: 'setup', expectedEffectDigest: reviewed.reviewedEffectDigest, consentScope,
             }, { ...h.context, transportRequestId: `prepare-${consentScope}` });
@@ -1147,6 +1147,12 @@ describe('authenticated finite Project Action owner', () => {
         }
         expect(await h.rpcInvoke('projects.prepare', { workspace: h.address, phase: 'setup', consentScope: 'thisTime' }))
             .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        // Remembered consent belongs to the approving app, never the native preparation RPC.
+        expect(await createProjectFiniteAction(h.runtime, h.context)({ actionId: 'projects.prepare',
+            input: { workspace: h.address, phase: 'setup', heldOperationId: 'operation',
+                expectedEffectDigest: reviewed.reviewedEffectDigest, consentScope: 'untilChanged' },
+            context: { authority: 'present_user', surface: 'ui', serverId: h.address.serverId } }))
+            .toMatchObject({ ok: false, errorCode: 'project_setup_consent_invalid' });
         expect(await h.rpcInvoke('projects.prepare', { workspace: h.address, phase: 'setup', expectedEffectDigest: reviewed.reviewedEffectDigest,
             consentScope: 'forever' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
         expect(await h.rpcInvoke('projects.prepare', { workspace: h.address, phase: 'setup', expectedEffectDigest: reviewed.reviewedEffectDigest,

@@ -20,7 +20,7 @@ import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
     ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
@@ -189,6 +189,117 @@ beforeEach(async () => {
 afterEach(async () => { restoreHttpReplyDecoder?.(); restoreHttpReplyDecoder = undefined; await homes.reset(); });
 
 describe('Project finite delivery through the default UI Action host', () => {
+    it.each([
+        { outcome: 'approve', surface: 'agent' }, { outcome: 'reject', surface: 'mcp' },
+        { outcome: 'cancel', surface: 'cli' }, { outcome: 'changed', surface: 'agent' },
+        { outcome: 'retired', surface: 'agent' },
+    ] as const)('routes an agent remembered-setup request through Inbox: $surface / $outcome', async ({ outcome, surface }) => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+        const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+        const previousProjectRows = storage.getState().projectAccountRows;
+        const previousPinnedWorkspaceRefs = storage.getState().pinnedWorkspaceRefIds;
+        const scope = { serverId, accountId: 'requester' };
+        const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+        const project = { serverId, projectId: 'accepted-project' };
+        const digest = 'reviewed-setup-effect';
+        const held = ProjectCommandActionOutputV1Schema.parse({ operation: {
+            version: 1, operationId: 'agent-held-setup', actionId: 'projects.prepare',
+            scope: { accountId: 'requester', machineId: 'source' }, state: 'accepted', revision: 1, createdAt: 1,
+            title: 'Prepare', cancellation: 'supported', domainRef: { kind: 'projectCommand', purpose: 'setup',
+                serverId, machineId: 'source', workspaceRefId: workspace.workspaceId, cwd: workspace.rootPath, sourceWorkspace: workspace },
+            setupReview: { kind: 'pendingApproval', code: 'project_setup_consent_required', reviewedEffectDigest: digest,
+                reviewedEffect: { commands: ['setup'] } },
+        } }).operation;
+        let current = held;
+        rpcResponses.set(`source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, { kind: 'found', operation: current });
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.prepare': ['agent', 'mcp', 'cli', 'ui'] } },
+        } } } });
+        storage.getState().activateProjectAccountRowsScope(scope);
+        storage.getState().applyProjectAccountRowsForScope(scope, createProjectAccountRowsFixture(scope, { workspaceRefs: [{
+            id: workspace.workspaceId, serverId, machineId: 'source', rootPath: '/repo', projectKey: project.projectId, createdAtMs: 1,
+        }] }));
+        homes.answer(requesterHomeId, `${PROJECT_TRUST_ROUTE_V1}/read`, { body: { status: 'absent' } });
+        homes.answer(requesterHomeId, `${PROJECT_TRUST_ROUTE_V1}/mutate`, { select: body => {
+            expect(ProjectTrustMutationRequestV1Schema.parse(body)).toMatchObject({ project, expectedRevision: 'absent',
+                content: { t: 'plain', v: { project, reviewedEffectDigest: digest } } });
+            const { setupReview: _review, ...resumed } = current;
+            current = { ...resumed, revision: current.revision + 1 };
+            rpcResponses.set(`source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, { kind: 'found', operation: current });
+            return { body: { status: 'updated', revision: 1, cursor: 1 } };
+        } });
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const input = { workspace, phase: 'setup', heldOperationId: held.operationId, expectedEffectDigest: digest, consentScope: 'untilChanged' };
+            const executor = createDefaultActionExecutor();
+            const requestId = 'agent-remember-request';
+            const caller = { kind: 'session' as const, sessionId: 'requesting-session', starterDepth: 0, turnDepth: 0 };
+            const target = { kind: 'machine' as const, machineId: 'source' };
+            const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+            const signed = outcome === 'approve' ? ExternalActionExecutionAuthorizationV1Schema.parse({
+                v: 1, token: 'signed-setup-request', binding: { accountId: 'requester', authentication: { kind: 'account', tokenEpoch: 0 },
+                    serverIdentityId: account.serverIdentityId, machineId: 'source', installationId: 'source-installation',
+                    custodianAccountId: 'requester', accountEncryptionMode: 'plain', actionId: 'projects.prepare', requestId, target,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId, target, input }),
+                    sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn-1', callerPermissionMode: null, requestId },
+                    sessionActionSource: { machineId: 'source', installationId: 'source-installation' },
+                },
+            }) : undefined;
+            if (signed) {
+                const machine = { ...createPlainMachineRowFixture({ id: 'source', accountId: 'requester' }), installationId: 'source-installation',
+                    installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null, replacedByMachineId: null };
+                homes.answer(requesterHomeId, '/v1/machines', { body: [machine] });
+                homes.answer(requesterHomeId, 'GET /v1/machines/source', { body: { machine } });
+            }
+            const requested = await executor.execute('projects.prepare', input, { serverId, surface, authority: 'account_automation',
+                actionRequestId: requestId, defaultSessionId: caller.sessionId, defaultSessionMachineId: 'source',
+                ...(signed ? { actionCaller: caller, externalActionTarget: target, externalActionExecutionAuthorization: signed,
+                    callerPermissionMode: null, sessionInputSource: { sourceSessionId: caller.sessionId, sourceTurnId: 'turn-1', via: 'action' as const },
+                    signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({ authorizationToken: args.authorization.token,
+                        actionId: args.actionId, input: args.input, target: args.target, privateKey: installation.secretKey }) } : {}),
+            });
+            expect(requested, JSON.stringify(requested)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            if (!requested.ok) throw new Error(requested.errorCode);
+            const created = ActionApprovalRequestCreatedResultSchema.parse(requested.result);
+            const artifact = await account.fetchArtifact(created.artifactId);
+            if (typeof artifact?.body !== 'string') throw new Error('Expected inline approval Artifact body');
+            const proposal = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
+            expect(proposal).toMatchObject({ status: 'open', actionArgs: input, preview: { setupReview: { reviewedEffectDigest: digest } } });
+            const { readProjectCommandApproval } = await import('@/components/approvals/ProjectCommandApprovalFacts');
+            expect(readProjectCommandApproval(proposal)).toMatchObject({ kind: 'setup', setupReview: { reviewedEffectDigest: digest } });
+            expect(homes.requestsFor(`${PROJECT_TRUST_ROUTE_V1}/mutate`)).toEqual([]);
+            // Review is exact-id demand, with no background polling while approval is pending.
+            const reviewReads = () => calls.filter(call => call.request.method === `source:${ACTION_OPERATION_RPC_METHODS_V2.get}`);
+            expect(reviewReads()).toHaveLength(1);
+            expect(await executor.execute('approval.request.decide', { artifactId: created.artifactId, decision: 'approve' },
+                { serverId, surface: 'agent', authority: 'account_automation', defaultSessionId: 'requesting-session',
+                    actionsSettings: { v: 1, approvalWaivedSurfaces: { 'approval.request.decide': ['agent'] } } }))
+                .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+            if (outcome === 'changed') {
+                current = { ...held, revision: 2, setupReview: { ...held.setupReview!, reviewedEffectDigest: 'changed-effect' } };
+                rpcResponses.set(`source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, { kind: 'found', operation: current });
+            }
+            if (outcome === 'retired') rpcResponses.set(`source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, { kind: 'not_found' });
+            const decided = await decideApprovalAsInbox(serverId, created.artifactId,
+                outcome === 'changed' || outcome === 'retired' ? 'approve' : outcome);
+            expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true, result: {
+                status: outcome === 'approve' ? 'executed' : outcome === 'changed' || outcome === 'retired' ? 'failed'
+                    : outcome === 'reject' ? 'rejected' : 'canceled',
+            } });
+            expect(homes.requestsFor(`${PROJECT_TRUST_ROUTE_V1}/mutate`)).toHaveLength(outcome === 'approve' ? 1 : 0);
+            expect(reviewReads()).toHaveLength(outcome === 'approve' ? 4 : outcome === 'changed' ? 3 : outcome === 'retired' ? 2 : 1);
+            expect(ownFiniteRelayRequests('projects.prepare')).toEqual([]);
+            expect(homes.requestsFor('/v1/actions/approval.request.decide')).toEqual([]);
+        } finally {
+            account.dispose();
+            storage.setState({ projectAccountRows: previousProjectRows, pinnedWorkspaceRefIds: previousPinnedWorkspaceRefs });
+            actionOperationStore.reset();
+        }
+    });
     it.each(['caller', 'account'] as const)('ends an issued worker status read when its %s retires on an inactive Home', async retirement => {
         answerExplicitScriptWorkerPlacement();
         let release!: (reply: unknown) => void;

@@ -10,7 +10,8 @@ import { RPC_METHODS } from '../rpc/methods.js';
 import { SecretReferenceOverlayV1Schema } from '../profiles/secretReferenceOverlayV1.js';
 import { ActionExecuteFailureSchema } from './actionExecutionResult.js';
 import { ProjectSetupConsentFailureDetailsV1Schema, ProjectSetupConsentScopeV1Schema, type ProjectSetupConsentFailureDetailsV1 } from './projectSetupConsentFailure.js';
-import { canRetainProjectSetupReviewV1 } from './operations/v1.js';
+import { canRetainProjectSetupReviewV1, ActionOperationGetV1ResponseSchema, type ActionOperationSnapshotV1 } from './operations/v1.js';
+import { normalizeWorkspaceRootPathV1 } from '../workspaces/workspaceRefResolutionV1.js';
 export { ProjectSetupConsentFailureDetailsV1Schema, ProjectSetupConsentScopeV1Schema,
   type ProjectSetupConsentFailureDetailsV1, type ProjectSetupConsentScopeV1 } from './projectSetupConsentFailure.js';
 import { PROJECT_ACTION_IDS_V1, type ProjectActionIdV1 } from './projectActionIdsV1.js';
@@ -95,10 +96,34 @@ export const ProjectPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({
 }).check(z.refine(input => input.consentScope === undefined || input.expectedEffectDigest !== undefined, {
   path: ['expectedEffectDigest'], message: 'Requested setup consent scope requires the reviewed effect digest',
 }), z.refine(input => input.heldOperationId === undefined || input.expectedEffectDigest !== undefined
-  && (input.consentScope === 'thisTime' || input.skipForInvocation === true) && input.consentScope !== 'untilChanged', {
-  path: ['heldOperationId'], message: 'A retained decision requires its reviewed digest and one-time or Skip choice',
+  && (input.consentScope !== undefined || input.skipForInvocation === true), {
+  path: ['heldOperationId'], message: 'A retained decision requires its reviewed digest and consent or Skip choice',
+}), z.refine(input => input.consentScope !== 'untilChanged' || input.heldOperationId !== undefined && input.skipForInvocation !== true, {
+  path: ['heldOperationId'], message: 'Remembered consent requires an exact retained operation and cannot skip setup',
 })));
 export type ProjectPrepareInputV1 = z.infer<typeof ProjectPrepareInputV1Schema>;
+
+/** Classification only; the Action schema admits operands before routing or execution. */
+export function isProjectSetupTrustRequestV1(actionId: string, input: unknown): boolean {
+  return actionId === 'projects.prepare' && typeof input === 'object' && input !== null
+    && 'consentScope' in input && input.consentScope === 'untilChanged';
+}
+
+/** The retained producer, not caller-provided effect facts, supplies remembered-consent review. */
+export function readProjectSetupTrustRequestOperationV1(input: ProjectPrepareInputV1, response: unknown): ActionOperationSnapshotV1 | null {
+  const parsed = ActionOperationGetV1ResponseSchema.safeParse(response);
+  if (!parsed.success || parsed.data.kind !== 'found') return null;
+  const operation = parsed.data.operation;
+  const target = operation.domainRef;
+  return operation.operationId === input.heldOperationId && canRetainProjectSetupReviewV1(operation.actionId)
+    && (operation.state === 'accepted' || operation.state === 'running') && operation.setupReview
+    && target?.kind === 'projectCommand' && target.sourceWorkspace !== undefined
+    && target.serverId === input.workspace.serverId && target.machineId === input.workspace.machineId
+    && operation.scope.machineId === target.machineId && target.workspaceRefId === input.workspace.workspaceId
+    && normalizeWorkspaceRootPathV1(target.cwd) === normalizeWorkspaceRootPathV1(input.workspace.rootPath)
+    && (target.purpose === 'teardown' ? 'teardown' : 'setup') === input.phase
+    ? operation : null;
+}
 export const PROJECT_ACTION_INPUT_SCHEMAS_V1 = {
   'projects.trust.list': lazyZodSchema(() => z.strictObject({ project: z.optional(QualifiedProjectTrustProjectV1Schema) })),
   'projects.trust.revoke': lazyZodSchema(() => z.strictObject({ project: QualifiedProjectTrustProjectV1Schema,
@@ -182,12 +207,15 @@ function row<const Id extends ProjectActionIdV1>(id: Id) {
   const read = id === 'projects.trust.list';
   return {
     id, approval: { result: 'required' },
-    ...(id === 'projects.prepare' ? { approvalPolicy: { uiConfirmation: 'policy' as const, rpcConfirmation: true as const } } : {}),
+    ...(id === 'projects.prepare' ? { approvalPolicy: { uiConfirmation: 'policy' as const, rpcConfirmation: true as const },
+      executionPlacementForInput: (input: unknown) => isProjectSetupTrustRequestV1(id, input) ? 'account' as const : 'machine' as const } : {}),
     originalExecution: { accountRoot: 'allowed' }, title: PROJECT_ACTION_COPY[id][0],
     description: id === 'projects.script.run'
       ? 'Run the selected Script on the exact qualified checkout through current declaration and worker policy. Read projects.inspect and projects.worker.preferences.get first; primary-only declarations cannot run on workers. An explicit invocation choice precedes the per-script override and saved checkout default; Ask requires a deliberate exact target choice. Setup-effect review follows the separate projects.prepare approval policy; waiving Run does not waive setup review. Only the user can grant remembered setup trust. Acceptance returns an exact-target operation, not completion: inspect action.operations.get and projects.execution.output.read for queue, copy, setup, output and exit facts. After possible acceptance or unknown outcome inspect that same target; do not repeat Run or fall back because it is busy, offline, failed or Stop is unconfirmed.'
       : id === 'projects.compute.exec'
       ? 'Run an explicitly requested ad-hoc command on the exact qualified checkout. Read projects.worker.preferences.get first: allowAdHoc must be enabled in ready current preferences; opted-out and unavailable settings are distinct refusals. Commands follow configurable Action approval and reviewed setup consent, and arbitrary shell commands are not automatically offloaded. Observe the chosen target through projects.worker.status or finite-purpose machines.pools.resolve. Acceptance is an inspectable operation, not completion; read its exact-target state and output, and never repeat or change targets after possible acceptance without renewed explicit intent.'
+      : id === 'projects.prepare'
+      ? 'Prepare the exact Project checkout. Request consentScope untilChanged with heldOperationId and expectedEffectDigest to ask a present person to remember the retained setup effect until it changes. A person must approve through the ordinary approval flow; an agent cannot grant or approve its own setup trust. Approval rechecks the retained target review and uses the approving Account Trust writer. Ordinary preparation and one-time consent follow the projects.prepare approval policy; a waiver writes no remembered trust.'
       : 'Use the authenticated Account and exact Project workspace. Setup-effect review follows the projects.prepare approval policy. A waiver permits only this invocation and does not grant remembered setup trust; only the user can grant that trust.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : id === 'projects.trust.revoke' ? 'write' : 'external',
     requiredAuthority: 'account_automation', executionPlacement: id.startsWith('projects.trust.') ? 'account' : 'machine',

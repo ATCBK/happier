@@ -10,6 +10,7 @@ import type {
 import { resolveActionApprovalFlow, type ActionApprovalFlow, type ActionApprovalResult } from './actionApprovalMetadata.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput, type ActionSpec } from './actionSpecs.js';
 import { isAgentOrUnresolvedSurface, resolveApprovalSurface } from './actionApprovalSurface.js';
+import { isProjectSetupTrustRequestV1 } from './projectActionFamily.js';
 export { isSharedRequesterActionV1 } from './actionRequestAttributionV1.js';
 export { isAgentOrUnresolvedSurface } from './actionApprovalSurface.js';
 
@@ -200,6 +201,9 @@ function resolveUnwiredApprovalDefault(
 }
 
 export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingArgs): ActionApprovalRoutingDecision {
+  // A setup waiver authorizes an invocation, never a remembered human Trust decision.
+  if (isProjectSetupTrustRequestV1(args.actionId, args.input) && args.context?.authority !== 'present_user'
+    && args.context?.bypassApprovals !== true) return { required: true, flow: 'deferred', result: 'required' };
   const presentUserRequest = isAutomationApprovalRequestSurface(args.context?.surface, args.spec, args.input)
     && canRequestPresentUserApprovalForActionInputV1(args.spec, args.input);
   const computerAction = args.spec.approvalPolicy?.computerConsent === true;

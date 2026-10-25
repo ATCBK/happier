@@ -1,12 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
-import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
+import { ActionSpecSchema, getActionSpec, resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from './projectActionFamily.js';
 import { describeApprovalActionFields } from './actionApprovalPresentation.js';
 
 describe('Project preparation Action contracts', () => {
+  it('keeps remembered setup consent human-owned while exposing a retained request on agent, MCP and CLI', () => {
+    const spec = getActionSpec('projects.prepare');
+    const input = { workspace: { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/repo' },
+      phase: 'setup', heldOperationId: 'held', expectedEffectDigest: 'reviewed', consentScope: 'untilChanged' };
+    expect(spec.inputSchema.parse(input)).toEqual(input);
+    expect(spec.inputSchema.safeParse({ ...input, heldOperationId: undefined }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ ...input, skipForInvocation: true }).success).toBe(false);
+    expect(resolveActionExecutionPlacementForInput(spec, input)).toBe('account');
+    expect(resolveActionExecutionPlacementForInput(spec, { ...input, consentScope: 'thisTime' })).toBe('machine');
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      expect(spec.surfaces[surface]).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: spec.id, spec, input, context: { surface, authority: 'account_automation' },
+        settings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'projects.prepare': [surface] } }),
+      })).toMatchObject({ required: true, flow: 'deferred' });
+    }
+  });
   it.each([
     { kind: 'named', name: 'fresh' },
     { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'fresh' } },

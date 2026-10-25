@@ -874,7 +874,20 @@ and copied target inputs, then consumes This time or Skip inside the original
 reservation. It admits no second preparation and writes no Trust row. Skip
 records no target setup completion; a skipped Service setup declines its waiting
 Start. Changed inputs remain held and cancellation cannot be reversed by a late
-decision. Until it changes uses the existing approving-Account Trust writer.
+decision. Agents may request Until it changes through `projects.prepare` with
+`consentScope: 'untilChanged'`, the exact `heldOperationId` and reviewed
+`expectedEffectDigest`. `workspace` names that retained operation's actual target
+checkout, including a worker target, rather than reconstructing it from SOURCE.
+This is a request for a present person's decision in the
+ordinary approval card/Inbox flow, even when invocation approval is waived.
+Approval runs in the approving app and delegates to the same
+`decideProjectSetupConsent` → `rememberReviewedProjectEffect` → approving-Account
+Trust CAS writer as the UI button. It remeasures the retained target review
+before writing; a changed digest is not covered. Agents cannot approve their own
+request, and rejection, cancellation or an expired/stale request remembers
+nothing. Ordinary preparation, This time and Skip retain their Machine owner;
+the native preparation RPC cannot write remembered consent. This is undeployed
+0.3 behavior, refactored in place without a compatibility alias or second writer.
 Exact current target completion can still satisfy another same-digest hold
 without repeating setup effects.
 Ordinary `actionOperation.get.v2` reconciliation returns its retained snapshot

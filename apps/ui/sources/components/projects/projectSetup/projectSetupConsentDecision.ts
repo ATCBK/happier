@@ -21,7 +21,7 @@ import { createProjectManifestActionClient } from './projectManifestActionClient
 export type ProjectSetupDecision = 'thisTime' | 'untilChanged' | 'skip';
 
 export type ProjectSetupConsentDecisionResult =
-  | Readonly<{ kind: 'remembered' }>
+  | Readonly<{ kind: 'remembered'; operation: ActionOperationSnapshotV1 }>
   | Readonly<{ kind: 'continued' }>
   | Readonly<{ kind: 'changed' }>
   | Readonly<{ kind: 'unavailable'; code: string }>;
@@ -126,7 +126,7 @@ export async function decideProjectSetupConsent(
     if (resumed.state === 'failed' || resumed.state === 'cancelled') {
       return { kind: 'unavailable', code: resumed.error?.errorCode ?? 'cancelled' };
     }
-    return { kind: 'remembered' };
+    return { kind: 'remembered', operation: resumed };
   } catch (error) {
     if (error instanceof ProjectTrustOperationError) {
       return error.code === 'project_setup_effect_changed'
