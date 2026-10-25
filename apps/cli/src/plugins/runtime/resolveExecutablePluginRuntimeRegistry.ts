@@ -345,6 +345,7 @@ import type {
     ManagedProviderOperationAuthority,
 } from '@/daemon/connectedServices/purposeBindings/managedProviderOperationAuthority';
 import type { RpcHandlerInvoker } from '@/api/rpc/types';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { createDaemonSpawnToolResolutionContext } from '@/daemon/spawnHooks';
 import {
@@ -4443,7 +4444,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             credentials: sessionCredentials,
             readCredentials: readSessionCredentials,
             serverId: configuration.activeServerId,
-            serverApiUrl: configuration.apiServerUrl,
+            serverApiUrl: resolveServerHttpBaseUrl(),
             ...(params?.accountExecution ? {
                 // This runtime already owns Account admission and any explicit
                 // nested Machine dispatch; do not re-enter daemon placement.

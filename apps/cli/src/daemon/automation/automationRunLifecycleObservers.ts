@@ -38,7 +38,7 @@ export function createAutomationRunLifecycleObservers(deps: Readonly<{
               const executed = await deps.executor.execute(source.observation ? 'execution.run.get' : 'execution.run.wait', {
                 runId: source.runId, sessionId: source.sessionId ?? null,
                 ...(source.observation ? { includeStructured: true, waitForOutput: source.observation } : {}),
-              }, { surface: 'cli', executionRunTargetMachineId: source.machineId, signal: controller.signal });
+              }, { surface: 'cli', authority: 'account_automation', executionRunTargetMachineId: source.machineId, signal: controller.signal });
               if (controller.signal.aborted) return;
               if (!executed.ok) throw Object.assign(new Error(executed.errorCode), { code: executed.errorCode });
               if (source.observation) {

@@ -232,7 +232,10 @@ export function createAcpClientHandlers(params: Readonly<{
           input,
         ) ?? null;
       } catch (error) {
-        logger.debug('[AcpBackend] Error resolving immediate permission decision:', error);
+        // Provider-controlled text can ride on a policy failure; the default log keeps only its phase and type.
+        logger.warn('[AcpBackend] Permission policy failed; request withdrawn', {
+          phase: 'pre_prompt', errorType: error instanceof Error ? 'Error' : typeof error,
+        });
         if (!permissionRequest.isCurrent()) return withdraw();
         await cancelOwnedPrompt();
         return { outcome: { outcome: 'cancelled' } };
@@ -310,7 +313,9 @@ export function createAcpClientHandlers(params: Readonly<{
           }
           return { outcome };
         } catch (error) {
-          logger.debug('[AcpBackend] Error in permission handler:', error);
+          logger.warn('[AcpBackend] Permission policy failed; request withdrawn', {
+            phase: 'decision', errorType: error instanceof Error ? 'Error' : typeof error,
+          });
           if (!permissionRequest.isCurrent()) return withdraw();
           await cancelOwnedPrompt(isWorkflowInteractionCapacityError(error) ? error : undefined);
           return { outcome: { outcome: 'cancelled' } };

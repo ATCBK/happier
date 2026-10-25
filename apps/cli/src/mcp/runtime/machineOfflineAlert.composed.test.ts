@@ -452,7 +452,7 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     const title = CallToolResultSchema.parse(await client.callTool({ name: 'change_title', arguments: { title: 'Offline alert' } }));
     const titleText = title.content.find(item => item.type === 'text');
     if (!titleText || titleText.type !== 'text') throw new Error('Missing title result');
-    expect(JSON.parse(titleText.text)).toMatchObject({ errorCode: 'account_encryption_currentness_unavailable' });
+    expect(JSON.parse(titleText.text)).toMatchObject({ errorCode: 'server_unreachable' });
     expect(JSON.parse(metadata)).toMatchObject({ summary: { text: 'Current tuple title' } });
     expect(content).toEqual(beforeRefusal);
   } finally {

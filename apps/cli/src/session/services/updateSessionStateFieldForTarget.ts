@@ -127,6 +127,10 @@ export async function updateSessionStateFieldForTarget<F extends SessionStateFie
           };
         } catch (error) {
           assertSessionMetadataMutationCurrentness(params.currentness);
+          // The shared Session transport adapter already classified these as the
+          // established control codes; Action normalization reports them as thrown.
+          const controlCode = (error as { code?: unknown } | null)?.code;
+          if (controlCode === 'server_unreachable' || controlCode === 'not_authenticated') throw error;
           portFailureCode = resolveMetadataPortFailureCode(error);
           return {
             ok: false,

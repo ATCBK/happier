@@ -1924,7 +1924,7 @@ export async function runHostSessionRuntime(
         ...(config.runtimeActionSettingsProvider ? { actionsSettingsProvider: config.runtimeActionSettingsProvider } : {}) });
     }
     if (!isSessionOpenAccountCurrent()) return null;
-    const result = await referenceActionExecutor.execute(actionId, input, { surface: 'cli', actionCaller: { kind: 'host' }, signal });
+    const result = await referenceActionExecutor.execute(actionId, input, { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' }, signal });
     signal?.throwIfAborted();
     return isSessionOpenAccountCurrent() && result.ok ? result.result : null;
   };

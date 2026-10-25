@@ -1374,9 +1374,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             } catch (error) {
                 if (nativeRuntime === opened) nativeRuntime = null;
                 if (rejectedStart === error) {
-                    if (opened.kind === 'conversation') {
-                        try { await opened.runtime.dispose(); } catch { /* Preserve the classified pre-start refusal. */ }
-                    }
+                    // The rejected member's handle is released for finite and retained Runs alike.
+                    try { await opened.runtime.dispose(); } catch { /* Preserve the classified pre-start refusal. */ }
                     throw error;
                 }
                 await opened.runtime.dispose();
