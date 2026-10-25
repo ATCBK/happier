@@ -76,6 +76,7 @@ export type SecretSettingsTestHarness = {
 
 /** Real Home/Account/catalog/Action/crypto owners, with only HTTP and credential storage synthetic. */
 export async function createSecretSettingsTestHarness(options: Readonly<{
+    accountId?: string;
     /** Provenance-bearing credential for composed CLI/daemon/app Account ingress. */
     token?: string;
     serverIdentityId?: string;
@@ -93,7 +94,8 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
 }> = {}): Promise<SecretSettingsTestHarness> {
     await loadSyncSingletonForTests();
     const mode = options.mode ?? 'plain';
-    const token = options.token ?? `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
+    const accountId = options.accountId ?? 'account-a';
+    const token = options.token ?? `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
     const credentials = mode === 'e2ee'
         ? { token, secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') }
         : { token };
@@ -135,7 +137,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const settingsWrites: unknown[] = [];
     const promotions: Array<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>> = [];
     const catalogRows = new Map<string, unknown>();
-    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: mode });
+    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: mode });
     const listeners = new Set<() => void>();
     const notify = () => { for (const listener of listeners) listener(); };
     const handleRequest = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -147,7 +149,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         if (artifactResponse) return await artifactResponse;
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
         if (path === '/v1/account/profile') return new Headers(init?.headers).get('Authorization') === `Bearer ${token}`
-            ? Response.json(AccountProfileSchema.parse({ id: 'account-a' }))
+            ? Response.json(AccountProfileSchema.parse({ id: accountId }))
             : Response.json({ error: 'Not authenticated' }, { status: 401 });
         if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
         if (path.startsWith('/v1/account/authoring-memory/')) return Response.json({ status: 'absent' });
@@ -189,11 +191,11 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         if (path === '/v1/account/saved-secrets/resources' && init?.method === 'POST') {
             const body=SharedSavedSecretCreateInputV1Schema.parse(JSON.parse(String(init.body)));
             creations.push(body);
-            const ownerEnvelope=body.keyEnvelopes?.find(envelope=>envelope.recipientAccountId==='account-a');
+            const ownerEnvelope=body.keyEnvelopes?.find(envelope=>envelope.recipientAccountId===accountId);
             resources.push(SavedSecretResourceMaterialV1Schema.parse({resourceId:body.resourceId,encryptionMode:body.encryptionMode,
                 storedContent:body.storedContent,recipientEnvelope:ownerEnvelope?{encryptedDataKey:ownerEnvelope.encryptedDataKey,
                     recipientContentPublicKeyFingerprint:ownerEnvelope.recipientContentPublicKeyFingerprint}:null,
-                entry:{ref:`happier:shared-secret:v1:${body.resourceId}`,source:'shared_resource',relationship:'owner',ownerAccountId:'account-a',
+                entry:{ref:`happier:shared-secret:v1:${body.resourceId}`,source:'shared_resource',relationship:'owner',ownerAccountId:accountId,
                     name:body.displayName,kind:body.kind,encryptionMode:body.encryptionMode,revision:1,materialStatus:'ready',
                     audience:{accounts:[],teams:[],groups:[]},capabilities:{use:true,rename:true,rotate:true,manageAccess:true,delete:true}},
             }));
@@ -221,7 +223,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
                 resources.push(SavedSecretResourceMaterialV1Schema.parse({ resourceId: resource.resourceId,
                     encryptionMode: 'plain', storedContent: resource.storedContent, recipientEnvelope: null,
                     entry: { ref: `happier:shared-secret:v1:${resource.resourceId}`, source: 'shared_resource',
-                        relationship: 'owner', ownerAccountId: 'account-a', name: content.name, kind: content.kind,
+                        relationship: 'owner', ownerAccountId: accountId, name: content.name, kind: content.kind,
                         encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
                         audience: { accounts: [], teams: [], groups: [] },
                         capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
@@ -256,7 +258,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
             if (current.entry.revision !== body.expectedRevision) return Response.json({ error: 'resource_changed' }, { status: 409 });
             updates.push(body);
             const nextMode = body.toMode ?? current.encryptionMode;
-            const ownerEnvelope = body.keyEnvelopes?.find((envelope) => envelope.recipientAccountId === 'account-a');
+            const ownerEnvelope = body.keyEnvelopes?.find((envelope) => envelope.recipientAccountId === accountId);
             const revision = body.expectedRevision + 1;
             resources[index] = SavedSecretResourceMaterialV1Schema.parse({ ...current,
                 encryptionMode: nextMode, storedContent: body.storedContent,
@@ -293,14 +295,14 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         settingsRequest: (url, init) => request(url, init),
     }) : null;
     const connection = await restoreServerAccountForTest({
-        serverUrl: `https://secrets-${crypto.randomUUID()}.example.test`, accountId: 'account-a', credentials, request,
+        serverUrl: `https://secrets-${crypto.randomUUID()}.example.test`, accountId, credentials, request,
         ...(options.serverIdentityId ? { serverIdentityId: options.serverIdentityId } : {}),
         credentialScope: 'restored-home',
     });
     const { sync } = await import('@/sync/sync');
     const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
     await queue.awaitQueue();
-    const scope = { serverId: connection.serverId, accountId: 'account-a' };
+    const scope = { serverId: connection.serverId, accountId };
     storage.setState({ settings, settingsScope: scope, settingsVersion });
     return {
         credentials, encryption, scope, request, resources, recipients, updates, creations, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,
@@ -338,7 +340,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
                 : sealSavedSecretResourceStoredContentV1({ mode: 'e2ee', resourceId: 'resource-a', content, resourceDataKey, randomBytes: getRandomBytes });
             const entry = SavedSecretCatalogEntryV1Schema.parse({ ref: 'happier:shared-secret:v1:resource-a',
                 source: 'shared_resource', relationship: 'owner', name: content.name, kind: content.kind,
-                encryptionMode: resourceMode, ownerAccountId: 'account-a', revision: 3, materialStatus: 'ready',
+                encryptionMode: resourceMode, ownerAccountId: accountId, revision: 3, materialStatus: 'ready',
                 capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true },
             });
             resources.push(SavedSecretResourceMaterialV1Schema.parse({ resourceId: 'resource-a', encryptionMode: resourceMode, entry, storedContent, recipientEnvelope }));
