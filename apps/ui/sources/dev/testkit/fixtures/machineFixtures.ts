@@ -94,17 +94,17 @@ export function createMachineListByServerIdFixture(
 }
 
 /** A Home census row, not an already-opened client projection. */
-export function createPlainMachineRowFixture(input: Readonly<{ id: string; accountId: string }>): FetchedMachineRow {
-    const machine = createMachineFixture({ id: input.id, activeAt: Date.now() });
+export function createPlainMachineRowFixture(input: Readonly<{ id: string; accountId: string; machine?: Machine }>): FetchedMachineRow {
+    const machine = input.machine ?? createMachineFixture({ id: input.id, activeAt: Date.now() });
     return {
         id: machine.id, kind: 'persistent', seq: machine.seq,
         createdAt: machine.createdAt, updatedAt: machine.updatedAt,
         active: machine.active, activeAt: machine.activeAt,
         metadata: encodePlainMachineStoredContent(machine.metadata), metadataVersion: machine.metadataVersion,
-        daemonState: null, daemonStateVersion: machine.daemonStateVersion,
+        daemonState: machine.daemonState == null ? null : encodePlainMachineStoredContent(machine.daemonState), daemonStateVersion: machine.daemonStateVersion,
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         revokedAt: null, replacedByMachineId: null, installationId: 'test-installation',
-        access: AccessibleMachineAccessV1Schema.parse({ custodian: { accountId: input.accountId, displayName: 'Test Account' },
+        access: AccessibleMachineAccessV1Schema.parse(machine.access ?? { custodian: { accountId: input.accountId, displayName: 'Test Account' },
             role: 'manage', resourceMode: 'plain', accessState: 'ready' }),
     };
 }
