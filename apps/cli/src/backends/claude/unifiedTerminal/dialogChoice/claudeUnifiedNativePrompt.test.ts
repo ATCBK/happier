@@ -339,6 +339,42 @@ describe('native prompts through the existing terminal dialog owner', () => {
     await broker.dispose();
   });
 
+  it('publishes read-outside-directory scopes and applies the selected one-time approval through the existing permission path', async () => {
+    const { session, broker, client } = createHarness();
+    const tool = { session_id: 'claude-native-session', tool_name: 'Read', tool_input: { file_path: '/tmp/outside-read-probe.txt' } };
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-read-outside' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
+    const labels = [
+      'Yes, and keep allowing any reads outside the working directories',
+      'No, and block reads outside the working directories from now on',
+      'No, and ask again next time',
+      'Yes, but ask again next time',
+    ];
+    const initial = readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.310-read-outside.txt', import.meta.url), 'utf8');
+    const screen = (focused: number) => initial.replace(/^ [ ❯] (\d+)\./gmu,
+      (_, number: string) => ` ${focused + 1 === Number(number) ? '❯' : ' '} ${number}.`);
+    const idle = '──────────────────\n❯ \n──────────────────';
+    const port = createFakeControlPort({ captures: [screen(0), screen(0), screen(0), screen(1), screen(2), screen(3), idle] });
+    const probe = createClaudeUnifiedDialogChoiceScreenProbe({
+      broker, port, wait: async () => {}, graceMs: 0, settleMs: 1,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 5, isDialogOwned: () => false,
+    });
+    await expect(probe.probe()).resolves.toMatchObject({ kind: 'request_published', dialogId: 'tool_permission' });
+    await vi.waitFor(() => expect(client.agentState.requests['native-1']).toBeDefined());
+    expect(client.agentState.requests['native-1']).toMatchObject({ arguments: { questions: [{
+      options: labels.map((label, index) => ({ label, choice: `option_${index + 1}` })),
+    }] } });
+    await expect(client.rpcHandlerManager.getHandler('permission')!({
+      id: 'native-1', approved: true, structuredAnswersV1: { claudeNativePermission: ['option_4'] },
+    })).resolves.toEqual({ ok: true });
+    expect(port.sentKeys).toEqual(['ArrowDown', 'ArrowDown', 'ArrowDown', 'Enter']);
+    expect(port.sentLiteral).toEqual([]);
+    expect(client.agentState.requests['native-1']).toBeUndefined();
+    expect(client.agentState.completedRequests['native-1']).toMatchObject({ dialogChoice: 'option_4' });
+    probe.dispose();
+    await broker.dispose();
+  });
+
   it('retires an observed native permission when the app state acknowledgment fails after execution', async () => {
     const { session, broker, client } = createHarness();
     const tool = { session_id: 'claude-native-session', tool_name: 'Bash', tool_input: { command: 'python3 -c "print(671)"' } };
