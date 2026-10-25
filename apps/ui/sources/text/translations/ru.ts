@@ -3848,8 +3848,12 @@ export const ru: TranslationStructure = {
   },
 
     notifications: {
-        permissionActionNeedsReview: "Не удалось подтвердить ответ на запрос разрешения из уведомления. Откройте сессию и проверьте текущий запрос, прежде чем отвечать снова.",
+        permissionActionNeedsReview: "Не удалось подтвердить ответ, отправленный из уведомления. Проверьте ожидающие запросы, прежде чем отвечать снова.",
+        permissionActionReviewUnavailable: "Не удалось открыть Home и аккаунт этого ответа. Проверьте соединение и вход в настройках, затем ожидающие запросы.",
       actions: {
+            reviewPendingRequests: "Проверить ожидающие запросы",
+            questionReply: "Ответить",
+            questionPlaceholder: "Ваш ответ",
         allow: 'Разрешить',
         deny: 'Отклонить',
         answer: 'Ответить',

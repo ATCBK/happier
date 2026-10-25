@@ -4241,8 +4241,12 @@ export const it: TranslationStructure = {
   },
 
     notifications: {
-        permissionActionNeedsReview: "Non è stato possibile confermare la risposta alla richiesta di autorizzazione ricevuta tramite notifica. Apri la sessione e controlla la richiesta attuale prima di rispondere di nuovo.",
+        permissionActionNeedsReview: "Non è stato possibile confermare la risposta inviata dalla notifica. Controlla le richieste in sospeso prima di rispondere di nuovo.",
+        permissionActionReviewUnavailable: "Impossibile aprire l’Home e l’account di questa risposta. Controlla la connessione e l’accesso nelle impostazioni, poi le richieste in sospeso.",
       actions: {
+            reviewPendingRequests: "Controlla le richieste in sospeso",
+            questionReply: "Rispondi",
+            questionPlaceholder: "La tua risposta",
         allow: 'Consenti',
         deny: 'Nega',
         answer: 'Rispondi',

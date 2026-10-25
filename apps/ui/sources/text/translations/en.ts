@@ -3609,8 +3609,12 @@ export const en = {
     },
 
     notifications: {
-        permissionActionNeedsReview: "The notification permission response could not be confirmed. Open the session and check its current request before responding again.",
+        permissionActionNeedsReview: "The response sent from the notification could not be confirmed. Review pending requests before responding again.",
+        permissionActionReviewUnavailable: "We couldn’t open the Home and Account for this response. Check your connection and sign-in in Settings, then review pending requests.",
         actions: {
+            reviewPendingRequests: "Review pending requests",
+            questionReply: "Reply",
+            questionPlaceholder: "Your answer",
             allow: 'Allow',
             deny: 'Deny',
             answer: 'Answer',

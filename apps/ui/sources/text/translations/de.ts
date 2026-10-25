@@ -3608,8 +3608,12 @@ export const de: TranslationStructure = {
     },
 
     notifications: {
-        permissionActionNeedsReview: "Die Berechtigungsantwort aus der Benachrichtigung konnte nicht bestätigt werden. Öffne die Sitzung und prüfe die aktuelle Anfrage, bevor du erneut antwortest.",
+        permissionActionNeedsReview: "Die Antwort aus der Benachrichtigung konnte nicht bestätigt werden. Prüfe die ausstehenden Anfragen, bevor du erneut antwortest.",
+        permissionActionReviewUnavailable: "Home und Konto dieser Antwort konnten nicht geöffnet werden. Prüfe Verbindung und Anmeldung in den Einstellungen und dann die ausstehenden Anfragen.",
         actions: {
+            reviewPendingRequests: "Ausstehende Anfragen prüfen",
+            questionReply: "Antworten",
+            questionPlaceholder: "Deine Antwort",
             allow: 'Erlauben',
             deny: 'Ablehnen',
             answer: 'Antworten',

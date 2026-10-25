@@ -3788,8 +3788,12 @@ export const zhHans: TranslationStructure = {
   },
 
   notifications: {
-      permissionActionNeedsReview: "无法确认通知中的权限请求回复。再次回复前，请打开会话并检查当前请求。",
+      permissionActionNeedsReview: "无法确认从通知发送的回复。请先查看待处理请求，再次回复。",
+      permissionActionReviewUnavailable: "无法打开此回复对应的 Home 和账户。请在设置中检查连接和登录状态，然后查看待处理请求。",
     actions: {
+          reviewPendingRequests: "查看待处理请求",
+          questionReply: "回复",
+          questionPlaceholder: "你的回答",
       allow: '允许',
       deny: '拒绝',
       answer: '回答',

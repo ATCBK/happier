@@ -3927,8 +3927,12 @@ export const pl: TranslationStructure = {
   },
 
     notifications: {
-        permissionActionNeedsReview: "Nie udało się potwierdzić odpowiedzi na prośbę o uprawnienie z powiadomienia. Otwórz sesję i sprawdź bieżącą prośbę, zanim odpowiesz ponownie.",
+        permissionActionNeedsReview: "Nie udało się potwierdzić odpowiedzi wysłanej z powiadomienia. Sprawdź oczekujące prośby, zanim odpowiesz ponownie.",
+        permissionActionReviewUnavailable: "Nie udało się otworzyć Home i konta tej odpowiedzi. Sprawdź połączenie i logowanie w Ustawieniach, a następnie oczekujące prośby.",
       actions: {
+            reviewPendingRequests: "Sprawdź oczekujące prośby",
+            questionReply: "Odpowiedz",
+            questionPlaceholder: "Twoja odpowiedź",
         allow: 'Zezwól',
         deny: 'Odmów',
         answer: 'Odpowiedz',

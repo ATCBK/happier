@@ -4190,8 +4190,12 @@ localTailscale: {
   },
 
   notifications: {
-      permissionActionNeedsReview: "通知からの権限リクエストへの応答を確認できませんでした。再度応答する前にセッションを開き、現在のリクエストを確認してください。",
+      permissionActionNeedsReview: "通知から送信した応答を確認できませんでした。再度応答する前に、保留中のリクエストを確認してください。",
+      permissionActionReviewUnavailable: "この応答のHomeとアカウントを開けませんでした。設定で接続とサインインを確認してから、保留中のリクエストを確認してください。",
     actions: {
+          reviewPendingRequests: "保留中のリクエストを確認",
+          questionReply: "返信",
+          questionPlaceholder: "回答",
       allow: "許可",
       deny: "拒否",
       answer: "回答",

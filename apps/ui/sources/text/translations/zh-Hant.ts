@@ -3586,8 +3586,12 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     notifications: {
-        permissionActionNeedsReview: "無法確認通知中的權限請求回覆。再次回覆前，請開啟工作階段並檢查目前的請求。",
+        permissionActionNeedsReview: "無法確認從通知傳送的回覆。請先檢查待處理請求，再次回覆。",
+        permissionActionReviewUnavailable: "無法開啟此回覆對應的 Home 和帳戶。請在設定中檢查連線與登入狀態，再檢查待處理請求。",
         actions: {
+            reviewPendingRequests: "檢查待處理請求",
+            questionReply: "回覆",
+            questionPlaceholder: "你的回答",
             allow: '允許',
             deny: '拒絕',
             answer: '回答',

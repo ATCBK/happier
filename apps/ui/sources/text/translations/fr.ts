@@ -3608,8 +3608,12 @@ export const fr: TranslationStructure = {
     },
 
     notifications: {
-        permissionActionNeedsReview: "La réponse envoyée depuis la notification n’a pas pu être confirmée. Ouvrez la session et vérifiez la demande d’autorisation en cours avant de répondre à nouveau.",
+        permissionActionNeedsReview: "La réponse envoyée depuis la notification n’a pas pu être confirmée. Vérifiez les demandes en attente avant de répondre à nouveau.",
+        permissionActionReviewUnavailable: "Impossible d’ouvrir le Home et le compte de cette réponse. Vérifiez votre connexion et votre identification dans les réglages, puis les demandes en attente.",
         actions: {
+            reviewPendingRequests: "Vérifier les demandes en attente",
+            questionReply: "Répondre",
+            questionPlaceholder: "Votre réponse",
             allow: 'Autoriser',
             deny: 'Refuser',
             answer: 'Répondre',

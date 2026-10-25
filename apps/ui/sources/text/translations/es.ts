@@ -3899,8 +3899,12 @@ export const es: TranslationStructure = {
   },
 
     notifications: {
-        permissionActionNeedsReview: "No se pudo confirmar la respuesta de permiso de la notificación. Abre la sesión y revisa la solicitud actual antes de volver a responder.",
+        permissionActionNeedsReview: "No se pudo confirmar la respuesta enviada desde la notificación. Revisa las solicitudes pendientes antes de volver a responder.",
+        permissionActionReviewUnavailable: "No se pudieron abrir el Home y la cuenta de esta respuesta. Revisa la conexión y el inicio de sesión en Ajustes y, después, las solicitudes pendientes.",
       actions: {
+            reviewPendingRequests: "Revisar solicitudes pendientes",
+            questionReply: "Responder",
+            questionPlaceholder: "Tu respuesta",
         allow: 'Permitir',
         deny: 'Denegar',
         answer: 'Responder',

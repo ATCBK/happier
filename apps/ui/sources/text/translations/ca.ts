@@ -3695,8 +3695,12 @@ export const ca: TranslationStructure = {
     },
 
     notifications: {
-        permissionActionNeedsReview: "No s’ha pogut confirmar la resposta de permís de la notificació. Obre la sessió i comprova la sol·licitud actual abans de tornar a respondre.",
+        permissionActionNeedsReview: "No s’ha pogut confirmar la resposta enviada des de la notificació. Revisa les sol·licituds pendents abans de tornar a respondre.",
+        permissionActionReviewUnavailable: "No s’han pogut obrir el Home i el compte d’aquesta resposta. Comprova la connexió i l’inici de sessió a Configuració i, després, les sol·licituds pendents.",
         actions: {
+            reviewPendingRequests: "Revisa les sol·licituds pendents",
+            questionReply: "Respon",
+            questionPlaceholder: "La teva resposta",
             allow: 'Permetre',
             deny: 'Denegar',
             answer: 'Respondre',
