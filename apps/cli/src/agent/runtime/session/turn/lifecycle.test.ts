@@ -50,8 +50,6 @@ describe('createSessionTurnLifecycle', () => {
                 { ...context, turnId: 'applied', outcome: 'applied' },
                 { ...context, turnId: 'evidence_absent', outcome: 'skipped', reason: 'evidence_absent' },
                 { ...context, turnId: 'read_failed', outcome: 'skipped', reason: 'evidence_absent' },
-                { ...context, turnId: 'cancellation', outcome: 'skipped', reason: 'cancellation' },
-                { ...context, turnId: 'non_team_failure', outcome: 'skipped', reason: 'non_team_failure' },
             ]);
             expect(reads).toBe(3); // One per eligible failure; no cancellation or diagnostic probes.
             expect(mutations.map(mutation => mutation.action)).toEqual(['begin', 'fail', 'begin', 'fail', 'begin', 'fail', 'begin', 'cancel', 'begin', 'fail']);
@@ -79,22 +77,66 @@ describe('createSessionTurnLifecycle', () => {
                 const context = { stage: 'turn_publication', sessionId: 'logged-session', turnId: 'logged-turn', pid: process.pid };
                 const records = log.mock.calls.filter(([, record]) => record && typeof record === 'object'
                     && 'stage' in record && record.stage === 'turn_publication').map(([, record]) => record);
-                expect(records).toEqual(scenario === 'no_publisher' ? [
-                    { ...context, action: 'begin', outcome: 'skipped', reason: 'no_publisher' },
-                    { ...context, action: 'complete', outcome: 'skipped', reason: 'no_publisher' },
-                ] : scenario === 'mutation_failed' ? [
+                expect(records).toEqual(scenario === 'mutation_failed' ? [
                     { ...context, action: 'begin', outcome: 'failed', reason: 'mutation_failed' },
-                    { ...context, action: 'complete', outcome: 'skipped', reason: 'begin_not_accepted' },
-                ] : [
-                    { ...context, action: 'begin', outcome: 'accepted' },
-                    { ...context, action: 'complete', outcome: scenario === 'marker_failed' ? 'failed' : 'accepted',
-                        ...(scenario === 'marker_failed' ? { reason: 'marker_failed' } : {}) },
-                ]);
+                ] : scenario === 'marker_failed' ? [
+                    { ...context, action: 'complete', outcome: 'failed', reason: 'marker_failed' },
+                ] : []);
                 expect(writes).toBe(scenario === 'no_publisher' ? 0 : scenario === 'mutation_failed' ? 1 : 2);
                 expect(markers).toBe(scenario === 'no_publisher' ? 0 : scenario === 'mutation_failed' ? 1 : 2);
             } finally { log.mockRestore(); }
         },
     );
+
+    it('writes no investigation records for successful turns', async () => {
+        const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const mutations: SessionTurnMutationV1[] = [];
+        try {
+            const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'quiet-session',
+                enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+                onAcceptedTurnLifecycle: async () => {},
+            });
+            for (let turn = 0; turn < 100; turn++) {
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'quiet-session', turnId: `turn-${turn}`, emittedAtMs: turn * 2 }));
+                lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: 'quiet-session', turnId: `turn-${turn}`, emittedAtMs: turn * 2 + 1 }));
+            }
+            await lifecycle.drainAcceptedLifecycle();
+            expect(mutations).toHaveLength(200);
+            expect(log.mock.calls.filter(([label]) => label === '[provider-broker-application]')).toHaveLength(0);
+        } finally { log.mockRestore(); }
+    });
+
+    it.each(['recovered', 'retired'] as const)('records one marker failure across retries until %s', async outcome => {
+        vi.useFakeTimers();
+        const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const mutations: SessionTurnMutationV1[] = [];
+        let attempts = 0;
+        let markerAvailable = false;
+        const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'retry-session',
+            enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+            onAcceptedTurnLifecycle: async () => {
+                attempts++;
+                if (!markerAvailable) throw new Error('private marker failure');
+            },
+        });
+        try {
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'retry-session', turnId: 'retry-turn', emittedAtMs: 1 }));
+            await vi.advanceTimersByTimeAsync(500);
+            expect(attempts).toBeGreaterThan(5);
+            expect(log.mock.calls.filter(([label]) => label === '[provider-broker-application]')).toEqual([
+                ['[provider-broker-application]', { stage: 'turn_publication', sessionId: 'retry-session', turnId: 'retry-turn',
+                    pid: process.pid, action: 'begin', outcome: 'failed', reason: 'marker_failed' }],
+            ]);
+        } finally {
+            if (outcome === 'retired') lifecycle.retireAcceptedLifecyclePublication();
+            else markerAvailable = true;
+            await vi.advanceTimersByTimeAsync(50);
+            await lifecycle.drainAcceptedLifecycle();
+            log.mockRestore();
+            vi.useRealTimers();
+        }
+        expect(mutations.map(mutation => mutation.action)).toEqual(outcome === 'recovered' ? ['begin'] : []);
+    });
 
     it.each(['accepted', 'unavailable'] as const)('keeps confirmed open usable when local mutation custody is %s', async custody => {
         const mutations: unknown[] = [];

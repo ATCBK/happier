@@ -96,16 +96,15 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
     let acceptedLifecyclePublicationRetired = false;
     const turnsWithMarkerButNoAcceptedBegin = new Set<string>();
 
-    function recordPublication(
+    function recordPublicationFailure(
         mutation: RuntimeSessionTurnMutationV1,
-        outcome: 'accepted' | 'failed' | 'skipped',
-        reason?: 'no_publisher' | 'mutation_failed' | 'marker_failed' | 'begin_not_accepted' | 'publication_retired',
+        reason: 'mutation_failed' | 'marker_failed',
     ): void {
         if (!['begin', 'complete', 'fail', 'cancel', 'wait'].includes(mutation.action) || !('turnId' in mutation)) return;
         try {
             logger.infoFile('[provider-broker-application]', { stage: 'turn_publication',
                 sessionId: params.session.sessionId, turnId: mutation.turnId, pid: process.pid,
-                action: mutation.action, outcome, ...(reason ? { reason } : {}) });
+                action: mutation.action, outcome: 'failed', reason });
         } catch { /* Diagnostics cannot change lifecycle custody. */ }
     }
 
@@ -117,16 +116,23 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
         }>,
         mutation: RuntimeSessionTurnMutationV1,
     ): Promise<boolean> {
+        if (acceptedLifecyclePublicationRetired) return false;
+        try {
+            await params.onAcceptedTurnLifecycle?.(lifecycle);
+            return true;
+        } catch {
+            recordPublicationFailure(mutation, 'marker_failed');
+        }
+        // Accepted begin identity is marker custody. Retain and retry the serialized
+        // obligation instead of allowing cleanup to race a runner exit with no exact id.
         for (;;) {
+            await delay(ACCEPTED_BEGIN_PUBLISH_RETRY_DELAY_MS);
             if (acceptedLifecyclePublicationRetired) return false;
             try {
                 await params.onAcceptedTurnLifecycle?.(lifecycle);
                 return true;
             } catch {
-                recordPublication(mutation, 'failed', 'marker_failed');
-                // Accepted begin identity is marker custody. Retain and retry the serialized
-                // obligation instead of allowing cleanup to race a runner exit with no exact id.
-                await delay(ACCEPTED_BEGIN_PUBLISH_RETRY_DELAY_MS);
+                // The first failure already records this retained obligation.
             }
         }
     }
@@ -141,9 +147,9 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
         failedEvent?: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>,
     ): void {
         const enqueue = params.session.enqueueSessionTurnMutation;
-        if (!enqueue) { recordPublication(mutation, 'skipped', 'no_publisher'); return; }
+        if (!enqueue) return;
         const enqueueResolvedMutation = async () => {
-            const recordEnrichment = (outcome: 'applied' | 'skipped', reason?: 'non_team_failure' | 'cancellation' | 'evidence_absent') => {
+            const recordEnrichment = (outcome: 'applied' | 'skipped', reason?: 'evidence_absent') => {
                 if (!('turnId' in mutation)) return;
                 try {
                     logger.infoFile('[provider-broker-application]', { stage: 'failure_enrichment',
@@ -165,8 +171,6 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                     logger.debug('[session-turn] Broker refusal evidence unavailable');
                     recordEnrichment('skipped', 'evidence_absent');
                 }
-            } else if (mutation.action === 'fail' || mutation.action === 'cancel') {
-                recordEnrichment('skipped', mutation.action === 'cancel' ? 'cancellation' : 'non_team_failure');
             }
             return await enqueue.call(params.session, mutation);
         };
@@ -177,9 +181,8 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                     // Construction has no daemon turn-marker callback, but its
                     // begin must still enter durable custody before its terminal.
                     await enqueueResolvedMutation();
-                    recordPublication(mutation, 'accepted');
                 } catch {
-                    recordPublication(mutation, 'failed', 'mutation_failed');
+                    recordPublicationFailure(mutation, 'mutation_failed');
                     // Mutation persistence is best-effort; runtime lifecycle observation must keep progressing.
                     return;
                 }
@@ -192,14 +195,13 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
             const mutationTurnId = 'turnId' in mutation ? mutation.turnId : null;
             if (acceptedLifecycle?.event === 'task_started') {
                 const markerPublished = await publishAcceptedBeginMarker(acceptedLifecycle, mutation);
-                if (!markerPublished) { recordPublication(mutation, 'skipped', 'publication_retired'); return; }
+                if (!markerPublished) return;
                 turnsWithMarkerButNoAcceptedBegin.add(acceptedLifecycle.turnId);
                 try {
                     await enqueueResolvedMutation();
                     turnsWithMarkerButNoAcceptedBegin.delete(acceptedLifecycle.turnId);
-                    recordPublication(mutation, 'accepted');
                 } catch {
-                    recordPublication(mutation, 'failed', 'mutation_failed');
+                    recordPublicationFailure(mutation, 'mutation_failed');
                     // The durable marker remains exact exit authority. Do not allow later rows or
                     // terminal clear to erase that conservative evidence for this unaccepted begin.
                 }
@@ -207,17 +209,16 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
             }
 
             if (mutationTurnId && turnsWithMarkerButNoAcceptedBegin.has(mutationTurnId)) {
-                recordPublication(mutation, 'skipped', 'begin_not_accepted');
                 return;
             }
             let admission: void | Readonly<{ terminalStatusOverride: 'failed' }>;
             try {
                 admission = await enqueueResolvedMutation();
             } catch {
-                recordPublication(mutation, 'failed', 'mutation_failed');
+                recordPublicationFailure(mutation, 'mutation_failed');
                 return;
             }
-            if (!acceptedLifecycle) { recordPublication(mutation, 'accepted'); return; }
+            if (!acceptedLifecycle) return;
             const acceptedLifecycleAfterAdmission =
                 admission?.terminalStatusOverride === 'failed'
                 && acceptedLifecycle.event === 'assistant_message_end'
@@ -225,9 +226,8 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                     : acceptedLifecycle;
             try {
                 await params.onAcceptedTurnLifecycle?.(acceptedLifecycleAfterAdmission);
-                recordPublication(mutation, 'accepted');
             } catch {
-                recordPublication(mutation, 'failed', 'marker_failed');
+                recordPublicationFailure(mutation, 'marker_failed');
                 // A failed terminal clear safely retains the exact marker. Observed exit
                 // settlement can then close the stale turn idempotently.
             }
