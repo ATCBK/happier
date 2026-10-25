@@ -1,3 +1,5 @@
+import { replacePersistentUiStateForTest, PersistedPaneScopesSchema } from '@/dev/testkit/harness/persistentUiState';
+import { paneUiState } from '@/sync/domains/state/filePaneUiState';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,7 +83,7 @@ describe('pending terminal creation follows its existing member, not its mounted
     afterEach(async () => { disposeLoader?.(); disposeLoader = undefined;
         await restoredAccount?.dispose(); restoredAccount = undefined; });
     beforeEach(async () => { await standardCleanup(); await harness.reset();
-        storage.getState().applyLocalSettings({ appPaneScopesV1: {} });
+        (replacePersistentUiStateForTest(paneUiState, PersistedPaneScopesSchema.parse({})), storage.getState().applyLocalSettings({ }));
         disposeLoader = await installRealActionExecutorModuleLoader();
         rpc.mockReset();
         rpc.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.DAEMON_TERMINAL_LIST

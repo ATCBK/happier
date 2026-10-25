@@ -59,6 +59,11 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         await vi.advanceTimersByTimeAsync(0);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(getSnapshotPlain).toHaveBeenCalledTimes(1);
+        // A real daemon keeps heartbeating during the idle minute; cached quota reads do not.
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applyMachines(Object.values(storage.getState().machines).map(machine => ({
+            ...machine, activeAt: Date.now(),
+        })), true, { sourceServerId: ctx.serverBasis!.serverId });
         await refreshQuotaSnapshot(key, ctx);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(getQuotaSnapshotEntry(key).refreshing).toBe(true);
