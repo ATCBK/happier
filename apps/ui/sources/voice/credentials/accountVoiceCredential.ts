@@ -542,7 +542,6 @@ export async function mutateScopedAccountVoiceCredentialSource(params: Readonly<
   mutation: AccountSettingsVoiceCredentialSourceMutation;
   expectedDeclaration: VoiceProviderContribution;
   resolveCurrentDeclaration: (contribution: PluginContributionIdentityV1) => VoiceProviderContribution | null;
-  observeProducedSettings?: (settings: Settings) => void;
   requiredRecipientContractDigest?: string | null;
   onApprovalSucceeded?: (result: Extract<AccountSettingsVoiceCredentialSourceMutationResult, { status: 'applied' }>) => void | Promise<void>;
   onApprovalFailed?: (code: string) => void;
@@ -610,7 +609,6 @@ export async function mutateScopedAccountVoiceCredentialSource(params: Readonly<
           referencedSavedSecretIds = [...listSavedSecretVoiceCredentialMutationReferencesV1(raw, produced.settings, {
             ...(gesture?.kind === 'bindVoiceCredentialSavedSecret' ? { requestedReferences: [gesture.secretId] } : {}),
           })];
-          params.observeProducedSettings?.(settingsParse(produced.settings));
           return produced;
         },
         commitPrepared: async (prepared) => {

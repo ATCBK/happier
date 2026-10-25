@@ -10,6 +10,16 @@ vi.mock('@/text', async () => {
 });
 
 describe('contributed Voice settings declaration admission', () => {
+    it('exposes typed selection for API-key-only providers and declarative Connected Account pickers', async () => {
+        const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
+        const pages = getVoiceContributedSettingsDeclarations(createDefaultVoiceProviderRegistry());
+        const fields = Object.assign({}, ...pages.map(page => page.settings));
+        for (const key of ['provider.happier.voice.google/gemini-stt.credential',
+            'provider.happier.voice.openai/realtime-openai.credential',
+            'provider.happier.agent.codex/realtime-codex.globalConnectedServices']) {
+            expect(fields[key]?.operation, key).toMatchObject({ kind: 'invoke', requiresHumanInteraction: false });
+        }
+    });
     it.each([false, true])('admits a provider presentation once per projection while preserving field validation (invalid presentation: %s)', (invalidPresentation) => {
         const pluginId = 'fixture.voice';
         const providerId = `${pluginId}/speech`;

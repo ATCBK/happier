@@ -63,7 +63,7 @@ await loadSyncSingletonForTests();
 const { t } = await import('@/text');
 const { log } = await import('@/log');
 
-const { createVoiceProviderRegistry } = await import('@/voice/registry/providerRegistry');
+const { createVoiceProviderRegistry, projectVoiceProviderAccountCredentialSlot } = await import('@/voice/registry/providerRegistry');
 const { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import(
     '@/voice/registry/externalVoiceProviderRegistrations'
 );
@@ -129,7 +129,19 @@ function voiceCredentialGestureRecords(): string[] {
 }
 
 async function waitForCredentialChange(): Promise<void> {
-    await act(async () => { await credentialChanged.promise; });
+    let unsubscribe = () => {};
+    try {
+        await act(async () => {
+            await Promise.race([credentialChanged.promise, new Promise<never>((_resolve, reject) => {
+                const check = () => {
+                    const records = voiceCredentialGestureRecords();
+                    if (records.length) reject(new Error(`Credential gesture failed: ${JSON.stringify(records)}`));
+                };
+                unsubscribe = log.onChange(check);
+                check();
+            })]);
+        });
+    } finally { unsubscribe(); }
 }
 
 async function waitForCredentialFailure(): Promise<void> {
@@ -297,6 +309,7 @@ async function renderRow(options: Readonly<{
                     },
                 }],
             }] : [])],
+            ...(recipientContract ? { hostMediated: { operations: recipientContract.operations } } : {}),
         },
         client: {
             artifactId: 'web-runtime',
@@ -314,13 +327,14 @@ async function renderRow(options: Readonly<{
         token: registrationToken,
         ...CONTRIBUTION,
         providerId,
-        descriptor,
+        descriptor: recipientContract ? { ...descriptor, accountCredentialSlot:
+            projectVoiceProviderAccountCredentialSlot(declaration, recipientContract) ?? undefined } : descriptor,
         adapter: null,
     });
 
     // The boundary's full personal-promotion transaction is Plain. E2EE
     // material admission is exercised by the canonical resource-owner suites.
-    account = await createSecretSettingsTestHarness({ mode: options.mode ?? 'plain', approvalRequired: options.approvalRequired,
+    account = await createSecretSettingsTestHarness({ voiceEnabled: true, mode: options.mode ?? 'plain', approvalRequired: options.approvalRequired,
         connectedPurposes: options.connectedPurposes ?? { v: 1, bindings: [] } });
     const { sync } = await import('@/sync/sync');
     const { storage } = await import('@/sync/domains/state/storage');

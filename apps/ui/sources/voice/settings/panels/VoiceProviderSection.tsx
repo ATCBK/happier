@@ -20,6 +20,8 @@ import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/acti
 import { resolveRequiredRecipientContractApprovalDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
 import type { VoiceCredentialSourceSelection } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { Modal } from '@/modal';
 import {
   resolvePluginProjectionEditableSettingsGroup,
   type PluginProjectionEditableSettingField,
@@ -27,7 +29,10 @@ import {
   type ResolvedPluginProjectionEditableSettingsGroup,
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { useSettingsSelector } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
@@ -120,12 +125,6 @@ import { resolveVoiceProviderReadinessPresentation, translateVoiceReadiness } fr
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 
 const registry = createDefaultVoiceProviderRegistry();
-
-const selectReadinessAccountSettings = (settings: Settings) => ({
-  voiceSettingsV1: settings.voiceSettingsV1,
-  secrets: settings.secrets,
-  backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
-});
 
 type CheckedVoiceProviderReadinessResult =
   | Readonly<{
@@ -319,7 +318,7 @@ export function useVoiceConversationsReadinessModel(props: {
   selectedDeclarativeConfig: Readonly<Record<string, unknown>> | null;
   selectedDeclarativeSettingsRow: VoiceReadinessSelectionRow | undefined;
   localizePluginText: ReturnType<typeof useProjectedPluginLocalizedTextResolver>;
-  writeExternalSetting: (fieldId: string, value: unknown) => void;
+  writeExternalSetting: (fieldId: string, value: unknown, expectedSettingsVersion?: number | null) => void;
   selectedProviderRow: VoiceReadinessSelectionRow | null;
   selectedUnavailableProvider: SelectedUnavailableVoiceProvider | null;
   localAdapterSettings: ReturnType<typeof resolveLocalVoiceAdapterSettingsFromVoice>;
@@ -334,8 +333,13 @@ export function useVoiceConversationsReadinessModel(props: {
     registry.getRevision ?? (() => 0),
   );
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
-  const accountSettings = useSettingsSelector(selectReadinessAccountSettings);
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
+  const accountSettings = React.useMemo(() => ({ voiceSettingsV1, secrets, backendEnabledByTargetKey }),
+    [voiceSettingsV1, secrets, backendEnabledByTargetKey]);
   const settingsScope = useAccountSettingsScope();
+  const credentialSelectionAction = useMountedActionExecution(settingsScope, { openOnRequest: true });
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);
   const connectedPurposes = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
@@ -911,8 +915,34 @@ export function useVoiceConversationsReadinessModel(props: {
         }),
       }, localizePluginText)
     : null;
-  const writeExternalSetting = (fieldId: string, value: unknown): void => {
+  const writeExternalSetting = (fieldId: string, value: unknown, expectedSettingsVersion?: number | null): void => {
     if (!selectedDeclarativeSettingsRow || !isRecord(selectedDeclarativeConfig)) return;
+    if (fieldId === selectedDeclarativeSettings?.connectedServicesBinding?.id) {
+      if (expectedSettingsVersion == null) {
+        Modal.alert(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed'));
+        return;
+      }
+      fireAndForget(credentialSelectionAction.execute('settings.invoke', {
+        anchor: `voiceConversations.provider.${selectedDeclarativeSettingsRow.providerId}.${fieldId}`,
+        input: { kind: 'voice_connected_services', expectedSettingsVersion, value },
+      }, { retainInvocation: true }).then(result => {
+        if (!result.ok) {
+          if (presentActionTurnedOffNoticeIfOff(result, 'settings.invoke')) return;
+          throw new Error('voice_credential_selection_failed');
+        }
+        const receipt = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result);
+        const value = receipt.value;
+        const status = value && typeof value === 'object' && !Array.isArray(value) && 'status' in value ? value.status : null;
+        if (receipt.status === 'completed' && status === 'outcomeUnknown') {
+          Modal.alert(t('common.error'), t('settingsProviders.errors.mutationOutcomeUnknownDescription'));
+          return;
+        }
+        if (receipt.status !== 'completed' || status !== 'applied') throw new Error('voice_credential_selection_unapplied');
+      }), { tag: 'VoiceProviderSection.connectedServicesSelection',
+        onError: () => Modal.alert(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed')),
+      });
+      return;
+    }
     select(writeVoiceProviderSettingsConfig(voice, selectedDeclarativeSettingsRow.providerId, {
       ...selectedDeclarativeConfig,
       [fieldId]: value,
@@ -1295,9 +1325,10 @@ export function VoiceProviderSection(props: Parameters<typeof useVoiceConversati
                       )
                     : undefined}
                   value={selectedDeclarativeConfig[selectedDeclarativeSettings.connectedServicesBinding.id]}
-                  onChange={(value) => writeExternalSetting(
+                  onChange={(value, expectedSettingsVersion) => writeExternalSetting(
                     selectedDeclarativeSettings.connectedServicesBinding!.id,
                     value,
+                    expectedSettingsVersion,
                   )}
                 />
               )

@@ -20,7 +20,8 @@ import { Item } from '@/components/ui/lists/Item';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { Modal } from '@/modal';
 import type { ConnectedServicesServiceBinding } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
-import { useProfile, useSettingsSelector } from '@/sync/store/hooks';
+import { storage, useSetting } from '@/sync/domains/state/storage';
+import { useProfile } from '@/sync/store/hooks';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { t, tLoose } from '@/text';
 
@@ -91,12 +92,10 @@ export function VoiceGlobalConnectedServicesBindingField(props: Readonly<{
   title?: unknown;
   subtitle?: unknown;
   value: unknown;
-  onChange: (value: unknown) => void;
+  onChange: (value: unknown, expectedSettingsVersion: number | null) => void;
 }>) {
   const profile = useProfile();
-  const settings = useSettingsSelector((settings) => ({
-      connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
-  }));
+  const connectedServicesDefaultProfileByServiceId = useSetting('connectedServicesDefaultProfileByServiceId');
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
   const router = useRouter();
   const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
@@ -145,7 +144,7 @@ export function VoiceGlobalConnectedServicesBindingField(props: Readonly<{
     return parsed.success ? parsed.data : null;
   }, [props.value]);
   const bindingsByServiceId = parsedBinding?.bindingsByServiceId ?? {};
-  const defaultProfileIdByServiceId = settings.connectedServicesDefaultProfileByServiceId ?? {};
+  const defaultProfileIdByServiceId = connectedServicesDefaultProfileByServiceId ?? {};
   const label = React.useMemo(() => resolveConnectedServicesAuthLabel({
     supportedServiceIds,
     bindingsByServiceId,
@@ -199,6 +198,7 @@ export function VoiceGlobalConnectedServicesBindingField(props: Readonly<{
     detail={parsedBinding ? label : t('common.none')}
     showChevron
     onPress={() => {
+      const expectedSettingsVersion = storage.getState().settingsVersion;
       Modal.show({
         component: VoiceGlobalConnectedServicesPicker,
         props: {
@@ -208,7 +208,7 @@ export function VoiceGlobalConnectedServicesBindingField(props: Readonly<{
           groupOptionsByServiceId,
           defaultProfileIdByServiceId,
           accountGroupsEnabled,
-          onBindingChange: props.onChange,
+          onBindingChange: (value: ConnectedServiceBindingsV1 | null) => props.onChange(value, expectedSettingsVersion),
           onOpenSettings: (serviceId) => router.push({
             pathname: '/(app)/settings/connected-services/[serviceId]',
             params: { serviceId },

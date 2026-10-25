@@ -241,6 +241,11 @@ afterEach(() => {
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+// Node's host renderer cannot mount Radix DOM effects; keep Happier's real
+// popover, picker and Action owners above the third-party SDK boundary.
+vi.mock('@/utils/web/radixCjs', async () => (
+    await import('@/dev/testkit/mocks/radixCjs')
+).createRadixCjsModuleMock());
 
 
 vi.mock('expo-clipboard', () => ({
@@ -3640,16 +3645,21 @@ describe('VoiceProviderSection', () => {
             },
         };
         const setVoice = vi.fn();
-        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: settingsParse({ voice: {
-                providerId,
-                providers: {
-                    [providerId]: {
-                        schemaVersion: 2,
-                        config: { globalConnectedServices: null },
-                    },
+        accountFixture.replaceVoice(settingsParse({ voice: {
+            providerId,
+            providers: {
+                [providerId]: {
+                    schemaVersion: 2,
+                    config: { globalConnectedServices: null },
                 },
-            } }).voice,
+            },
+        } }).voice);
+        passiveSetupBoundary.profile = { connectedServicesV2: [
+            { serviceId: 'anthropic', profiles: [{ profileId: 'anthropic-account-a', status: 'connected', kind: 'token' }] },
+            { serviceId: 'openai-codex', profiles: [{ profileId: 'codex-account-a', status: 'connected', kind: 'oauth' }] },
+        ] };
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: accountFixture.settings.voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -3664,16 +3674,19 @@ describe('VoiceProviderSection', () => {
             localId: 'claude',
         });
         expect(field?.props.serviceIds).toEqual(['anthropic', 'openai-codex']);
-        await act(async () => field?.props.onChange(binding));
-        expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
+        const version = storage.getState().settingsVersion;
+        expect(version).not.toBeNull();
+        await act(async () => field?.props.onChange(binding, version));
+        await waitForTestEvent(screen.subscribe, () => expect(accountFixture.persistedSettings.voice).toMatchObject({
             providerId,
-            providers: expect.objectContaining({
+            providers: {
                 [providerId]: {
                     schemaVersion: 2,
                     config: { globalConnectedServices: binding },
                 },
-            }),
+            },
         }));
+        expect(setVoice).not.toHaveBeenCalled();
     });
 
     it('renders bundled Codex through the same exact qualified public Connected Services declaration', async () => {
@@ -3689,16 +3702,19 @@ describe('VoiceProviderSection', () => {
             },
         };
         const setVoice = vi.fn();
-        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: settingsParse({ voice: {
-                providerId: CODEX_PROVIDER_ID,
-                providers: {
-                    [CODEX_PROVIDER_ID]: {
-                        schemaVersion: 2,
-                        config: { globalConnectedServices: null },
-                    },
+        accountFixture.replaceVoice(settingsParse({ voice: {
+            providerId: CODEX_PROVIDER_ID,
+            providers: {
+                [CODEX_PROVIDER_ID]: {
+                    schemaVersion: 2,
+                    config: { globalConnectedServices: null },
                 },
-            } }).voice,
+            },
+        } }).voice);
+        passiveSetupBoundary.profile = { connectedServicesV2: [{ serviceId: 'openai-codex',
+            profiles: [{ profileId: 'codex-account-b', status: 'connected', kind: 'oauth' }] }] };
+        const screen = await renderScreen(React.createElement(VoiceProviderSection, {
+            voice: accountFixture.settings.voice,
             setVoice,
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -3710,15 +3726,18 @@ describe('VoiceProviderSection', () => {
                 && candidate.props.agentId?.pluginId === 'happier.agent.codex'
                 && candidate.props.agentId?.localId === 'codex');
         expect(fields).toHaveLength(1);
-        await act(async () => fields[0]?.props.onChange(binding));
-        expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
+        const version = storage.getState().settingsVersion;
+        expect(version).not.toBeNull();
+        await act(async () => fields[0]?.props.onChange(binding, version));
+        await waitForTestEvent(screen.subscribe, () => expect(accountFixture.persistedSettings.voice).toMatchObject({
             providerId: CODEX_PROVIDER_ID,
-            providers: expect.objectContaining({
+            providers: {
                 [CODEX_PROVIDER_ID]: {
                     schemaVersion: 2,
                     config: { globalConnectedServices: binding },
                 },
-            }),
+            },
         }));
+        expect(setVoice).not.toHaveBeenCalled();
     });
 });

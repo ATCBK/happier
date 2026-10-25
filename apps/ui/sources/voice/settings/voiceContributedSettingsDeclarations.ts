@@ -23,9 +23,10 @@ function voiceSettingsPageIds(roles: readonly string[], conversation: boolean): 
     return pages;
 }
 
-export function voiceCredentialSourceSettingAnchor(contribution: PluginContributionIdentityV1, declaration: VoiceProviderContribution): string | null {
+export function voiceCredentialSettingAnchor(contribution: PluginContributionIdentityV1, declaration: VoiceProviderContribution,
+    field: 'credential' | 'credentialSource'): string | null {
     const page = voiceSettingsPageIds(declaration.roles, declaration.kind === 'conversation')[0];
-    return page ? `${page}.provider.${buildQualifiedPluginContributionKey(contribution)}.credentialSource` : null;
+    return page ? `${page}.provider.${buildQualifiedPluginContributionKey(contribution)}.${field}` : null;
 }
 
 function record(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -200,13 +201,20 @@ export function getVoiceContributedSettingsDeclarations(
         }
         if (descriptor?.connectedServicesBinding) {
             const binding = descriptor.connectedServicesBinding;
-            fields[`provider.${entry.providerId}.${binding.id}`] = { titleKey: 'settingsVoice.providerSectionTitle', title: label(binding.title), description: binding.description ? label(binding.description) : undefined, sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true } };
+            fields[`provider.${entry.providerId}.${binding.id}`] = { titleKey: 'settingsVoice.providerSectionTitle', title: label(binding.title), description: binding.description ? label(binding.description) : undefined, sensitive: true,
+                operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: false,
+                    invoke: async context => (await import('./voiceConnectedServicesSettingsOperation')).invokeVoiceConnectedServicesSettingsOperation(entry, registry, context),
+                },
+            };
         }
         const credential = descriptor?.presentation?.credential;
         const credentials = declaration?.credentials;
         if (credential?.kind === 'api_key' || credentials?.sources.some((source) => source.kind === 'savedSecret')) fields[`provider.${entry.providerId}.credential`] = {
             titleKey: 'settingsVoice.externalCredentials.apiKeyTitle',
-            ...(credential?.kind === 'api_key' && credential.titleKey ? { title: label(credential.titleKey) } : {}), sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true },
+            ...(credential?.kind === 'api_key' && credential.titleKey ? { title: label(credential.titleKey) } : {}), sensitive: true,
+            operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: true, uiConfirmation: 'direct',
+                invoke: async context => (await import('./voiceSavedSecretSettingsOperation')).invokeVoiceSavedSecretSettingsOperation(entry, registry, context),
+            },
         };
         if (credentials?.sources.some((source) => source.kind === 'connectedAccount')) fields[`provider.${entry.providerId}.credentialSource`] = {
             titleKey: 'settingsVoice.realtimeProviders.authentication.title', descriptionKey: 'settingsVoice.realtimeProviders.authentication.subtitle', sensitive: true,

@@ -136,6 +136,10 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
     expect(item.props.onPress).toEqual(expect.any(Function));
     await act(async () => item.props.onPress());
     const picker = screen.tree.findByType(NewSessionConnectedServicesSelectionContent);
+    const pickerSettingsVersion = storage.getState().settingsVersion;
+    if (pickerSettingsVersion === null) throw new Error('Expected loaded settings version');
+    // A server update while this picker is open cannot turn its stale selection into a fresh CAS.
+    await act(async () => account.replaceSettings(account.settings, { version: pickerSettingsVersion + 1 }));
 
     expect(picker.props.supportedServiceIds).toEqual([serviceId]);
     expect(picker.props.profileOptionsByServiceId[serviceId]).toEqual([
@@ -156,6 +160,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
     const qualifiedServiceId = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
     expect(qualifiedServiceId).not.toBeNull();
     expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]?.[1]).toBe(pickerSettingsVersion);
     const emittedBinding = onChange.mock.calls[0]?.[0];
     expect(emittedBinding).toEqual({
       v: 1,

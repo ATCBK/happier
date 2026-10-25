@@ -11,6 +11,7 @@ import type {
 } from '@happier-dev/protocol';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { resolveRequiredRecipientContractApprovalDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
@@ -19,9 +20,9 @@ import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalo
 import { Modal } from '@/modal';
 import { randomUUID } from '@/platform/randomUUID';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
-import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
-import { storage, useSettings } from '@/sync/domains/state/storage';
-import { useSettingsVersion } from '@/sync/store/hooks';
+import type { Settings } from '@/sync/domains/settings/settings';
+import { storage, useSetting } from '@/sync/domains/state/storage';
+import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { sync } from '@/sync/sync';
@@ -33,16 +34,11 @@ import { t, tLoose } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
-  approveAccountVoiceCredentialRecipientContract,
-  bindAccountVoiceCredentialSavedSecret,
-  createAccountVoiceCredentialBindingMutation,
   createAccountVoiceCredentialReplacementMutation,
   mutateScopedAccountVoiceCredentialSource,
   replaceScopedAccountVoiceCredential,
-  removeAccountVoiceCredential,
   resolveExactAccountVoiceCredentialSecretId,
   resolveAccountVoiceCredential,
-  resolveAccountVoiceCredentialApprovalDigest,
   resolveAccountVoiceCredentialSourceSelection,
   resolveAccountVoiceCredentialStatus,
   resolveSelectedVoiceCredentialRawGrants,
@@ -53,6 +49,8 @@ import {
 import { confirmAccountVoiceCredentialWrite } from './confirmAccountVoiceCredentialWrite';
 import { createRecipientContractApproval } from './recipientContractApprovalSummary';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { voiceCredentialSettingAnchor } from '@/voice/settings/voiceContributedSettingsDeclarations';
 import {
   readSafeVoiceRuntimeFailureCode,
   recordVoiceRuntimeFailure,
@@ -158,9 +156,11 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
   onChanged?: () => void;
   onStatusChanged?: (status: VoiceCredentialItemStatus) => void;
 }>) {
-  const settings = useSettings();
-  const settingsVersion = useSettingsVersion();
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const settings = React.useMemo(() => ({ voiceSettingsV1, secrets }), [voiceSettingsV1, secrets]);
   const expectedSettingsScope = useAccountSettingsScope();
+  const credentialAction = useMountedActionExecution(expectedSettingsScope, { openOnRequest: true });
   const purposes = useConnectedAccountCatalog('purposes', expectedSettingsScope);
   const connectedPurposes = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;
   const savedSecretCatalog = useSavedSecretCatalog();
@@ -190,10 +190,13 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
     return settlement.value;
   };
   const [gestureMenuOpen, setGestureMenuOpen] = React.useState(false);
-  const latestSettingsRef = React.useRef(settings);
-  latestSettingsRef.current = settings;
-  const latestSettingsVersionRef = React.useRef(settingsVersion);
-  latestSettingsVersionRef.current = settingsVersion;
+  const readCurrentSettings = () => {
+    const current = storage.getState();
+    if (!areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) {
+      throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+    }
+    return current;
+  };
   type CredentialMutationReceipt = RecoverableVoiceCredentialMutationResult<
     OneShotAccountSettingsMutationResult<undefined> | AccountSettingsVoiceCredentialSourceMutationResult
   >;
@@ -271,17 +274,9 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
     savedSecretMutation: Extract<
       AccountSettingsSavedSecretMutation,
       Readonly<{ kind: 'replaceVoiceCredentialSecret' }>
-      | Readonly<{ kind: 'bindVoiceCredentialSavedSecret' }>
     >,
-    /**
-     * Receives the settings the reducer actually produced. The mutation result
-     * reports the Connected-Account purpose binding, not the credential slot,
-     * so this is the only place the caller can see whether the slot ended up
-     * using the record it asked for.
-     */
-    observeProducedSettings?: (produced: Settings) => void,
   ): Promise<RecoverableVoiceCredentialMutationResult<AccountSettingsVoiceCredentialSourceMutationResult>> => {
-    const expectedSettingsVersion = latestSettingsVersionRef.current;
+    const expectedSettingsVersion = readCurrentSettings().settingsVersion;
     const currentEntry = voiceProviderRegistry.get(
       buildQualifiedPluginContributionKey(contribution),
     );
@@ -297,7 +292,6 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
     }
     const result = await awaitCredentialApproval<RecoverableVoiceCredentialMutationResult<AccountSettingsVoiceCredentialSourceMutationResult>>(callbacks => mutateScopedAccountVoiceCredentialSource({
       scope: expectedSettingsScope,
-      observeProducedSettings,
       requiredRecipientContractDigest,
       onApprovalSucceeded: callbacks.onApprovalSucceeded,
       onApprovalFailed: callbacks.onApprovalFailed,
@@ -327,23 +321,34 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
     return result;
   };
 
-  const runAccountSettingsMutationOnce = async <T,>(
-    mutate: (raw: Readonly<Record<string, unknown>>) => Readonly<{
-      settings: Record<string, unknown>;
-      value: T;
-    }>,
-  ): Promise<OneShotAccountSettingsMutationResult<T>> => {
-    const expectedSettingsVersion = latestSettingsVersionRef.current;
-    if (expectedSettingsVersion === null) {
-      throw Object.assign(new Error('account_settings_version_unavailable'), {
-        code: 'account_settings_version_unavailable',
-      });
+  const runReferenceGesture = async (operation: 'bind' | 'review' | 'remove',
+    expectedSecretId: string | null, expectedSecretUpdatedAt: number | null, secretId?: string) => {
+    const expectedSettingsVersion = readCurrentSettings().settingsVersion;
+    const contribution = props.contribution;
+    const current = contribution ? voiceProviderRegistry.get(buildQualifiedPluginContributionKey(contribution)) : null;
+    const declaration = props.credentialSourceDeclaration ?? (current && 'declaration' in current ? current.declaration : null);
+    const anchor = contribution && declaration ? voiceCredentialSettingAnchor(contribution, declaration, 'credential') : null;
+    if (expectedSettingsVersion === null || !anchor) throw Object.assign(new Error('voice_credential_source_declaration_unavailable'), { code: 'voice_credential_source_declaration_unavailable' });
+    const result = await credentialAction.execute('settings.invoke', { anchor, input: {
+      kind: 'voice_saved_secret', operation, credentialSlotId: props.credentialSlotId, machineId: props.machineId ?? null,
+      expectedSettingsVersion, expectedSecretId, expectedSecretUpdatedAt,
+      ...(secretId ? { secretId } : {}),
+      ...(recipientApproval ? { expectedRecipientContractDigest: recipientApproval.digest } : {}),
+    } }, { retainInvocation: true });
+    if (!result.ok) throw Object.assign(new Error('voice_credential_operation_failed'), { code: result.errorCode });
+    const receipt = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result);
+    if (receipt.status === 'cancelled') return 'cancelled';
+    if (receipt.status !== 'completed' || !receipt.value || typeof receipt.value !== 'object' || Array.isArray(receipt.value)
+      || !('status' in receipt.value)) throw new Error('voice_credential_operation_unavailable');
+    const status = receipt.value.status;
+    if (status === 'conflict') throw Object.assign(new Error('voice_credential_source_conflict'), { code: 'voice_credential_source_conflict' });
+    if (status !== 'applied' && status !== 'outcomeUnknown') throw new Error('voice_credential_operation_unavailable');
+    if (status === 'outcomeUnknown') {
+      await reportVoiceCredentialMutationOutcomeUnknown(contribution,
+        operation === 'bind' ? 'useSavedSecret' : operation === 'remove' ? 'remove' : 'enterNew',
+        operation === 'bind' ? 'saved_secret_binding_outcome_unknown' : 'saved_secret_mutation_outcome_unknown');
     }
-    return await sync.mutateAccountSettingsOnce({
-      expectedSettingsScope,
-      expectedSettingsVersion,
-      mutate,
-    });
+    return status;
   };
 
   const pickStoredSavedSecretId = async (
@@ -383,7 +388,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
 
   const runCredentialGesture = (gesture: VoiceCredentialGesture) => fireAndForget((async () => {
       try {
-        if (approval.approvalPending) return;
+        if (approval.approvalPending || credentialAction.approval.approvalPending) return;
         const pending = pendingCredentialRecovery.current;
         if (pending && pending.scopeKey === credentialScopeKey) {
           const recovered = await pending.verifyOutcome?.();
@@ -410,13 +415,13 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
         await settleWebOverlayHandoff();
 
         const current = resolveAccountVoiceCredential(
-          latestSettingsRef.current,
+          readCurrentSettings().settings,
           contribution,
           props.credentialSlotId,
           props.machineId,
         );
         const expectedSecretId = resolveExactAccountVoiceCredentialSecretId({
-          settings: latestSettingsRef.current,
+          settings: readCurrentSettings().settings,
           contribution,
           credentialSlotId: props.credentialSlotId,
           machineId: props.machineId,
@@ -426,7 +431,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           : null;
         const expectedSecretUpdatedAt = expectedSavedSecret?.revision ?? null;
         const approvalRequiredNow = resolveAccountVoiceCredentialStatus({
-          settings: latestSettingsRef.current,
+          settings: readCurrentSettings().settings,
           contribution,
           credentialSlotId: props.credentialSlotId,
           machineId: props.machineId,
@@ -434,37 +439,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           resolveSavedSecret: savedSecretCatalog.resolveReference,
         }).status === 'review_required';
         if (approvalRequiredNow) {
-          const approvedRecipientContractDigest = resolveAccountVoiceCredentialApprovalDigest({
-            requiredRecipientContractDigest,
-            savedSecret: expectedSavedSecret,
-          });
-          if (!recipientApproval
-            || !expectedSecretId
-            || expectedSecretUpdatedAt === null
-            || !requiredRecipientContractDigest
-            || requiredRecipientContractDigest !== recipientApproval.digest
-            || !approvedRecipientContractDigest) {
-            throw Object.assign(new Error('invalid_voice_recipient_contract_approval'), {
-              code: 'invalid_voice_recipient_contract_approval',
-            });
-          }
-          if (!await Modal.confirm(
-            t('settingsVoice.externalCredentials.recipientApprovalTitle'),
-            recipientApproval.summary,
-            { confirmText: t('settingsVoice.externalCredentials.recipientApprovalConfirm') },
-          )) return;
-          requireOneShotAccountSettingsMutationApplied(await runAccountSettingsMutationOnce((raw) => {
-            const approved = approveAccountVoiceCredentialRecipientContract({
-              settings: settingsParse(raw),
-              contribution,
-              credentialSlotId: props.credentialSlotId,
-              machineId: props.machineId,
-              expectedSecretId,
-              expectedSecretUpdatedAt,
-              approvedRecipientContractDigest,
-            });
-            return { settings: approved.accountSettings, value: undefined };
-          }));
+          if (await runReferenceGesture('review', expectedSecretId, expectedSecretUpdatedAt) !== 'applied') return;
           props.onChanged?.();
           return;
         }
@@ -513,43 +488,17 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
             return;
           }
           const selectedSecretId = pick.secretId;
-          const selectedSavedSecret = savedSecretCatalog.resolveReference(selectedSecretId);
-          if (selectedSavedSecret.status !== 'ready' || !selectedSavedSecret.secret) {
-            recordVoiceCredentialGestureFailure(
-              contribution,
-              gesture,
-              'unapplied',
-              'saved_secret_record_unavailable',
-            );
-            return;
-          }
-          const selectedApprovalDigest = resolveAccountVoiceCredentialApprovalDigest({
-            requiredRecipientContractDigest,
-            savedSecret: selectedSavedSecret,
-          });
           // The picker's own dismissal is still settling this click; give it the
           // same handoff the opener got before mounting the approval confirm.
           await settleWebOverlayHandoff();
           // No new secret material is written here, so the plaintext-storage
           // disclosure that guards entering a key does not apply: the account
           // already stores this record under the terms it was saved with.
-          if (!await confirmRecipientContract()) return;
           // An explicit selection always writes the state it asserts, including
           // when the slot already names this record: the row reports the source
           // that is in effect, and a slot can hold an id whose source is dormant
           // or whose record is gone. Re-asserting it is idempotent at the owner
           // and is the only gesture that can repair either state.
-          const binding = {
-            contribution,
-            credentialSlotId: props.credentialSlotId,
-            machineId: props.machineId,
-            secretId: selectedSecretId,
-            expectedSecretId,
-            expectedSecretUpdatedAt,
-            ...(recipientApproval && selectedApprovalDigest
-              ? { approvedRecipientContractDigest: selectedApprovalDigest }
-              : {}),
-          };
           // Both paths are checked against the same question the row asks:
           // does this slot now USE the chosen record?
           const usesSelectedSecret = (produced: Settings): boolean => resolveAccountVoiceCredential(
@@ -558,40 +507,12 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
             props.credentialSlotId,
             props.machineId,
           )?.secretId === selectedSecretId;
-          const selectionOutcome = await (async (): Promise<
-            'effective' | 'notEffective' | 'outcomeUnknown'
-          > => {
-            let effective = false;
-            if (props.credentialSourcePurpose) {
-              const applied = await runVoiceCredentialSourceMutation(
-                contribution,
-                createAccountVoiceCredentialBindingMutation(binding),
-                (produced) => { effective = usesSelectedSecret(produced); },
-              );
-              if (applied.status === 'outcomeUnknown') return 'outcomeUnknown';
-              return applied.status === 'applied' && effective ? 'effective' : 'notEffective';
-            }
-            const bindingResult = await runAccountSettingsMutationOnce((raw) => {
-              const result = bindAccountVoiceCredentialSavedSecret({
-                ...binding,
-                settings: settingsParse(raw),
-              });
-              return {
-                settings: result.accountSettings,
-                value: usesSelectedSecret(result.settings),
-              };
-            });
-            if (bindingResult.status === 'outcomeUnknown') return 'outcomeUnknown';
-            return bindingResult.status === 'applied' && bindingResult.value
-              ? 'effective'
-              : 'notEffective';
-          })();
+          const selectionOutcome = await runReferenceGesture('bind', expectedSecretId, expectedSecretUpdatedAt, selectedSecretId);
+          if (selectionOutcome === 'cancelled') {
+            recordVoiceCredentialGestureFailure(contribution, gesture, 'declined', 'recipient_contract_not_approved');
+            return;
+          }
           if (selectionOutcome === 'outcomeUnknown') {
-            await reportVoiceCredentialMutationOutcomeUnknown(
-              contribution,
-              gesture,
-              'saved_secret_binding_outcome_unknown',
-            );
             return;
           }
           // The reducer agreeing is not the same as the account agreeing. An
@@ -603,7 +524,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           // canonical snapshot the write left behind (the engine applies it
           // before it returns) rather than trusting the reported status.
           const storedAfterWrite = storage.getState().settings;
-          if (selectionOutcome !== 'effective' || !usesSelectedSecret(storedAfterWrite)) {
+          if (selectionOutcome !== 'applied' || !usesSelectedSecret(storedAfterWrite)) {
             // The write reported success but the slot does not use the chosen
             // record — the state the row reports and the state the write asserts
             // have diverged, and repeating the gesture cannot converge them.
@@ -635,22 +556,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
             );
             return;
           }
-          if (!await Modal.confirm(
-            t('settingsVoice.local.voiceCredential.deleteTitle'),
-            t('settingsVoice.local.voiceCredential.deleteAccountBody'),
-            { destructive: true, confirmText: t('common.remove') },
-          )) return;
-          requireOneShotAccountSettingsMutationApplied(await runAccountSettingsMutationOnce((raw) => ({
-            settings: removeAccountVoiceCredential({
-              settings: settingsParse(raw),
-              contribution,
-              credentialSlotId: props.credentialSlotId,
-              machineId: props.machineId,
-              expectedSecretId,
-              expectedSecretUpdatedAt,
-            }).accountSettings,
-            value: undefined,
-          })));
+          if (await runReferenceGesture('remove', expectedSecretId, expectedSecretUpdatedAt) !== 'applied') return;
           props.onChanged?.();
           return;
         }
@@ -682,7 +588,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           if (!permitted) return;
           if (!await confirmRecipientContract()) return;
           const mutationInput = {
-            settings: latestSettingsRef.current,
+            settings: readCurrentSettings().settings,
             contribution,
             credentialSlotId: props.credentialSlotId,
             machineId: props.machineId,
@@ -704,7 +610,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           if (props.credentialSourcePurpose) {
             const replacement = createAccountVoiceCredentialReplacementMutation({
               ...mutationInput,
-              settings: latestSettingsRef.current,
+              settings: readCurrentSettings().settings,
             });
             const replacementResult = await runVoiceCredentialSourceMutation(
               contribution,
@@ -722,7 +628,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
               return;
             }
           } else {
-            const expectedSettingsVersion = latestSettingsVersionRef.current;
+            const expectedSettingsVersion = readCurrentSettings().settingsVersion;
             if (expectedSettingsVersion === null) throw new Error('account_settings_version_unavailable');
             const replacementResult = await awaitCredentialApproval<RecoverableVoiceCredentialMutationResult<OneShotAccountSettingsMutationResult<undefined>>>(callbacks => replaceScopedAccountVoiceCredential({
               scope: expectedSettingsScope,
@@ -745,22 +651,7 @@ export const VoiceCredentialItem = React.memo(function VoiceCredentialItem(props
           return;
         }
         if (!expectedSecretId || expectedSecretUpdatedAt === null) return;
-        if (!await Modal.confirm(
-          t('settingsVoice.local.voiceCredential.deleteTitle'),
-          t('settingsVoice.local.voiceCredential.deleteAccountBody'),
-          { destructive: true, confirmText: t('common.remove') },
-        )) return;
-        requireOneShotAccountSettingsMutationApplied(await runAccountSettingsMutationOnce((raw) => ({
-          settings: removeAccountVoiceCredential({
-            settings: settingsParse(raw),
-            contribution,
-            credentialSlotId: props.credentialSlotId,
-            machineId: props.machineId,
-            expectedSecretId,
-            expectedSecretUpdatedAt,
-          }).accountSettings,
-          value: undefined,
-        })));
+        if (await runReferenceGesture('remove', expectedSecretId, expectedSecretUpdatedAt) !== 'applied') return;
         props.onChanged?.();
       } catch (error) {
         // Recorded before the alert, never instead of it: the alert is an

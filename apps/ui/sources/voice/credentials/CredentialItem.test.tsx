@@ -144,7 +144,7 @@ const credentialSourceDeclaration = VoiceProviderContributionSchema.parse({
 });
 
 
-const { createVoiceProviderRegistry } = await import('@/voice/registry/providerRegistry');
+const { createVoiceProviderRegistry, projectVoiceProviderAccountCredentialSlot } = await import('@/voice/registry/providerRegistry');
 const { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration,
   replaceExternalVoiceProviderProjectionAuthority } = await import('@/voice/registry/externalVoiceProviderRegistrations');
 const { VoiceCredentialItem } = await import('./CredentialItem');
@@ -164,7 +164,7 @@ let alertPresented = createDeferred<void>();
 let confirmPresented = createDeferred<void>();
 let recipientConfirmationPresented = createDeferred<void>();
 
-function register(declaration: typeof credentialSourceDeclaration | null = credentialSourceDeclaration) {
+function register(declaration: typeof credentialSourceDeclaration | null = credentialSourceDeclaration, contract?: typeof recipientContract) {
   removeExternalVoiceProviderRegistration(token);
   if (!declaration) { replaceExternalVoiceProviderProjectionAuthority(null, token, new Map()); return; }
   const providerId = 'com.acme.voice/conversation';
@@ -173,7 +173,8 @@ function register(declaration: typeof credentialSourceDeclaration | null = crede
     bundledPresentations: [{ providerId, settingsSectionId: 'voice.acme.conversation' }],
   }).get(providerId);
   if (!descriptor) throw new Error('Fixture Voice declaration not admitted');
-  commitExternalVoiceProviderRegistration({ token, ...contribution, providerId, descriptor, adapter: null });
+  commitExternalVoiceProviderRegistration({ token, ...contribution, providerId,
+    descriptor: contract ? { ...descriptor, accountCredentialSlot: projectVoiceProviderAccountCredentialSlot(declaration, contract) ?? undefined } : descriptor, adapter: null });
 }
 
 function secretSettings(source: 'none' | 'savedSecret' = 'none', reference: string | null = null, approvedDigest?: string) {
@@ -191,7 +192,7 @@ function secretSettings(source: 'none' | 'savedSecret' = 'none', reference: stri
 async function setup(settings: Settings = settingsParse({}), connectedPurposes: ConnectedPurposeCatalogV1 = { v: 1, bindings: [] }) {
   account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settings,
     actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'], 'secrets.shared.create': ['ui'] } },
-  }), connectedPurposes });
+  }), connectedPurposes, voiceEnabled: true });
   await account.purposes!.hydrate(account.scope);
   await refreshSavedSecretCatalog(account.scope);
   if (settings.secrets.length) {
@@ -214,11 +215,18 @@ function binding() { return account?.persistedSettings.voiceSettingsV1.credentia
 function choose(ref = storedRef()) {
   selectedSecretRef = ref;
 }
-async function render(options: Partial<React.ComponentProps<typeof VoiceCredentialItem>> = {}) {
-  return renderScreen(<InjectedAuthProvider credentials={account!.credentials}><ModalProvider><VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
+async function render(options: Partial<React.ComponentProps<typeof VoiceCredentialItem>> = {}, onRender?: React.ProfilerOnRenderCallback) {
+  if (options.recipientContract) {
+    const declaration = VoiceProviderContributionSchema.parse({ ...credentialSourceDeclaration,
+      credentials: { ...credentialSourceDeclaration.credentials, hostMediated: { operations: options.recipientContract.operations } },
+    });
+    register(declaration, options.recipientContract);
+    options = { ...options, credentialSourceDeclaration: declaration };
+  }
+  return renderScreen(<InjectedAuthProvider credentials={account!.credentials}><ModalProvider><React.Profiler id="voice-credential" onRender={onRender ?? (() => {})}><VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
     contribution={contribution} credentialSlotId="api-key" credentialSourcePurpose="voice.client-auth"
     credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options}
-    onChanged={() => { options.onChanged?.(); credentialChanged.resolve(); }} /></ModalProvider></InjectedAuthProvider>, {
+    onChanged={() => { options.onChanged?.(); credentialChanged.resolve(); }} /></React.Profiler></ModalProvider></InjectedAuthProvider>, {
     // Test Renderer has no native layout engine; keep the real Popover measurable and interactive.
     createNodeMock: element => element.props.testID === 'credential' ? {
       measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 100, 320, 48),
@@ -271,6 +279,23 @@ async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew
 function failures() { return log.getLogs().filter(message => message.includes('voice_credential:')); }
 
 describe('VoiceCredentialItem', () => {
+  it('does not commit for unrelated Account preference revisions', async () => {
+    await setup(secretSettings());
+    let commits = 0;
+    const screen = await render({}, () => { commits += 1; });
+    const initial = commits;
+    for (let index = 0; index < 20; index += 1) {
+      await act(async () => { account!.replaceSettings({ ...storage.getState().settings,
+        analyticsOptOut: !storage.getState().settings.analyticsOptOut,
+      }, { version: (storage.getState().settingsVersion ?? 0) + 1 }); });
+    }
+    expect(commits - initial).toBe(0);
+    const ref = storedRef();
+    choose(ref);
+    await gesture(screen, 'useSavedSecret');
+    await credentialChanged.promise;
+    expect(binding()).toMatchObject({ credentialBindings: { account: { 'api-key': ref } } });
+  });
   let webLocks: ReturnType<typeof installWebLockManagerMock>;
   beforeEach(() => {
     webLocks = installWebLockManagerMock();

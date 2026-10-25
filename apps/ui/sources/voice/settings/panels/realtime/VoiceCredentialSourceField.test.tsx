@@ -5,7 +5,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { buildQualifiedPluginContributionKey, createRecipientContractDigestV1, PluginProjectionV2Schema, VoiceProviderContributionSchema, type PluginContributionIdentityV1, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, createRecipientContractDigestV1, createVoiceProviderRecipientContractFromCredentialsV1, PluginProjectionV2Schema, VoiceProviderContributionSchema, tryWriteServerEnabledBitInPlace, type PluginContributionIdentityV1, type PluginProjectionV2, type VoiceProviderContribution, type RecipientContractV1 } from '@happier-dev/protocol';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -21,7 +22,7 @@ import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionAc
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { commitExternalVoiceProviderRegistration, resetExternalVoiceProviderRegistrationsForTests } from '@/voice/registry/externalVoiceProviderRegistrations';
-import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { createVoiceProviderRegistry, projectVoiceProviderAccountCredentialSlot } from '@/voice/registry/providerRegistry';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
 import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
@@ -164,8 +165,9 @@ const declaration = VoiceProviderContributionSchema.parse({
 });
 const credentials = declaration.credentials!;
 
-function installCurrentDeclaration(currentDeclaration: VoiceProviderContribution) {
+function installCurrentDeclaration(currentDeclaration: VoiceProviderContribution, recipientContract?: RecipientContractV1) {
   projectedDeclaration = currentDeclaration;
+  projectedRecipientContract = recipientContract ?? null;
   const providerId = buildQualifiedPluginContributionKey({
     pluginId: contribution.pluginId,
     localId: currentDeclaration.id,
@@ -182,7 +184,8 @@ function installCurrentDeclaration(currentDeclaration: VoiceProviderContribution
     localId: currentDeclaration.id,
     providerId,
     occurrenceId: declarationOccurrenceId,
-    descriptor,
+    descriptor: recipientContract ? { ...descriptor, accountCredentialSlot:
+      projectVoiceProviderAccountCredentialSlot(currentDeclaration, recipientContract) ?? undefined } : descriptor,
     adapter: null,
   });
 }
@@ -262,6 +265,7 @@ async function installCodexDescriptor(options: Readonly<{
 const declarationOccurrenceId = 'credential-source-declaration';
 const descriptorMachineId = 'credential-descriptor-machine';
 let projectedDeclaration = declaration;
+let projectedRecipientContract: RecipientContractV1 | null = null;
 let descriptorReplies: Array<ReturnType<typeof ConnectedAccountUiProjectionEntryV1Schema.parse>> = [];
 let reloadProjection: (() => void) | undefined;
 let runtimeLease: ReturnType<typeof createBundledConversationRuntimeHostLease> | undefined;
@@ -304,7 +308,10 @@ const projectionRequests = installSessionActionRpcBoundary(request => {
         voiceProviders: { family: 'voiceProviders', entriesById: Object.fromEntries([
           ...entries.map(entry => [entry.id, entry] as const),
           [providerId, { id: providerId, contributionKey: providerId, pluginId: contribution.pluginId,
-            occurrenceId: declarationOccurrenceId, definition: projectedDeclaration }],
+            occurrenceId: declarationOccurrenceId, definition: projectedDeclaration,
+            ...(projectedRecipientContract ? { recipientContract: projectedRecipientContract,
+              recipientContractDigest: createRecipientContractDigestV1(projectedRecipientContract) } : {}),
+          }],
         ]) },
       },
     }),
@@ -443,7 +450,9 @@ beforeEach(async () => {
   beforePurposeRead = undefined;
   afterAcknowledgement = undefined;
   omitSettingsReceipt = false;
-  account = await createSecretSettingsTestHarness({ voiceEnabled: true, settings: settingsParse({
+  const features = createRootLayoutFeaturesResponse({ features: { connectedServices: { enabled: true } } });
+  if (!tryWriteServerEnabledBitInPlace(features, 'connectedServices.accountGroups', true)) throw new Error('Missing Connected Services feature fixture');
+  account = await createSecretSettingsTestHarness({ features, voiceEnabled: true, settings: settingsParse({
     schemaVersion: 7, secrets: [], voiceSettingsV1: { credentialBindings: [] },
   }) });
   account.catalogRows.set(PURPOSES_PATH, {
@@ -524,6 +533,192 @@ afterEach(async () => {
 });
 
 describe('VoiceCredentialSourceField → admitted Account purpose transaction', () => {
+  it('does not commit for unrelated Account preference revisions', async () => {
+    let commits = 0;
+    await renderField(declaration, undefined, <React.Profiler id="credential-source" onRender={() => { commits += 1; }}>
+      <VoiceCredentialSourceField contribution={contribution} declaration={declaration} credentials={declaration.credentials!} />
+    </React.Profiler>);
+    const initial = commits;
+    for (let index = 0; index < 20; index += 1) {
+      await act(async () => { account!.replaceSettings({ ...storage.getState().settings,
+        analyticsOptOut: !storage.getState().settings.analyticsOptOut,
+      }, { version: (storage.getState().settingsVersion ?? 0) + 1 }); });
+    }
+    expect(commits - initial).toBe(0);
+    expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'applied' });
+    assertAccountSelection();
+  });
+  it('selects an existing Codex account or pool in provider configuration, rejects missing references and preserves Account defaults', async () => {
+    await renderField();
+    account!.replaceSettings(settingsParse({ ...account!.persistedSettings, featureToggles: {
+      ...account!.persistedSettings.featureToggles, connectedServices: true, 'connectedServices.accountGroups': true,
+    } }));
+    const serviceId = 'happier.agent.codex/openai-codex';
+    const profile = AccountProfileSchema.parse({ ...storage.getState().profile, connectedServicesV2: [{ serviceId: 'openai-codex',
+      profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
+      groups: [{ groupId: 'pool', displayName: 'Work pool', activeProfileId: 'work', memberProfileIds: ['work'] }],
+    }] });
+    storage.getState().applyProfile(profile);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { SettingsDeclarationActionOutputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+      serverId: account!.scope.serverId, expectedAccountId: account!.scope.accountId, actionCaller: { kind: 'host' as const } };
+    const providerId = 'happier.agent.codex/realtime-codex';
+    const anchor = `voiceConversations.provider.${providerId}.globalConnectedServices`;
+    const defaults = account!.persistedSettings.connectedServicesDefaultProfileByServiceId;
+    const originalPurposes = structuredClone(purposes);
+    const invoke = async (value: unknown) => {
+      const result = await executor.execute('settings.invoke', { anchor,
+        input: { kind: 'voice_connected_services', expectedSettingsVersion: storage.getState().settingsVersion, value } }, context);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error('Expected typed Connected Services result');
+      return SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result);
+    };
+    for (const selection of [
+      { source: 'connected', selection: 'profile', profileId: 'work' },
+      { source: 'connected', selection: 'group', groupId: 'pool' },
+    ]) {
+      const value = { v: 1, bindingsByServiceId: { [serviceId]: selection } };
+      expect(await invoke(value)).toMatchObject({ status: 'completed', value: { status: 'applied' } });
+      expect(account!.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ globalConnectedServices: value });
+    }
+    const before = account!.persistedSettings;
+    expect(await invoke({ v: 1, bindingsByServiceId: { [serviceId]: { source: 'connected', profileId: 'missing' } } }))
+      .toMatchObject({ status: 'unavailable', reason: 'credential_source_unavailable' });
+    expect(account!.persistedSettings).toEqual(before);
+    const voiceBeforeMismatch = storage.getState().settings.voice;
+    const selected = voiceBeforeMismatch.providers[providerId];
+    if (!selected) throw new Error('Expected selected provider settings');
+    account!.replaceSettings(settingsParse({ ...account!.persistedSettings, voiceSettingsV1: {
+      ...account!.persistedSettings.voiceSettingsV1, providers: { ...account!.persistedSettings.voiceSettingsV1.providers,
+        [providerId]: { ...selected, schemaVersion: 1 },
+      },
+    } }));
+    expect(await invoke(null)).toMatchObject({ status: 'unavailable', reason: 'credential_source_unavailable' });
+    account!.replaceSettings(before);
+    expect(await invoke(null)).toMatchObject({ status: 'completed', value: { status: 'applied' } });
+    expect(account!.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ globalConnectedServices: null });
+    expect(account!.persistedSettings.connectedServicesDefaultProfileByServiceId).toEqual(defaults);
+    expect(purposes).toEqual(originalPurposes);
+  });
+  it.each(['ui', 'agent'] as const)('binds an exact Saved Secret for an API-key-only service, reviews and removes it through the Action owner on %s', async surface => {
+    const { SavedSecretResourceMaterialV1Schema, formatSavedSecretCatalogReferenceV1 } = await import('@happier-dev/protocol/account/settings/savedSecretCatalogV1');
+    const { sealSavedSecretResourceStoredContentV1 } = await import('@happier-dev/protocol/account/settings/savedSecretResourceContentV1');
+    const { refreshSavedSecretCatalog } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
+    const { Modal } = await import('@/modal');
+    // Substitute only the person's confirmation; the Action, catalog, CAS and reducers stay real.
+    const confirmation = vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+    onTestFinished(() => confirmation.mockRestore());
+    const apiOnly = VoiceProviderContributionSchema.parse({ ...declaration, credentials: {
+      ...credentials, sources: credentials.sources.filter(source => source.kind === 'savedSecret'),
+    } });
+    if (!apiOnly.credentials?.hostMediated) throw new Error('Expected mediated credential fixture');
+    const contract = createVoiceProviderRecipientContractFromCredentialsV1({
+      package: { pluginId: contribution.pluginId, source: { kind: 'package', locator: '@acme/voice' } },
+      publisher: { trust: 'verified', identity: 'fixture:acme' }, contribution,
+      credentials: { slot: apiOnly.credentials.slot, hostMediated: apiOnly.credentials.hostMediated },
+    });
+    installCurrentDeclaration(apiOnly, contract);
+    const resourceId = 'voice-selection-existing';
+    const secretId = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: resourceId });
+    account!.resources.push(SavedSecretResourceMaterialV1Schema.parse({ resourceId, encryptionMode: 'plain', recipientEnvelope: null,
+      storedContent: sealSavedSecretResourceStoredContentV1({ resourceId, mode: 'plain',
+        content: { v: 1, name: 'Existing Voice key', kind: 'apiKey', value: 'private-fixture-material' } }),
+      entry: { ref: secretId, source: 'shared_resource', relationship: 'owner', ownerAccountId: account!.scope.accountId,
+        name: 'Existing Voice key', kind: 'apiKey', encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+        capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+    }));
+    await refreshSavedSecretCatalog(account!.scope);
+    await renderField(apiOnly);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { SettingsDeclarationActionOutputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+    const context = { surface, authority: surface === 'ui' ? 'present_user' as const : 'account_automation' as const,
+      serverId: account!.scope.serverId, expectedAccountId: account!.scope.accountId,
+      ...(surface === 'agent' ? { defaultSessionId: 'background-agent-session' } : { actionCaller: { kind: 'host' as const } }) };
+    let executor: Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'> = createDefaultActionExecutor();
+    if (surface === 'agent') {
+      // Explicit Account policy admits this automation. Recipient consent, CAS,
+      // reference reducers and both executors stay real below the Socket boundary.
+      account!.replaceSettings(settingsParse({ ...account!.persistedSettings, actionsSettingsV1: {
+        v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['agent'] },
+      } }));
+      const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
+      const { loadBrowserDaemonRuntimeForTests } = await import('@/dev/testkit/harness/browserDaemonRuntime');
+      const { createClientActionReverseDispatcher, createUnavailableActionTransportDeps } = await loadBrowserDaemonRuntimeForTests();
+      const { createUiClientActionReverseHandler } = await import('@/sync/ops/actions/clientActionReverseDispatch');
+      const receive = createUiClientActionReverseHandler({ ...account!.scope, isCurrent: () => true });
+      executor = createActionExecutor({
+        ...createUnavailableActionTransportDeps(),
+        clientActionExecute: createClientActionReverseDispatcher(() => ({
+          hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+          callConnectedClientRpc: async (method, payload, options) => {
+            if (method !== RPC_METHODS.UI_ACTION_EXECUTE) return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
+            options?.onIssued?.();
+            return { ok: true, result: await receive(payload, { signal: options?.signal ?? new AbortController().signal }) };
+          },
+        })),
+      });
+    }
+    const anchor = `voiceConversations.provider.${buildQualifiedPluginContributionKey(contribution)}.credential`;
+    const invoke = async (operation: 'bind' | 'inspect' | 'review' | 'remove', expectedSecretId: string | null,
+      version = storage.getState().settingsVersion, expectedRecipientContractDigest?: string, machineId?: string) => {
+      const result = await executor.execute('settings.invoke', { anchor, input: {
+        kind: 'voice_saved_secret', operation, credentialSlotId: credentials.slot.id,
+        expectedSettingsVersion: version, expectedSecretId, expectedSecretUpdatedAt: expectedSecretId ? 1 : null,
+        ...(operation === 'bind' ? { secretId } : {}),
+        ...(expectedRecipientContractDigest ? { expectedRecipientContractDigest } : {}),
+        ...(machineId ? { machineId } : {}),
+      } }, { ...context, actionsSettings: storage.getState().settings.actionsSettingsV1 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('Expected typed credential operation result');
+      const receipt = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result);
+      expect(JSON.stringify(receipt)).not.toContain('private-fixture-material');
+      return receipt;
+    };
+    const initialVersion = storage.getState().settingsVersion;
+    confirmation.mockResolvedValueOnce(false);
+    expect(await invoke('bind', null)).toMatchObject({ status: 'cancelled' });
+    expect(binding()).toBeUndefined();
+    expect(await invoke('bind', null)).toMatchObject({ status: 'completed', value: { status: 'applied' } });
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' }, credentialBindings: { account: { api_key: secretId } } });
+    const writesAfterBinding = writes.length;
+    const settingsWritesAfterBinding = account!.settingsWrites.length;
+    expect(await invoke('bind', null, initialVersion)).toMatchObject({ value: { status: 'conflict' } });
+    expect(writes).toHaveLength(writesAfterBinding);
+    expect(await invoke('review', secretId, initialVersion)).toMatchObject({ value: { status: 'conflict' } });
+    expect(account!.settingsWrites).toHaveLength(settingsWritesAfterBinding);
+    expect(await invoke('review', secretId, undefined, `sha256:${'0'.repeat(64)}`))
+      .toMatchObject({ status: 'unavailable', reason: 'credential_contract_changed' });
+    expect(account!.settingsWrites).toHaveLength(settingsWritesAfterBinding);
+    await act(async () => { await refreshSavedSecretCatalog(account!.scope); });
+    await flush();
+    const materialInventoryReads = () => account!.request.mock.calls.filter(([input]) => new URL(
+      input instanceof Request ? input.url : String(input),
+    ).pathname === '/v1/account/saved-secrets/resources/materials').length;
+    const readsBeforeInspect = materialInventoryReads();
+    expect(await invoke('inspect', secretId)).toMatchObject({ status: 'completed', value: { secretId } });
+    expect(materialInventoryReads()).toBe(readsBeforeInspect);
+    const approvedDigest = binding()?.approvedRecipientContractDigest;
+    expect(approvedDigest).toMatch(/^sha256:/);
+    account!.replaceSettings(settingsParse({ ...account!.persistedSettings, voiceSettingsV1: {
+      ...account!.persistedSettings.voiceSettingsV1, credentialBindings: account!.persistedSettings.voiceSettingsV1.credentialBindings.map(
+        ({ approvedRecipientContractDigest: _oldApproval, ...rest }) => rest),
+    } }), { version: (storage.getState().settingsVersion ?? 0) + 1 });
+    expect(await invoke('review', secretId)).toMatchObject({ status: 'completed', value: { status: 'applied' } });
+    expect(binding()?.approvedRecipientContractDigest).toBe(approvedDigest);
+    expect(await invoke('bind', null, undefined, undefined, 'machine-a')).toMatchObject({ value: { status: 'applied' } });
+    expect(binding()?.credentialBindings).toMatchObject({ account: { api_key: secretId }, byMachineId: {
+      'machine-a': { api_key: secretId },
+    } });
+    expect(await invoke('remove', secretId, undefined, undefined, 'machine-a')).toMatchObject({ value: { status: 'applied' } });
+    expect(binding()?.credentialBindings.account?.api_key).toBe(secretId);
+    expect(binding()?.credentialBindings.byMachineId?.['machine-a']?.api_key).toBeUndefined();
+    expect(await invoke('remove', secretId)).toMatchObject({ status: 'completed', value: { status: 'applied' } });
+    expect(binding()?.credentialBindings.account?.api_key).toBeUndefined();
+    expect(account!.resources).toHaveLength(1);
+    expect(confirmation).toHaveBeenCalled();
+  });
   it('refuses the exact source operation before either write while adjacent Settings writes remain allowed', async () => {
     account!.replaceSettings(settingsParse({ ...account!.persistedSettings, actionsSettingsV1: {
       v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },

@@ -14,7 +14,9 @@ import {
   DropdownMenu,
   type DropdownMenuItem,
 } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { useProfile, useSettingsSelector, useSettingsVersion } from '@/sync/store/hooks';
+import { useProfile } from '@/sync/store/hooks';
+import { storage, useSetting } from '@/sync/domains/state/storage';
+import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { tLoose } from '@/text';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
@@ -32,7 +34,7 @@ import {
 } from '@/voice/credentials/accountVoiceCredential';
 import { resolveVoiceConnectedAccountTargetEligibility } from '@/voice/credentials/sourceEligibility';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { voiceCredentialSourceSettingAnchor } from '@/voice/settings/voiceContributedSettingsDeclarations';
+import { voiceCredentialSettingAnchor } from '@/voice/settings/voiceContributedSettingsDeclarations';
 import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
@@ -78,12 +80,10 @@ export function VoiceCredentialSourceField(props: Readonly<{
   onStatusChanged?: (status: VoiceCredentialSourceFieldStatus) => void;
   isCurrent?: () => boolean;
 }>) {
-  const settings = useSettingsSelector((settings) => ({
-      voiceSettingsV1: settings.voiceSettingsV1,
-      secrets: settings.secrets,
-  }));
+  const voiceSettingsV1 = useSetting('voiceSettingsV1');
+  const secrets = useSetting('secrets');
+  const settings = React.useMemo(() => ({ voiceSettingsV1, secrets }), [voiceSettingsV1, secrets]);
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
-  const settingsVersion = useSettingsVersion();
   const expectedSettingsScope = useAccountSettingsScope();
   const sourceAction = useMountedActionExecution(expectedSettingsScope, { openOnRequest: true });
   const purposes = useConnectedAccountCatalog('purposes', expectedSettingsScope);
@@ -313,6 +313,9 @@ export function VoiceCredentialSourceField(props: Readonly<{
     items={rows.map((row) => row.item)}
     onSelect={(id) => {
       setOpen(false);
+      const current = storage.getState();
+      const settingsVersion = areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)
+        ? current.settingsVersion : null;
       const row = rows.find((candidate) => candidate.item.id === id);
       if (!row
         || row.item.disabled
@@ -328,7 +331,7 @@ export function VoiceCredentialSourceField(props: Readonly<{
         selection: row.selection,
         expectedSettingsVersion: settingsVersion,
       };
-      const anchor = voiceCredentialSourceSettingAnchor(props.contribution, props.declaration);
+      const anchor = voiceCredentialSettingAnchor(props.contribution, props.declaration, 'credentialSource');
       const expectedContractDigest = voiceCredentialSourceMutationContractDigest(props.declaration, selectedMutation);
       if (!anchor || !expectedContractDigest) return;
       const mutation = sourceAction.execute('settings.invoke', { anchor, input: {
