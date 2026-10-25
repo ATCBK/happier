@@ -309,6 +309,27 @@ describe('ApprovalInboxCard', () => {
     expect(other.findHostByTestId(`inbox.approval.${simple.id}.allow_once`)).toBeFalsy();
     expect(other.findHostByTestId(`inbox.approval.${simple.id}.review`)).toBeTruthy();
   });
+  it('keeps an agent\'s request to remember a Project setup behind Review and says so on its row', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const workspace = { serverId: serverIdB, machineId: 'machine-a', workspaceId: 'checkout', rootPath: '/src/happier' };
+    const rowFor = (actionArgs: Record<string, unknown>) => {
+      const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli', sessionId: 'session-1' }, actionId: 'projects.prepare', actionArgs,
+        summary: 'Prepare project', executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli',
+          caller: { kind: 'host' }, serverId: serverIdB, actionId: 'projects.prepare', requestId: 'request-a' } });
+      return { ...createApprovalArtifact(), header: { ...buildApprovalRequestArtifactHeaderV1(request), sessionId: 'session-1' },
+        body: JSON.stringify(request) } satisfies DecryptedArtifact;
+    };
+    const remembered = rowFor({ workspace, phase: 'setup', heldOperationId: 'operation-1', expectedEffectDigest: 'reviewed', consentScope: 'untilChanged' });
+    const asked = await renderScreen(<ApprovalInboxCard artifact={remembered} inlineActionLabel="Review" onPress={() => {}} />);
+    expect(asked.findHostByTestId(`inbox.approval.${remembered.id}.allow_once`)).toBeFalsy();
+    expect(asked.findHostByTestId(`inbox.approval.${remembered.id}.review`)).toBeTruthy();
+    expect(asked.getTextContent()).toContain(t('projects.scripts.setup.agentAsksRememberedRow'));
+
+    const ordinary = rowFor({ workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope: 'thisTime' });
+    const plain = await renderScreen(<ApprovalInboxCard artifact={ordinary} inlineActionLabel="Review" onPress={() => {}} />);
+    expect(plain.getTextContent()).not.toContain(t('projects.scripts.setup.agentAsksRememberedRow'));
+  });
   it('sets a simple request\'s Deny and Allow once beneath the row on a phone, outside the row button', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

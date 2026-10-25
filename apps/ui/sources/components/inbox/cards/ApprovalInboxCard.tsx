@@ -26,6 +26,7 @@ import { InboxRelativeTime } from '../InboxRelativeTime';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { readApprovalQuickActions } from '@/components/approvals/approvalQuickActions';
 import { readActionApprovalReview } from '@/components/approvals/actionApprovalReview';
+import { readProjectCommandApproval } from '@/components/approvals/ProjectCommandApprovalFacts';
 import { ApprovalDecisionBar } from '@/components/approvals/ApprovalDecisionBar';
 import {
   alertApprovalFailure,
@@ -182,8 +183,13 @@ export const ApprovalInboxCard = React.memo(
     // unless the title already names it as the request's own subject.
     const requester = askingSession ?? originMachineLabel;
     const source = requester && !title.includes(requester) ? requester : null;
+    // An agent's request to remember a Project's setup says so on its row; the page spells out the consequence.
+    const projectCommand = parsedApproval?.family === 'built_in' ? readProjectCommandApproval(parsedApproval.request) : null;
+    const asksToRemember = projectCommand?.kind === 'setup' && projectCommand.remembersConsent
+      ? t('projects.scripts.setup.agentAsksRememberedRow') : null;
     const distinguishingFacts = [
       proposalFacts,
+      asksToRemember,
       actionTitle && actionTitle !== title && !proposalFacts
         ? actionTitle
         : null,

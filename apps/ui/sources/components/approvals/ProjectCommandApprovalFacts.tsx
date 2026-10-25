@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { isProjectSetupTrustRequestV1, PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 import { ProjectExecutionChoiceV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { LocalServiceStartApprovalReviewV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -52,6 +52,8 @@ export type ProjectCommandApprovalPresentation =
       sourceMachineId: string;
       destination: Destination;
       setupReview: ProjectSetupReviewV1 | null;
+      /** The agent asked for Until it changes: approving remembers this reviewed setup instead of only running it. */
+      remembersConsent: boolean;
     }>
   | Readonly<{
       /** A declared service's current effect, disclosed by the starter before it launches (plan 22). */
@@ -122,6 +124,7 @@ export function readProjectCommandApproval(
       sourceMachineId: input.data.workspace.machineId,
       destination: { kind: 'primary' },
       setupReview,
+      remembersConsent: isProjectSetupTrustRequestV1(approval.actionId, approval.actionArgs),
     };
   }
   if (approval.actionId === 'projects.script.run') {
@@ -193,8 +196,11 @@ export function describeProjectCommandApprovalTitle(
   sourceMachineName: string,
   runsOnMachineName: string = sourceMachineName,
 ): string {
+  // Remembered consent covers the Project on any of the person's machines, so its question names none.
   if (presentation.kind === 'setup')
-    return t('projects.authoring.sessionAsk', { machine: sourceMachineName });
+    return presentation.remembersConsent
+      ? t('projects.scripts.setup.agentAsksRememberedTitle')
+      : t('projects.authoring.sessionAsk', { machine: sourceMachineName });
   if (presentation.kind === 'script')
     return t('projects.scripts.adhocRunScriptTitle', { name: presentation.name });
   if (presentation.kind === 'service' && presentation.name)
@@ -228,7 +234,10 @@ export function describeProjectCommandApprovalDecisions(
   if (presentation.kind === 'service')
     return { approve: t('localServices.effectReview.start'), reject: t('localServices.effectReview.notNow') };
   return presentation.kind === 'setup'
-    ? { approve: t('projects.scripts.setup.run'), reject: t('projects.scripts.setup.notNow') }
+    ? {
+        approve: presentation.remembersConsent ? t('projects.authoring.allowUntilChanged') : t('projects.scripts.setup.run'),
+        reject: t('projects.scripts.setup.notNow'),
+      }
     : { approve: t('projects.scripts.adhocRunOnce'), reject: t('projects.scripts.adhocDeny') };
 }
 
@@ -306,6 +315,16 @@ export const ProjectCommandApprovalFacts = React.memo(
             />
           </View>
         ) : null}
+        {presentation.kind === 'setup' && presentation.remembersConsent ? (
+          <View testID={`${props.testID}.rememberedConsent`} style={styles.consent}>
+            <Text variant="label" emphasis="semiBold" style={{ color: theme.colors.text.primary }}>
+              {t('projects.scripts.setup.agentAsksRemembered')}
+            </Text>
+            <Text style={[styles.value, { color: theme.colors.text.secondary }]}>
+              {t('projects.scripts.setup.agentAsksRememberedBody')}
+            </Text>
+          </View>
+        ) : null}
         {presentation.kind === 'setup' ? (
           presentation.setupReview ? (
             // The same review anatomy as the Scripts page and the Session ask; the owner reads the effect.
@@ -367,6 +386,7 @@ export const ProjectCommandApprovalFacts = React.memo(
 
 const styles = StyleSheet.create(() => ({
   root: { gap: 10 },
+  consent: { gap: 2 },
   rows: { gap: 4 },
   row: { flexDirection: 'row', gap: 12 },
   label: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), width: 56 },

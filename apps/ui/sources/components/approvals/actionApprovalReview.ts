@@ -1,5 +1,6 @@
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isProjectSetupTrustRequestV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview,
     readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -48,7 +49,9 @@ export function readActionApprovalReview(request: ApprovalRequest): ActionApprov
         || visualPreview !== null || request.handoffTargetReplacementApproval !== undefined
         || Boolean(spec?.approvalNarrowing || spec?.approvalInputCustody === 'live_only'
             || spec?.approvalResultCustody === 'live_only')
-        || readPluginInstallApprovalPendingReview(request.preview) !== null;
+        || readPluginInstallApprovalPendingReview(request.preview) !== null
+        // Remembering a Project's setup is a consequence the person reads on the page before deciding; a one-tap row hides it.
+        || isProjectSetupTrustRequestV1(request.actionId, request.actionArgs);
     const simple = request.v === 2 && request.status === 'open' && admission?.status === 'available'
         && spec !== null && spec.inputSchema.safeParse(request.actionArgs).success && !requiresReview;
     return { admission, confidentialAction, confidential, capabilityEnable, promptDocUpdate, resourceProposal,

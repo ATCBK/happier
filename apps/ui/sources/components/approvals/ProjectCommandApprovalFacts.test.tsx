@@ -212,6 +212,35 @@ describe('Project command approval facts', () => {
     expect(readProjectCommandApproval({ ...input, actionArgs: { ...actionArgs, expectedEffectDigest: 'stale' } }))
       .toMatchObject({ kind: 'setup', setupReview: null });
   });
+  it('discloses the remembered consent only when the agent asked for Until it changes', async () => {
+    const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffectDigest: 'reviewed', reviewedEffect: {
+      commands: [{ kind: 'command', command: 'mise install', cwd: '.', os: 'linux' }],
+    } });
+    const read = (consentScope?: 'thisTime' | 'untilChanged') => readProjectCommandApproval({ actionId: 'projects.prepare',
+      actionArgs: ProjectPrepareInputV1Schema.parse({ workspace, phase: 'setup', expectedEffectDigest: 'reviewed',
+        ...(consentScope ? { consentScope } : {}), ...(consentScope === 'untilChanged' ? { heldOperationId: 'operation-1' } : {}) }),
+      preview: { setupReview } })!;
+
+    const remembered = read('untilChanged');
+    const withDisclosure = await renderScreen(<ProjectCommandApprovalFacts presentation={remembered} testID="facts" />);
+    expect(withDisclosure.findByTestId('facts.rememberedConsent')).not.toBeNull();
+    // The same reviewed steps and Where/Files/As stay beside the disclosure; there is no second card.
+    expect(withDisclosure.getTextContent()).toContain('mise install');
+    expect(withDisclosure.findByTestId('facts.review')).not.toBeNull();
+    await withDisclosure.unmount();
+    // The decision names what approving does; Not now stays the other choice.
+    expect(describeProjectCommandApprovalDecisions(remembered)).toEqual({ approve: 'Allow until it changes', reject: 'Not now' });
+    // The question agrees with the consent: it covers the Project on any of the person's machines, so it names none.
+    expect(describeProjectCommandApprovalTitle(remembered, 'devbox')).toBe('Run setup and remember it for this project?');
+    expect(describeProjectCommandApprovalTitle(read('thisTime'), 'devbox')).toBe('Run setup on devbox?');
+
+    for (const ordinary of [read('thisTime'), read()]) {
+      const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={ordinary} testID="facts" />);
+      expect(screen.findByTestId('facts.rememberedConsent')).toBeNull();
+      await screen.unmount();
+      expect(describeProjectCommandApprovalDecisions(ordinary)).toEqual({ approve: 'Run setup', reject: 'Not now' });
+    }
+  });
   it('renders the reviewed setup steps with Where, Files and As, and says plainly when the steps could not be read', async () => {
     const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffectDigest: 'reviewed', reviewedEffect: {
       commands: [
