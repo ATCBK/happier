@@ -7,6 +7,8 @@ export const ARTIFACT_LIST_PAGE_MAX_ITEMS_V1 = 500;
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
   kinds?: readonly string[];
+  /** Server-visible exact index hints; private-header matching remains owned by `kinds`/`headerFilter`. */
+  indexedKinds?: readonly string[];
   coarseKind?: ArtifactCoarseKindV1;
   ownerAccountId?: string;
   /** Keyholding host selection over admitted private headers; never a wire filter. */
@@ -15,7 +17,7 @@ export type ArtifactListSelectionOptionsV1 = Readonly<{
 }>;
 
 export type ArtifactListPageOptionsV1 = Readonly<Pick<ArtifactListSelectionOptionsV1,
-  'limit' | 'cursor' | 'includeBody' | 'coarseKind' | 'kinds' | 'ownerAccountId' | 'signal'> & { unclassified?: boolean | 'coarse' }>;
+  'limit' | 'cursor' | 'includeBody' | 'coarseKind' | 'kinds' | 'indexedKinds' | 'ownerAccountId' | 'signal'> & { unclassified?: boolean | 'coarse' }>;
 
 type ArtifactListHeader = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; createdAt: number; updatedAt: number;
@@ -39,7 +41,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   if (kinds?.length === 0) return { items: [], coverage: 'complete' };
   // The incumbent /v1/artifacts route admits at most 500 structural rows per request.
   if (!options || (options.limit !== undefined && options.limit <= 500
-    && options.search === undefined && options.kind === undefined && kinds === undefined && options.coarseKind === undefined && !options.headerFilter
+    && options.search === undefined && options.kind === undefined && kinds === undefined && options.indexedKinds === undefined && options.coarseKind === undefined && !options.headerFilter
     && (options.sort === undefined || options.sort === 'updated_desc'))) {
     const page = await params.readPage(options);
     throwIfAborted(options?.signal);
@@ -63,7 +65,8 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   let hasMorePhysicalRows = false;
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
-      ...(kinds !== undefined ? { kinds } : options.coarseKind ? { coarseKind: options.coarseKind } : {}),
+      ...(options.indexedKinds !== undefined ? { indexedKinds: options.indexedKinds }
+        : kinds !== undefined ? { kinds } : options.coarseKind ? { coarseKind: options.coarseKind } : {}),
       ...(options.ownerAccountId !== undefined ? { ownerAccountId: options.ownerAccountId } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     throwIfAborted(options.signal);
@@ -83,7 +86,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   } while (true);
   // Legacy membership is resolved only under the server's current typed witness.
   // This same header reader never repairs hints or opens unrelated bodies.
-  if (kinds !== undefined && kindCoverage?.status === 'partial') {
+  if (kinds !== undefined && options.indexedKinds === undefined && kindCoverage?.status === 'partial') {
     let legacyCursor = updatedOrder ? options.cursor : undefined;
     const selectedIds = new Set(all.map(item => item.artifactId));
     do {
