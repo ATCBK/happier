@@ -44,7 +44,6 @@ vi.mock('@/modal', async () => (
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
-        useWindowDimensions: () => ({ width: 1440, height: 900, scale: 1, fontScale: 1 }),
         Dimensions: { get: () => ({ width: 1440, height: 900, scale: 1, fontScale: 1 }) },
     });
 });

@@ -14,7 +14,6 @@ import { voiceDictationOperation, type VoiceDictationActionId } from '@happier-d
 import { PluginJsonValueV2Schema, type PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import type { PluginProjectedActionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type {
-    PluginUiHostApiErrorCodeV1,
     PluginUiJsonValueV1,
 } from '@happier-dev/protocol/plugins/ui';
 
@@ -31,6 +30,7 @@ import {
     type PluginSurfaceHostActionBinding,
     type PluginSurfaceHostActionExecute,
     type PluginSurfaceActionInvocationSurface,
+    type PluginSurfaceActionDispatchOutcome,
 } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 import {
     createPluginUiProjectedActionResolver,
@@ -64,7 +64,7 @@ import {
  */
 export type CurrentUiContextVoiceInvocationOutcome =
     | Readonly<{ ok: true; result?: PluginUiJsonValueV1 }>
-    | Readonly<{ ok: false; code: PluginUiHostApiErrorCodeV1 | 'outcome_unknown'; errorCode?: string; actionHandlerInvocation?: 'notStarted' }>;
+    | Readonly<{ ok: false; code: Extract<PluginSurfaceActionDispatchOutcome, { ok: false }>['code']; errorCode?: string; actionHandlerInvocation?: 'notStarted' }>;
 
 export type CurrentUiContextVoiceCommandInvocationInput = Readonly<{
     commandId: string;

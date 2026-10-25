@@ -487,7 +487,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
             path: '/workspace/voice-agent-binding',
             host: 'test.local',
             homeDir: '/Users/tester',
-            backendTarget: { kind: 'backend', backendId: 'codex' },
+            flavor: 'codex',
           } as ReturnType<typeof createSessionFixture>['metadata'],
         }),
       },
@@ -582,7 +582,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
               host: 'test.local',
               homeDir: '/Users/tester',
               machineId: 'machine-voice-agent-race-a',
-              backendTarget: { kind: 'backend', backendId: 'codex' },
+              flavor: 'codex',
             } as ReturnType<typeof createSessionFixture>['metadata'],
           }),
           [conversationSessionIdB]: createSessionFixture({
@@ -595,7 +595,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
               host: 'test.local',
               homeDir: '/Users/tester',
               machineId: 'machine-voice-agent-race-b',
-              backendTarget: { kind: 'backend', backendId: 'codex' },
+              flavor: 'codex',
             } as ReturnType<typeof createSessionFixture>['metadata'],
           }),
         },
@@ -652,7 +652,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
                   ...metadata,
                   ...(invalidation === 'session machine change'
                     ? { machineId: 'machine-voice-agent-race-changed' }
-                    : { backendTarget: { kind: 'backend', backendId: 'claude' } }),
+                    : { flavor: 'claude' }),
                 },
               };
           return {
@@ -780,7 +780,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
               host: 'test.local',
               homeDir: '/Users/tester',
               machineId: 'machine-voice-generation-cleanup',
-              backendTarget: { kind: 'backend', backendId: 'codex' },
+              flavor: 'codex',
             } as ReturnType<typeof createSessionFixture>['metadata'],
           }),
         },

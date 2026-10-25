@@ -60,7 +60,6 @@ function installViewportBoundary(): void {
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
-        useWindowDimensions: () => ({ ...viewport }),
         Dimensions: { get: () => ({ ...viewport }) },
     });
 });

@@ -42,7 +42,7 @@ import type {
     PluginReactNativeLoaderBackend,
 } from '@/components/plugins/reactNative/loader';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
-import { setPreferredLanguageFromSettings } from '@/text';
+import { preloadTranslationsForSettings, setPreferredLanguageFromSettings } from '@/text';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema } from '@happier-dev/protocol/socketRpc';
 
@@ -1172,7 +1172,8 @@ describe('current UI context Voice tool port', () => {
         await expect(port.readCurrentContributedActionSchemas?.(ACTION_DISCOVERY_ID)).resolves.toEqual({ inputSchema: {} });
     });
 
-    it('resolves the same localized Action title and input hints that UI presentation consumes', () => {
+    it('resolves the same localized Action title and input hints that UI presentation consumes', async () => {
+        await preloadTranslationsForSettings('es');
         setPreferredLanguageFromSettings('es');
         try {
             const projection = createDaemonActionProjection();
@@ -1250,6 +1251,7 @@ describe('current UI context Voice tool port', () => {
                 }),
             ]);
 
+            await preloadTranslationsForSettings('ja');
             setPreferredLanguageFromSettings('ja');
             expect(port.listCurrentContributedActionDefinitions?.()).toEqual([
                 expect.objectContaining({

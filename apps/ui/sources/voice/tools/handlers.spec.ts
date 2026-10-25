@@ -18,7 +18,7 @@ import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { readSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -174,14 +174,17 @@ async function mountCurrentUiContext(wireResult: Readonly<Record<string, boolean
   const { reader, port } = mounted.getCurrent();
   if (!reader) throw new Error('Canonical Current UI owner did not mount');
   if (!port) throw new Error('Canonical Current UI Voice port did not mount');
-  await vi.waitFor(() => {
+  await waitForTestEvent(mounted.subscribe, mounted.getCurrent, value => (
+    value.port?.listCurrentContributedActionDefinitions?.().some(action => action.id === formatQualifiedPluginActionId({ pluginId: 'acme.triage', localId: 'refresh-issues' })) === true
+  ));
+  {
     const { projection: current } = mounted.getCurrent();
     expect(mounted.getCurrent().port?.listCurrentContributedActionDefinitions?.(), JSON.stringify({
       phase: current.phase, reason: current.unavailableReasonCode, interactionEnabled: current.interactionEnabled,
       machineId: current.machineId, actionIds: Object.keys(current.pluginUiProjection?.actionsById ?? {}),
       daemonMethods: daemonRpc.mock.calls.map(([request]) => request.method),
     })).toEqual(expect.arrayContaining([expect.objectContaining({ id: formatQualifiedPluginActionId({ pluginId: 'acme.triage', localId: 'refresh-issues' }) })]));
-  });
+  }
   const commandId = reader.readCurrentUiContext()?.commands[0]?.id;
   return { port: mounted.getCurrent().port!, reader, commandId };
 }
@@ -660,8 +663,8 @@ describe('voice tool handlers', () => {
     const first = harness.deliver('provider-a', 'first');
     const duplicate = harness.deliver('provider-a', 'first');
     const sibling = harness.deliver('provider-b', 'second');
-    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(2));
     await Promise.all([first, duplicate, sibling]);
+    expect(pendingEnqueue).toHaveBeenCalledTimes(2);
     expect(harness.directEffect).not.toHaveBeenCalled();
     expect(harness.sent.filter((event) => event.type === 'client_tool_result').map((event) => event.tool_call_id))
       .toEqual(expect.arrayContaining(['provider-a', 'provider-a', 'provider-b']));
@@ -682,8 +685,8 @@ describe('voice tool handlers', () => {
     };
     const harness = await createElevenLabsToolHarness();
     const delivery = harness.deliver('provider-approval', 'requires approval');
-    await vi.waitFor(() => expect(artifactCreateRequests).toHaveBeenCalledTimes(1));
     await delivery;
+    expect(artifactCreateRequests).toHaveBeenCalledTimes(1);
     expect(pendingEnqueue).not.toHaveBeenCalled();
     expect(harness.directEffect).not.toHaveBeenCalled();
     const result = harness.sent.find((event) => event.tool_call_id === 'provider-approval');
@@ -693,15 +696,17 @@ describe('voice tool handlers', () => {
   });
 
   it('rejects real ElevenLabs conflicting duplicates without assigning the first result to the conflicting callback', async () => {
+    const enqueueStarted = createDeferred<void>();
     let release!: (value: Response) => void;
     let requestInit!: RequestInit;
     pendingEnqueue.mockImplementationOnce(async request => {
       requestInit = request.init;
-      return await new Promise<Response>((resolve) => { release = resolve; });
+      return await new Promise<Response>((resolve) => { release = resolve; enqueueStarted.resolve(); });
     });
     const harness = await createElevenLabsToolHarness();
     const first = harness.deliver('provider-conflict', 'first');
-    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(1));
+    await enqueueStarted.promise;
+    expect(pendingEnqueue).toHaveBeenCalledTimes(1);
     const conflict = harness.deliver('provider-conflict', 'different effect');
     await Promise.all([first, conflict]);
     expect(harness.failures).toEqual([expect.objectContaining({ code: 'response_conflict' })]);
@@ -714,15 +719,17 @@ describe('voice tool handlers', () => {
   });
 
   it('settles real ElevenLabs cancelled callbacks and cannot deliver late results or replay them on a new connection', async () => {
+    const enqueueStarted = createDeferred<void>();
     let release!: (value: Response) => void;
     let requestInit!: RequestInit;
     pendingEnqueue.mockImplementationOnce(async request => {
       requestInit = request.init;
-      return await new Promise<Response>((resolve) => { release = resolve; });
+      return await new Promise<Response>((resolve) => { release = resolve; enqueueStarted.resolve(); });
     });
     const harness = await createElevenLabsToolHarness();
     const delivery = harness.deliver('provider-cancelled', 'pending message');
-    await vi.waitFor(() => expect(pendingEnqueue).toHaveBeenCalledTimes(1));
+    await enqueueStarted.promise;
+    expect(pendingEnqueue).toHaveBeenCalledTimes(1);
     await harness.close();
     await delivery;
     const resultsAtClose = harness.sent.length;
@@ -1900,9 +1907,10 @@ describe('voice tool handlers', () => {
       initializeSessionId: 'carrier-1',
       existingSession: { id: 'carrier-1', active: true, metadata: writeVoiceConversationScopeMetadata({
         path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude',
+        permissionMode: 'read-only', connectedServices: { v: 2, bindingsByServiceId: {} },
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
         agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
-      }, { kind: 'session_root', sessionRootId: 's1' }) },
+      } satisfies NonNullable<ReturnType<typeof createSessionFixture>['metadata']>, { kind: 'session_root', sessionRootId: 's1' }) },
       sessions: [createSessionFixture({ id: 's1', active: true, activeAt: Date.now(), metadata: {
         path: '/repo', host: 'voice.test', machineId: 'machine-1', flavor: 'claude',
         agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
@@ -2309,7 +2317,8 @@ describe('voice tool handlers', () => {
         groups: [{ id: 'voice-tool-homes', name: 'Voice tool Homes', serverIds: [homeA, homeB] }],
         activeTargetKind: 'group', activeTargetId: 'voice-tool-homes',
       }), { scope: 'device' });
-      await vi.waitFor(() => expect(isSessionListQueryHomeOnline(homeB)).toBe(true));
+      await waitForTestEvent(storage.subscribe, () => isSessionListQueryHomeOnline(homeB), Boolean);
+      expect(isSessionListQueryHomeOnline(homeB)).toBe(true);
       const otherRaw = await tools.listSessions(
         { view: 'summary', limit: 10, includeLastMessagePreview: false },
         { serverId: homeB },

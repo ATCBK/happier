@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { setPreferredLanguageFromSettings } from '@/text';
+import { preloadTranslationsForSettings, setPreferredLanguageFromSettings } from '@/text';
 
 import { formatPermissionRequest, summarizeAgentRequestForVoiceHuman } from './contextFormatters';
 
@@ -18,7 +18,8 @@ const SHARE_ALL = {
 describe('formatPermissionRequest privacy', () => {
   afterEach(() => setPreferredLanguageFromSettings(null));
 
-  it('localizes human-spoken request framing without changing authored question text', () => {
+  it('localizes human-spoken request framing without changing authored question text', async () => {
+    await preloadTranslationsForSettings('es');
     setPreferredLanguageFromSettings('es');
     const permission = summarizeAgentRequestForVoiceHuman('permission', 'req_es', 'Bash', { command: 'pwd' }, SHARE_ALL);
     const question = summarizeAgentRequestForVoiceHuman('user_action', 'req_question_es', 'ask_user_question', {

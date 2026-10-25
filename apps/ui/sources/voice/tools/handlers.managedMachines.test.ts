@@ -112,8 +112,13 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       }
       expect(requests).toEqual([{ serverUrl: home.homes.compute!.serverUrl,
         method: `${machine.id}:${method}`, input: actionId === 'machines.work.summary.get' ? input : {} }]);
-      expect(home.requests.filter(request => request.path === '/v1/machines/read-batch').map(request => ({ home: request.home, accountId: request.accountId })))
-        .toEqual([{ home: 'compute', accountId: 'owner' }]);
+      // Terminal Actions first check Account custody, then the scoped RPC checks fresh access.
+      const expectedMachineReads = actionId === 'machines.terminal.list' ? 2 : 1;
+      expect(home.requests.filter(request => request.path === '/v1/machines/read-batch').map(request => ({
+        home: request.home, accountId: request.accountId, body: request.body,
+      }))).toEqual(Array.from({ length: expectedMachineReads }, () => ({
+        home: 'compute', accountId: 'owner', body: { machineIds: [machine.id] },
+      })));
     } finally {
       await serverScopedRpcSocketPool.stopAll();
       await home.dispose();
@@ -138,6 +143,8 @@ describe('Machines advertised UI and eligible Voice execution', () => {
         capabilities: { serverIdentity: { serverIdentityId: homeId } },
       }));
       if (request.path === '/v1/machines') return Response.json([machine]);
+      if (request.path === '/v1/machines/read-batch' && request.method === 'POST') return createMachineReadBatchResponseFixture(request.body,
+        id => id === machine.id ? machine : null);
       if (!request.path.startsWith('/v1/actions/')) return undefined;
       expect(request.headers.get(AUTHORITY_CEILING_HEADER_V1)).toBe('account_automation');
       const body = ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.body);
@@ -263,6 +270,8 @@ describe('Machines advertised UI and eligible Voice execution', () => {
           ? Response.json({ error: 'unsupported' }, { status: 404 }) : Response.json(managed);
         if (request.path === '/v1/machines') return Response.json([{ ...createPlainMachineRowFixture({ id: controller.machineId,
           accountId: 'owner' }), installationId: controller.installationId }]);
+        if (request.path === '/v1/machines/read-batch' && request.method === 'POST') return createMachineReadBatchResponseFixture(request.body,
+          id => id === controller.machineId ? { ...createPlainMachineRowFixture({ id, accountId: 'owner' }), installationId: controller.installationId } : null);
         if (request.path !== `/v1/actions/${actionId}`) return undefined;
         expect(request.headers.get(AUTHORITY_CEILING_HEADER_V1)).toBe('account_automation');
         const envelope = request.body as { requestId: string };

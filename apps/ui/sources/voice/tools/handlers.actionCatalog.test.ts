@@ -15,10 +15,15 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import {
+  AccountSettingsV2UpdateRequestSchema,
   formatQualifiedPluginActionId,
   getActionSpec,
   type ActionDefinitionV1,
+  type AccountSettingsStoredContentEnvelope,
 } from '@happier-dev/protocol';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionDirectToolExposedOn } from '@happier-dev/protocol/actions/actionToolExposure';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -30,6 +35,59 @@ const { createDefaultActionExecutor } = await import('@/sync/ops/actions/default
 describe('Voice Action reference catalog', () => {
   beforeEach(async () => { await home.reset(); });
   afterEach(async () => { await home.reset(); });
+  it('discovers a displayed Voice preference on the Global Home and changes it only after human approval', async () => {
+    expect(isActionDirectToolExposedOn(getActionSpec('settings.list'), 'agent')).toBe(true);
+    const serverId = await home.addHome({ name: 'Global Voice settings', serverUrl: 'https://global-voice-settings.test',
+      accountId: 'alice', currentAccount: true });
+    const features = createRootLayoutFeaturesResponse();
+    expect(tryWriteServerEnabledBitInPlace(features, 'voice', true)).toBe(true);
+    home.answer(serverId, '/v1/features', { body: features });
+    let content: Extract<AccountSettingsStoredContentEnvelope, { t: 'plain' }> = {
+      t: 'plain', v: { voice: settingsDefaults.voice, favoriteMachines: ['keep-neighbor'] },
+    };
+    let version = 1;
+    home.answer(serverId, 'GET /v2/account/settings', { select: () => ({ body: { content, version } }) });
+    home.answer(serverId, 'POST /v2/account/settings', { select: raw => {
+      const request = AccountSettingsV2UpdateRequestSchema.parse(raw);
+      expect(request.expectedVersion).toBe(version);
+      if (!request.content || request.content.t !== 'plain') throw new Error('Expected a plain Account fixture');
+      content = request.content;
+      return { body: { success: true, version: ++version } };
+    } });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null, currentServerId: serverId });
+    const listed = JSON.parse(await handlers.settings_list!({ pageId: 'voiceConversations' }));
+    expect(listed.ok).toBe(true);
+    const declaration = SettingsDeclarationActionOutputSchemasV1['settings.list'].parse({ items: listed.items }).items
+      .find(item => item.title === 'Ignore sounds shorter than');
+    expect(declaration).toMatchObject({ anchor: 'voiceConversations.minSpeechMs', readable: true, writable: true });
+    if (!declaration) throw new Error('The displayed Voice preference was not discoverable');
+    const input = { anchor: declaration.anchor };
+    const before = JSON.parse(await handlers.settings_get!(input));
+    expect(before).toMatchObject({ ok: true, value: 1000 });
+    let created!: () => void;
+    const askCreated = new Promise<void>(resolve => { created = resolve; });
+    home.artifacts(serverId).afterNextCreate(async () => { created(); });
+    const pending = handlers.settings_set!({ ...input, value: 1100 }, { effectId: 'global-voice-settings-write' });
+    await askCreated;
+    const ask = home.artifacts(serverId).list().find(row => {
+      const parsed = ApprovalRequestSchema.safeParse(JSON.parse(home.artifacts(serverId).readPlainBody(row.id) ?? 'null'));
+      return parsed.success && parsed.data.actionId === 'settings.set';
+    });
+    if (!ask) throw new Error('The model-dispatched setting must create an Ask');
+    expect(version).toBe(1);
+    expect(JSON.parse(await handlers.settings_get!(input))).toMatchObject({ ok: true, value: 1000 });
+    expect(ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(ask.id) ?? 'null')))
+      .toMatchObject({ status: 'open', actionId: 'settings.set', requestedSurface: 'voice',
+        executionOriginV1: { authority: 'account_automation' } });
+    const decided = await createDefaultActionExecutor().execute('approval.request.decide', {
+      artifactId: ask.id, decision: 'approve',
+    }, { surface: 'ui', serverId, authority: 'present_user', actionCaller: { kind: 'host' } });
+    expect(decided).toMatchObject({ ok: true });
+    expect(JSON.parse(await pending)).toMatchObject({ ok: true, value: 1100 });
+    expect(JSON.parse(await handlers.settings_get!(input))).toMatchObject({ ok: true, value: 1100 });
+    expect(content.v.favoriteMachines).toEqual(['keep-neighbor']);
+    expect(version).toBe(2);
+  });
   it('pauses an exact Workflow through generic Voice execution and the canonical Account storage owner', async () => {
     const serverId = await home.addHome({ name: 'Workflow Voice Home', serverUrl: 'https://workflow-voice.test', accountId: 'alice', currentAccount: true });
     const features = createRootLayoutFeaturesResponse();

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SUPPORTED_LANGUAGE_CODES } from '@/text/i18n';
 import { setPreferredLanguageFromSettings } from '@/text';
-import { resolveVoiceWelcomeText } from './voiceWelcomeText';
+import { preloadVoiceWelcomeText, resolveVoiceWelcomeText } from './voiceWelcomeText';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
@@ -11,25 +11,28 @@ afterEach(() => {
 });
 
 describe('Voice welcome literal', () => {
-    it('names only the explicitly admitted bound target while the global default stays unchanged', () => {
+    it('names only the explicitly admitted bound target while the global default stays unchanged', async () => {
+        await Promise.all(['en', 'fr'].map(preloadVoiceWelcomeText));
         expect(resolveVoiceWelcomeText('en', { targetDisplayName: 'Atlas' })).toContain('Atlas');
         expect(resolveVoiceWelcomeText('en')).not.toContain('Atlas');
         expect(resolveVoiceWelcomeText('fr', { targetDisplayName: 'Atlas' })).toContain('Atlas');
         expect(resolveVoiceWelcomeText('ar', { targetDisplayName: 'Atlas' })).toBeUndefined();
     });
 
-    it('resolves every app locale when the native runtime has no Intl.Locale constructor', () => {
+    it('resolves every app locale when the native runtime has no Intl.Locale constructor', async () => {
         const nativeIntl = Object.create(Intl);
         Object.defineProperty(nativeIntl, 'Locale', { value: undefined });
         vi.stubGlobal('Intl', nativeIntl);
         for (const language of SUPPORTED_LANGUAGE_CODES) {
+            await preloadVoiceWelcomeText(language);
             expect(resolveVoiceWelcomeText(language), language).toEqual(expect.any(String));
         }
         expect(resolveVoiceWelcomeText('zh-TW')).toContain('什麼');
         expect(resolveVoiceWelcomeText('fr-CA')).toMatch(/^Bonjour/);
     });
 
-    it('uses Reply in rather than the app language, including regional tags', () => {
+    it('uses Reply in rather than the app language, including regional tags', async () => {
+        await Promise.all(['fr-CA', 'en-GB', 'zh-TW', 'zh-CN'].map(preloadVoiceWelcomeText));
         setPreferredLanguageFromSettings('de');
         expect(resolveVoiceWelcomeText('fr-CA')).toMatch(/^Bonjour/);
         expect(resolveVoiceWelcomeText('en-GB')).toMatch(/^Hi/);

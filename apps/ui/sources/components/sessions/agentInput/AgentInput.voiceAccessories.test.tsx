@@ -3,7 +3,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, renderScreen as renderTestScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, pressTestInstanceAsync, renderScreen as renderTestScreen, type RenderScreenResult } from '@/dev/testkit';
 import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -57,7 +57,7 @@ const recording = vi.hoisted(() => ({
     prepares: 0,
     audioModes: 0,
     snapshots: [] as unknown[],
-    setNativeProps: vi.fn(),
+    setTextAndSelection: vi.fn(),
     focus: vi.fn(),
 }));
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -141,8 +141,9 @@ const { resolveRuntimeFeatureDecision } = await import('@/sync/domains/features/
 const { t } = await import('@/text');
 
 function createInputHost(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0]) {
-    return element.type === 'TextInput' ? {
-        setNativeProps: recording.setNativeProps,
+    // The canonical Expo view shim forwards native commands from this host ref.
+    return element.type === 'HappierComposerInput' ? {
+        setTextAndSelection: recording.setTextAndSelection,
         focus: recording.focus,
         blur() {},
         measureInWindow(callback: (x: number, y: number, width: number, height: number) => void) { callback(0, 0, 300, 100); },
@@ -321,7 +322,7 @@ beforeEach(async () => {
     stopObservingDictation = voiceDictationController.subscribe(() => {
         recording.snapshots.push(voiceDictationController.getSnapshot());
     });
-    recording.setNativeProps.mockClear();
+    recording.setTextAndSelection.mockClear();
     recording.focus.mockClear();
     machineRpc.mockReset();
     getStorage().setState(initialStorageState, true);
@@ -879,10 +880,10 @@ describe('AgentInput mounts the Voice composer', () => {
             resolveTranscription({ ok: true, requestId: 'stale-request', text: 'stale words', language: 'en', modelPackId: null });
             await pendingPress!;
         });
-        expect(recording.setNativeProps).not.toHaveBeenCalled();
+        expect(recording.setTextAndSelection).not.toHaveBeenCalled();
 
         await screen.update(await sessionComposerScene());
-        expect(recording.setNativeProps).not.toHaveBeenCalled();
+        expect(recording.setTextAndSelection).not.toHaveBeenCalled();
         expect(voiceDictationController.getSnapshot().status).toBe('idle');
         await screen.unmount();
     });
@@ -895,8 +896,8 @@ describe('AgentInput mounts the Voice composer', () => {
         expect(voiceDictationController.getSnapshot(), JSON.stringify(recording.snapshots)).toMatchObject({ status: 'listening' });
         await screen.pressByTestIdAsync(DICTATION_TEST_ID);
         await waitForHomeGovernance(() => expect(onChangeText).toHaveBeenCalledWith('fresh words'));
-        expect(onChangeText, JSON.stringify({ snapshot: voiceDictationController.getSnapshot(), methods: machineRpc.mock.calls.map(([request]) => request.method), nativeWrites: recording.setNativeProps.mock.calls })).toHaveBeenCalledWith('fresh words');
-        expect(recording.setNativeProps).toHaveBeenCalledWith({ text: 'fresh words', selection: { start: 11, end: 11 } });
+        expect(onChangeText, JSON.stringify({ snapshot: voiceDictationController.getSnapshot(), methods: machineRpc.mock.calls.map(([request]) => request.method), nativeWrites: recording.setTextAndSelection.mock.calls })).toHaveBeenCalledWith('fresh words');
+        expect(recording.setTextAndSelection).toHaveBeenCalledWith('fresh words', { start: 11, end: 11 }, []);
         expect(recording.focus).toHaveBeenCalledOnce();
         await screen.unmount();
     });
@@ -1065,13 +1066,18 @@ describe('AgentInput states the Voice planet’s target', () => {
         // The manager must reach the mounted lifecycle owner: with that real
         // registration removed, the same control cannot admit any target.
         const { setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
+        const { VoiceComposerPlanet } = await import('@/components/voice/composer/VoiceComposerPlanet');
         setVoiceSessionLifecycleController(null);
-        await screen.pressByTestIdAsync(PLANET_TEST_ID);
+        // Await this refusal at the leaf callback: the IconButton press wrapper
+        // intentionally returns void, so restoring the owner immediately would
+        // let this first Action race the second press's admission.
+        await pressTestInstanceAsync(screen.findByType(VoiceComposerPlanet), 'composer Voice action');
         expect(routing.lifecycle.getAttemptTargetSessionAddress()).toBeNull();
         expect(recording.starts).toBe(0);
         setVoiceSessionLifecycleController(routing.lifecycle);
         await screen.pressByTestIdAsync(PLANET_TEST_ID);
-        expect(routing.lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: 'server-b', sessionId: 'shared-session' });
+        // A host press starts an asynchronous Action; observe its admitted target.
+        await waitForHomeGovernance(() => expect(routing.lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: 'server-b', sessionId: 'shared-session' }));
 
         await screen.unmount();
     });
@@ -1094,7 +1100,7 @@ describe('AgentInput states the Voice planet’s target', () => {
 
         await screen.pressByTestIdAsync(PLANET_TEST_ID);
         const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
-        expect(routing.lifecycle.getSnapshot()).toMatchObject({ adapterId: 'local_conversation', sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+        await waitForHomeGovernance(() => expect(routing.lifecycle.getSnapshot()).toMatchObject({ adapterId: 'local_conversation', sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }));
         expect(routing.lifecycle.getAttemptTargetSessionAddress()).toBeNull();
 
         // Starting Voice is not sending, discarding, or re-mounting the prompt being written.

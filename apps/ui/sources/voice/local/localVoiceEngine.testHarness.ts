@@ -36,6 +36,8 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
@@ -398,6 +400,8 @@ async function createVoiceConversationSessionFixture(raw: unknown) {
                     metadata: {
                         ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
                         flavor: spawnedAgentId,
+                        permissionMode: args.permissionMode,
+                        ...(args.connectedServices ? { connectedServices: args.connectedServices } : {}),
                         agentRuntimeCapabilitiesV1: {
                             localControl: { supported: true },
                         },
@@ -588,9 +592,9 @@ export function readLocalVoiceHttpRequests(): readonly ServedHomeRequest[] {
 }
 let activeSessionMetadataHttp: ReturnType<typeof createSessionMetadataHttpBoundary> | null = null;
 /** A case replacing persisted HTTP seed data must explicitly retire the boundary's prior record. */
-export function replaceLocalVoiceSessionHttpSeed(sessionId: string) {
+export function replaceLocalVoiceSessionHttpSeed(sessionId: string, record?: Parameters<NonNullable<typeof activeSessionMetadataHttp>['replaceSession']>[1]) {
     if (!activeSessionMetadataHttp) throw new Error('Expected active Voice metadata HTTP boundary');
-    activeSessionMetadataHttp.replaceSession(sessionId);
+    activeSessionMetadataHttp.replaceSession(sessionId, record);
 }
 export async function switchLocalVoiceAccount(accountId: string) {
     if (!activeAccountHomes || !speechAccount) throw new Error('Expected active Voice Home');
@@ -614,10 +618,12 @@ async function createLocalVoiceAccountHarness() {
     const { storage } = await import('@/sync/domains/state/storage');
     let metadataHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
     return {
-        async setup() {
+        async setup(serverIdentityId?: string) {
             await connection?.dispose();
             metadataHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
             const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
+            const purposes = createConnectedPurposeCatalogHttpBoundary();
+            const accountKv = createAccountKvHttpFixture();
             let artifactRequestAccountId: string | null = null;
             const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => artifactRequestAccountId, encryptionMode: 'plain' });
             activeSessionMetadataHttp = metadataHttp;
@@ -626,7 +632,7 @@ async function createLocalVoiceAccountHarness() {
             const { profileDefaults } = await import('@/sync/domains/profiles/profile');
             const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
             const homes = await serveAccountHomes({
-                homes: [{ key: 'voice', serverUrl: 'https://local-voice-actions.example.test', accountId: 'account-a',
+                homes: [{ key: 'voice', serverUrl: 'https://local-voice-actions.example.test', serverIdentityId, accountId: 'account-a',
                     currentAccount: true, settings: accountSettings }],
                 route: createSessionReadBatchHttpBoundary(async request => {
                     if (localVoiceHttpResponder) {
@@ -648,6 +654,10 @@ async function createLocalVoiceAccountHarness() {
                     }
                     const authoringMemoryResponse = await authoringMemoryHttp.handle(input, init);
                     if (authoringMemoryResponse) return authoringMemoryResponse;
+                    const purposeResponse = await purposes.handle(input, init);
+                    if (purposeResponse) return purposeResponse;
+                    const accountKvResponse = await accountKv.handleFetch(input, init);
+                    if (accountKvResponse) return accountKvResponse;
                     if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(ProjectAccountRowListResponseV1Schema.parse({
                         status: 'listed', rows: [], coverage: 'complete',
                     }));
@@ -827,12 +837,14 @@ vi.mock('expo-audio', () => ({
 
 export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
     resetModulesBetweenTests?: boolean;
+    serverIdentityId?: string;
 }>) {
     const originalFetch = globalThis.fetch;
     const originalCreateObjectURL = (globalThis as any)?.URL?.createObjectURL;
     const originalRevokeObjectURL = (globalThis as any)?.URL?.revokeObjectURL;
     const originalAudioCtor = (globalThis as any)?.Audio;
     const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
     const originalNavigator = globalThis.navigator;
     const originalMediaDevicesDescriptor = originalNavigator
         ? Object.getOwnPropertyDescriptor(originalNavigator, 'mediaDevices') : undefined;
@@ -924,6 +936,15 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         Object.defineProperty(globalThis.navigator, 'mediaDevices', {
             configurable: true, value: { getUserMedia: webMicGetUserMedia },
         });
+        // The web mic owner subscribes to browser visibility even when the
+        // provider manages capture. Keep that OS boundary present in Node.
+        if (typeof globalThis.document === 'undefined') {
+            Object.defineProperty(globalThis, 'document', {
+                configurable: true,
+                writable: true,
+                value: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
+            });
+        }
         audioStreamStart.mockReset();
         audioStreamStop.mockReset();
         audioSessionRelease.mockReset();
@@ -1067,7 +1088,7 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
                 }
             }
         };
-        await (await installLocalVoiceAccountHarness()).setup();
+        await (await installLocalVoiceAccountHarness()).setup(options?.serverIdentityId);
         const storage = await getStorage();
         const fixtureMachine = createMachineFixture();
         if (!fixtureMachine.metadata) throw new Error('Expected canonical Machine fixture metadata');
@@ -1132,6 +1153,8 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         }
         if (originalNavigatorDescriptor) Object.defineProperty(globalThis, 'navigator', originalNavigatorDescriptor);
         else Reflect.deleteProperty(globalThis, 'navigator');
+        if (originalDocumentDescriptor) Object.defineProperty(globalThis, 'document', originalDocumentDescriptor);
+        else Reflect.deleteProperty(globalThis, 'document');
         await (await installLocalVoiceAccountHarness()).dispose();
         const urlAny = (globalThis as any).URL as any;
         if (typeof originalCreateObjectURL === 'function') {
