@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
-import { buildConnectedServiceCredentialRecord, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { buildConnectedServiceCredentialRecord, FeaturesResponseSchema, QualifiedConnectedAccountCredentialHealthPatchV4Schema } from '@happier-dev/protocol';
 import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { QualifiedConnectedAccountGroupResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
@@ -63,6 +63,9 @@ import { recordConnectedServiceAccountProfileChange } from '../../../server/sour
 import { mutateQualifiedConnectedServiceCredential, mutateQualifiedConnectedServiceCredentialHealth } from '../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository';
 import { createDaemonConnectedAccountPurposeBindingRuntime } from '@/daemon/connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { registerQualifiedConnectedAccountCredentialRoutesV4 } from '../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/registerQualifiedConnectedAccountCredentialRoutesV4';
+import { listQualifiedConnectedAccountsV4, listQualifiedConnectedAccountGroupsV4, readQualifiedConnectedAccountGroupV4 } from '@/api/client/qualifiedConnectedAccountApi';
+import { QualifiedConnectedAccountServiceRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import {
     publishPluginAccountCollectionWatchInvalidation as publishCollectionChange,
     readPluginAccountAvailabilityChangeKey,
@@ -2133,6 +2136,105 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         afterAll(async () => { await database?.close(); });
 
         it.each(['one', 'two', 'broad', 'legacy', 'team'] as const)('reconciles connected services with service-proportional inventory reads (%s)', async mode => {
+        it('does not replay an email health commit on unrelated Account wakes or equal/refused health writes', async () => {
+            await withRealCheckpoint(async storage => {
+                const admitted = await createAdmittedPluginRuntimeFixture();
+                let harness: Awaited<ReturnType<typeof createMaterialChangeHarness>> | undefined;
+                try {
+                    const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+                    const service = { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' };
+                    const ref = { service, accountId: 'pf25-email' };
+                    const created = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+                        expectedCredentialRevision: null, authenticationModeId: 'password',
+                        content: { t: 'plain', v: { token: 'disposable-email-fixture' } }, metadata: { scopes: [] } });
+                    if (created.status !== 'written') throw new Error('Email fixture credential was not created');
+                    harness = await createMaterialChangeHarness(account.id, 'token', registerQualifiedConnectedAccountCredentialRoutesV4);
+                    // Keep the helper's completion witness, while exercising the
+                    // real cursor file rather than a cursor held by a test mock.
+                    const rememberCursor = writeAccountChangesCursor.getMockImplementation()!;
+                    readAccountChangesCursor.mockImplementation(storage.readAccountChangesCursor);
+                    writeAccountChangesCursor.mockImplementation(async (accountId, cursor) => {
+                        await storage.writeAccountChangesCursor(accountId, cursor);
+                        await rememberCursor(accountId, cursor);
+                    });
+                    await harness.start();
+                    const purposeRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+                        reloadController: admitted.controller, coordinatorInventoryIsObserved: () => true,
+                        resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+                        establishedRuntimeOwner: createQualifiedConnectedAccountEstablishedRuntimeOwner({
+                            reloadController: admitted.controller,
+                            credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+                            getAccountEncryptionMode: async () => 'plain',
+                            configuration: { read: async () => null, secrets: {
+                                admit: async () => undefined, has: async () => false, read: async () => null,
+                            } },
+                        }),
+                        qualifiedApi: {
+                            listAccounts: currentService => listQualifiedConnectedAccountsV4({ token: 'token', service: currentService }),
+                            listGroups: currentService => listQualifiedConnectedAccountGroupsV4({ token: 'token', service: currentService }),
+                            readGroup: group => readQualifiedConnectedAccountGroupV4({ token: 'token', group }),
+                        },
+                    });
+                    await purposeRuntime.listCoordinatorAccounts();
+                    harness.detachProjection();
+                    const projections: import('./apiMachine').ConnectedServicesProjectionNotification[] = [];
+                    harness.client.onConnectedServicesProjection(async notification => {
+                        projections.push(notification);
+                        purposeRuntime.invalidate({ services: notification.connectedServiceRefs });
+                        await purposeRuntime.listCoordinatorAccounts();
+                    });
+                    axiosGet.mockClear();
+                    vi.mocked(logger.debug).mockClear();
+                    const servicePages = () => vi.mocked(logger.debug).mock.calls
+                        .filter(([message]) => message === '[API MACHINE] Connected service Account page')
+                        .map(([, diagnostic]) => diagnostic);
+                    const health = { v: 1 as const, status: 'needs_reauth' as const, reconnectRequired: true };
+                    const patchHealth = (expectedCredentialRevision = created.credentialRevision) => harness!.app.inject({
+                        method: 'PATCH', url: '/v4/connect/qualified/credential/health', headers: harness!.headers,
+                        payload: QualifiedConnectedAccountCredentialHealthPatchV4Schema.parse({ ref, health,
+                            expectedCredentialRevision, expectedConfigurationRevision: created.configurationRevision }),
+                    });
+                    expect((await patchHealth()).statusCode).toBe(200);
+                    await harness.settle();
+                    const firstCursor = await storage.readAccountChangesCursor(account.id);
+                    expect(projections).toEqual([expect.objectContaining({ source: 'changes', connectedServiceRefs: [service] })]);
+                    expect(servicePages()).toEqual([
+                        { phase: 'classified', afterCursor: firstCursor - 1, nextCursor: firstCursor,
+                            changeCursors: [firstCursor], allServices: false, serviceKinds: ['email-imap-smtp'] },
+                        { phase: 'settled', afterCursor: firstCursor - 1, nextCursor: firstCursor,
+                            changeCursors: [firstCursor], allServices: false, serviceKinds: ['email-imap-smtp'] },
+                    ]);
+                    const listServices = () => axiosGet.mock.calls.flatMap(([url]) => {
+                        const parsed = new URL(String(url));
+                        return parsed.pathname === '/v4/connect/qualified/accounts'
+                            ? [QualifiedConnectedAccountServiceRefSchema.parse(JSON.parse(parsed.searchParams.get('service') ?? 'null'))] : [];
+                    });
+                    expect(listServices()).toEqual([service]);
+                    for (let index = 0; index < 25; index++) {
+                        await inTx(tx => markAccountChanged(tx, { accountId: account.id, kind: 'account',
+                            entityId: 'self', hint: { settingsVersion: index + 2 } }));
+                        await harness.settle();
+                        await purposeRuntime.listCoordinatorAccounts();
+                    }
+                    expect(await storage.readAccountChangesCursor(account.id)).toBeGreaterThan(firstCursor);
+                    expect(projections).toHaveLength(1);
+                    expect(listServices()).toEqual([service]);
+                    const beforeRefusal = await storage.readAccountChangesCursor(account.id);
+                    expect((await patchHealth()).statusCode).toBe(200);
+                    expect((await patchHealth(`csr_${'x'.repeat(22)}`)).statusCode).toBe(409);
+                    await harness.settle();
+                    await purposeRuntime.listCoordinatorAccounts();
+                    expect(await storage.readAccountChangesCursor(account.id)).toBe(beforeRefusal);
+                    expect(projections).toHaveLength(1);
+                    expect(listServices()).toEqual([service]);
+                    expect(servicePages()).toHaveLength(2);
+                } finally {
+                    try { await harness?.close(); }
+                    finally { await admitted.dispose(); }
+                }
+            });
+        });
+
             const admitted = await createAdmittedPluginRuntimeFixture();
             let client: ApiMachineClient | undefined;
             try {

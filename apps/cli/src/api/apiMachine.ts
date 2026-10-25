@@ -5269,11 +5269,27 @@ export class ApiMachineClient {
                 : null;
             const connectedServicesChanges = changes.flatMap(change => {
                 const scope = readConnectedServicesAccountChangeV1(change);
-                return scope ? [scope] : [];
+                    return scope ? [{ ...scope, cursor: change.cursor }] : [];
             });
             const hasConnectedServicesChange = connectedServicesChanges.length > 0;
             const connectedServiceRefs = connectedServicesChanges.some(change => change.scope === 'all') ? undefined
                 : connectedServicesChanges.flatMap(change => change.scope === 'service' ? [change.ref] : []);
+                // Classification is not acknowledgement. Keep these payload-free
+                // witnesses paired so replay can be distinguished from a new fact
+                // without logging Account/credential identities or feed bodies.
+                const connectedServicesPageDiagnostic = hasConnectedServicesChange ? {
+                    afterCursor: after,
+                    nextCursor,
+                    changeCursors: connectedServicesChanges.map(change => change.cursor),
+                    allServices: connectedServicesChanges.some(change => change.scope === 'all'),
+                    serviceKinds: [...new Set(connectedServicesChanges.flatMap(change =>
+                        change.scope === 'service' ? [change.ref.localId] : []))],
+                } : null;
+                if (connectedServicesPageDiagnostic) {
+                    logger.debug('[API MACHINE] Connected service Account page', {
+                        phase: 'classified', ...connectedServicesPageDiagnostic,
+                    });
+                }
             const quotaRefreshRecordIds = [...new Set(changes.flatMap(change => {
                 const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
                 return recordId === null ? [] : [recordId];
@@ -5531,6 +5547,11 @@ export class ApiMachineClient {
             if (this.isActiveTransportGeneration(transportGeneration)) {
                 this.accountChangesObserverTransportGeneration = transportGeneration;
             }
+                if (connectedServicesPageDiagnostic) {
+                    logger.debug('[API MACHINE] Connected service Account page', {
+                        phase: 'settled', ...connectedServicesPageDiagnostic,
+                    });
+                }
             if (changes.length < CHANGES_PAGE_LIMIT) return;
             // Each page is consumed before its cursor is acknowledged. Subsequent
             // pages classify exact changes instead of repeating reconnect recovery.
