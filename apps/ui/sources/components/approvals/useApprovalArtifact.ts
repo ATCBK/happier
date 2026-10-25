@@ -107,11 +107,12 @@ export function useApprovalArtifact(input: Readonly<{
     // matching decrypted body. That newer revision must restart the exact-Home
     // fetch; otherwise `fetched` remains the earlier open request forever and
     // every mounted Action continuation waits despite observing the right id.
-    const headerOnlyLocalUpdatedAt = local
+    const headerOnlyLocalRevision = local
         && local.isDecrypted !== false
         && typeof local.body !== 'string'
-            ? local.updatedAt
+            ? JSON.stringify([local.headerVersion, local.bodyVersion, local.updatedAt])
             : null;
+    const observedHeaderOnlyRevision = React.useRef<string | null>(null);
     // The local store row belongs to the active Home. An unresolvable Home is not
     // the active Home merely because it has no local profile id.
     const localMatches = scopeMatches && !unresolvedServer
@@ -212,11 +213,21 @@ export function useApprovalArtifact(input: Readonly<{
         }
     }, [artifactId, input.scope, requestedByPortableIdentity, requestedServerIdentityId, resolution, scopeMatches, serverId, unresolvedServer]);
     React.useEffect(() => {
+        observedHeaderOnlyRevision.current = headerOnlyLocalRevision;
         // Binding the active Home must not create new demand for retained content,
         // especially a locked row whose absent body is not a hydration request.
         if (observing && artifactId && (requestedServerIdentifier || (local?.body == null && local?.isDecrypted !== false))) void refresh();
         return () => { pending.current?.abort(); };
-    }, [artifactId, observing, headerOnlyLocalUpdatedAt, refresh, requestedServerIdentifier]);
+        // Scope/focus creates initial demand; later header observations are owned below.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [artifactId, observing, refresh, requestedServerIdentifier]);
+    React.useEffect(() => {
+        // Completing hydration removes the header-only projection; it is not
+        // another demand. A genuinely new header revision still needs its body.
+        if (headerOnlyLocalRevision === null || observedHeaderOnlyRevision.current === headerOnlyLocalRevision) return;
+        observedHeaderOnlyRevision.current = headerOnlyLocalRevision;
+        if (observing && artifactId) void refresh();
+    }, [artifactId, headerOnlyLocalRevision, observing, refresh]);
     React.useEffect(() => {
         if (!observing || !artifactId || !serverId || resolution.kind !== 'bound') return;
         // A concurrently observed Home intentionally cannot publish its Artifact

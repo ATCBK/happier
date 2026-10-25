@@ -77,6 +77,22 @@ describe('approval Artifact header correspondence', () => {
     decision: { kind: 'approve', decidedAtMs: 2 },
   });
 
+  it('indexes Project Start source custody before hydration, and verifies supplied index facts against the body', () => {
+    const workspace = { serverId: 'home', machineId: 'source', workspaceId: 'checkout', rootPath: '/source' };
+    const start = ApprovalRequestV2Schema.parse({ ...builtIn, actionId: 'localServices.launcher.start',
+      executionOriginV1: { ...builtIn.executionOriginV1, actionId: 'localServices.launcher.start', machineId: 'worker' },
+      actionArgs: { machineId: 'worker', targetId: 'web', workspace,
+        declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest', name: 'web' } } } });
+    const header = buildApprovalRequestArtifactHeaderV1(start);
+    expect(header.approvalSubjectKey).toEqual(expect.stringMatching(/^project-service-start:/));
+    expect(approvalArtifactBodyMatchesHeaderV1(header, JSON.stringify(start))?.family).toBe('built_in');
+    expect(approvalArtifactBodyMatchesHeaderV1({ ...header, approvalSubjectKey: 'project-service-start:other' }, JSON.stringify(start))).toBeNull();
+    expect(approvalArtifactBodyMatchesHeaderV1({ ...header, approvalSubjectKey: { machineId: 'source' } }, JSON.stringify(start))).toBeNull();
+    const { approvalSubjectKey: _index, ...previousHeader } = header;
+    expect(approvalArtifactBodyMatchesHeaderV1(previousHeader, JSON.stringify(start))?.family).toBe('built_in');
+    expect(buildApprovalRequestArtifactHeaderV1({ ...start, actionArgs: { ...start.actionArgs as object, declaration: undefined } }).approvalSubjectKey).toBeUndefined();
+  });
+
   it('resumes a bounded approval page and filters plugin approvals through their canonical Action id', async () => {
     const rows = [
       { artifactId: 'built-in', updatedAt: 2, header: buildApprovalRequestArtifactHeaderV1(builtIn), body: JSON.stringify(builtIn) },

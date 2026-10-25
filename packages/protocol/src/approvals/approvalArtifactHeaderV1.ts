@@ -3,6 +3,7 @@ import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import { ActionIdSchema, type ActionId } from '../actions/actionIds.js';
 import type { ApprovalQueueListItemV1, ApprovalQueueListResultV1 } from '../actions/executor/types.js';
 import type { ArtifactListSelectionOptionsV1 } from '../artifacts/artifactListSelectionV1.js';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '../local/services/launcher/v1.js';
 import { encodeArtifactKindV1 } from '../artifacts/artifactKindV1.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 import { ManagedDeleteInputV1Schema } from '../machines/managed/actionsV1.js';
@@ -48,12 +49,23 @@ function sessionBindingMatches(header: ApprovalArtifactHeaderCandidateV1, sessio
       : header.sessions === undefined || header.sessions === null);
 }
 
+/** The surrounding private Artifact inventory and verified origin supply Home/Account scope. */
+export function deriveProjectServiceStartApprovalSubjectKeyV1(source: Readonly<{ machineId: string; refId: string }>): string {
+  return `project-service-start:${computeCanonicalDomainSeparatedDigest('happier.approval.project-service-start-subject.v1', [source.machineId, source.refId])}`;
+}
+
 export function deriveManagedDeleteApprovalSubjectKeyV1(input: Readonly<{ homeId: string; managedId: string }>): string {
   return `managed-delete:${computeCanonicalDomainSeparatedDigest('happier.approval.managed-delete-subject.v1', [input.homeId, input.managedId])}`;
 }
 
 /** One subject-index producer; a header hint never substitutes for body admission. */
 export function readApprovalRequestArtifactSubjectKeyV1(request: ApprovalRequest): string | null {
+  if (request.v === 2 && request.actionId === 'localServices.launcher.start') {
+    const input = DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(request.actionArgs);
+    return input.success && input.data.workspace && input.data.declaration?.selection.kind === 'manifest'
+      && input.data.declaration.workspaceRefId === input.data.workspace.workspaceId
+      ? deriveProjectServiceStartApprovalSubjectKeyV1({ machineId: input.data.workspace.machineId, refId: input.data.declaration.workspaceRefId }) : null;
+  }
   if (request.actionId !== 'machines.managed.delete') return null;
   const input = ManagedDeleteInputV1Schema.safeParse(request.actionArgs);
   return input.success ? deriveManagedDeleteApprovalSubjectKeyV1(input.data) : null;
@@ -101,7 +113,8 @@ export function approvalRequestArtifactHeaderMatches(
     && header.title === request.summary
     && header.approvalStatus === request.status
     && header.actionId === request.actionId
-    && optionalExactStringMatches(header.approvalSubjectKey, approvalSubjectKey)
+    && (request.actionId === 'localServices.launcher.start' && header.approvalSubjectKey === undefined
+      || optionalExactStringMatches(header.approvalSubjectKey, approvalSubjectKey))
     && sessionBindingMatches(header, sessionId || null)
     && (request.v === 1 || (
       optionalExactStringMatches(header.serverId, origin?.serverId ?? null)

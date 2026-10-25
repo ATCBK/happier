@@ -19,6 +19,7 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 /**
  * The exact-Home approval reader over real saved Homes and their stateful
@@ -344,12 +345,15 @@ describe('useApprovalArtifact', () => {
         } finally {
             context.dispose();
         }
+        const readsBefore = harness.requestsFor(`/v1/artifacts/${artifactId}`).length;
         const hook = await renderReader(artifactId, serverId);
         await settle(hook, artifactId, state => {
             expect(state.invalidArtifact).toBe(true);
             expect(state.isLoading).toBe(false);
             expect(state.error).toBe(true);
         });
+        await flushHookEffects();
+        expect(harness.requestsFor(`/v1/artifacts/${artifactId}`).length - readsBefore).toBe(1);
     });
 
     it('projects an accepted exact-Home decision before replay returns, without a remote change or poll', async () => {

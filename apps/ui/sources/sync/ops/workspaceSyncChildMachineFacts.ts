@@ -4,8 +4,8 @@ import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actions/actionAccountContext';
 
-/** One admitted Machine observation, with retained-row reads only for the
- * component selected by Protocol. No UI topology or retained fact cache. */
+/** One admitted Machine census, with each demanded child's retained facts shared
+ * by its projections. A later census always reads fresh facts. */
 export async function readUiWorkspaceSyncChildMachineFacts(account: LazyActionAccountContext, signal?: AbortSignal): Promise<Readonly<{
     childMachineProjections: readonly WorkspaceSyncChildMachineProjection[];
     readChildMachines(machineIds: readonly string[]): Promise<readonly WorkspaceSyncChildMachineFacts[]>;
@@ -18,6 +18,7 @@ export async function readUiWorkspaceSyncChildMachineFacts(account: LazyActionAc
     const childMachineProjections = machines.flatMap(machine => machine.devcontainerChild
         ? [{ serverId: account.serverId, machineId: machine.id, projection: DevcontainerChildProjectionV1Schema.parse(machine.devcontainerChild) }] : []);
     const managed = createManagedMachineActionClient({ request: account.request });
+    const childFacts = new Map<string, Promise<WorkspaceSyncChildMachineFacts>>();
     return {
         childMachineProjections,
         async readChildMachines(machineIds: readonly string[]): Promise<readonly WorkspaceSyncChildMachineFacts[]> {
@@ -30,13 +31,25 @@ export async function readUiWorkspaceSyncChildMachineFacts(account: LazyActionAc
                     || machine.access && machine.access.accessState !== 'ready') throw new Error('Current Machine is unavailable');
                 const child = childMachineProjections.find(candidate => candidate.machineId === machineId);
                 if (!child) continue;
-                if (!machine.installationId) throw new Error('Child installation is unavailable');
-                const managedMachine = await managed.execute('machines.managed.get', {
-                    homeId: account.serverId, managedId: child.projection.relation.managedMachineId,
-                }, { signal });
+                const installationId = machine.installationId;
+                if (!installationId) throw new Error('Child installation is unavailable');
+                let pending = childFacts.get(machineId);
+                if (!pending) {
+                    pending = (async () => {
+                        const managedMachine = await managed.execute('machines.managed.get', {
+                            homeId: account.serverId, managedId: child.projection.relation.managedMachineId,
+                        }, { signal });
+                        return { ...child, installationId, managedMachine,
+                            controller: { ...managedMachine.controller, available: false } };
+                    })();
+                    // Retain failures too: this census cannot retry the same read per
+                    // declaration. The next real observation owns its fresh attempt.
+                    childFacts.set(machineId, pending);
+                }
+                const fact = await pending;
                 account.assertCurrent();
-                facts.push({ ...child, installationId: machine.installationId, managedMachine,
-                    controller: { ...managedMachine.controller, available: false } });
+                signal?.throwIfAborted();
+                facts.push(fact);
             }
             return facts;
         },

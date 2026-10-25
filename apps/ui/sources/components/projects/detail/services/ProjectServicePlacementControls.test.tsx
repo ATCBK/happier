@@ -34,6 +34,8 @@ import { executeServiceRelocationAction } from './serviceRelocationAction';
 type PlacementObservation = ReturnType<typeof import('./projectServicePlacementObservation')['useProjectServicePlacementObservation']>;
 
 const remote = vi.hoisted(() => vi.fn());
+// Host renderer uses the real web adapter for the native haptic boundary.
+vi.mock('@/components/ui/theme/haptics', () => import('@/components/ui/theme/haptics.web'));
 // The addressed daemons are the network boundary; placement, relocation and Action policy stay real.
 vi.mock(
   '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
@@ -125,6 +127,8 @@ async function setup(options: Readonly<{
   waiveStartApproval?: boolean;
   onStart?: (request: Readonly<{ machineId: string; params: unknown }>) => unknown;
   startResponse?: () => unknown;
+  beforeRender?: (serverId: string) => void;
+  artifactBodyReads?: string[];
 }>) {
   const writes: WorkspaceExecutionSettingsV1[] = [];
   const poolReads: unknown[] = [];
@@ -141,6 +145,12 @@ async function setup(options: Readonly<{
     'https://service-placement-ui.test',
     {
       handleRequest: async (path, init) => {
+        if (path === '/v1/artifacts/read') {
+          const request = JSON.parse(String(init?.body)) as { artifactIds: string[]; projection?: string };
+          if (request.projection !== 'headers') options.artifactBodyReads?.push(...request.artifactIds);
+        } else if (/^\/v1\/artifacts\/[^/]+$/.test(path) && (!init?.method || init.method === 'GET')) {
+          options.artifactBodyReads?.push(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
+        }
         if (options.serviceRuntime && path === '/v2/account/settings') return json({
           content: { t: 'plain', v: storage.getState().settings }, version: storage.getState().settingsVersion ?? 0,
         });
@@ -406,6 +416,7 @@ async function setup(options: Readonly<{
         source={{ serverId, refId, machineId: source.machineId }} declaration={{ portable: options.portable !== false, currentnessKey: declarationBasis }} lifecycleKey={lifecycleKey} /> : null}
     </Provider>;
   }
+  options.beforeRender?.(serverId);
   const screen = await renderScreen(<React.Profiler id="services" onRender={() => options.onCommit?.()}><Host /></React.Profiler>);
   if (options.modelOnly) await vi.waitFor(() => expect(model?.state.kind).toBe('ready'));
   else if (options.waitEnabled !== false) await vi.waitFor(() =>
@@ -436,7 +447,14 @@ async function setup(options: Readonly<{
     });
   };
   const runsOn = () => screen.findAllByTestId('placement.runsOn')[0]!;
+  const catalogBinding = async () => {
+    const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+    const resolved = await resolveServerCredentialAccountScope(serverId);
+    if (resolved.kind !== 'bound' || !resolved.credentialKey) throw new Error('Expected the fixture Home credential binding');
+    return { serverId: resolved.scope.serverId, accountId: resolved.scope.accountId, credentialKey: resolved.credentialKey };
+  };
   return { screen, writes, poolReads, choose, choosePool, runsOn, model: () => model!, serverId,
+    catalogBinding,
     setRunning: (value: boolean) => { running = value; refreshRow?.(); },
     setRowMachine: (machineId: string) => { rowMachineId = machineId; refreshRow?.(); },
     setActualFails: (failed: boolean) => { actualFails = failed; },
@@ -449,6 +467,57 @@ async function setup(options: Readonly<{
 }
 
 describe('Service Runs on through the placement and relocation Actions', () => {
+  it('opens only this Project pending approval bodies across unrelated Starts, Back and reconnect', async () => {
+    const bodyReads: string[] = [];
+    const h = await setup({ running: false, actualFails: true, liveFeeds: true, sharedObservation: true, waitEnabled: false,
+      artifactBodyReads: bodyReads,
+      beforeRender(serverId) {
+        const workspace = { serverId, machineId: 'devbox', workspaceId: 'checkout', rootPath: '/src/happier' };
+        const request = { machineId: 'hz-build-1', targetId: 'server-target', workspace,
+          declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest' as const, name: 'server' } } };
+        const serviceStartReview = { request, target: { ...workspace, machineId: 'hz-build-1', workspaceId: 'worker-checkout', rootPath: '/copy' },
+          reviewedEffectDigest: 'a'.repeat(64), reviewedEffect: {}, setup: { required: false,
+            project: { serverId, projectId: 'project' }, reviewedEffectDigest: 'b'.repeat(64), reviewedEffect: {} } };
+        const base: ApprovalRequestV2 = { v: 2, status: 'approved', createdAtMs: 1, updatedAtMs: 2,
+          createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId: 'localServices.launcher.start', actionArgs: request,
+          executionOriginV1: { v: 1, authority: 'present_user', surface: 'cli', caller: { kind: 'host' }, serverId,
+            accountId: 'artifact-account', actionId: 'localServices.launcher.start', requestId: 'pending-start', machineId: 'hz-build-1' },
+          summary: 'Start server', decision: { kind: 'approve', decidedAtMs: 2 },
+          preview: { serviceStartReview } };
+        const values: Array<{ id: string; approval: ApprovalRequestV2 }> = Array.from({ length: 1000 }, (_, index) => {
+          const otherRequest = { ...request, workspace: { ...workspace, workspaceId: `other-checkout-${index}`, rootPath: `/other-${index}`,
+              machineId: index % 2 ? 'other-machine' : 'devbox' },
+            declaration: { ...request.declaration, workspaceRefId: `other-checkout-${index}` } };
+          return { id: `unrelated-start-${index}`, approval: { ...base, status: index % 2 ? 'approved' as const : 'executing' as const,
+            executionOriginV1: { ...base.executionOriginV1, requestId: `unrelated-request-${index}` },
+            actionArgs: otherRequest, preview: { serviceStartReview: { ...serviceStartReview, request: otherRequest,
+              target: { ...serviceStartReview.target, workspaceId: `worker-other-${index}`, rootPath: `/copy-other-${index}` },
+              setup: { ...serviceStartReview.setup, project: { serverId, projectId: `project-other-${index}` } } } } } };
+        });
+        values.push({ id: 'pending-start', approval: base });
+        for (const { id, approval } of values) {
+          const header = buildApprovalRequestArtifactHeaderV1(approval);
+          fixture!.boundary.replaceStoredRow({ id, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }),
+            headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2 });
+          storage.getState().updateArtifact({ id, title: approval.summary, header, isDecrypted: true,
+            headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2 });
+        }
+      } });
+    try {
+      await vi.waitFor(() => expect(h.screen.getTextContent()).toContain('localServices.row.startingOn'));
+      await flushHookEffects();
+      expect(bodyReads.length).toBe(1);
+      expect(bodyReads).toEqual(['pending-start']);
+      await act(async () => { h.setDetail(true); });
+      await act(async () => { h.setDetail(false); });
+      expect(bodyReads).toEqual(['pending-start']);
+      await act(async () => publishHomeAccountChange(h.serverId, undefined, { source: 'connected' }));
+      await vi.waitFor(() => expect(bodyReads).toEqual(['pending-start', 'pending-start']));
+      expect(h.screen.getTextContent()).toContain('localServices.row.startingOn');
+    } finally { await h.screen.unmount(); }
+  });
   it.each([['app', 'hz-build-1', 'running'], ['app', 'devbox', 'running'], ['cli', 'hz-build-1', 'running'], ['cli', 'devbox', 'running'],
     ['cli', 'hz-build-1', 'failed']] as const)(
     'retains successful %s Start handoff over cached absence on %s until native %s, then accepts a real kill', async (entry, machineId, nativeState) => {
@@ -571,7 +640,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         // without this instance (including a genuine native exit).
         placementRead = createDeferred<void>();
         holdPlacement = true;
-        await act(async () => { h.setRunning(false); publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+        await act(async () => { h.setRunning(false); publishLocalServiceInventorySnapshot({ ...await h.catalogBinding(), machineId }, {
           v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
         await vi.waitFor(() => expect(h.screen.findByTestId('service-row-start')).toBeTruthy());
         expect(h.screen.findByTestId('service-row-status-operation')).toBeNull();
@@ -657,7 +726,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running')).toBeTruthy());
       hold = true;
       capture = () => frames.push(h.screen.getTextContent());
-      await act(async () => publishLocalServiceLauncherSnapshot({ serverId: h.serverId, machineId: 'devbox',
+      await act(async () => publishLocalServiceLauncherSnapshot({ ...await h.catalogBinding(), machineId: 'devbox',
         scope: 'workspace', workspaceRoot: workspace.rootPath }, { v: 1, machineId: 'devbox', updatedAt: 2, targets: [{
           id: 'server-target', source: 'managed_service', sourceClass: { kind: 'managed_service', managedServiceId: 'instance' },
           machineId: 'devbox', workspaceId: 'checkout', workspace, declaration, cwd: workspace.rootPath,
@@ -670,7 +739,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
       expect(frames.every(frame => !frame.includes('localServices.rowStatus.loading') && !frame.includes('common.loading'))).toBe(true);
       capture = () => {};
       await act(async () => { updatedAt = 3; h.setRunning(false); hold = false; bindingRead.resolve();
-        publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId: 'devbox' }, {
+        publishLocalServiceInventorySnapshot({ ...await h.catalogBinding(), machineId: 'devbox' }, {
           v: 1, machineId: 'devbox', generatedAt: 3, refreshState: 'idle', entries: [], diagnostics: [] }); });
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-start')).toBeTruthy());
       expect(h.screen.getTextContent()).not.toContain('common.loading');
@@ -792,7 +861,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
       expect(h.screen.getTextContent()).not.toContain('common.loading');
       h.setActualFails(false);
       await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
-        publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+        publishLocalServiceInventorySnapshot({ ...await h.catalogBinding(), machineId }, {
           v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), JSON.stringify({ text: h.screen.getTextContent(),
         calls: remote.mock.calls.slice(-10).map(([call]) => ({ machineId: call.machineId, method: call.method, payload: call.payload })) })).toBeTruthy());
@@ -835,13 +904,13 @@ describe('Service Runs on through the placement and relocation Actions', () => {
       expect(h.screen.getTextContent()).not.toContain('common.loading');
       h.setActualFails(false);
       await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
-        publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+        publishLocalServiceInventorySnapshot({ ...await h.catalogBinding(), machineId }, {
           v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), h.screen.getTextContent()).toBeTruthy());
       // The receipt has handed off. A later failed census must say Unavailable,
       // rather than replaying this historical success's loading treatment.
       h.setActualFails(true);
-      await act(async () => publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+      await act(async () => publishLocalServiceInventorySnapshot({ ...await h.catalogBinding(), machineId }, {
         v: 1, machineId, generatedAt: 3, refreshState: 'idle', entries: [], diagnostics: [] }));
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
     } finally { await h.screen.unmount(); }
