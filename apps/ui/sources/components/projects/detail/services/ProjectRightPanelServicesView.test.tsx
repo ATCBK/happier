@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LocalServiceLauncherSnapshotV1, LocalServicePreviewResourceV1 } from '@happier-dev/protocol';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
@@ -13,7 +15,8 @@ import { DaemonLocalServiceLauncherSnapshotResponseV1Schema, DaemonLocalServiceL
     DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { DaemonLocalServicePublicPreviewCreateResponseV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import type { IModal } from '@/modal/types';
-import { buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localServices';
+import { buildLocalServiceInventoryRow, buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localServices';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { pressTestInstanceAsync, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -40,6 +43,22 @@ const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+
+// Load the real daemon producers at runtime without rooting the CLI's compiler graph in UI tests.
+const launcherProducerPath = fileURLToPath(new URL('../../../../../../cli/src/daemon/local/services/launch/suggestions.ts', import.meta.url));
+const previewProducerPath = fileURLToPath(new URL('../../../../../../cli/src/daemon/local/services/preview/registry.ts', import.meta.url));
+const { buildLocalServiceLauncherSnapshot } = await vi.importActual<{
+    buildLocalServiceLauncherSnapshot(input: Readonly<{
+        machineId: string; accountId: string; sessionId: string; updatedAt: number;
+        runTargets: readonly never[];
+        inventoryEntries: readonly ReturnType<typeof buildLocalServiceInventoryRow>[];
+        previewResources: readonly LocalServicePreviewResourceV1[];
+    }>): LocalServiceLauncherSnapshotV1;
+}>(launcherProducerPath);
+const { previewIdForInventoryEntry } = await vi.importActual<{
+    previewIdForInventoryEntry(accountId: string, machineId: string, sessionId: string | undefined, entryId: string): string;
+}>(previewProducerPath);
+const publicPreviewId = previewIdForInventoryEntry('project-account', 'machine-a', 'session-a', 'project-feed');
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 vi.mock('socket.io-client', async importOriginal =>
@@ -103,29 +122,26 @@ function buildLauncherState() {
 }
 
 function buildPublicPreviewLauncherState() {
-    return applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
-        v: 1,
+    const snapshot = buildLocalServiceLauncherSnapshot({
         machineId: 'machine-a',
+        accountId: 'project-account',
         sessionId: 'session-a',
         updatedAt: 3_000,
-        targets: [{
-            id: 'preview:project-feed',
-            source: 'registered_preview',
+        runTargets: [],
+        inventoryEntries: [buildLocalServiceInventoryRow({ id: 'project-feed', port: 3000,
+            provenance: { session: { id: 'session-a' } } })],
+        previewResources: [{
+            previewId: publicPreviewId,
             machineId: 'machine-a',
             sessionId: 'session-a',
-            title: 'Project feed preview',
-            subtitle: 'localhost:3000',
-            confidence: 'high',
-            state: 'available',
-            actions: [],
-            browserTarget: {
-                kind: 'localServicePreview',
-                targetId: 'preview-project',
-                sessionId: 'session-a',
-                machineId: 'machine-a',
-            },
+            owner: { kind: 'session', id: 'session-a' },
+            target: { scheme: 'http', host: '127.0.0.1', port: 3000 },
+            initialPath: { pathname: '/', search: '' },
+            display: { title: 'Project feed preview', addressLabel: 'localhost:3000' },
+            originMode: 'host',
         }],
     });
+    return applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), snapshot);
 }
 
 function buildPublicPreviewState() {
@@ -247,7 +263,9 @@ describe('ProjectRightPanelServicesView', () => {
             installationId: 'service-machine-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             runnerContentKeyBinding: null, access: { custodian: { accountId: scope.accountId, displayName: 'Project account' },
                 role: 'manage', resourceMode: 'plain', accessState: 'ready' } });
-        home.answer(serverId, '/v1/machines', { body: [machine] });
+        const machineRow = { ...createPlainMachineRowFixture({ id: machine.id, accountId: scope.accountId }),
+            installationId: machine.installationId };
+        home.answer(serverId, `/v1/machines/${machine.id}`, { body: { machine: machineRow } });
         home.answer(serverId, '/v1/actions/projects.prepare/execution-authorization', { select: body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
             return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-setup-root', binding: {
@@ -408,7 +426,7 @@ describe('ProjectRightPanelServicesView', () => {
             protocolVersion: 1,
             exposure: {
                 exposureId: 'public-preview-1',
-                previewId: 'preview-project',
+                previewId: publicPreviewId,
                 sessionId: 'session-a',
                 machineId: 'machine-a',
                 mode: 'secret_link',
@@ -423,7 +441,7 @@ describe('ProjectRightPanelServicesView', () => {
                 v: 1,
                 machineId: 'machine-a',
                 sessionId: 'session-a',
-                previewId: 'preview-project',
+                previewId: publicPreviewId,
                 generatedAt: 4_000,
                 refreshState: 'idle',
                 policy: {
@@ -451,9 +469,9 @@ describe('ProjectRightPanelServicesView', () => {
             />,
         );
 
-        await screen.pressByTestIdAsync('project-rightpanel-services-row:preview:project-feed-item');
+        await screen.pressByTestIdAsync('project-rightpanel-services-row:inventory:project-feed-item');
         await flushHookEffects();
-        await screen.pressByTestIdAsync('project-rightpanel-services-row:preview:project-feed-share');
+        await screen.pressByTestIdAsync('project-rightpanel-services-row:inventory:project-feed-share');
         await flushHookEffects();
 
         expect(modalShowMock).not.toHaveBeenCalled();
@@ -463,7 +481,7 @@ describe('ProjectRightPanelServicesView', () => {
             input: {
                 machineId: 'machine-a',
                 sessionId: 'session-a',
-                previewId: 'preview-project',
+                previewId: publicPreviewId,
                 mode: 'secret_link',
                 ttlMs: 600_000,
                 confirmation: { acknowledged: true },
@@ -477,11 +495,11 @@ describe('ProjectRightPanelServicesView', () => {
         });
         expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
             serverId, machineId: 'machine-a', method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE,
-            payload: expect.objectContaining({ previewId: 'preview-project', sessionId: 'session-a',
+            payload: expect.objectContaining({ previewId: publicPreviewId, sessionId: 'session-a',
                 mode: 'secret_link', ttlMs: 600_000, confirmation: { acknowledged: true } }),
         }));
         await expect(runtimeActionExecute.mock.results[0]!.value).resolves.toMatchObject({
-            protocolVersion: 1, exposure: { exposureId: 'public-preview-1', previewId: 'preview-project',
+            protocolVersion: 1, exposure: { exposureId: 'public-preview-1', previewId: publicPreviewId,
                 publicUrl: 'https://preview.example.test/public-preview-1' },
         });
     });
