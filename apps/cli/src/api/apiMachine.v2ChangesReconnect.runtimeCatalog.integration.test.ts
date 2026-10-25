@@ -569,7 +569,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             // change on the same page still wakes direct-material admission.
             expect(events).toEqual(mode === 'paged' || mixed || mode === 'mixed-team' ? ['cursor', refresh, 'cursor'] : [refresh, 'cursor']);
             expect(directMaterialWakes).toEqual(mode === 'mixed' || mode === 'mixed-team' ? [{ source: 'changes',
-                signal: expect.any(AbortSignal), directMaterialChanged: true }] : []);
+                signal: expect.any(AbortSignal), facts: expect.arrayContaining([mode === 'mixed' ? 'connected-services' : 'teams']) }] : []);
             expect(axiosGet.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/profile')))
                 // The first catch-up authenticates the opaque token's Account;
                 // only a mixed credential change needs a projection read too.
@@ -1401,7 +1401,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             expect(revalidate).toHaveBeenCalledWith({
                 source: 'changes',
                 signal: expect.any(AbortSignal),
-                directMaterialChanged: true,
+                facts: expect.arrayContaining(['teams']),
             });
             expect(writeAccountChangesCursor).not.toHaveBeenCalled();
             withdraw();

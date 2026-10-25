@@ -264,6 +264,7 @@ import {
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 import {
   createDaemonTeamCredentialDirectMaterialReconciler,
+  subscribeTeamCredentialDirectMaterialAccountChanges,
   subscribeTeamCredentialDirectMaterialSourceChanges,
   type TeamCredentialDirectMaterialWakeReason,
   type TeamCredentialDirectMaterialSourceWake,
@@ -4101,12 +4102,9 @@ export async function startDaemon(
           // reconnect, whose census reconstructs missing work (teams-lane-10 06 §11).
           teamCredentialDirectMaterialAccountChangeCleanup?.();
           teamCredentialDirectMaterialAccountChangeCleanup = attemptedApiMachine
-            ? attemptedApiMachine.onManagedProviderRetainedCurrentnessInvalidation(
-                change => {
-                  if (change.directMaterialChanged) {
-                    reconcileTeamCredentialDirectMaterialAfterSourceChange(`account-${change.source}`);
-                  }
-                },
+            ? subscribeTeamCredentialDirectMaterialAccountChanges(
+                attemptedApiMachine,
+                wakeReason => reconcileTeamCredentialDirectMaterialAfterSourceChange(wakeReason),
               )
             : null;
           pluginWebhookWakeCleanup?.();

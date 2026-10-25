@@ -6,6 +6,8 @@
 import axios from 'axios';
 import { readConnectedServicesAccountChangeV1, readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
 import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import type { ProviderBrokerRetainedCurrentnessInvalidation } from '@/providers/broker/brokerRetainedCurrentnessInvalidation';
+import { sameProviderConnectionsDirectMaterial } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import { PluginDomainChangeEntrySchema } from '@happier-dev/protocol/changes/pluginDomain';
 import { ManagedMachinePolicyChangeHintV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
@@ -440,10 +442,9 @@ export type SessionAccessResetNotification = Readonly<{
     cursor: number;
 }>;
 
-export type ManagedProviderRetainedCurrentnessInvalidation = Readonly<{
+export type ManagedProviderRetainedCurrentnessInvalidation = ProviderBrokerRetainedCurrentnessInvalidation & Readonly<{
     source: 'connect' | 'reconnect' | 'changes' | 'page-limit' | 'cursor-gone';
     signal: AbortSignal;
-    directMaterialChanged: boolean;
 }>;
 
 export type ConnectedServicesProjectionNotification = Readonly<{
@@ -5178,7 +5179,7 @@ export class ApiMachineClient {
                 await this.notifyManagedProviderRetainedCurrentnessInvalidation({
                     source: 'cursor-gone',
                     signal,
-                    directMaterialChanged: true,
+                    facts: ['all'],
                 });
                 await this.notifyAutomationEventSourcesInvalidated(signal);
                 await this.notifyPluginWebhookInvalidated(signal);
@@ -5395,6 +5396,9 @@ export class ApiMachineClient {
                 await refreshDemandedActiveProfileCatalog({ token: this.token, signal });
                 signal.throwIfAborted();
             }
+            const sourceSnapshotBeforeSettings = getActiveAccountSettingsSnapshot();
+            const providerCatalogBeforeSettings = sourceSnapshotBeforeSettings?.providerConnectionsCatalog;
+            const providerAccountLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
             if (highestAccountSettingsVersion !== null) {
                 await this.notifyAccountSettingsVersionHint({
                     settingsVersion: highestAccountSettingsVersion,
@@ -5506,17 +5510,34 @@ export class ApiMachineClient {
                 });
             }
 
-            const directMaterialChanged = reason !== 'live'
-                || hasTeamChange
-                || hasConnectedServicesChange
-                || hasSavedSecretCatalogChange
-                || hasProviderConnectionsChange;
-            if (directMaterialChanged) {
+            const sourceSnapshot = getActiveAccountSettingsSnapshot();
+            const facts: ProviderBrokerRetainedCurrentnessInvalidation['facts'][number][] = [];
+            if (reason !== 'live'
+                || providerAccountLifetime !== getActiveAccountSettingsSnapshotLifetimeToken()
+                || !isDeepStrictEqual(sourceSnapshotBeforeSettings?.settingsSecretsReadKeys, sourceSnapshot?.settingsSecretsReadKeys)
+                || !isDeepStrictEqual(sourceSnapshotBeforeSettings?.settings.secrets, sourceSnapshot?.settings.secrets)) {
+                facts.push('all');
+            }
+            // Keep Home-owned facts explicit even when material authority also
+            // changed: direct delivery consumes those facts independently of
+            // its snapshot subscription, while retained checks consume `all`.
+            if (hasTeamChange) facts.push('teams');
+            if (hasConnectedServicesChange) facts.push('connected-services');
+            if (!facts.includes('all')) {
+                if (hasConnectedAccountCatalogChange) facts.push('connected-catalog');
+                if (hasSavedSecretCatalogChange && (sourceSnapshotBeforeSettings?.savedSecretResources !== sourceSnapshot?.savedSecretResources
+                    || sourceSnapshotBeforeSettings?.savedSecretCatalogState !== sourceSnapshot?.savedSecretCatalogState)) facts.push('saved-secrets');
+                if (hasProviderConnectionsChange && (providerCatalogBeforeSettings?.status !== 'ready'
+                    || !sameProviderConnectionsDirectMaterial(providerCatalogBeforeSettings,
+                        sourceSnapshot?.providerConnectionsCatalog))) facts.push('provider-connections');
+            }
+            if (facts.length > 0) {
                 signal.throwIfAborted();
                 await this.notifyManagedProviderRetainedCurrentnessInvalidation({
                     source: reason === 'live' ? 'changes' : reason,
                     signal,
-                    directMaterialChanged,
+                    facts,
+                    ...(hasConnectedServicesChange && connectedServiceRefs ? { connectedServiceRefs } : {}),
                 });
             }
 
