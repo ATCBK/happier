@@ -724,6 +724,7 @@ describe('voice session lifecycle edge contracts', () => {
                 errorMessage: 'voice_provider_adapter_not_registered',
                 errorRecoveryAction: 'retry',
                 errorPresentation: 'error',
+                recoveryTarget: null,
             });
             expect(published).toHaveBeenCalledTimes(1);
 

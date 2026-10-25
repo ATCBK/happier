@@ -869,6 +869,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     let publishProviderConversation = false;
     let nativeProviderConversationId: string | null = null;
     let prepareFailure: string | null = null;
+    let prepareDecline: string | null = null;
     let sdkOpenFailure: string | null = null;
     let scope: ReturnType<typeof createExternalVoiceProviderActivationScope> | null = null;
     const { voiceRuntimeLevelStore } = await import('@/voice/runtime/levels/voiceRuntimeLevelStore');
@@ -904,6 +905,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       kind: 'conversation', microphoneMode: 'provider_managed', setInputMuted: () => {}, outputLevelMeter: 'measured',
       protocol: {
         async prepare({ signal, request, providerConversation }) {
+          if (prepareDecline) return { kind: 'declined', code: prepareDecline };
           if (prepareFailure) throw Object.assign(new Error(prepareFailure), { code: prepareFailure });
           if (signal.aborted) return { kind: 'aborted' };
           if (publishProviderConversation) {
@@ -1120,11 +1122,15 @@ describe('createBundledRealtimeProviderRuntime', () => {
         expect(adapter.getSnapshot()).toMatchObject({ errorCode: failure.kind });
         sdkOpenFailure = null;
       }
-      for (const code of ['execution_machine_unavailable', 'update_required']) {
+      prepareDecline = 'agent_signed_out';
+      await expect(adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null })).resolves.toBeUndefined();
+      expect(adapter.getSnapshot()).toMatchObject({ errorCode: 'authentication_required', errorRecoveryAction: 'connect_agent' });
+      prepareDecline = null;
+      for (const code of ['agent_signed_out', 'execution_machine_unavailable', 'update_required']) {
         sdkOpenFailure = code;
         await expect(adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null }))
           .rejects.toMatchObject({ code });
-        expect(adapter.getSnapshot()).toMatchObject({ errorCode: code });
+        expect(adapter.getSnapshot()).toMatchObject({ errorCode: code === 'agent_signed_out' ? 'authentication_required' : code });
       }
       sdkOpenFailure = 'provider_specific_failure';
       log.clear();

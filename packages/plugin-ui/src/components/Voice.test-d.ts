@@ -1,5 +1,6 @@
 import type { DictationButtonProps, SetupBlockGridProps, SetupStepsProps, StatusCellProps, TextFieldProps, VoiceMarkArtProps } from './index.public.js';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
+import type { VoicePresenceProps, VoiceMarkProps, VoiceStatusLineProps, VoiceTransportProps } from './index.public.js';
 
 const mark: VoiceMarkArtProps = { pose: 'ready', size: 24, theme: 'dark', light: [1, 0, 1], still: true };
 const cell: StatusCellProps = { kind: 'thinking', label: 'Reviewing the draft', still: true };
@@ -21,3 +22,9 @@ async function requestVoice(host: PluginUiHostApi) {
   await host.executeAction('ui.voice_global.brief.request', {});
 }
 void requestVoice;
+
+const presence: VoicePresenceProps = { target: { kind: 'session', sessionAddress: { serverId: 'home', sessionId: 'coding' } } };
+const liveParts: [VoiceMarkProps, VoiceStatusLineProps, VoiceTransportProps] = [{ size: 24 }, { size: 'pill' }, { size: 'touch' }];
+// @ts-expect-error Live rendering binds the host attempt rather than accepting caller-authored lifecycle facts.
+const forgedMark: VoiceMarkProps = { size: 24, voice: {} };
+void [presence, liveParts, forgedMark];

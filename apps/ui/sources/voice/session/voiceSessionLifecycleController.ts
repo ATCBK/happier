@@ -1,4 +1,6 @@
-import { getVoiceAdapterRegistry } from './voiceAdapterRegistry';
+import { getVoiceAdapterRegistry, resolveVoiceAdapterSurfaceCapabilities } from './voiceAdapterRegistry';
+import { storage } from '@/sync/domains/state/storage';
+import { captureVoiceAttemptRecoveryTarget } from './voiceAttemptRecoveryTarget';
 import { canDismissVoiceSessionFailedAttempt, getVoiceSessionSnapshot, recordVoiceSessionEndReason, type VoiceSessionEndReason } from './voiceSessionStore';
 import type { VoiceAdapterController, VoiceAdapterId, VoiceSessionSnapshot } from './types';
 import type { VoiceHeldInput } from '@/voice/runtime/controller/VoiceConversationController';
@@ -38,6 +40,9 @@ export type VoiceSessionLifecycleController = Readonly<{
     rearmAfterCredentialAuthorityChange: (options?: Readonly<{
         exactSessionAccountScopeChanged?: boolean;
         globalBindingAuthorityChanged?: boolean;
+        agentDefaultAuthorityChanged?: boolean;
+        /** False for a default-only change: speech/provider credentials are independent. */
+        providerCredentialAuthorityChanged?: boolean;
     }>) => void;
     sendContextUpdate: (sessionId: string, update: string) => void;
     setConfiguredProviderId: (providerId: VoiceAdapterId | 'off' | null) => void;
@@ -80,6 +85,7 @@ type VoiceRecoveryBinding = Readonly<{
     providerId: VoiceAdapterId;
     sessionId: string;
     requestedTargetSessionAddress: SessionAddress | null;
+    recoveryTarget?: VoiceSessionSnapshot['recoveryTarget'];
 }>;
 
 type MuteAttemptOwner = {
@@ -303,8 +309,12 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
     ): Promise<void> => {
         heldInput = null;
         const ownedSessionId = startAttempt.expectedSnapshotSessionId;
+        const recoveryTarget = captureVoiceAttemptRecoveryTarget(
+            resolveVoiceAdapterSurfaceCapabilities(adapter.id, storage.getState().settings.voice),
+            requestedTargetSessionAddress,
+        );
         if (adapter.engineKind !== 'realtime') {
-            recoveryBinding = { providerId: adapter.id, sessionId: ownedSessionId, requestedTargetSessionAddress };
+            recoveryBinding = { providerId: adapter.id, sessionId: ownedSessionId, requestedTargetSessionAddress, recoveryTarget };
             ensureAttemptConnectivityLease(adapter, ownedSessionId, requestedTargetSessionAddress);
             startingAdapter = startAttempt;
             try {
@@ -346,7 +356,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             throw busy;
         }
         ensureAttemptConnectivityLease(adapter, ownedSessionId, requestedTargetSessionAddress);
-        recoveryBinding = { providerId: adapter.id, sessionId: ownedSessionId, requestedTargetSessionAddress };
+        recoveryBinding = { providerId: adapter.id, sessionId: ownedSessionId, requestedTargetSessionAddress, recoveryTarget };
         realtimeCaptureAdmission = {
             adapter,
             adapterId: adapter.id,
@@ -778,7 +788,19 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         if (disposed) {
             return publishedSnapshot;
         }
+        const previousSnapshot = publishedSnapshot;
         publishedSnapshot = computeSnapshot();
+        if (recoveryBinding?.providerId === publishedSnapshot.adapterId
+            && recoveryBinding.sessionId === publishedSnapshot.sessionId
+            && (publishedSnapshot.canStop || canDismissVoiceSessionFailedAttempt(publishedSnapshot))) {
+            publishedSnapshot = { ...publishedSnapshot, recoveryTarget: recoveryBinding.recoveryTarget ?? null };
+        } else if (publishedSnapshot.canStop && previousSnapshot.adapterId === publishedSnapshot.adapterId
+            && previousSnapshot.sessionId === publishedSnapshot.sessionId
+            && previousSnapshot.recoveryTarget !== undefined) {
+            // Next-provider selection retires retry intent before physical Stop
+            // settles. The still-owned attempt keeps its admitted context.
+            publishedSnapshot = { ...publishedSnapshot, recoveryTarget: previousSnapshot.recoveryTarget };
+        }
         if (publishedSnapshot.status === 'disconnected' || publishedSnapshot.canStop !== true) {
             // Input preference and native suspension leases belong to one
             // admitted attempt. A later attempt, even through the same adapter
@@ -1269,7 +1291,13 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
                 });
                 return;
             }
-            if (!isTerminalProviderAuthFailure(publishedSnapshot)) return;
+            const fixedAgentAuthRepaired = options?.agentDefaultAuthorityChanged === true
+                && canDismissVoiceSessionFailedAttempt(publishedSnapshot)
+                && publishedSnapshot.errorCode === 'authentication_required'
+                && publishedSnapshot.errorMessage === 'agent_signed_out';
+            const providerAuthRepaired = options?.providerCredentialAuthorityChanged !== false
+                && isTerminalProviderAuthFailure(publishedSnapshot);
+            if (!providerAuthRepaired && !fixedAgentAuthRepaired) return;
             suppressedTerminalFailureAdapterId = publishedSnapshot.adapterId;
             publishSnapshot();
         },

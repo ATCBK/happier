@@ -222,6 +222,18 @@ describe('classifyMicSessionFailure', () => {
 });
 
 describe('classifyRealtimeProviderFailure', () => {
+    it.each([
+        ['agent_signed_out', 'authentication_required', 'connect_agent'],
+        ['credential_unavailable', 'provider_auth_invalid', 'review_credentials'],
+        ['credential_access_review_required', 'provider_auth_invalid', 'review_credentials'],
+        ['realtime_agent_update_required', 'provider_setup_required', 'open_settings'],
+        ['update_required', 'update_required', 'update_agent_runtime'],
+    ])('shares the canonical recovery for %s', (code, kind, recoveryAction) => {
+        expect(classifyRealtimeProviderFailure(Object.assign(new Error('private provider detail'), { code })))
+            .toMatchObject({ kind, recoveryAction });
+        expect(resolveVoiceMachineErrorKind(code)).toBe(kind);
+    });
+
     it('classifies permission errors as actionable preflight permission denial', () => {
         const error = Object.assign(new Error('permission_denied'), { name: 'NotAllowedError' });
         expect(classifyRealtimeProviderFailure(error)).toMatchObject({

@@ -79,6 +79,19 @@ export function resolveVoiceAttemptRecoveryAvailable(
 }
 
 /**
+ * Whether Connect is repaired on the exact Agent's own settings page, on the machine that refused
+ * it. Dispatch and the recovery's label read this one answer.
+ */
+export function opensAgentRuntimeSettings(
+    recoveryAction: VoiceMachineRecoveryAction | null,
+    context: VoiceAttemptRecoveryContext,
+): boolean {
+    return recoveryAction === 'connect_agent'
+        && context.connectRecoveryTarget.kind === 'default'
+        && context.runtimeRecoveryTarget !== null;
+}
+
+/**
  * The one recovery dispatch every Voice surface fires.
  *
  * Horizon, the orb and the composer planet all reach the *same* remedy for the
@@ -103,9 +116,7 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
     const { context, navigate, recoveryAction, setupIncomplete } = params;
     if (params.isCurrent?.() === false) return false;
     if ('expectedAttempt' in params && !voiceSessionManager.matchesAttempt(params.expectedAttempt ?? null)) return false;
-        const connectAgentRuntime = recoveryAction === 'connect_agent'
-            && context.connectRecoveryTarget.kind === 'default'
-            && context.runtimeRecoveryTarget !== null;
+        const connectAgentRuntime = opensAgentRuntimeSettings(recoveryAction, context);
         if (recoveryAction === 'connect_agent' && !connectAgentRuntime) {
             if (context.connectRecoveryTarget.kind === 'unavailable') return false;
             await navigate(

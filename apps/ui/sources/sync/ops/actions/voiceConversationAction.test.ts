@@ -48,6 +48,7 @@ import { executeSessionAction } from '@/components/sessions/actions/sessionActio
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -136,7 +137,7 @@ async function createHarness(start = true, featureEnabled = true) {
             currentAccount: true, settings: servedSettings })),
         { key: 'voice', serverUrl: `https://voice-action-runtime-${fixtureOrdinal}.example.test`,
             accountId: 'voice-action-account', currentAccount: true, settings: servedSettings },
-    ], route: async request => {
+    ], route: createSessionReadBatchHttpBoundary(async request => {
             const artifactResponse = artifacts.handle(request.path, { method: request.method,
                 ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) });
             if (artifactResponse) return await artifactResponse;
@@ -153,7 +154,7 @@ async function createHarness(start = true, featureEnabled = true) {
             return await purposes.handle(request.url, { method: request.method, body: request.method === 'POST' ? JSON.stringify(request.body) : undefined })
                 ?? sessions?.handle(request.url, { method: request.method, body: request.method === 'PATCH' ? JSON.stringify(request.body) : undefined })
                 ?? answerVoiceRealtimePreparationHttpRequest(request.url, storage.getState().settings) ?? undefined;
-        } });
+        }).handle });
     runtimeCleanup.push(async () => { await home.dispose(); });
     const disconnect = await home.restoreActiveConnection();
     runtimeCleanup.push(async () => { await disconnect(); });
@@ -239,6 +240,15 @@ async function createHarness(start = true, featureEnabled = true) {
 }
 
 describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it('exposes a sanitized public attempt projection without opening media', async () => {
+        const { lifecycle, invoke } = await createHarness(false);
+        try {
+            const result = await invoke('ui.voice_global.get', {});
+            expect(result.voice).toMatchObject({ presentation: { attemptId: null, surfaceState: 'idle',
+                live: false, failureKind: null, failureMessage: null, recovery: null } });
+            expect(lifecycle.getSnapshot().status).toBe('disconnected');
+        } finally { await lifecycle.dispose(); }
+    });
     it.each(['open', 'close'] as const)('applies exact glance policy to the top-bar %s control', async operation => {
         const { lifecycle } = await createHarness(false);
         const { VoiceTopBarPresence } = await import('@/components/voice/presence/VoiceTopBarPresence');
@@ -621,6 +631,13 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
         const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
         const { Text } = await import('@/components/ui/text/Text');
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const { createRealAppRouteElement } = await import('@/dev/testkit/render/renderRealAppRoute');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const home = getServerProfileById(serverId);
+        if (!home) throw new Error('Hosted Voice destination requires its admitted Home');
+        const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl);
+        if (!credentials) throw new Error('Hosted Voice destination requires its authenticated Account');
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: true, friends: false } });
         let workspace = createWorkspaceState({ id: 'voice-settings-tab', target: { kind: 'settings', params: { pageId: 'voice' } }, pinned: false, preview: false });
         const navigation = createWorkspaceNavigationAdapter({ getState: () => workspace, getCatalog: () => catalog,
@@ -637,7 +654,7 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
                 focused: true, visible: true, navigation: { push() {}, replace() {}, back() {} },
                 children: React.createElement(Text, { testID: 'voice-action-hosted-destination' }, href) });
         };
-        const screen = await renderScreen(hosted());
+        const screen = await renderScreen(await createRealAppRouteElement(hosted, credentials));
         try {
             const accountScope = { serverId, accountId: 'voice-action-account' };
             setVoiceSessionSnapshot(lifecycle.getSnapshot(), { adapterId: providerId, controlSessionId: 'session-original',
@@ -658,7 +675,7 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
                 presentUserConfirmation: { actionId } };
             const result = await createDefaultActionExecutor().execute(actionId, { expectedAttempt }, context);
             expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed' } });
-            await act(async () => { await screen.update(hosted()); });
+            await screen.update(await createRealAppRouteElement(hosted, credentials));
             const destination = scenario === 'ended' ? `/session/saved-conversation?serverId=${serverId}`
                 : scenario === 'history' ? '/settings/voice-history' : '/settings/voice/conversations?focus=provider';
             expect(screen.findByTestId('voice-action-hosted-destination')?.props.children).toBe(destination);
@@ -940,7 +957,10 @@ describe('generated OpenAI conversation Action admission and turn controls', () 
             fail();
             await vi.waitFor(() => expect(lifecycle.getSnapshot().errorRecoveryAction).toBe('retry'));
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'other-session' });
-            expect((await invoke('ui.voice_global.get', {})).voice).toMatchObject({ attemptId: expectedAttempt, canDismissFailedAttempt: true });
+            const failedVoice = (await invoke('ui.voice_global.get', {})).voice;
+            expect(failedVoice).toMatchObject({ attemptId: expectedAttempt, canDismissFailedAttempt: true,
+                presentation: { surfaceState: 'error', failureKind: 'provider_error', failureMessage: expect.any(String),
+                    recovery: { action: 'retry', label: expect.any(String), icon: 'arrow-clockwise' } } });
             expect((await invoke('ui.voice_global.recover', { expectedAttempt })).status).toBe('completed');
             expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 'session-original', status: 'connected' });
             const replacement = getVoiceSessionAttemptId()!;

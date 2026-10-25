@@ -9,6 +9,7 @@ import {
     setPlatformOs,
     waitForLocalVoiceBoundaryEvent,
 } from '@/voice/local/localVoiceEngine.testHarness';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol';
@@ -1376,7 +1377,7 @@ describe('createVoiceSessionLifecycleController', () => {
     });
 
     describe('actual local model-session disclosure', () => {
-        registerLocalVoiceEngineHarnessHooks();
+        registerLocalVoiceEngineHarnessHooks({ serverIdentityId: 'srv_voice_recovery_home' });
 
         beforeEach(async () => {
             const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
@@ -1388,6 +1389,131 @@ describe('createVoiceSessionLifecycleController', () => {
                     ? Promise.resolve(DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [] }))
                     : incumbent(request)
             ));
+        });
+
+        it('keeps Global sign-in recovery on the admitted Agent and machine after preferences change', async () => {
+            const state = await getStorage();
+            const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+            const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+            const { renderHook, renderScreen } = await import('@/dev/testkit');
+            const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+            const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+            const { useVoiceAttemptControl } = await import('@/components/voice/attempt/useVoiceAttemptControl');
+            const { executeVoiceConversationAction } = await import('@/sync/ops/actions/voiceConversationAction');
+            const { getVoiceSessionPresentedAttemptId } = await import('./voiceSessionStore');
+            const { t } = await import('@/text');
+            const settings = state.getState().settings;
+            const config = readLocalConversationVoiceSettings(settings.voice);
+            state.__setState({ settings: { ...settings, voice: { ...settings.voice, providerId: 'local_conversation',
+                executionMachine: { mode: 'fixed', machineId: 'machine-1' },
+                providers: { ...settings.voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                    conversationMode: 'agent', agent: { ...config.agent, agentSource: 'agent', agentId: 'codex' } } } },
+            } } });
+            await loadLocalVoiceEngineWithCompatState();
+            const incumbent = machineRpcWithServerScope.getMockImplementation()!;
+            machineRpcWithServerScope.mockImplementation((request: Readonly<{ method: string }>) => request.method === RPC_METHODS.SESSION_SPAWN_NEW
+                ? Promise.resolve({ type: 'error', errorCode: 'agent_signed_out', errorMessage: 'agent_signed_out' }) : incumbent(request));
+            const runtime = await renderScreen(React.createElement(VoiceSessionRuntime));
+            const controller = getVoiceSessionLifecycleController();
+            if (!controller) throw new Error('Mounted Voice lifecycle unavailable');
+            const hook = await renderHook(() => useVoiceAttemptControl({ kind: 'global' }));
+            try {
+                await act(async () => { await controller.toggle(null).catch(() => undefined); });
+                expect(controller.getSnapshot()).toMatchObject({ errorCode: 'authentication_required', errorMessage: 'agent_signed_out', canStop: false });
+                const caption = hook.getCurrent().captionLabel;
+                expect(caption).toContain('Codex');
+                const next = state.getState().settings;
+                await act(async () => { state.__setState({ settings: { ...next, voice: { ...next.voice,
+                    executionMachine: { mode: 'fixed', machineId: 'machine-unobserved' },
+                    providers: { ...next.voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                        conversationMode: 'agent', agent: { ...config.agent, agentSource: 'agent', agentId: 'claude' } } } },
+                } } }); });
+                expect(hook.getCurrent().captionLabel).toBe(caption);
+                expect(hook.getCurrent().recoveryLabel).toBe(t('voiceSurface.setUpAgent', { agent: 'Codex' }));
+                let destination: unknown;
+                const result = await executeVoiceConversationAction('ui.voice_global.recover', {
+                    expectedAttempt: getVoiceSessionPresentedAttemptId(),
+                }, { navigate: href => { destination = href; } });
+                expect(result.status).toBe('completed');
+                expect(destination).toMatchObject({ pathname: '/(app)/settings/agents/[agentId]', params: {
+                    agentId: 'codex', machineId: 'machine-1', pluginId: 'happier.agent.codex',
+                    serverIdentityId: 'srv_voice_recovery_home',
+                } });
+            } finally { await hook.unmount(); await runtime.unmount(); }
+        });
+
+        it('rearms a fixed-Agent refusal only when its effective default changes, without opening capture', async () => {
+            const state = await getStorage();
+            const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+            const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+            const { renderScreen } = await import('@/dev/testkit');
+            const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+            const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+            const { withConnectedAccountCatalogAccount } = await import('@/sync/api/account/apiConnectedAccountCatalog');
+            const { mutateConnectedAccountPurposeDefaultsInContext } = await import('@/sync/ops/connectedAccounts/connectedAccountPurposeDefaults');
+            const { writeAgentConnectedAccountPurposeDefault } = await import('@happier-dev/protocol/account/settings/connected-services');
+            const { resolveAgentCatalogProjection } = await import('@/agents/backendCatalog/agentCatalogProjection');
+            const settings = state.getState().settings;
+            const config = readLocalConversationVoiceSettings(settings.voice);
+            state.__setState({ settings: { ...settings, voice: { ...settings.voice, providerId: 'local_conversation',
+                executionMachine: { mode: 'fixed', machineId: 'machine-1' },
+                providers: { ...settings.voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                    conversationMode: 'agent', agent: { ...config.agent, agentSource: 'agent', agentId: 'codex' } } } },
+            } } });
+            await loadLocalVoiceEngineWithCompatState();
+            const incumbent = machineRpcWithServerScope.getMockImplementation()!;
+            const spawnChoices: unknown[] = [];
+            machineRpcWithServerScope.mockImplementation((request: Readonly<{ method: string; payload: unknown }>) => {
+                if (request.method !== RPC_METHODS.SESSION_SPAWN_NEW) return incumbent(request);
+                spawnChoices.push(request.payload);
+                return spawnChoices.length === 1
+                    ? Promise.resolve({ type: 'error', errorCode: 'agent_signed_out', errorMessage: 'agent_signed_out' }) : incumbent(request);
+            });
+            const runtime = await renderScreen(React.createElement(VoiceSessionRuntime));
+            const controller = getVoiceSessionLifecycleController();
+            if (!controller) throw new Error('Mounted Voice lifecycle unavailable');
+            const selectDefault = async (agent: string, accountId = 'work') => {
+                const scope = state.getState().profileScope;
+                if (!scope) throw new Error('Restored Voice Account unavailable');
+                const entry = resolveAgentCatalogProjection(agent, { enabledAgentIds: [] });
+                const declaration = entry.connectedAccounts[0];
+                const consumer = entry.identity;
+                if (!consumer || !declaration) throw new Error('Agent purpose declaration unavailable');
+                await act(async () => { await withConnectedAccountCatalogAccount(scope, undefined, context =>
+                    mutateConnectedAccountPurposeDefaultsInContext(context, (current, legacySettings) => {
+                        const next = writeAgentConnectedAccountPurposeDefault({ settings: legacySettings, purposeBindings: current,
+                            agentId: agent, consumer, declarations: entry.connectedAccounts,
+                            purpose: declaration.purpose, target: { kind: 'account', account: { service: declaration.service, accountId } },
+                        });
+                        return { purposeBindings: next.connectedAccountPurposeBindingsV1, legacySettingsDelta: {
+                            connectedServicesDefaultAuthByAgentIdV1: next.connectedServicesDefaultAuthByAgentIdV1,
+                            connectedServicesAdditionalDefaultAuthByAgentIdV1: next.connectedServicesAdditionalDefaultAuthByAgentIdV1,
+                        } };
+                    }));
+                });
+            };
+            try {
+                await act(async () => { await controller.toggle(null).catch(() => undefined); });
+                expect(controller.getSnapshot()).toMatchObject({ errorCode: 'authentication_required', errorMessage: 'agent_signed_out', canStop: false });
+                const recordings = localVoiceSpeechOutputBoundary.fileRecording.start.mock.calls.length;
+                await selectDefault('claude');
+                expect(controller.getSnapshot()).toMatchObject({ errorMessage: 'agent_signed_out' });
+                await selectDefault('codex');
+                expect(controller.getSnapshot()).toMatchObject({ status: 'disconnected', adapterId: null, canStop: false });
+                expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(recordings);
+                expect(spawnChoices).toHaveLength(1);
+                await act(async () => { await controller.toggle(null); });
+                expect(spawnChoices).toHaveLength(2);
+                expect(spawnChoices[1]).toMatchObject({ connectedServices: { v: 2, bindingsByServiceId: {
+                    'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+                } } });
+                expect(controller.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+                const activeRecordings = localVoiceSpeechOutputBoundary.fileRecording.start.mock.calls.length;
+                await selectDefault('codex', 'other-work');
+                expect(controller.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+                expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(activeRecordings);
+                expect(spawnChoices).toHaveLength(2);
+            } finally { await runtime.unmount(); }
         });
 
         it('fences a late suspension release from a same-id replacement adapter', async () => {

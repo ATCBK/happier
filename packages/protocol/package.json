@@ -8500,6 +8500,11 @@
       "types": "./dist/voice/realtime/index.d.ts",
       "default": "./dist/voice/realtime/index.js"
     },
+    "./voice/attemptPresentation": {
+      "happier-source": "./src/voice/attemptPresentation.ts",
+      "types": "./dist/voice/attemptPresentation.d.ts",
+      "default": "./dist/voice/attemptPresentation.js"
+    },
     "./voice/providerOperations": {
       "happier-source": "./src/voice/providerOperations.ts",
       "types": "./dist/voice/providerOperations.d.ts",

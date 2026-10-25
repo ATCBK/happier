@@ -23,6 +23,11 @@ import { resolveVoiceSurfaceStatusPresentation } from '@/components/voice/surfac
 import { resolveVoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
 import { resolveVoiceConnectRecoveryTarget } from '@/components/voice/surface/resolveVoiceConnectRecoveryTarget';
 import { resolveVoiceAttemptControl } from '@/components/voice/attempt/resolveVoiceAttemptControl';
+import { projectVoiceAttemptPresentation } from '@/components/voice/attempt/projectVoiceAttemptPresentation';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
+import { resolveVoiceServiceTitle } from '@/voice/registry/voiceProviderPresentation';
+import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { t, tLoose } from '@/text';
 import { executeVoiceAttemptRecovery, resolveVoiceAttemptRecoveryAvailable, resolveVoiceAttemptRecoveryRuntimeTarget,
     type VoiceAttemptRecoveryContext } from '@/components/voice/attempt/voiceAttemptRecovery';
 import type { VoiceAdapterSurfaceCapabilities } from '@/voice/session/types';
@@ -91,11 +96,14 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
     const recoveryAddress = capturedTarget ?? (attemptId ? null : startAddress);
     const recoverySession = recoveryAddress ? state.sessions[recoveryAddress.sessionId] : null;
     const metadata = recoverySession?.serverId === recoveryAddress?.serverId && recoverySession ? readSessionOwnerMetadataView(recoverySession) : null;
-    const executionMachine = resolveVoiceExecutionMachinePresentationFromState(state);
-    const agent = capabilities?.agentRuntime;
-    const machineId = bindingScope === 'session' ? metadata?.machineId : executionMachine.machineId;
+    const executionMachine = attemptId ? null : resolveVoiceExecutionMachinePresentationFromState(state);
+    const admittedRecovery = snapshot.recoveryTarget;
+    const agent = attemptId ? admittedRecovery?.agentRuntime : capabilities?.agentRuntime;
+    const machineId = attemptId ? admittedRecovery?.machineId
+        : bindingScope === 'session' ? metadata?.machineId : executionMachine?.machineId;
     const runtimeRecoveryTarget = resolveVoiceAttemptRecoveryRuntimeTarget({ agentRuntime: agent ?? null, machineId,
-        serverId: bindingScope === 'session' ? recoveryAddress?.serverId : state.profileScope?.serverId });
+        serverId: attemptId ? admittedRecovery?.serverId
+            : bindingScope === 'session' ? recoveryAddress?.serverId : state.profileScope?.serverId });
     const entry = registry.get(providerId);
     const context = { attemptSessionId: snapshot.sessionId, startSessionId: startAddress?.sessionId ?? null,
         globalStartAuthorized: bindingScope === 'global', runtimeRecoveryTarget,
@@ -127,7 +135,15 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
             && snapshot.status === 'connected' && snapshot.canHoldToTalk === true,
         muted: control.muted, canDismissFailedAttempt: control.canDismissFailedAttempt === true,
         canDismissEnded: ended !== null, recoveryAction, availability: control.availability,
-        inUseVoice: snapshot.status === 'connected' ? snapshot.inUseVoice ?? null : null };
+        inUseVoice: snapshot.status === 'connected' ? snapshot.inUseVoice ?? null : null,
+        presentation: projectVoiceAttemptPresentation({
+            control, attemptId, ended: visibleEnded !== null, errorCode: snapshot.errorCode, errorMessage: snapshot.errorMessage,
+            recoveryAction, recoveryContext: context,
+            serviceTitle: entry ? resolveVoiceServiceTitle(entry, tLoose, createPluginLocalizedTextResolver({ projection: null })) : t('voicePresence.title'),
+            agentTitle: agent ? resolveAgentCatalogTitle(agent.localId) : null,
+            agentMachineLabel: attemptId ? admittedRecovery?.machineLabel ?? null
+                : runtimeRecoveryTarget?.machineId === executionMachine?.machineId ? executionMachine?.machineLabel ?? null : null,
+        }) };
     const navigationBinding = ended ? visibleEnded : binding;
     const navigationAddress = navigationBinding && navigationBinding.conversationSessionAddress
         ? resolveVoiceConversationNavigationAddress({ ...navigationBinding, conversationSessionAddress: navigationBinding.conversationSessionAddress }) : null;

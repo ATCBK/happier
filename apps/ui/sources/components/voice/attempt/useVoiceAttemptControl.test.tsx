@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup, renderHook, createDeferred, waitForTestEvent, createSessionMessagesFixture, createSessionFixture, createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, type RenderHookResult } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
+import { renderScreen } from '@/dev/testkit';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { VOICE_SETTINGS_PROVIDER_FOCUS_TARGET } from '@/voice/settings/voiceSettingsRouteFocus';
 import type { VoiceAdapterController, VoiceSessionSnapshot } from '@/voice/session/types';
@@ -788,7 +789,8 @@ describe('useVoiceAttemptControl recovery routing', () => {
     });
 
     async function renderBothRecoveryOwners(recoveryAction: 'connect_agent' | 'update_agent_runtime' | 'open_settings') {
-        const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+        const { registerVoiceAdapters, resolveVoiceAdapterSurfaceCapabilities } = await import('@/voice/session/voiceAdapterRegistry');
+        const { captureVoiceAttemptRecoveryTarget } = await import('@/voice/session/voiceAttemptRecoveryTarget');
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         registerVoiceAdapters([getActivatedAdapter(CODEX_PROVIDER_ID)]);
         seedVoiceSettings(SELECTED_PROFILE_VOICE_SETTINGS);
@@ -800,6 +802,7 @@ describe('useVoiceAttemptControl recovery routing', () => {
             canStop: false,
             errorRecoveryAction: recoveryAction,
             errorPresentation: 'error',
+            recoveryTarget: captureVoiceAttemptRecoveryTarget(resolveVoiceAdapterSurfaceCapabilities(CODEX_PROVIDER_ID, getStorage().getState().settings.voice), null),
         });
         return await renderBothOwners();
     }
@@ -826,22 +829,55 @@ describe('useVoiceAttemptControl recovery routing', () => {
         await hook.unmount();
     });
 
-    it('offers Agent settings from Local Voice authentication recovery when the adapter has no exact runtime identity', async () => {
-        const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+    async function renderLocalVoiceSignedOutRefusal(agent: Readonly<{ agentSource: 'agent' | 'session'; agentId: string }>) {
+        const { registerVoiceAdapters, resolveVoiceAdapterSurfaceCapabilities } = await import('@/voice/session/voiceAdapterRegistry');
+        const { captureVoiceAttemptRecoveryTarget } = await import('@/voice/session/voiceAttemptRecoveryTarget');
         const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
         registerVoiceAdapters([getActivatedAdapter('local_conversation')]);
         seedVoiceSettings({ providerId: 'local_conversation', providers: {
-            local_conversation: { schemaVersion: 1, config: {
-                conversationMode: 'agent', agent: { agentSource: 'agent', agentId: 'codex' },
-            } },
+            local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent', agent } },
         } });
         setVoiceSessionSnapshot({
             adapterId: 'local_conversation', sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             status: 'error', mode: 'idle', canStop: false,
             errorCode: 'authentication_required', errorMessage: 'agent_signed_out',
             errorRecoveryAction: 'connect_agent', errorPresentation: 'error',
+            recoveryTarget: captureVoiceAttemptRecoveryTarget(resolveVoiceAdapterSurfaceCapabilities('local_conversation', getStorage().getState().settings.voice), null),
         });
-        const hook = await renderBothOwners();
+        return await renderBothOwners();
+    }
+
+    it('names the fixed Voice Agent and its machine when it is signed out, and sets that Agent up from every placement', async () => {
+        const { resolveVoiceExecutionMachinePresentationFromState } = await import('@/voice/credentials/useExecutionMachinePresentation');
+        const hook = await renderLocalVoiceSignedOutRefusal({ agentSource: 'agent', agentId: 'codex' });
+        try {
+            const machine = resolveVoiceExecutionMachinePresentationFromState(getStorage().getState()).machineLabel;
+            expect(machine).toEqual(expect.any(String));
+            const message = t('settingsVoice.local.machineErrors.agent_signed_out', { agent: 'Codex', machine: machine ?? '' });
+            expect(hook.getCurrent().control).toMatchObject({
+                recoveryAvailable: true, surfaceState: 'error', captionLabel: message,
+                recoveryLabel: t('voiceSurface.setUpAgent', { agent: 'Codex' }),
+            });
+            expect(hook.getCurrent().model?.subtitle).toBe(message);
+            const expectedRoute = {
+                pathname: '/(app)/settings/agents/[agentId]',
+                params: { agentId: 'codex', pluginId: 'happier.agent.codex', machineId: 'machine-work', serverIdentityId: 'srv_voice_attempt_work' },
+            } satisfies Parameters<typeof resolveHref>[0];
+            expect(hook.getCurrent().control.publicPresentation).toMatchObject({ failureKind: 'authentication_required',
+                failureMessage: message, recovery: { action: 'connect_agent', label: hook.getCurrent().control.recoveryLabel,
+                    runtimeTarget: expectedRoute.params } });
+            await act(async () => { await hook.getCurrent().control.onRecover(); });
+            expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
+            routerMock.instance?.spies.push.mock.calls.splice(0);
+            await act(async () => { await hook.getCurrent().model?.attemptControl.onRecover(); });
+            expect(readLastPushedHref()).toBe(resolveHref(expectedRoute));
+        } finally {
+            await hook.unmount();
+        }
+    });
+
+    it('offers Agent settings from Local Voice authentication recovery when the Voice Agent follows the session and has no exact runtime identity', async () => {
+        const hook = await renderLocalVoiceSignedOutRefusal({ agentSource: 'session', agentId: 'codex' });
         try {
             expect(hook.getCurrent().control).toMatchObject({
                 recoveryAvailable: true, surfaceState: 'error',
@@ -853,6 +889,17 @@ describe('useVoiceAttemptControl recovery routing', () => {
         } finally {
             await hook.unmount();
         }
+    });
+
+    it('does not reconstruct missing admitted recovery facts from the current fixed Agent preference', async () => {
+        const hook = await renderLocalVoiceSignedOutRefusal({ agentSource: 'agent', agentId: 'codex' });
+        const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+        try {
+            await act(async () => { setVoiceSessionSnapshot({ ...getVoiceSessionSnapshot(), recoveryTarget: undefined }); });
+            expect(hook.getCurrent().control.recoveryLabel).toBe(t('voiceSurface.connectAgent'));
+            await act(async () => { await hook.getCurrent().control.onRecover(); });
+            expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe('/settings/agents');
+        } finally { await hook.unmount(); }
     });
 
     it('sends Agent runtime update recovery to the exact portable update target from every placement', async () => {
@@ -1133,6 +1180,7 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
             mode: 'idle',
             canStop: false,
             errorCode: 'provider_setup_required',
+            errorMessage: '/private/provider/detail',
             errorRecoveryAction: 'open_settings',
         });
 
@@ -1140,6 +1188,30 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         expect(hook.getCurrent().captionLabel).toBe(t('voice.readiness.settings_missing_required_setting', { service: hook.getCurrent().serviceTitle ?? t('voicePresence.title') }));
         expect(hook.getCurrent().recoveryLabel).toBe(t('voicePresence.recovery.setUp'));
         expect(hook.getCurrent().recoveryIcon).toBe('gear');
+        const { VoicePresence, VoiceMark, VoiceStatusLine, VoiceTransport, useVoiceAttempt } = await import('@happier-dev/plugin-ui');
+        const { PluginUiPresentationHostProviderInternal } = await import('../../../../../../packages/plugin-ui/src/presentationHost/context');
+        const { createPluginUiPrivatePresentationHost } = await import('@/components/plugins/surfaces/pluginUiPrivatePresentationHost');
+        const { VoiceMark: HostMark } = await import('@/components/voice/presence/VoiceMark');
+        const { VoiceStatusLine: HostStatusLine } = await import('@/components/voice/presence/VoiceStatusLine');
+        const { VoiceTransport: HostTransport } = await import('@/components/voice/presence/VoiceTransport');
+        let publicAttempt: ReturnType<typeof useVoiceAttempt> = null;
+        function ReadAttempt() { publicAttempt = useVoiceAttempt(); return null; }
+        const publicScreen = await renderScreen(<PluginUiPresentationHostProviderInternal host={createPluginUiPrivatePresentationHost(undefined)}>
+            <VoicePresence target={{ kind: 'global' }}>
+                <VoiceMark size={24} /><VoiceStatusLine size="pill" /><VoiceTransport size="pill" /><ReadAttempt />
+            </VoicePresence>
+        </PluginUiPresentationHostProviderInternal>);
+        expect(publicAttempt).toMatchObject({ surfaceState: 'error', failureKind: 'provider_setup_required',
+            failureMessage: hook.getCurrent().failureMessage, recovery: { label: hook.getCurrent().recoveryLabel, icon: 'gear' } });
+        // The external composition reaches the real host primitives, sharing one projection.
+        expect(publicScreen.findByType(HostMark).props.voice)
+            .toBe(publicScreen.findByType(HostStatusLine).props.voice);
+        expect(publicScreen.findByType(HostTransport).props.voice)
+            .toBe(publicScreen.findByType(HostStatusLine).props.voice);
+        expect(publicAttempt).not.toHaveProperty('onRecover');
+        expect(publicAttempt).not.toHaveProperty('errorMessage');
+        expect(JSON.stringify(publicAttempt)).not.toContain('/private/provider/detail');
+        await publicScreen.unmount();
         await hook.unmount();
     });
 

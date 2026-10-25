@@ -182,6 +182,8 @@ const SNAPSHOT_FIELDS = {
   presentationState: true,
   reconnectRetryAvailable: true,
   inUseVoice: true,
+  preparedInstructionsFor: true,
+  recoveryTarget: true,
 } satisfies Record<keyof VoiceSessionSnapshot, true>;
 const SNAPSHOT_KEYS = Object.keys(SNAPSHOT_FIELDS) as Array<keyof VoiceSessionSnapshot>;
 
@@ -210,6 +212,8 @@ function normalizeVoiceSessionSnapshot(snapshot: VoiceSessionSnapshot): VoiceSes
     presentationState: snapshot.presentationState,
     reconnectRetryAvailable: snapshot.reconnectRetryAvailable,
     inUseVoice: snapshot.status === 'connected' ? snapshot.inUseVoice : undefined,
+    preparedInstructionsFor: snapshot.status === 'connected' ? snapshot.preparedInstructionsFor : undefined,
+    recoveryTarget: snapshot.recoveryTarget,
   };
 }
 

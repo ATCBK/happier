@@ -30,6 +30,12 @@ import type {
     VoiceModelPackTransducerArtifactsV1,
 } from '@happier-dev/protocol/voice/modelPacks/contributionV1';
 import * as z from 'zod/mini';
+export {
+    VoiceAttemptFailureKindSchema, VoiceAttemptRecoveryActionSchema, VoiceAttemptPresentationSchema,
+} from '@happier-dev/protocol/voice/attemptPresentation';
+export type {
+    VoiceAttemptFailureKind, VoiceAttemptRecoveryAction, VoiceAttemptPresentation,
+} from '@happier-dev/protocol/voice/attemptPresentation';
 
 import type { InteractionsService } from '../interactions.js';
 import type { PluginSettingsActionRuntime } from '../settingsActions.js';

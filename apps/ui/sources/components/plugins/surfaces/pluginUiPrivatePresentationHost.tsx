@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { PluginVoicePresence, PluginVoiceMark, PluginVoiceStatusLine, PluginVoiceTransport, usePluginVoiceAttempt } from './PluginVoicePresence';
+import type { VoicePresenceProps, VoiceMarkProps, VoiceStatusLineProps, VoiceTransportProps } from '@happier-dev/plugin-ui';
 import { usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
 import { COMPANION_WEB_POINTER_BINDING } from '@/components/companion/interaction/useCompanionPointerDragSession';
 import { NativeFloatingFrame } from '@/components/companion/interaction/NativeFloatingFrame';
@@ -372,6 +374,11 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         // Only explicit art props: no live energy acquisition or attempt data.
         return <VoiceMarkArt {...input} still={input.still ?? true} presentationOnly />;
     },
+    renderVoicePresence: (input: VoicePresenceProps) => <PluginVoicePresence {...input} />,
+    useVoiceAttempt: usePluginVoiceAttempt,
+    renderVoiceMark: (input: VoiceMarkProps) => <PluginVoiceMark {...input} />,
+    renderVoiceStatusLine: (input: VoiceStatusLineProps) => <PluginVoiceStatusLine {...input} />,
+    renderVoiceTransport: (input: VoiceTransportProps) => <PluginVoiceTransport {...input} />,
     renderScene(input: HappierSceneRenderRequest) {
         return <SceneArt {...input} />;
     },

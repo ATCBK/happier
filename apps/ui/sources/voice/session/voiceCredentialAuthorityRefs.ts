@@ -11,6 +11,7 @@ export type VoiceCredentialRuntimeAuthoritySnapshot = Readonly<{
   credentialBindingAuthority: string;
   providerEnvelopeAuthority: string;
   selectedCredentialAuthority: string;
+  agentDefaultAuthority: string | null;
 }>;
 
 export function createVoiceCredentialRuntimeAuthoritySnapshot(input: Readonly<{
@@ -19,6 +20,7 @@ export function createVoiceCredentialRuntimeAuthoritySnapshot(input: Readonly<{
   credentialBinding: unknown;
   providerEnvelope: unknown;
   selectedCredentialAuthority: unknown;
+  agentDefaultAuthority?: string | null;
 }>): VoiceCredentialRuntimeAuthoritySnapshot {
   return Object.freeze({
     accountScopeAuthority: stableJsonStringify(input.accountScope),
@@ -26,6 +28,7 @@ export function createVoiceCredentialRuntimeAuthoritySnapshot(input: Readonly<{
     credentialBindingAuthority: stableJsonStringify(input.credentialBinding),
     providerEnvelopeAuthority: stableJsonStringify(input.providerEnvelope),
     selectedCredentialAuthority: stableJsonStringify(input.selectedCredentialAuthority),
+    agentDefaultAuthority: input.agentDefaultAuthority ?? null,
   });
 }
 
@@ -38,7 +41,9 @@ export function hasVoiceCredentialRuntimeAuthorityChanged(
       !== next.agentConnectedServiceBindingAuthority
     || previous.credentialBindingAuthority !== next.credentialBindingAuthority
     || previous.providerEnvelopeAuthority !== next.providerEnvelopeAuthority
-    || previous.selectedCredentialAuthority !== next.selectedCredentialAuthority;
+    || previous.selectedCredentialAuthority !== next.selectedCredentialAuthority
+    || (previous.agentDefaultAuthority !== null && next.agentDefaultAuthority !== null
+      && previous.agentDefaultAuthority !== next.agentDefaultAuthority);
 }
 
 /**

@@ -22,7 +22,13 @@ import {
   registerVoiceAdapters,
   resolveVoiceAdapterSurfaceCapabilities,
 } from './voiceAdapterRegistry';
-import { recordVoiceSessionArrival, setVoiceSessionSnapshot } from './voiceSessionStore';
+import { recordVoiceSessionArrival, setVoiceSessionSnapshot, useVoiceSessionStore } from './voiceSessionStore';
+import { resolveAgentConnectedServicesDefaultBindings } from '@/sync/domains/connectedServices/resolveAgentConnectedServicesDefaultBindings';
+import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
+import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/resolveBundledAgentIdFromContributionIdentity';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { useDaemonMergedProjectionSummary } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { readStoredSessionMessagesForAddress } from '@/sync/domains/messages/readStoredSessionMessagesForAddress';
 import { createNativeAudioSessionLifecycleBridge } from '@/voice/runtime/nativeAudioSessionLifecycleBridge';
 import { useVoiceDiagnosticsRuntimeSync } from '@/voice/diagnostics/useVoiceDiagnosticsRuntimeSync';
@@ -38,7 +44,7 @@ import { useVoiceProviderRegistryRevision } from '@/voice/registry/useVoiceProvi
 import { useCurrentUiContextVoiceToolPort } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
 import { useForegroundVoiceTextTurnQaBridge } from '@/dev/testkit/harness/useForegroundVoiceTextTurnQaBridge';
 import { resolveAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
-import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -70,7 +76,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
     connectedAccountsV4: profile.connectedAccountsV4,
     connectedAccountGroupsV4: profile.connectedAccountGroupsV4,
   }));
-  const executionMachine = useVoiceExecutionMachinePresentation();
+  const executionMachineId = useVoiceExecutionMachineId();
   const accountScope = useActiveServerAccountScope();
   const settingsScope = useAccountSettingsScope();
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);
@@ -98,13 +104,40 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
   const credentialSlotId = selectedProviderEntry?.kind === 'voice.conversation-provider.v1'
     ? selectedProviderEntry.declaration?.credentials?.slot.id ?? null
     : null;
-  const exactSessionCredentialAuthority = providerId !== null
-    && resolveVoiceAdapterSurfaceCapabilities(providerId, voice)?.agentRuntime !== undefined;
+  const selectedCapabilities = providerId === null ? null : resolveVoiceAdapterSurfaceCapabilities(providerId, voice);
+  const exactSessionCredentialAuthority = selectedCapabilities?.agentRuntime !== undefined;
   const voiceCredentialAuthority = readVoiceCredentialAuthorityRefs(
     canonicalVoiceSettings,
     providerId,
     credentialSlotId,
   );
+  const admittedRecoveryTarget = useVoiceSessionStore(state => state.recoveryTarget);
+  // Built-in standalone Agent Voice consumes Account Agent defaults, rather
+  // than a provider credential slot. Keep the failed attempt's Agent selected.
+  const fixedAgentRuntime = selectedProviderEntry?.source.kind === 'built_in'
+    ? admittedRecoveryTarget?.agentRuntime ?? null
+    : null;
+  const agentDefaultKey = fixedAgentRuntime ? buildQualifiedPluginContributionKey(fixedAgentRuntime) : null;
+  const agentProjection = useDaemonMergedProjectionSummary({
+    machineId: fixedAgentRuntime ? admittedRecoveryTarget?.machineId : null,
+    serverId: admittedRecoveryTarget?.serverId ?? accountScope?.serverId,
+  });
+  const agentDefaultAuthority = React.useMemo(() => {
+    if (!fixedAgentRuntime || !connectedPurposes) return null;
+    const agentId = resolveBundledAgentIdFromContributionIdentity(fixedAgentRuntime)
+      ?? buildQualifiedPluginContributionKey(fixedAgentRuntime);
+    const agent = resolveAgentCatalogProjection(agentId, { enabledAgentIds: [],
+      mergedProviderProjectionById: agentProjection.inputs?.mergedProviderProjectionById,
+      mergedBackendProjectionById: agentProjection.inputs?.mergedBackendProjectionById });
+    if (agent.identity?.pluginId !== fixedAgentRuntime.pluginId || agent.identity.localId !== fixedAgentRuntime.localId) return null;
+    return stableJsonStringify({ agent: fixedAgentRuntime,
+      bindings: resolveAgentConnectedServicesDefaultBindings({
+        // The admitted purpose row is authoritative; no legacy preference fallback.
+        settings: {}, purposeBindings: connectedPurposes, agentId,
+        consumer: agent.identity, declarations: agent.connectedAccounts,
+      }),
+    });
+  }, [fixedAgentRuntime?.pluginId, fixedAgentRuntime?.localId, connectedPurposes, agentProjection.inputs]);
   const selectedCredentialAuthority = (() => {
     if (selectedProviderEntry?.kind !== 'voice.conversation-provider.v1') return 'unbound';
     const declaration = selectedProviderEntry.declaration;
@@ -127,7 +160,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
           consumer: contribution,
           purpose: credentials.slot.purpose,
         },
-        machineId: executionMachine.machineId,
+        machineId: executionMachineId,
       });
       const selectedSavedSecret = sourceResolution.savedSecret === null
         ? null
@@ -156,7 +189,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
   const controllerRef = React.useRef<ReturnType<typeof createVoiceSessionLifecycleController> | null>(null);
   const accountLifetimeRetirementRef = React.useRef<Readonly<{ dispose(): void }> | null>(null);
   const accountScopeAtLastLayoutCommitRef = React.useRef<typeof accountScope | undefined>(undefined);
-  const credentialAuthorityRef = React.useRef<VoiceCredentialRuntimeAuthoritySnapshot | null>(null);
+  const credentialAuthorityRef = React.useRef<(VoiceCredentialRuntimeAuthoritySnapshot & Readonly<{ agentDefaultKey: string | null }>) | null>(null);
   const currentUiContextToolSetEnabledRef = React.useRef(currentUiContextToolSetEnabled);
   const currentUiContextToolSetSyncRef = React.useRef<Readonly<{
     controller: ReturnType<typeof createVoiceSessionLifecycleController>;
@@ -326,6 +359,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
   }, [currentUiContextToolSetEnabled]);
 
   React.useEffect(() => {
+    const previousAuthority = credentialAuthorityRef.current;
     const providerSettings = selectedProviderEntry?.providerSettings ?? null;
     const providerEnvelope = voiceCredentialAuthority.providerEnvelope;
     const agentConnectedServicesBinding = providerSettings
@@ -336,7 +370,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
           providerConfig: providerEnvelope.config,
         })
       : null;
-    const nextAuthority = createVoiceCredentialRuntimeAuthoritySnapshot({
+    const nextAuthority = { ...createVoiceCredentialRuntimeAuthoritySnapshot({
       accountScope,
       agentConnectedServiceBindingAuthority:
         createConnectedServiceBindingAuthorityFingerprint({
@@ -347,8 +381,15 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       credentialBinding: voiceCredentialAuthority.credentialBinding,
       providerEnvelope: voiceCredentialAuthority.providerEnvelope,
       selectedCredentialAuthority,
-    });
-    const previousAuthority = credentialAuthorityRef.current;
+      agentDefaultAuthority,
+    }), agentDefaultKey };
+    // A temporarily unavailable catalog is not a changed default. Retain only
+    // the last proven authority for this exact Account and Agent.
+    if (nextAuthority.agentDefaultAuthority === null && previousAuthority
+      && previousAuthority.accountScopeAuthority === nextAuthority.accountScopeAuthority
+      && previousAuthority.agentDefaultKey === agentDefaultKey) {
+      nextAuthority.agentDefaultAuthority = previousAuthority.agentDefaultAuthority;
+    }
     credentialAuthorityRef.current = nextAuthority;
     if (!previousAuthority) {
       return;
@@ -366,6 +407,12 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       controllerRef.current?.rearmAfterCredentialAuthorityChange({
         exactSessionAccountScopeChanged: false,
         globalBindingAuthorityChanged,
+        providerCredentialAuthorityChanged: hasVoiceCredentialRuntimeAuthorityChanged(previousAuthority, {
+          ...nextAuthority, agentDefaultAuthority: previousAuthority.agentDefaultAuthority,
+        }),
+        agentDefaultAuthorityChanged: previousAuthority.agentDefaultAuthority !== null
+          && nextAuthority.agentDefaultAuthority !== null
+          && previousAuthority.agentDefaultAuthority !== nextAuthority.agentDefaultAuthority,
       });
     }
   }, [
@@ -377,6 +424,8 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
     voiceCredentialAuthority.credentialBinding,
     voiceCredentialAuthority.providerEnvelope,
     selectedCredentialAuthority,
+    agentDefaultAuthority,
+    agentDefaultKey,
   ]);
 
   return <VoiceSetupFirstSuccessRuntime />;

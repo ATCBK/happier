@@ -1,8 +1,47 @@
 import type { ReactElement, ReactNode } from 'react';
+import type { VoiceAttemptPresentation } from '@happier-dev/plugin-sdk/voice';
 import { View } from 'react-native';
 
 import { useHappierUiAnimationActivityInternal } from '../environment/context.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
+
+export type VoicePresenceProps = Readonly<{
+  /** Only idle Start uses this intent; active and recovery controls retain the admitted attempt. */
+  target: Readonly<{ kind: 'global' }> | Readonly<{ kind: 'default' }>
+    | Readonly<{ kind: 'session'; sessionAddress: Readonly<{ serverId: string; sessionId: string }> | null }>;
+  /** May narrow host visibility, never reactivate a hidden surface. */
+  presented?: boolean;
+  children?: ReactNode;
+  fallback?: ReactNode;
+}>;
+
+/** Shares one host attempt projection across live parts. Starts no media on mount. */
+export function VoicePresence({ fallback, presented = true, ...input }: VoicePresenceProps): ReactElement {
+  const host = useOptionalPluginUiPresentationHost();
+  const active = useHappierUiAnimationActivityInternal();
+  if (!active || !presented) return <></>;
+  return <>{host?.renderVoicePresence?.(input) ?? fallback}</>;
+}
+
+/** Read-only safe facts from the nearest VoicePresence. Mutations use ordinary host Actions. */
+export function useVoiceAttempt(): VoiceAttemptPresentation | null {
+  return useOptionalPluginUiPresentationHost()?.useVoiceAttempt?.() ?? null;
+}
+
+export type VoiceMarkProps = Readonly<{ size: number; testID?: string; fallback?: ReactNode }>;
+export function VoiceMark({ fallback, ...input }: VoiceMarkProps): ReactElement {
+  return <>{useOptionalPluginUiPresentationHost()?.renderVoiceMark?.(input) ?? fallback}</>;
+}
+
+export type VoiceStatusLineProps = Readonly<{ size: 'pill' | 'island' | 'hero'; testID?: string; fallback?: ReactNode }>;
+export function VoiceStatusLine({ fallback, ...input }: VoiceStatusLineProps): ReactElement {
+  return <>{useOptionalPluginUiPresentationHost()?.renderVoiceStatusLine?.(input) ?? fallback}</>;
+}
+
+export type VoiceTransportProps = Readonly<{ size: 'pill' | 'island' | 'touch'; testID?: string; fallback?: ReactNode }>;
+export function VoiceTransport({ fallback, ...input }: VoiceTransportProps): ReactElement {
+  return <>{useOptionalPluginUiPresentationHost()?.renderVoiceTransport?.(input) ?? fallback}</>;
+}
 
 export type VoiceMarkArtProps = Readonly<{
   pose: 'mic' | 'ready' | 'shadow' | 'eclipse' | 'shade';

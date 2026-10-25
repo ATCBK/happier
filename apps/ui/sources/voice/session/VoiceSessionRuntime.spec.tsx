@@ -65,10 +65,6 @@ vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
   abort: () => recognizer.abort(),
 } }));
 const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn(), callListeners: new Set<() => void>() }));
-// Metro selects the .web mic sources for the web platform these mounted browser cases model;
-// Vitest has no platform extension resolution, so select them explicitly (leaf modules, no UI cycle).
-vi.mock('@/voice/runtime/mic/createRealtimeMicSession', async () => await import('@/voice/runtime/mic/createRealtimeMicSession.web'));
-vi.mock('@/voice/runtime/mic/createLiveMicSession', async () => await import('@/voice/runtime/mic/createLiveMicSession.web'));
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: (...args: unknown[]) => {
   const result = sdk.startSession(...args);
   for (const listener of sdk.callListeners) listener();
@@ -1155,6 +1151,11 @@ describe('VoiceSessionRuntime', () => {
     expect(getVoiceSessionSnapshot()).toMatchObject({
       status: 'error', errorCode: 'provider_auth_invalid', errorRecoveryAction: 'review_credentials',
     });
+    const providerFailure = getVoiceSessionSnapshot();
+    await act(async () => { lifecycle.rearmAfterCredentialAuthorityChange({
+      agentDefaultAuthorityChanged: true, providerCredentialAuthorityChanged: false,
+    }); });
+    expect(getVoiceSessionSnapshot()).toEqual(providerFailure);
     expect(browser.peers).toEqual([]);
     expect(browser.micTracks).toEqual([]);
     const requestsBeforeRepair = mintRequests;

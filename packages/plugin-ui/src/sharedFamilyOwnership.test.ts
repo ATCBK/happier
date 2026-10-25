@@ -96,7 +96,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   // Widgets platform: declared areas delegate to the incumbent mounted host.
   'WidgetSurface',
   // Public setup and Voice author adapters documented by docs/plugin-platform.md.
-  'SetupSteps', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+  'SetupSteps', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'VoicePresence', 'VoiceMark', 'VoiceStatusLine', 'VoiceTransport', 'StatusCell', 'DictationButton',
   // Lane 12 Machines: the typed-or-picked local date and time (a provisioner's lease or expiry input).
   'LocalDateTimeField',
   // Lane 12 Projects: the widget-body glance row and the lines-added/removed readout, one owner each.
@@ -2352,6 +2352,14 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
       hostModule: 'components/ui/setupBlocks/SetupBlockGrid.tsx', hostSymbol: 'SetupBlockGrid' },
     { publicName: 'VoiceMarkArt', module: 'components/Voice.tsx', callback: 'renderVoiceMarkArt',
       hostModule: 'components/voice/presence/VoiceMark.tsx', hostSymbol: 'VoiceMarkArt' },
+    { publicName: 'VoicePresence', module: 'components/Voice.tsx', callback: 'renderVoicePresence',
+      hostModule: 'components/plugins/surfaces/PluginVoicePresence.tsx', hostSymbol: 'PluginVoicePresence' },
+    { publicName: 'VoiceMark', module: 'components/Voice.tsx', callback: 'renderVoiceMark',
+      hostModule: 'components/plugins/surfaces/PluginVoicePresence.tsx', hostSymbol: 'PluginVoiceMark' },
+    { publicName: 'VoiceStatusLine', module: 'components/Voice.tsx', callback: 'renderVoiceStatusLine',
+      hostModule: 'components/plugins/surfaces/PluginVoicePresence.tsx', hostSymbol: 'PluginVoiceStatusLine' },
+    { publicName: 'VoiceTransport', module: 'components/Voice.tsx', callback: 'renderVoiceTransport',
+      hostModule: 'components/plugins/surfaces/PluginVoicePresence.tsx', hostSymbol: 'PluginVoiceTransport' },
     { publicName: 'StatusCell', module: 'components/Voice.tsx', callback: 'renderStatusCell',
       hostModule: 'components/voice/presence/VoiceStatusCell.tsx', hostSymbol: 'VoiceStatusCell' },
     { publicName: 'DictationButton', module: 'components/Voice.tsx', callback: 'renderDictationButton',
@@ -3119,7 +3127,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'MemoryDuplicateChoice', 'capabilityCollectionAnatomy', 'DocEditProposal', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'MemoryDuplicateChoice', 'capabilityCollectionAnatomy', 'DocEditProposal', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'VoicePresence', 'VoiceMark', 'VoiceStatusLine', 'VoiceTransport', 'StatusCell', 'DictationButton',
     ]);
   });
 

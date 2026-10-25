@@ -28,7 +28,7 @@ import type {
 } from '@/voice/runtime/protocol/VoiceRealtimeProtocolAdapter';
 import { createRealtimeBargeInCoordinator } from '@/voice/runtime/realtime/createRealtimeBargeInCoordinator';
 import { ensureInterruptionWordSegmentationAvailable } from '@/voice/runtime/input/segmentInterruptionWords';
-import { isVoiceMachineErrorKind } from '@/voice/runtime/machine/voiceMachineError';
+import { resolveVoiceMachineErrorKind } from '@/voice/runtime/machine/voiceMachineError';
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
 import { markVoiceConversationAssistantTurnInterrupted } from '@/voice/transcript/voiceTurnInterruption';
 import { isCanonicalVoiceTranscriptPersistenceEvent } from '@/voice/transcript/voiceConversationTranscript';
@@ -69,32 +69,12 @@ function isProviderSettingsSetupDeclineCode(code: unknown): code is
   return code === 'realtime_byo_not_configured' || code === 'realtime_agent_update_required';
 }
 
-function isCredentialSetupDeclineCode(code: string): boolean {
-  return readVoiceProviderCredentialRemediationCode({ code }) !== null;
-}
-
 function readActionableSetupDeclineCode(error: unknown): string | null {
   const remediationCode = readVoiceProviderCredentialRemediationCode(error);
   if (remediationCode) return remediationCode;
   const candidate = error as { code?: unknown } | null;
   const code = candidate?.code;
   return isProviderSettingsSetupDeclineCode(code) ? code : null;
-}
-
-/**
- * Sole conversion from a typed runtime failure code to a machine-error kind,
- * shared by both machine ports.
- *
- * The decline and failure ports used to classify independently, so the very
- * same credential code produced `provider_auth_invalid` (terminal, "Review
- * credentials") when a provider declined and `provider_error` (recoverable,
- * "Retry") when it threw — two answers for one fact, and the throw variant
- * offered a retry that can never succeed.
- */
-function machineErrorKindForFailureCode(code: string): VoiceMachineErrorKind {
-  if (isVoiceMachineErrorKind(code)) return code;
-  if (isProviderSettingsSetupDeclineCode(code)) return 'provider_setup_required';
-  return isCredentialSetupDeclineCode(code) ? 'provider_auth_invalid' : 'provider_error';
 }
 
 type ActiveTranscriptAttempt = {
@@ -187,6 +167,7 @@ export function createBundledRealtimeProviderRuntime(
     preparePromise: Promise<void | Readonly<{ kind: 'declined'; code: string }>> | null;
     releasePromise: Promise<void> | null;
     inUseVoice: VoiceSessionSnapshot['inUseVoice'];
+    preparedInstructionsFor: VoiceSessionSnapshot['preparedInstructionsFor'];
   };
   const resourceAttempts = new Map<number, ResourceAttempt>();
   const directMediaReleaseByAttemptIdentity = new Map<string, Promise<void>>();
@@ -350,6 +331,7 @@ export function createBundledRealtimeProviderRuntime(
     preparePromise: null,
     releasePromise: null,
     inUseVoice: undefined,
+    preparedInstructionsFor: undefined,
   });
   // Provider mute hooks may control one physical capture resource shared by
   // consecutive controller attempts. The public hook has no cancellation
@@ -438,6 +420,7 @@ export function createBundledRealtimeProviderRuntime(
           && resourceAttempts.get(input.attemptId) === attempt && attempt.releasePromise === null
           && runtime?.getOwnedAttemptId() === input.attemptId) {
           attempt.inUseVoice = prepared.kind === 'prepared' ? prepared.inUseVoice : undefined;
+          attempt.preparedInstructionsFor = prepared.kind === 'prepared' ? prepared.preparedInstructionsFor : undefined;
         }
         return prepared;
       } catch (error) {
@@ -827,7 +810,7 @@ export function createBundledRealtimeProviderRuntime(
         retireUnpreparedResourceAttempt(attemptId);
         let declineError: ReturnType<typeof host.createMachineError> | null = null;
         if (code) {
-          const kind = machineErrorKindForFailureCode(code);
+          const kind = resolveVoiceMachineErrorKind(code);
           recordMachinePortFailure('declined', kind, code);
           declineError = host.createMachineError({ kind, reason: code });
         }
@@ -844,7 +827,7 @@ export function createBundledRealtimeProviderRuntime(
         bargeInCoordinator?.reset();
         closeLevelWriters();
         retireUnpreparedResourceAttempt(attemptId);
-        const kind = machineErrorKindForFailureCode(code);
+        const kind = resolveVoiceMachineErrorKind(code);
         recordMachinePortFailure('failed', kind, code, diagnosticReason);
         host.machine.setError(
           controlSessionId,
@@ -1503,8 +1486,10 @@ export function createBundledRealtimeProviderRuntime(
       canCommitInput: runtime?.canCommitInput() === true,
       canHoldToTalk: runtime?.canHoldToTalk?.() === true,
       inUseVoice: attemptId != null ? resourceAttempts.get(attemptId)?.inUseVoice : undefined,
+      preparedInstructionsFor: attemptId != null ? resourceAttempts.get(attemptId)?.preparedInstructionsFor : undefined,
     };
     if (projected.status !== 'connected') projected.inUseVoice = undefined;
+    if (projected.status !== 'connected') projected.preparedInstructionsFor = undefined;
     const terminalCode = projected.errorCode === 'provider_error'
       && typeof projected.errorMessage === 'string'
       && projected.errorMessage.startsWith('voice_')

@@ -1,44 +1,11 @@
 import type { VoiceAdapterId } from '@/voice/session/types';
 import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 
-export type VoiceMachineErrorKind =
-    | 'mic_permission_denied'
-    | 'mic_unavailable'
-    | 'speech_recognition_unavailable'
-    | 'mic_permission_revoked'
-    | 'mic_ended'
-    | 'mic_plateau'
-    | 'transport_disconnect'
-    | 'provider_error'
-    | 'provider_auth_invalid'
-    | 'provider_setup_required'
-    | 'execution_machine_unavailable'
-    | 'reconnect_exhausted'
-    | 'audio_context_suspended'
-    | 'stt_timeout'
-    | 'tts_failed'
-    | 'turn_aborted'
-    | 'authentication_required'
-    | 'session_unavailable'
-    | 'unsupported_runtime'
-    | 'update_required'
-    | 'feature_unavailable'
-    | 'service_temporarily_unavailable';
+export type VoiceMachineErrorKind = import('@happier-dev/protocol/voice/attemptPresentation').VoiceAttemptFailureKind;
 
 export type VoiceMachineErrorPhase = 'preflight' | 'active_session' | 'turn' | 'runtime';
 export type VoiceMachineRetryPolicy = 'never' | 'user_action' | 'immediate_once' | 'backoff';
-export type VoiceMachineRecoveryAction =
-    | 'retry'
-    | 'reconnect'
-    | 'open_settings'
-    | 'open_settings_then_reconnect'
-    | 'review_credentials'
-    | 'select_execution_machine'
-    | 'select_speech_engine'
-    | 'connect_agent'
-    | 'install_agent_runtime'
-    | 'update_agent_runtime'
-    | 'none';
+export type VoiceMachineRecoveryAction = import('@happier-dev/protocol/voice/attemptPresentation').VoiceAttemptRecoveryAction;
 export type VoiceMachineErrorPresentation =
     | 'permission_required'
     | 'notice'

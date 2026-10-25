@@ -1,5 +1,6 @@
 import { isMicrophoneUnavailableError, isPermissionDeniedMicrophoneError } from '@/utils/platform/microphonePermissions';
 import type { MicSessionFailure } from '@/voice/runtime/mic/MicSession';
+import { readVoiceProviderCredentialRemediationCode } from '@happier-dev/protocol/voice/providerOperations';
 
 import type {
     VoiceMachineError,
@@ -66,16 +67,16 @@ export function isVoiceMachineErrorKind(value: unknown): value is VoiceMachineEr
 /** Shared typed-refusal and retained reason classification for Local Voice and unknown-error ingress. */
 export function resolveVoiceMachineErrorKind(reason: string, preferredKind?: VoiceMachineErrorKind): VoiceMachineErrorKind {
     if (reason === 'agent_signed_out') return 'authentication_required';
-    if (reason === 'provider_setup_required') return 'provider_setup_required';
+    if (reason === 'held_by_person') return 'session_unavailable';
+    if (reason === 'provider_setup_required' || reason === 'realtime_byo_not_configured' || reason === 'realtime_agent_update_required') return 'provider_setup_required';
+    if (readVoiceProviderCredentialRemediationCode({ code: reason })) return 'provider_auth_invalid';
     if (reason === 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED') return 'service_temporarily_unavailable';
     if (reason === 'VOICE_AGENT_TARGET_MACHINE_OFFLINE'
         || reason === 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE'
         || reason === 'daemon_streaming_stt_machine_unreachable') return 'execution_machine_unavailable';
     if (preferredKind) return preferredKind;
-    if (reason === 'turn_aborted') return 'turn_aborted';
-    if (reason === 'tts_failed') return 'tts_failed';
+    if (isVoiceMachineErrorKind(reason)) return reason;
     if (reason.includes('permission_denied')) return 'mic_permission_denied';
-    if (reason === 'mic_unavailable') return 'mic_unavailable';
     return 'provider_error';
 }
 
@@ -137,19 +138,8 @@ export function classifyMicSessionFailure(failure: MicSessionFailure): VoiceMach
 
 /** Classify a realtime transport/provider error (permission denial vs generic provider fault). */
 export function classifyRealtimeProviderFailure(error: unknown): VoiceMachineError {
-    if (isMicrophoneUnavailableError(error)) {
-        return createVoiceMachineError({ kind: 'mic_unavailable', reason: 'mic_unavailable' });
-    }
-    if (isPermissionDeniedMicrophoneError(error)) {
-        return createVoiceMachineError({
-            kind: 'mic_permission_denied',
-            reason: readErrorReason(error, 'realtime_mic_permission_denied'),
-        });
-    }
-    return createVoiceMachineError({
-        kind: 'provider_error',
-        reason: readErrorReason(error, 'realtime_provider_error'),
-    });
+    return classifyVoiceMachineError(error, { reason: isPermissionDeniedMicrophoneError(error)
+        ? 'realtime_mic_permission_denied' : 'realtime_provider_error' });
 }
 
 /**

@@ -8,8 +8,6 @@ import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePriva
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { t, tLoose } from '@/text';
 import { useVoiceSessionSnapshot } from '@/voice/session/voiceSession';
-import { isVoiceMachineErrorKind } from '@/voice/runtime/machine/voiceMachineError';
-import { resolveVoiceMachineErrorTranslationKey } from '@/voice/runtime/machine/voiceMachineErrorCopy';
 import { isHiddenSystemSession } from '@happier-dev/protocol/sessions/control/contract';
 import {
     useVoiceAttemptControl,
@@ -228,9 +226,7 @@ export function useVoiceSurfaceModel(props: VoiceSurfaceProps): VoiceSurfaceView
     const isSpeaking = surfaceState === 'speaking';
     const controlsLoading = snap.status === 'connecting' && !canStop;
     const controlsDisabled = !canStop && !canStart;
-    const errorSubtitle = isVoiceMachineErrorKind(snap.errorCode)
-        ? t(resolveVoiceMachineErrorTranslationKey(snap.errorCode, snap.errorMessage))
-        : null;
+    const errorSubtitle = baseAttemptControl.failureMessage ?? null;
     // Target/error channel only. Agent-authored `display_status` text now travels on
     // `delegatedWork` so it stops competing with the target label in one flattened string.
     const subtitle = errorSubtitle

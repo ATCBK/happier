@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { DictationButton, SetupSteps, TextField, VoiceMarkArt, StatusCell, SetupBlockGrid, SetupBlockTile } from './index.public.js';
@@ -6,8 +7,50 @@ import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginUiPresentationHostProviderInternal } from '../presentationHost/context.js';
 import { HappierUiAnimationActivityProviderInternal } from '../environment/context.js';
+import * as VoiceComponents from './Voice.js';
+import { VoiceAttemptPresentationSchema } from '@happier-dev/protocol/voice/attemptPresentation';
 
 describe('public Voice author composition', () => {
+  it('binds live parts once and withdraws hidden presentation demand', async () => {
+    expect(VoiceComponents.VoicePresence).toBeTypeOf('function');
+    const { VoicePresence, VoiceMark, VoiceStatusLine, VoiceTransport, useVoiceAttempt } = VoiceComponents;
+    let mounts = 0;
+    let releases = 0;
+    const attempt = VoiceAttemptPresentationSchema.parse({ attemptId: 'external-attempt', surfaceState: 'error',
+      live: true, muted: false, canStart: false, canStop: false, canMute: false, canCommitInput: false,
+      canDismissFailedAttempt: true, canDismissEnded: false, failureKind: 'authentication_required',
+      failureMessage: 'Sign in required', recovery: null });
+    const host = {
+      renderVoicePresence: ({ children }: { children?: React.ReactNode }) => <Binding>{children}</Binding>,
+      useVoiceAttempt: () => attempt,
+      renderVoiceMark: () => <span>Live mark</span>,
+      renderVoiceStatusLine: () => <span>Live status</span>,
+      renderVoiceTransport: () => <button>Recover exact attempt</button>,
+    };
+    function Binding({ children }: { children?: React.ReactNode }) {
+      React.useEffect(() => { mounts += 1; return () => { releases += 1; }; }, []);
+      return <>{children}</>;
+    }
+    function ReadAttempt() { return <span>{useVoiceAttempt()?.failureMessage}</span>; }
+    const render = (active: boolean) => <PluginUiPresentationHostProviderInternal host={host}>
+      <HappierUiAnimationActivityProviderInternal active={active}>
+        <VoicePresence target={{ kind: 'global' }} presented>
+          <VoiceMark size={24} /><VoiceStatusLine size="pill" /><VoiceTransport size="pill" /><ReadAttempt />
+        </VoicePresence>
+      </HappierUiAnimationActivityProviderInternal>
+    </PluginUiPresentationHostProviderInternal>;
+    const view = mountThroughReactNativeWeb(render(false));
+    expect(mounts).toBe(0);
+    expect(view.container.textContent).toBe('');
+    await view.render(render(true));
+    expect(mounts).toBe(1);
+    expect(view.container.textContent).toContain('Live markLive statusRecover exact attemptSign in required');
+    await view.render(render(false));
+    expect(releases).toBe(1);
+    expect(view.container.textContent).toBe('');
+    view.unmount();
+  });
+
   it('keeps field editability and Dictation admission together without submitting the draft', async () => {
     const context = createSurfaceContext();
     const onTranscription = vi.fn();

@@ -59,6 +59,14 @@ export type VoiceAdapterConversationBinding = Readonly<{
   targetSessionAddress: SessionAddress | null;
 }>;
 
+/** Non-secret preparation facts retained with an attempt, including its terminal recovery. */
+export type VoiceAttemptRecoveryTarget = Readonly<{
+  serverId: string;
+  machineId: string;
+  machineLabel: string | null;
+  agentRuntime: VoiceAdapterSurfaceCapabilities['agentRuntime'] | null;
+}>;
+
 export type VoiceSessionSnapshot = Readonly<{
   adapterId: VoiceAdapterId | null;
   sessionId: string | null;
@@ -77,6 +85,9 @@ export type VoiceSessionSnapshot = Readonly<{
   reconnectRetryAvailable?: boolean;
   /** The current connected adapter's accepted application snapshot. Unknown is omitted. */
   inUseVoice?: VoiceConversationInUseVoice;
+  /** Exact Session instructions accepted by this attempt's supported carrier; unknown is omitted. */
+  preparedInstructionsFor?: SessionAddress;
+  recoveryTarget?: VoiceAttemptRecoveryTarget | null;
 }>;
 
 export type VoiceAdapterController = Readonly<{

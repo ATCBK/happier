@@ -1,3 +1,5 @@
+export { VoiceAttemptFailureKindSchema, VoiceAttemptRecoveryActionSchema, VoiceAttemptPresentationSchema } from './projections.js';
+export type { VoiceAttemptFailureKind, VoiceAttemptRecoveryAction, VoiceAttemptPresentation } from './projections.js';
 export type { ConnectedAccountHttpHeadersRequest } from './projections.js';
 export type { VoiceAccountOperationService } from './projections.js';
 export type { VoiceAvailabilityPlatform } from './projections.js';
