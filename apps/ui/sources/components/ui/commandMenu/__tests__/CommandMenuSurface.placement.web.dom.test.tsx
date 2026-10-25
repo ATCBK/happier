@@ -5,10 +5,18 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import { installPopoverCommonModuleMocks } from '@/components/ui/popover/popoverTestHelpers';
 
-installPopoverCommonModuleMocks({ reactNative: async () => ({
-    ...await vi.importActual('react-native-web'),
-    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
-}) });
+installPopoverCommonModuleMocks({ reactNative: async () => {
+    const native = await vi.importActual<typeof import('react-native')>('react-native-web');
+    const dimensions = () => ({ width: 390, height: 844, scale: 1, fontScale: 1 });
+    return {
+        ...native,
+        useWindowDimensions: dimensions,
+        Dimensions: {
+            get: dimensions,
+            addEventListener: native.Dimensions.addEventListener.bind(native.Dimensions),
+        },
+    };
+} });
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // Keep cold module collection outside the observable placement deadline.
 const { CommandMenu } = await import('../CommandMenu');

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { View } from 'react-native';
 import {
     buildWorkBoardItemKeyV1, buildWorkBoardWidgetKeyV1, createWorkBoardV1, WorkBoardActionInputSchemasV1,
@@ -349,6 +349,8 @@ describe('WorkBoard widgets', () => {
         const agentC = placement(copy('agent-c', NOTES));
         const old = placement(copy('old', NOTES));
         const b = boardStore(boardWith([old]));
+        const releaseView = b.store.retainView(() => () => {}, 'board:b1');
+        onTestFinished(releaseView);
         await b.store.refresh();
         const ownAdds = new Set(['mine']);
         const hook = await renderHook(() => {

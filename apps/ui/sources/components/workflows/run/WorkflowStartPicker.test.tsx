@@ -12,6 +12,7 @@ import {
   createWorkflowAccountRunActionOwner,
   openWorkflowAcceptedSnapshotStoredEnvelopeV1,
   parseWorkflowStoredContentEnvelopeV1,
+  AutomationDefinitionListRequestSchema,
 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
@@ -39,11 +40,7 @@ import {
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { WorkflowRunStartRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
-import type {
-  Artifact,
-  ArtifactCreateRequest,
-} from '@/sync/domains/artifacts/artifactTypes';
-import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 let modals: ReturnType<typeof useModal>['state']['modals'] = [];
 function ObserveModals() {
@@ -119,7 +116,8 @@ vi.mock('@/text', async () => {
 let previousState = storage.getState();
 let home: Awaited<ReturnType<typeof serveActionHomes>>;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
-const artifacts = new Map<string, Artifact>();
+let artifactAccountId: string | null = null;
+const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => artifactAccountId, encryptionMode: 'plain' });
 type StartRequest = Parameters<
   Extract<Parameters<typeof createExternalActionAccountHttpBoundary>[0],
     { requesterInvocation?: 'required' }>['execute']
@@ -187,9 +185,12 @@ function installPluginProjection() {
 function writes() {
   return home.requests.filter((request) => {
     if (request.method === 'GET') return false;
-    // App Sync uses POST for these read-only startup projections.
+    // POST also carries selected Artifact reads; these paths never mutate storage.
     if (
+      request.method === 'POST' &&
       [
+        '/v1/artifacts/read',
+        '/v3/automations/query',
         '/v1/plugins/availability/materializations/read',
         '/v1/plugins/availability/intents/list',
       ].includes(request.path)
@@ -243,19 +244,19 @@ async function seedUnavailableWorkflowDefinitions() {
       metadata: { title },
     });
   }
-  const missingTitle = artifacts.get(ids.missingTitle);
-  const badBody = artifacts.get(ids.badBody);
+  const missingTitle = artifacts.read(ids.missingTitle);
+  const badBody = artifacts.read(ids.badBody);
   if (!missingTitle || !badBody)
     throw new Error('Actual workflow Artifact writes are unavailable');
   // Corrupt Home storage bytes, not the Action result: the real Artifact
   // codec and workflow document reader decide the per-row refusal.
-  artifacts.set(ids.missingTitle, {
+  artifacts.replaceStoredRow({
     ...missingTitle,
     header: encodePlainArtifactStoredContent({
       kind: 'workflow-definition.v1',
     }),
   });
-  artifacts.set(ids.badBody, {
+  artifacts.replaceStoredRow({
     ...badBody,
     body: encodePlainArtifactStoredContent({ body: 'invalid-workflow-json' }),
   });
@@ -334,34 +335,25 @@ beforeEach(async () => {
       if (request.path === '/v1/artifacts') {
         if (request.method !== 'POST' && artifactReadStatus !== null)
           return new Response('{}', { status: artifactReadStatus });
-        if (request.method !== 'POST')
-          return delayedRead ?? Response.json([...artifacts.values()]);
-        const input = request.body as ArtifactCreateRequest;
-        const artifact: Artifact = {
-          ...input,
-          ...projectArtifactStoredKind(input.kind),
-          ownerAccountId: request.accountId!,
-          access: 'owner',
-          encryptionMode: 'plain',
-          headerVersion: 1,
-          bodyVersion: 1,
-          seq: 1,
-          createdAt: 1,
-          updatedAt: 1,
-        };
-        artifacts.set(artifact.id, artifact);
-        return Response.json(artifact);
+        if (request.method !== 'POST' && delayedRead) {
+          const response = await delayedRead;
+          if (!response.ok) return response;
+        }
       }
-      if (request.path.startsWith('/v1/artifacts/')) {
-        const artifact = artifacts.get(
-          request.path.slice('/v1/artifacts/'.length),
-        );
-        return Response.json(artifact ?? { error: 'not_found' }, {
-          status: artifact ? 200 : 404,
-        });
+      if (request.path === '/v1/artifacts' || request.path.startsWith('/v1/artifacts/')) {
+        artifactAccountId = request.accountId;
+        return await artifacts.handle(`${request.path}${request.url.search}`, {
+          method: request.method,
+          ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
+          signal: request.signal,
+        }) ?? undefined;
       }
       if (request.path === '/v3/automations')
         return Response.json({ automations: [], nextCursor: null });
+      if (request.path === '/v3/automations/query' && request.method === 'POST') {
+        AutomationDefinitionListRequestSchema.parse(request.body);
+        return Response.json({ automations: [], nextCursor: null });
+      }
       if (request.path === '/v3/automations/runs/workflow-storage') {
         const input = request.body as { operation: string };
         return Response.json(
@@ -1406,6 +1398,7 @@ describe('WorkflowStartPicker plugin workflows', () => {
     // Sync may finish its header-only census after fixture setup. The closed
     // launcher must not demand Workflow bodies, summaries or daemon catalogs.
     const workflowReads = () => home.requests.filter((request) =>
+      request.path === '/v1/artifacts/read' ||
       (request.path === '/v1/artifacts' && request.url.searchParams.get('includeBody') === 'true') ||
       request.path === '/v3/automations/runs/workflow-storage');
     expect(
