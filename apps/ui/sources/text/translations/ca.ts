@@ -4183,6 +4183,16 @@ export const ca: TranslationStructure = {
 	                    },
 	                },
 	                fields: {
+	                    codexReasoningSummaries: {
+	                        title: "Resums del raonament",
+	                        footer: "Controla si Codex genera resums, independentment de la visualització a la conversa. S’aplica en iniciar o reprendre una sessió. La disponibilitat depèn del model.",
+	                        generation: "Generació",
+	                        options: {
+	                            default: "Fes servir la configuració de Codex o el valor per defecte del model.",
+	                            enabled: "Demana resums si el model els admet.",
+	                            disabled: "No generis resums del raonament.",
+	                        },
+	                    },
 	                    codexBackendMode: {
 	                        title: 'Mode d\'encaminament de Codex',
 	                        subtitle: 'Selecciona el servidor d’aplicacions, ACP o MCP.',

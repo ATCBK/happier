@@ -4508,6 +4508,16 @@ export const pt: TranslationStructure = {
             },
           },
           fields: {
+            codexReasoningSummaries: {
+                title: "Resumos do raciocínio",
+                footer: "Controla se o Codex gera resumos, independentemente da exibição na conversa. Aplica-se ao iniciar ou retomar uma sessão. A disponibilidade depende do modelo.",
+                generation: "Geração",
+                options: {
+                    default: "Use a configuração do Codex ou o padrão do modelo.",
+                    enabled: "Solicite resumos quando o modelo oferecer suporte.",
+                    disabled: "Não gere resumos do raciocínio.",
+                },
+            },
             codexBackendMode: {
               title: "Modo de roteamento do Codex",
               subtitle: "Selecione App Server, ACP ou MCP.",

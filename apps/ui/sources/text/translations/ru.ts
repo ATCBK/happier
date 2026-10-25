@@ -4338,6 +4338,16 @@ export const ru: TranslationStructure = {
           },
         },
         fields: {
+          codexReasoningSummaries: {
+              title: "Сводки рассуждений",
+              footer: "Определяет, создаёт ли Codex сводки, независимо от отображения в переписке. Применяется при запуске или возобновлении сессии. Доступность зависит от модели.",
+              generation: "Создание",
+              options: {
+                  default: "Использовать конфигурацию Codex или настройку модели по умолчанию.",
+                  enabled: "Запрашивать сводки, если модель их поддерживает.",
+                  disabled: "Не создавать сводки рассуждений.",
+              },
+          },
           codexBackendMode: {
             title: "Режим маршрутизации Codex",
             subtitle: "Выберите App Server, ACP или MCP.",

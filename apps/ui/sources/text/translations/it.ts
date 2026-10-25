@@ -4730,6 +4730,16 @@ export const it: TranslationStructure = {
             },
           },
           fields: {
+            codexReasoningSummaries: {
+                title: "Riepiloghi del ragionamento",
+                footer: "Controlla se Codex genera riepiloghi, indipendentemente dalla visualizzazione nella conversazione. Si applica all’avvio o alla ripresa di una sessione. La disponibilità dipende dal modello.",
+                generation: "Generazione",
+                options: {
+                    default: "Usa la configurazione di Codex o il valore predefinito del modello.",
+                    enabled: "Richiedi riepiloghi quando il modello li supporta.",
+                    disabled: "Non generare riepiloghi del ragionamento.",
+                },
+            },
             codexBackendMode: {
               title: "Modalità di instradamento di Codex",
               subtitle: "Seleziona App Server, ACP o MCP.",

@@ -4418,6 +4418,16 @@ export const pl: TranslationStructure = {
             },
           },
           fields: {
+            codexReasoningSummaries: {
+                title: "Podsumowania rozumowania",
+                footer: "Określa, czy Codex generuje podsumowania, niezależnie od wyświetlania w rozmowie. Dotyczy uruchamiania lub wznawiania sesji. Dostępność zależy od modelu.",
+                generation: "Generowanie",
+                options: {
+                    default: "Użyj konfiguracji Codex lub ustawienia domyślnego modelu.",
+                    enabled: "Żądaj podsumowań, jeśli model je obsługuje.",
+                    disabled: "Nie generuj podsumowań rozumowania.",
+                },
+            },
             codexBackendMode: {
               title: "Tryb routingu Codex",
               subtitle: "Wybierz Serwer aplikacji, ACP lub MCP.",

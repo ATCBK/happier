@@ -4114,6 +4114,16 @@ export const en = {
 	                    },
 	                },
 	                fields: {
+	                    codexReasoningSummaries: {
+	                        title: "Reasoning summaries",
+	                        footer: "Controls whether Codex generates summaries, independently of transcript display. Applies when starting or resuming a session. Availability depends on the model.",
+	                        generation: "Generation",
+	                        options: {
+	                            default: "Use your Codex configuration or model default.",
+	                            enabled: "Request summaries when the model supports them.",
+	                            disabled: "Do not generate reasoning summaries.",
+	                        },
+	                    },
 	                    codexBackendMode: {
 	                        title: 'Codex routing mode',
 	                        subtitle: 'Select App Server, ACP, or MCP.',

@@ -1184,13 +1184,15 @@ function buildThreadServiceTierParams(
 
 function buildThreadConfigOverrideParams(
     currentReasoningEffort: string | null,
+    reasoningSummary: 'auto' | 'none' | undefined,
 ): { config?: Record<string, string> } {
-    if (!currentReasoningEffort) {
+    if (!currentReasoningEffort && reasoningSummary === undefined) {
         return {};
     }
     return {
         config: {
-            model_reasoning_effort: currentReasoningEffort,
+            ...(currentReasoningEffort ? { model_reasoning_effort: currentReasoningEffort } : {}),
+            ...(reasoningSummary !== undefined ? { model_reasoning_summary: reasoningSummary } : {}),
         },
     };
 }
@@ -1225,6 +1227,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     daemonStatePath?: string | null;
     processEnv?: NodeJS.ProcessEnv;
     configOverrides?: ReadonlyArray<string>;
+    reasoningSummary?: 'auto' | 'none';
     contextWindowRecovery?: Readonly<{
         mode?: CodexAppServerContextWindowRecoveryMode | null;
         continuationPrompt?: string | null;
@@ -4590,7 +4593,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             cwd: params.directory,
             ...(currentModelId ? { model: currentModelId } : {}),
             ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-            ...buildThreadConfigOverrideParams(currentReasoningEffort),
+            ...buildThreadConfigOverrideParams(currentReasoningEffort, params.reasoningSummary),
             ...buildCurrentPermissionParams('thread'),
             persistExtendedHistory: true,
             excludeTurns: options.includeTurns === true ? false : true,
@@ -4619,7 +4622,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         cwd: params.directory,
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                        ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                        ...buildThreadConfigOverrideParams(currentReasoningEffort, params.reasoningSummary),
                         ...buildCurrentLegacyPermissionParams('thread'),
                         persistExtendedHistory: true,
                         excludeTurns: options.includeTurns === true ? false : true,
@@ -4754,7 +4757,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         cwd: params.directory,
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                        ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                        ...buildThreadConfigOverrideParams(currentReasoningEffort, params.reasoningSummary),
                         ...buildCurrentPermissionParams('thread'),
                         experimentalRawEvents: true,
                         persistExtendedHistory: true,
@@ -4774,7 +4777,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             cwd: params.directory,
                             ...(currentModelId ? { model: currentModelId } : {}),
                             ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                            ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                            ...buildThreadConfigOverrideParams(currentReasoningEffort, params.reasoningSummary),
                             ...buildCurrentLegacyPermissionParams('thread'),
                             experimentalRawEvents: true,
                             persistExtendedHistory: true,
@@ -5393,6 +5396,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         ...(clientUserMessageId ? { clientUserMessageId } : {}),
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...(currentReasoningEffort ? { effort: currentReasoningEffort } : {}),
+                        // Loaded native threads can ignore resume config; enforce the fixed session preference here too.
+                        ...(params.reasoningSummary !== undefined ? { summary: params.reasoningSummary } : {}),
                         ...(hasServiceTierOverride ? (currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null }) : {}),
                         ...(collaborationMode ? { collaborationMode } : {}),
                     };

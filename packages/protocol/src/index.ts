@@ -838,6 +838,13 @@ export {
 } from './providers/codex/backendMode.js';
 
 export {
+  CODEX_REASONING_SUMMARIES_DEFAULT,
+  CodexReasoningSummariesSchema,
+  resolveCodexReasoningSummaryOverride,
+  type CodexReasoningSummaries,
+} from './providers/codex/reasoningSummary.js';
+
+export {
   CodexAppServerCapabilitiesSchema,
   CodexAppServerGoalSchema,
   CodexAppServerGoalStatusSchema,

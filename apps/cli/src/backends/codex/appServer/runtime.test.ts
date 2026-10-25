@@ -8404,6 +8404,46 @@ describe('createCodexAppServerRuntime', () => {
         );
     });
 
+    it.each(['auto', 'none', undefined] as const)('applies reasoning summary %s on native thread starts, resumes, and each subsequent turn', async (reasoningSummary) => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-reasoning-summary-');
+        for (const resume of [false, true]) {
+            const runtime = createCodexAppServerRuntime({
+                directory: root,
+                onThinkingChange: vi.fn(),
+                session: createApiSessionClientFixture(),
+                ...{ reasoningSummary },
+            });
+            if (reasoningSummary === 'auto') await runtime.setSessionConfigOption('reasoning_effort', 'high');
+            await runtime.startOrLoad(resume ? { existingSessionId: 'thread-existing', importHistory: false } : {});
+            await runtime.sendPrompt('reasoning-summary-first');
+            await runtime.sendPrompt('reasoning-summary-second');
+            await runtime.reset();
+        }
+        const requestLog = await readRequestLog(requestLogPath);
+        const turns = requestLog.filter((entry) => entry.method === 'turn/start');
+        expect(turns).toHaveLength(4);
+        for (const turn of turns) {
+            if (reasoningSummary === undefined) {
+                expect(turn.params).not.toHaveProperty('summary');
+            } else {
+                expect(turn.params).toHaveProperty('summary', reasoningSummary);
+            }
+        }
+        const requests = requestLog.filter((entry) => entry.method === 'thread/start' || entry.method === 'thread/resume');
+        expect(requests.some((entry) => entry.method === 'thread/start')).toBe(true);
+        expect(requests.some((entry) => entry.method === 'thread/resume')).toBe(true);
+        for (const request of requests) {
+            if (reasoningSummary === undefined) {
+                expect(request.params).not.toHaveProperty('config');
+            } else {
+                expect(request.params).toHaveProperty('config', {
+                    ...(reasoningSummary === 'auto' ? { model_reasoning_effort: 'high' } : {}),
+                    model_reasoning_summary: reasoningSummary,
+                });
+            }
+        }
+    });
+
     it('includes preselected model, reasoning, and Fast service tier in fresh thread/start requests', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-thread-start-overrides-');
 

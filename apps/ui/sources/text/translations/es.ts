@@ -4383,6 +4383,16 @@ export const es: TranslationStructure = {
 	          },
 	        },
 	        fields: {
+	          codexReasoningSummaries: {
+	              title: "Resúmenes del razonamiento",
+	              footer: "Controla si Codex genera resúmenes, independientemente de su visualización en la conversación. Se aplica al iniciar o reanudar una sesión. La disponibilidad depende del modelo.",
+	              generation: "Generación",
+	              options: {
+	                  default: "Usa tu configuración de Codex o el valor predeterminado del modelo.",
+	                  enabled: "Solicita resúmenes si el modelo los admite.",
+	                  disabled: "No generes resúmenes del razonamiento.",
+	              },
+	          },
 	          codexBackendMode: {
 	            title: "Modo de enrutamiento de Codex",
 	            subtitle: "Selecciona App Server, ACP o MCP.",

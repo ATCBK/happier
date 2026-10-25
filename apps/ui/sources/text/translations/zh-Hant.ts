@@ -4044,6 +4044,16 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                     },
                 },
                 fields: {
+                    codexReasoningSummaries: {
+                        title: "推理摘要",
+                        footer: "控制 Codex 是否產生摘要，與對話中的顯示方式無關。在啟動或恢復工作階段時生效。可用性取決於模型。",
+                        generation: "產生",
+                        options: {
+                            default: "使用 Codex 設定或模型預設值。",
+                            enabled: "在模型支援時請求摘要。",
+                            disabled: "不產生推理摘要。",
+                        },
+                    },
                     codexBackendMode: {
                         title: 'Codex 路由模式',
                         subtitle: '選擇 App Server、ACP 或 MCP。',

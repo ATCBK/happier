@@ -4677,6 +4677,16 @@ localTailscale: {
           },
         },
         fields: {
+          codexReasoningSummaries: {
+              title: "推論の要約",
+              footer: "会話内の表示とは個別に、Codex が要約を生成するかを設定します。セッションの開始時または再開時に適用されます。利用できるかどうかはモデルによって異なります。",
+              generation: "生成",
+              options: {
+                  default: "Codex の設定またはモデルの既定値を使用します。",
+                  enabled: "モデルが対応している場合に要約を要求します。",
+                  disabled: "推論の要約を生成しません。",
+              },
+          },
           codexBackendMode: {
             title: "Codex ルーティングモード",
             subtitle: "アプリサーバー、ACP、または MCP を選択します。",

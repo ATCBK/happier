@@ -4094,6 +4094,16 @@ export const fr: TranslationStructure = {
 	                    },
 	                },
 	                fields: {
+	                    codexReasoningSummaries: {
+	                        title: "Résumés du raisonnement",
+	                        footer: "Contrôle si Codex génère des résumés, indépendamment de l’affichage dans la conversation. S’applique au démarrage ou à la reprise d’une session. La disponibilité dépend du modèle.",
+	                        generation: "Génération",
+	                        options: {
+	                            default: "Utilise ta configuration Codex ou le choix par défaut du modèle.",
+	                            enabled: "Demande des résumés si le modèle les prend en charge.",
+	                            disabled: "Ne génère pas de résumés du raisonnement.",
+	                        },
+	                    },
 	                    codexBackendMode: {
 	                        title: 'Mode de routage Codex',
 	                        subtitle: 'Choisis App Server, ACP ou MCP.',

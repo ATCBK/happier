@@ -4094,6 +4094,16 @@ export const de: TranslationStructure = {
 	                    },
 	                },
 	                fields: {
+	                    codexReasoningSummaries: {
+	                        title: "Denkzusammenfassungen",
+	                        footer: "Legt unabhängig von der Anzeige im Gespräch fest, ob Codex Zusammenfassungen erzeugt. Gilt beim Starten oder Fortsetzen einer Sitzung. Die Verfügbarkeit hängt vom Modell ab.",
+	                        generation: "Erzeugung",
+	                        options: {
+	                            default: "Codex-Konfiguration oder Modellstandard verwenden.",
+	                            enabled: "Zusammenfassungen anfordern, wenn das Modell sie unterstützt.",
+	                            disabled: "Keine Denkzusammenfassungen erzeugen.",
+	                        },
+	                    },
 	                    codexBackendMode: {
 	                        title: 'Codex-Routing-Modus',
 	                        subtitle: 'Wähl App Server, ACP oder MCP.',

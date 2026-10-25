@@ -4273,6 +4273,16 @@ export const zhHans: TranslationStructure = {
           },
         },
         fields: {
+          codexReasoningSummaries: {
+              title: "推理摘要",
+              footer: "控制 Codex 是否生成摘要，与对话中的显示方式无关。在启动或恢复会话时生效。可用性取决于模型。",
+              generation: "生成",
+              options: {
+                  default: "使用 Codex 配置或模型默认值。",
+                  enabled: "在模型支持时请求摘要。",
+                  disabled: "不生成推理摘要。",
+              },
+          },
           codexBackendMode: {
             title: "Codex 路由模式",
             subtitle: "选择 App Server、ACP 或 MCP。",
