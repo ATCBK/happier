@@ -6,9 +6,7 @@ import * as Fonts from 'expo-font';
 import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import {
-    PUSH_NOTIFICATION_ACTION_IDS,
     PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS,
-    PUSH_NOTIFICATION_CATEGORY_IDS,
 } from '@happier-dev/protocol';
 import { AuthProvider, useAuth } from '@/auth/context/AuthContext';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
@@ -77,7 +75,7 @@ import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAre
 import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 import { installWebFontFaces } from '@/platform/installWebFontFaces';
 import { ActionOperationRuntime } from '@/sync/domains/actionOperations/actionOperationRuntime';
-import { notificationPermissionActionsOpenApp } from '@/activity/notifications/runtime/notificationBackgroundTaskState';
+import { configureNotificationCategories } from '@/activity/notifications/runtime/configureNotificationCategories';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
@@ -364,40 +362,13 @@ function configureAndroidNotificationChannels(Notifications: ExpoNotificationsMo
     }).catch(() => {});
 }
 
-async function configureNotificationCategories(Notifications: ExpoNotificationsModule): Promise<void> {
-    if (Platform.OS === 'web') return;
-    const opensAppToForeground = await notificationPermissionActionsOpenApp(Platform.OS);
-
-    // Expo docs recommend avoiding ':' and '-' in category identifiers.
-    // Our category ids live in `@happier-dev/protocol` so the CLI push payload and app registration stay in sync.
-    void Notifications.setNotificationCategoryAsync(PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1, [
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            buttonTitle: t('notifications.actions.allow'),
-            options: { opensAppToForeground },
-        },
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
-            buttonTitle: t('notifications.actions.deny'),
-            options: { opensAppToForeground, isDestructive: true },
-        },
-    ]).catch(() => {});
-
-    void Notifications.setNotificationCategoryAsync(PUSH_NOTIFICATION_CATEGORY_IDS.userActionRequestV1, [
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.userActionOpenV1,
-            buttonTitle: t('notifications.actions.answer'),
-            options: { opensAppToForeground: true },
-        },
-    ]).catch(() => {});
-}
 
 void (async () => {
     try {
         const Notifications = await loadExpoNotifications();
         configureForegroundNotificationHandler(Notifications);
         configureAndroidNotificationChannels(Notifications);
-        await configureNotificationCategories(Notifications);
+        await configureNotificationCategories(Notifications, Platform.OS);
     } catch {
         // Native notification modules are optional in local dev clients; startup must still render.
     }
