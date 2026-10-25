@@ -107,7 +107,7 @@ function writeJsonFile(path: string, value: unknown): void {
 
 function renderGeneratedStressServerDockerfile(): string {
     return `# syntax=docker/dockerfile:1
-FROM node:22 AS server-stress
+FROM node:24 AS server-stress
 RUN apt-get update && apt-get install -y python3 ffmpeg make g++ build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 ENV HAPPIER_INSTALL_SCOPE=server,protocol,agents,cli-common,release-runtime

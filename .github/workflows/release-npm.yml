@@ -206,7 +206,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Resolve release inputs
         id: release_inputs
@@ -572,7 +572,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: Re-admit Qualified V4 npm CLI payload publication
@@ -625,7 +625,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: npm publish (stack tarball) (pipeline)
@@ -667,7 +667,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: npm publish (server runner tarball) (pipeline)
@@ -716,7 +716,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: npm publish (plugin SDK lockstep pair) (pipeline)
@@ -764,7 +764,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: npm publish (SDK tarball) (pipeline)
@@ -812,7 +812,7 @@ jobs:
       - name: Setup Node (npm publish)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
 
       - name: npm publish (Channels protocol tarball) (pipeline)

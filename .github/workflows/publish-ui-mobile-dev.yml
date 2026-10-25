@@ -146,7 +146,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Install candidate preparation dependencies
         env:
           npm_config_production: "false"
@@ -202,7 +202,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Install trusted OTA publisher dependencies
         env:
           npm_config_production: "false"
@@ -266,7 +266,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
 
       - name: Install dependencies
@@ -391,7 +391,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .testflight-preflight-control/.node-version
 
       - name: Validate configured external TestFlight groups
         working-directory: .testflight-preflight-control
@@ -501,7 +501,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .testflight-preflight-control/.node-version
 
       - name: Validate configured external TestFlight groups
         working-directory: .testflight-preflight-control

@@ -146,7 +146,7 @@ jobs:
         if: ${{ inputs.resume_version != '' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Verify resumed immutable UI-web candidate
         id: resume
         if: ${{ inputs.resume_version != '' }}
@@ -203,7 +203,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
       - name: Resolve channel metadata
         id: channel_meta
@@ -315,7 +315,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
 
       - name: Install dependencies
@@ -408,7 +408,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
 
 
       - name: Install minisign (signing + verification)
@@ -516,7 +516,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign
       - name: Install dependencies

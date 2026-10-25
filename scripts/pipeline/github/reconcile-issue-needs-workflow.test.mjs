@@ -12,7 +12,7 @@ test('issue handoff workflow delegates opened, reopened, and comment events to t
   assert.match(workflow, /issue_comment:\s*\n\s+types:\s*\[created\]/);
   assert.match(workflow, /permissions:\s*\n\s+contents:\s*read\s*\n\s+issues:\s*write/);
   assert.match(workflow, /actions\/checkout@[^\n]+\n\s+with:\s*\n\s+persist-credentials:\s*false/);
-  assert.match(workflow, /actions\/setup-node@[^\n]+\n\s+with:\s*\n\s+node-version:\s*22\.x/);
+  assert.match(workflow, /actions\/setup-node@[^\n]+\n\s+with:\s*\n\s+node-version-file:\s*\.node-version\s*\n/);
   assert.match(workflow, /node scripts\/pipeline\/github\/reconcile-issue-needs\.mjs/);
   assert.match(workflow, /--event-name "\$GITHUB_EVENT_NAME"/);
   assert.match(workflow, /--event-path "\$GITHUB_EVENT_PATH"/);

@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .node-version
       - name: Select performance comparison
         id: selection
         run: node scripts/pipeline/perf/run-workflow.mjs --plan

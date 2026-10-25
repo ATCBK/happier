@@ -66,7 +66,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
+          node-version-file: .release-control/.node-version
       - name: Install minisign from trusted control bytes
         if: ${{ inputs.candidate_cli_version != '' || inputs.candidate_stack_version != '' || inputs.candidate_server_version != '' || inputs.candidate_runner_version != '' || inputs.candidate_ui_web_version != '' }}
         uses: ./.release-control/.github/actions/bootstrap-minisign
