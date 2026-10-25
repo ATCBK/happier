@@ -11,6 +11,7 @@ import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { artifactListResponse, artifactReadResponse } from '@/testkit/http/artifactHome';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 
 function response<T>(data: T): AxiosResponse<T> {
@@ -42,13 +43,14 @@ it('attributes an automation background Action approval to its host Machine thro
         if (path === '/v1/account/encryption/currentness') return response({ mode: 'plain', version: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
             recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
-        if (path === '/v1/artifacts') return response([...artifacts.values()]);
+        if (path === '/v1/artifacts') return response(artifactListResponse(String(url), [...artifacts.values()]));
         const artifact = artifacts.get(path.split('/').at(-1)!);
         if (artifact) return response(artifact);
         throw new Error(`Unexpected GET ${path}`);
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
         const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts/read') return response(artifactReadResponse(body, id => artifacts.get(id) ?? null).data);
         if (path !== '/v1/artifacts') throw new Error(`Unexpected POST ${path}`);
         const value = body as { id: string; header: string; body: string };
         artifacts.set(value.id, { ...value, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,

@@ -15,6 +15,7 @@ import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secret
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent,
   LaunchProfileArtifactV1Schema, buildLaunchProfileArtifactHeaderV1, FeaturesResponseSchema,
   SavedSecretResourceMaterialsResponseV1Schema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -92,7 +93,7 @@ it.each(['plain', 'e2ee'] as const)('admits a captured lossless legacy clone and
     if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: 5 } };
     if (path.endsWith('/transfer')) return { status: 200, data: { status: 'absent' } };
     if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: null } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     throw new Error(`Unexpected clone read: ${path}`);
   });
   const submitted: unknown[] = [];
@@ -141,7 +142,7 @@ it('loads a retained legacy Artifact through the single issued Account catalog c
     if (url.pathname.endsWith('/entity-rows/profiles')) return { status: 200, data: { status: 'listed', rows: [],
       complete: true, nextCursor: null, diagnostics: [], referenceGuardRevision: 'absent', transferControl: { status: 'absent' } } };
     if (url.pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: raw } } };
-    if (url.pathname === '/v1/artifacts') return { status: 200, data: [] };
+    if (url.pathname === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (url.pathname === '/v1/artifacts/retained-artifact') { artifactReads.push(url.pathname); return { status: 200, data: row }; }
     throw new Error(`Unexpected issued Artifact boundary: ${url.pathname}`);
   });
@@ -468,7 +469,7 @@ it('reads Artifact grants from the same captured Home as its Profile rows', asyn
     if (url.pathname.endsWith('/transfer')) return { status: 200, data: control };
     if (url.pathname === '/v1/account/entity-rows/profiles') return { status: 200, data: { status: 'listed',
       rows: [], complete: true, nextCursor: null, diagnostics: [], referenceGuardRevision: 'absent', transferControl: control } };
-    if (url.pathname === '/v1/artifacts') return { status: 200, data: [] };
+    if (url.pathname === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     throw new Error(`Unexpected Artifact Home boundary: ${url.pathname}`);
   });
   const store = runWithServerHttpBaseUrl('https://captured-home.test', () => createCliProfileStore({ credentials }));

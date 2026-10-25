@@ -10,6 +10,7 @@ import * as persistenceModule from '@/persistence';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 let records: ProfileRecordV1[];
 
@@ -24,7 +25,7 @@ beforeEach(() => {
       status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
     };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
     if (path === '/v2/account/settings') return {
       status: 200, data: { version: 1, content: { t: 'plain', v: {} } },
     };

@@ -10,6 +10,7 @@ import { createPromptBundleInLibrary, type PromptLibraryArtifactStore } from '@h
 import { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1, SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -59,7 +60,7 @@ async function fixture(approvalRequired = false, invalidReply = false) {
     if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
       key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) },
     })) } };
-    if (path === '/v1/artifacts') return { status: 200, data: artifacts };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), artifacts) };
     if (path === `/v1/artifacts/${artifacts[0]!.id}`) return { status: 200, data: artifacts[0] };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: { actionsSettingsV1 } }, version: 7 } };
     if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };

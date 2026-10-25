@@ -27,6 +27,7 @@ import { resolveAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/requir
 import { ProfileRecordV1Schema, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { ACCOUNT_SECURITY_PATH_V1, AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { createRequesterSessionControlRuntimeFixture } from '../testkit/requesterSessionControlRuntimeFixture';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 describe('foreground requester Account admission through protected custody', () => {
   it('claims Bob Profile material without publishing Bob as Alice, and refuses lost admission before claiming material', async () => {
@@ -89,7 +90,7 @@ describe('foreground requester Account admission through protected custody', () 
       app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1, updatedAt: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null }));
       app.get('/v2/account/settings', async () => ({ version: 1, content: { t: 'plain', v: settings } }));
-      app.get('/v1/artifacts', async () => []);
+      app.get('/v1/artifacts', async (request) => artifactListResponse(request.url, []));
       app.get('/v1/account/entity-rows/profiles/reference-guard', async () => ({ status: 'ready', revision: 1 }));
       app.get('/v1/account/entity-rows/profiles/transfer', async () => ({ status: 'absent' }));
       app.get('/v1/account/entity-rows/profiles', async () => ({ status: 'listed', rows: [{ id: profile.id, revision: 1,

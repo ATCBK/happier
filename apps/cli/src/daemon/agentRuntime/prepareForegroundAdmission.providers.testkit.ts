@@ -39,14 +39,16 @@ import { sealProfileTransferContentV1 } from '@happier-dev/protocol/profiles/pro
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
-import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import type { ProjectManifestV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
 import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import { refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema,
   sealProviderConnectionsContentV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 type BaseContext = Parameters<Parameters<typeof withRealForegroundAdmissionFixture>[1]>[0];
 type RequestOverrides = NonNullable<Parameters<BaseContext['prepare']>[0]>;
@@ -221,25 +223,27 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
     app.get('/v1/features', async () => features);
     app.get('/v1/features/authenticated', async () => features);
     app.get('/v2/account/settings', async () => settingsResponse);
-    app.get('/v1/artifacts', async () => []);
+    app.get('/v1/artifacts', async (request) => artifactListResponse(request.url, []));
     app.get('/v1/account/encryption', async () => ({ mode: 'e2ee', updatedAt: 0 }));
     app.get('/v1/account/encryption/currentness', async () => ({ mode: 'e2ee', version: 1, updatedAt: 0,
       signingKeyFingerprint: null, contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
         createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint),
     }));
-    let projectRows = ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] });
+    let projectRows: unknown[] = [];
     if (options.projectManifest) {
       await mkdir(join(base.directory, '.happier'), { recursive: true });
       await writeFile(join(base.directory, '.happier', 'project.json'), JSON.stringify(options.projectManifest));
       const key = { kind: 'workspace-ref' as const, serverId: configuration.activeServerId, id: 'foreground-workspace' };
       const cipher = createProjectAccountRowCipherV1({ mode: 'e2ee', material,
         randomBytes: length => new Uint8Array(length).fill(7) });
-      projectRows = ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [{ key,
+      projectRows = [{ key,
         revision: 0, content: cipher.seal({ key, value: { id: key.id, serverId: key.serverId,
           machineId: 'machine-1', rootPath: base.directory, projectKey: 'foreground-project', createdAtMs: 1 } }),
-      }] });
+      }];
     }
-    app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, async () => projectRows);
+    // Project setup reads the exact workspace-ref key (/read) or a kind-scoped selection (/list).
+    for (const route of ['list', 'read']) app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/${route}`, async request =>
+      projectAccountRowsReadHttpResponse(projectRows, request.url, request.body).data);
     app.get('/v1/machines/machine-1', async () => ({ machine: MachinePublishedRowV1Schema.parse({
       id: 'machine-1', storageMode: 'e2ee', metadata: null, metadataVersion: 0,
       daemonState: null, daemonStateVersion: 0, dataEncryptionKey: null,

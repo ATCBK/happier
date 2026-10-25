@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
-import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowReadRequestV1Schema, buildProjectAccountRowPhysicalKeyV1, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createCliActionDeps } from './createCliActionDeps';
 import { reloadConfiguration } from '@/configuration';
@@ -57,9 +57,14 @@ describe('CLI personal context qualified Artifact transport', () => {
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 0, createdAt: 0, updatedAt: 0 } };
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
-      expect(String(url)).toMatch(/^https:\/\/context-home-a\.test\/v1\/account\/project-rows\/(list|mutate)$/);
+      expect(String(url)).toMatch(/^https:\/\/context-home-a\.test\/v1\/account\/project-rows\/(list|read|mutate)$/);
       expect(options?.headers?.Authorization).toBe(`Bearer ${homeToken}`);
       if (String(url).endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [row] } };
+      if (String(url).endsWith('/read')) {
+        const { key: requested } = ProjectAccountRowReadRequestV1Schema.parse(body);
+        return { status: 200, data: buildProjectAccountRowPhysicalKeyV1(requested) === buildProjectAccountRowPhysicalKeyV1(row.key)
+          ? { status: 'present', row } : { status: 'absent' } };
+      }
       const mutation = ProjectAccountRowMutationRequestV1Schema.parse(body).mutations[0]!;
       expect(mutation.expectedRevision).toBe(row.revision);
       row = { key, revision: row.revision + 1, content: mutation.content }; writes++;

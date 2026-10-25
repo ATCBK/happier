@@ -15,6 +15,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createHappierMcpServer } from './createHappierMcpServer';
 import type { HappyMcpSessionClient } from './startHappyServer';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 describe('createHappierMcpServer goal parity', () => {
   afterEach(() => {
@@ -37,7 +38,7 @@ describe('createHappierMcpServer goal parity', () => {
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(rawUrl), []) };
       throw new Error(`Unexpected Goal Account read: ${path}`);
     });
     return settings;

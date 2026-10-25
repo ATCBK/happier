@@ -10,6 +10,7 @@ import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/proto
 import { createCliActionDeps } from './createCliActionDeps';
 import { reloadConfiguration } from '@/configuration';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
@@ -56,7 +57,7 @@ describe('CLI Profile entity Action front door', () => {
       if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [{ id: record.id,
         revision: 3, content: { t: 'plain', v: record } }], nextCursor: null, complete: true, diagnostics: [],
         referenceGuardRevision: 4, transferControl } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       throw new Error(`unexpected_profile_clone_get:${path}`);
     });
     let saved: unknown;
@@ -180,7 +181,7 @@ describe('CLI Profile entity Action front door', () => {
       if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed',
         rows: [{ id: record.id, revision: 3, content: { t: 'plain', v: record } }], nextCursor: null,
         complete: true, diagnostics: [], referenceGuardRevision: 4, transferControl } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       if (path === '/v1/account/saved-secrets/resources/materials') return { status: 200,
         data: SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{ resourceId: 'secret-selected', encryptionMode: 'plain',
           entry: { ref: 'happier:shared-secret:v1:secret-selected', source: 'shared_resource', relationship: 'owner', name: 'Selected',
@@ -227,7 +228,7 @@ describe('CLI Profile entity Action front door', () => {
       if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [{ id: record.id, revision: 3,
         content: { t: 'plain', v: record } }], nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 4,
         transferControl: { status: 'absent' } } };
-      if (path === '/v1/artifacts') return { status: 200, data: [...artifactRows.values()] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), [...artifactRows.values()]) };
       if (path.startsWith('/v1/artifacts/')) {
         const row = artifactRows.get(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
         if (row) return { status: 200, data: row };

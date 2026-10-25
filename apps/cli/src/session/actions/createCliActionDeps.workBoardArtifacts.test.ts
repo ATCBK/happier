@@ -6,6 +6,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, decod
     WorkBoardV1Schema, buildHomeHubArtifactIdV1, buildWorkBoardItemKeyV1, createActionExecutor, createWorkBoardV1 } from '@happier-dev/protocol';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { buildWidgetSurfaceArtifactIdV1 } from '@happier-dev/protocol/widgets';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { createCliActionDeps } from './createCliActionDeps';
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -13,11 +14,21 @@ import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/action
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
-afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+// A Home that indexes kinds advertises it on its features route, so CLI writes carry their stored kind.
+const advertiseKindIndexing = () => vi.stubGlobal('fetch', async (url: unknown) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json({
+        features: { artifacts: { queryHints: { enabled: true } } }, capabilities: {} });
+    throw new Error(`unexpected_fetch:${path}`);
+});
+const coarseKindOf = (storedKind: string | undefined) => storedKind?.split(':')[1];
 
 describe('CLI Board Actions through the Artifact owner', () => {
     it.each([['plain', false], ['plain', true], ['e2ee', false], ['e2ee', true]] as const)(
         'round-trips Board create/list/edit/delete through the existing %s Artifact codec (Home read unavailable: %s)', async (mode, initiallyUnavailable) => {
+        advertiseKindIndexing();
         const secret = new Uint8Array(32).fill(7);
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
         const credentials = { token, encryption: mode === 'plain' ? null
@@ -50,7 +61,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
             if (path === '/v1/artifacts') {
                 const kind = new URL(url).searchParams.get('kind');
                 // The Artifact server selects by its stored coarse kind; every row here is classified.
-                return { status: 200, data: kind ? { items: [...rows.values()].filter(row => row.kind === kind), hasUnclassified: false } : [...rows.values()] };
+                return { status: 200, data: artifactListResponse(url, kind ? [...rows.values()].filter(row => coarseKindOf(row.kind) === kind) : [...rows.values()]) };
             }
             const artifactId = decodeURIComponent(path.split('/')[3] ?? '');
             const row = rows.get(artifactId);
@@ -268,6 +279,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
         expect(rows.has('new-board')).toBe(false);
     });
     it('writes one Board, replays a position conflict, and leaves another Board and settings untouched', async () => {
+        advertiseKindIndexing();
         const key = buildWorkBoardItemKeyV1({ kind: 'session', qualifiedId: { serverId: 'board-home', id: 's1' } });
         const otherKey = buildWorkBoardItemKeyV1({ kind: 'session', qualifiedId: { serverId: 'board-home', id: 's2' } });
         let board = createWorkBoardV1({ id: 'b1', name: 'CLI Board' });
@@ -286,7 +298,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
             } };
             if (url.includes('/v1/artifacts?')) {
                 const items = [row('b1'), row('other')];
-                return { status: 200, data: new URL(url).searchParams.has('kind') ? { items, hasUnclassified: false } : items };
+                return { status: 200, data: artifactListResponse(url, items) };
             }
             if (url.endsWith('/v1/artifacts/b1')) return { status: 200, data: row('b1') };
             if (url.endsWith('/v1/artifacts/other')) return { status: 200, data: row('other') };
@@ -316,7 +328,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
         const positioned = await executor.execute('boards.apply', { intent: { kind: 'set_positions', boardId: 'b1', positionsByItemRef: { [key]: { x: 48, y: 96 } } } }, context);
         expect(positioned, JSON.stringify(positioned)).toMatchObject({ ok: true });
         expect(board.positionsByItemRef).toEqual({ [key]: { x: 48, y: 96 }, [otherKey]: { x: 3, y: 4 } });
-        expect(await executor.execute('boards.list', {}, context)).toMatchObject({ ok: true, result: { boards: [{ id: 'b1' }, { id: 'other' }] } });
+        expect(await executor.execute('boards.list', {}, context)).toMatchObject({ ok: true, result: { boards: [{ id: 'other' }, { id: 'b1' }] } }); // equal updatedAt: the Artifact list order is id-descending
         expect(post.mock.calls.every(call => call[0] === 'https://board-home.test/v1/artifacts/b1')).toBe(true);
         expect(get.mock.calls.some(call => call[0].includes('/v1/kv/'))).toBe(false);
     });

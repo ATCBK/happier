@@ -21,6 +21,7 @@ import { createResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { encodeBase64, encryptWithDataKey } from '@/api/encryption';
 import { randomBytes } from 'node:crypto';
 import { x25519 } from '@noble/curves/ed25519';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 const defaultEngine = { agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }) };
 
@@ -83,7 +84,7 @@ describe('session role prompt-plan context', () => {
     vi.spyOn(axios, 'get').mockImplementation(async input => {
       const path = new URL(String(input)).pathname;
       paths.push(path);
-      if (path === '/v1/artifacts') { await release.promise; return { status: 200, data: [row] }; }
+      if (path === '/v1/artifacts') { await release.promise; return { status: 200, data: artifactListResponse(String(input), [row]) }; }
       if (path === '/v1/artifacts/selected-role') return { status: 200, data: row };
       throw new Error(`Unexpected Artifact request: ${path}`);
     });

@@ -57,7 +57,8 @@ describe('skill library name inventory', () => {
         const items = bundles.map((body, index) => ({
           id: `skill-${index}`, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
           dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
-          seq: index + 1, createdAt: 1, updatedAt: 1,
+          // The default list order is newest-updated first, so the first bundle is the newest.
+          seq: index + 1, createdAt: 1, updatedAt: bundles.length - index,
           header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: `Skill ${index}`,
             bundleSchemaId: 'skills.skill_md_v1' }),
           ...(url.searchParams.get('includeBody') === 'true' && !(unreadable && index === 1)

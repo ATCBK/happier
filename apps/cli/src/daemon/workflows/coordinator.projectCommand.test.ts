@@ -104,8 +104,10 @@ describe('finite Project command Workflow completion', () => {
         return { status: 200, data: { status: 'updated', revision: ++trustRevision, cursor: 1 } };
       }
       const key = { kind: 'workspace-ref', serverId: 'home', id: workspace.id };
-      return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1,
-        content: { t: 'plain', v: { key, value: workspace } } }] } };
+      const row = { key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } };
+      // An exact Workspace address reads its one row; only a census lists.
+      return { status: 200, data: String(url).endsWith('/project-rows/read')
+        ? { status: 'present', row } : { status: 'listed', coverage: 'complete', rows: [row] } };
     });
     const processes: FinitePty[] = [];
     let stopRequests = 0;

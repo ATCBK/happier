@@ -26,6 +26,7 @@ import { prepareRequesterAccountActionContext } from "../sessionEncryption/reque
 import { type RequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { executeExternalAction } from './executeExternalAction';
 import type { JsonValue } from '@happier-dev/protocol';
+import { projectAccountRowReadResponse } from '@/testkit/http/projectAccountRows';
 
 // Database I/O and HTTP are the only substitutes. Home token minting, signed
 // request verification, private custody, Action policy and row semantics stay real.
@@ -40,7 +41,7 @@ const storage = vi.hoisted(() => {
     $queryRaw: async () => [{ statement_timeout: '0' }],
     $executeRawUnsafe: async () => 0,
     account: { findUnique: async () => account },
-    machine: { findUnique: async () => machine(), findFirst: async () => machine() },
+    machine: { findUnique: async () => machine(), findFirst: async () => machine(), findMany: async () => [machine()] },
     simpleCache: { findUnique: async () => ({ value: 'srv_PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP' }) } };
   return { state, account, db: { ...reader, $transaction: async <T>(run: (tx: typeof reader) => Promise<T>) => run(reader) } };
 });
@@ -122,6 +123,7 @@ function httpBoundary() {
     admitted.push({ actionId: verified.binding.actionId, path, authority: verified.principal.authority,
       kind: 'authentication' in verified.principal ? verified.principal.authentication.kind : 'pat' });
     if (path === '/v1/account/project-rows/list') return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+    if (path === '/v1/account/project-rows/read') return projectAccountRowReadResponse(rows, body);
     if (path === '/v1/account/project-rows/mutate') {
       const mutation = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = mutation.mutations.map(value => {

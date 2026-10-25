@@ -10,6 +10,7 @@ import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/art
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { artifactListResponse, artifactReadResponse } from '@/testkit/http/artifactHome';
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { listActionSpecsForCatalogSurface } from '@happier-dev/protocol/actions/actionCatalog';
@@ -39,7 +40,8 @@ describe('composed approval catalog RPC and Account Artifact transport', () => {
       rows.set(row.id, row);
       return { id: row.id, headerVersion: row.headerVersion, bodyVersion: row.bodyVersion };
     });
-    home.get('/v1/artifacts', async () => [...rows.values()]);
+    home.get('/v1/artifacts', async request => artifactListResponse(request.url, [...rows.values()]));
+    home.post('/v1/artifacts/read', async request => artifactReadResponse(request.body, id => rows.get(id) ?? null).data);
     home.get<{ Params: { id: string } }>('/v1/artifacts/:id', async (request, reply) =>
       rows.get(request.params.id) ?? reply.code(404).send({ error: 'not_found' }));
     await home.ready();

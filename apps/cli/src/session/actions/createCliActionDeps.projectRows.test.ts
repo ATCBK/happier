@@ -6,7 +6,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import {
-  ProjectAccountRowMutationRequestV1Schema, buildProjectAccountRowPhysicalKeyV1,
+  ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowReadRequestV1Schema, buildProjectAccountRowPhysicalKeyV1,
   type ProjectAccountRowV1,
 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createCliActionDeps } from './createCliActionDeps';
@@ -34,6 +34,11 @@ function accountRows(rows: ProjectAccountRowV1[], options?: Readonly<{ rejectAft
   });
   const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     if (String(url).endsWith('/v1/account/project-rows/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+    if (String(url).endsWith('/v1/account/project-rows/read')) {
+      const { key } = ProjectAccountRowReadRequestV1Schema.parse(body);
+      const row = rows.find(prior => buildProjectAccountRowPhysicalKeyV1(prior.key) === buildProjectAccountRowPhysicalKeyV1(key));
+      return { status: 200, data: row ? { status: 'present', row } : { status: 'absent' } };
+    }
     if (!String(url).endsWith('/v1/account/project-rows/mutate')) throw new Error(`Unexpected POST ${url}`);
     const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
     const updates: ProjectAccountRowV1[] = [];

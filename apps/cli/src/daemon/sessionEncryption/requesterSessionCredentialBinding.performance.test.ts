@@ -21,6 +21,7 @@ import { logger } from '@/utils/logger';
 import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import { bindRequesterSessionRuntimeMachineAdmissionCurrentness, prepareRequesterSessionBootstrap,
   verifyRequesterSessionCredentialBinding, verifyRequesterSessionMachineAdmissionCurrent } from './requesterSessionCredentials';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 // The socket transport is unavailable in this HTTP custody composition.
 vi.mock('socket.io-client', () => ({ io: () => { throw new Error('Socket unavailable'); } }));
@@ -223,7 +224,7 @@ it.each([
     rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
       content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })),
   }));
-  app.get('/v1/artifacts', async () => []);
+  app.get('/v1/artifacts', async (request) => artifactListResponse(request.url, []));
   app.get('/v1/account/entity-rows/profiles', async () => ({ status: 'listed', rows: [], nextCursor: null,
     complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } }));
   app.get('/v1/account/entity-rows/profiles/reference-guard', async () => ({ status: 'ready', revision: 1 }));

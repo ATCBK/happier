@@ -19,6 +19,7 @@ import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import * as persistence from '@/persistence';
 import { refreshDemandedActiveProfileCatalog } from './hydrateProfileCatalog';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -80,7 +81,7 @@ it.each([
         authoringMemoryObserved = true;
         response.end(JSON.stringify({ status: 'present', revision: 1, content: { t: 'plain', v: 'focused' } }));
       } else if (path?.startsWith('/v1/artifacts')) {
-        response.end(JSON.stringify([]));
+        response.end(JSON.stringify(artifactListResponse(request.url ?? '', [])));
       } else {
         // Optional cleanup may stay pending without undoing admitted activation.
         response.statusCode = request.method === 'POST' ? 503 : 404;
@@ -200,7 +201,7 @@ describe('CLI Profile catalog hydration', () => {
         mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (url.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (url.pathname === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
-      if (url.pathname === '/v1/artifacts') return { status: 200, data: [] };
+      if (url.pathname === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
       if (url.pathname.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: 1 } };
       if (url.pathname.endsWith('/transfer')) return { status: 200, data: transfer };
       if (url.pathname === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } };
@@ -293,7 +294,7 @@ it('demand reads use refreshed active rows without any Settings definition or re
         v: 1, id: 'focused', enabled: revision === 1, promptStack: [], secretBindings: {},
         definition: { kind: 'inline', profile: { v: 2, id: 'focused', name: 'Destination', createdAt: 1, updatedAt: 1 } },
       }) } }], nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: revision, transferControl: control } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: null, version: 7 } };
@@ -325,7 +326,7 @@ it('selects the exact inherited identity returned by the admitted Account reader
       rows: [{ id, revision: 1, content: { t: 'plain', v: record } }], nextCursor: null, complete: true,
       diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
     throw new Error(`Unexpected exact identity boundary: ${path}`);
@@ -358,7 +359,7 @@ it.each(['enabled', 'remembered'] as const)('admits a visible native builtin pre
     if (path === '/v1/account/entity-rows/profiles') return { status: 200, data: { status: 'listed', rows: [],
       nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 'absent', transferControl: { status: 'absent' } } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: raw }, version: settingsVersion } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: lastUsedProfile === null
       ? { status: 'absent' } : { status: 'present', revision: 1, content: { t: 'plain', v: lastUsedProfile } } };
@@ -406,7 +407,7 @@ it.each(['applied', 'conflict'] as const)('cleans transferred source and retaine
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
       mode: 'plain', version: 1, settingsVersion, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: rows.length ? 0 : 'absent' } };
     if (path.endsWith('/transfer')) return { status: 200, data: control };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: raw }, version: settingsVersion } };
@@ -474,7 +475,7 @@ it('reads the full captured predecessor source rather than its bounded preferenc
     loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials), profileCatalog: catalog });
   vi.spyOn(axios, 'get').mockImplementation(async (input) => {
     const path = new URL(String(input)).pathname;
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(input), []) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: raw }, version: 7 } };
@@ -498,7 +499,7 @@ it('refuses to disclose a captured Profile after Account retirement during Artif
     const path = new URL(String(input)).pathname;
     if (path === '/v1/artifacts') {
       resetActiveAccountSettingsSnapshotForTests();
-      return { status: 200, data: [] };
+      return { status: 200, data: artifactListResponse(String(input), []) };
     }
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };

@@ -11,6 +11,7 @@ import { resolveProfileProbeEnvironment } from './resolveProfileProbeEnvironment
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 
 function publishAccountSnapshot(request: Pick<Parameters<typeof resolveProfileProbeEnvironment>[0], 'accountSettings' | 'credentials' | 'profileCatalog'>) {
   if (!request.accountSettings || !request.credentials) throw new Error('Expected a credentialed Account fixture');
@@ -28,7 +29,7 @@ describe('resolveProfileProbeEnvironment', () => {
   it('probes the destination Profile row rather than a retained Settings definition', async () => {
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
       if (path === '/v2/account/settings') return { status: 200, data: { content: null, version: 1 } };
@@ -61,11 +62,11 @@ describe('resolveProfileProbeEnvironment', () => {
     // Account HTTP transport is the system boundary; profile parsing and secret materialization stay real.
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       if (path === '/v2/account/settings') return { status: 200, data: { content: null, version: 1 } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
       if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       throw new Error(`Unexpected account request: ${path}`);
     });
     const recoverySecret = new Uint8Array(32).fill(7);
@@ -96,11 +97,11 @@ describe('resolveProfileProbeEnvironment', () => {
     vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
       expect(options?.headers?.Authorization).toBe('Bearer token');
       const path = new URL(String(url)).pathname;
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
       if (path === '/v1/account/authoring-memory/lastUsedProfile') return { status: 200, data: { status: 'absent' } };
       if (path === '/v2/account/settings') return { status: 200, data: { content: null, version: 1 } };
-      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
       throw new Error(`Unexpected profile probe HTTP path: ${path}`);
     });
     const post = vi.spyOn(axios, 'post').mockImplementation(async () => {

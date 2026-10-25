@@ -13,6 +13,7 @@ import { AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automa
 import { MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { PROFILE_ROWS_ROUTE_V1, ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { artifactListResponse, artifactReadResponse } from '@/testkit/http/artifactHome';
 import { configuration } from '@/configuration';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createCliActionDeps } from './createCliActionDeps';
@@ -67,7 +68,7 @@ it.each(['legacy', 'destination', 'unavailable'] as const)('reviews current cano
     { id: 'unrelated-board', header: buildWorkBoardArtifactHeaderV1(unrelatedBoard), body: unrelatedBoard },
     { id: 'profile-artifact-a', header: buildLaunchProfileArtifactHeaderV1(profile), body: profile },
     { id: 'unrelated-profile-artifact', header: buildLaunchProfileArtifactHeaderV1(unrelatedProfile), body: unrelatedProfile },
-  ].map((artifact) => ({ id: artifact.id, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+  ].map((artifact) => ({ id: artifact.id, ownerAccountId: 'account-a', access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
     header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(artifact.body) }),
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }));
   const assignment = (id: string, machineId: string) => AutomationDefinitionListItemSchema.parse({ id,
@@ -108,18 +109,21 @@ it.each(['legacy', 'destination', 'unavailable'] as const)('reviews current cano
     }
     if (path === `${PROFILE_ROWS_ROUTE_V1}/reference-guard`) return response({ status: 'ready', revision: 'absent' });
     if (path === PROFILE_TRANSFER_ROUTE_V1) return response(transfer);
-    if (path === '/v1/artifacts') return response(artifacts);
+    if (path === '/v1/artifacts') return response(artifactListResponse(String(url), artifacts));
+    if (path.endsWith('/access/grants')) return response({ artifactId: path.split('/').at(-3), ownerAccountId: 'account-a',
+      access: 'owner', grants: [] });
     if (path.startsWith('/v1/artifacts/')) return response(artifacts.find(artifact => artifact.id === path.split('/').at(-1)));
     if (path === '/v3/automations') return response({ automations: [assignment('workflow-assignment-a', 'target-machine'),
       assignment('unrelated-workflow-assignment', 'other-machine')], nextCursor: null });
     throw new Error(`Unexpected read: ${path}`);
   });
-  const outward = vi.spyOn(axios, 'post').mockImplementation(async (url) => {
+  const outward = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     const parsedUrl = new URL(url);
     const path = parsedUrl.pathname;
     requests.push({ method: 'POST', origin: parsedUrl.origin, path });
     if (path === managedMachineActionEndpointPathV1('machines.managed.get')) return response(machine);
     if (path.endsWith('/pools/list')) return response({ pools });
+    if (path === '/v1/artifacts/read') return response(artifactReadResponse(body, id => artifacts.find(artifact => artifact.id === id) ?? null).data);
     throw new Error(`Unexpected outward effect during review: ${path}`);
   });
   const deps = createCliActionDeps({ token, credentials: { token, encryption: null },
@@ -130,7 +134,8 @@ it.each(['legacy', 'destination', 'unavailable'] as const)('reviews current cano
     context: { surface: 'cli', authority: 'present_user', serverId: 'home-a', runtimeAccountId: 'account-a' },
     defaultPreview: { actionId: 'machines.managed.delete', actionArgs: input, summary: 'Delete managed Machine' } });
   expect(preview).toMatchObject({ machineReferences: { homeId: 'home-a', machineId: 'target-machine',
-    coverage: profileSource === 'unavailable' ? 'partial' : 'complete',
+    // Shared-only Profiles are undiscoverable, so Profile coverage is always partial (d2411fa101).
+    coverage: 'partial', unavailable: expect.arrayContaining(['profiles']),
     references: expect.arrayContaining([expect.objectContaining({ kind: 'board', id: 'board-a' }),
       ...(profileSource === 'unavailable' ? [] : [expect.objectContaining({ kind: 'profile', id: 'profile-a' })]),
       expect.objectContaining({ kind: 'machine_pool', id: '11111111-1111-4111-8111-111111111111' }),
