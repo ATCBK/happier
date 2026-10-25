@@ -252,7 +252,7 @@ describe('generated output ownership', () => {
     const packageName = '@happier-dev/plugins-antigravity';
     const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'antigravity' });
     writeCliBundledHostPackage({ happyCliDir, bundledDependencies: [packageName] });
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: packageName, version: '0.0.0' }));
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: packageName, version: '0.0.0', type: 'module' }));
     writeFileSync(join(packageRoot, 'src/manifest.ts'), 'throw new Error("Antigravity source preparation failed");');
     mkdirSync(join(packageRoot, 'src/agent'), { recursive: true });
     writeFileSync(join(packageRoot, 'src/agent/definition.ts'), `export const AGENT_DEFINITION = ${JSON.stringify(BUNDLED_AGENT_DEFINITIONS_BY_ID.antigravity)};`);
@@ -345,7 +345,7 @@ describe('generated output ownership', () => {
     const manifestPath = join(happyCliDir, locator.manifestRelativePath);
     mkdirSync(dirname(manifestPath), { recursive: true });
     writeFileSync(manifestPath, JSON.stringify(manifest));
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-claude', version: '0.0.0' }));
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-claude', version: '0.0.0', type: 'module' }));
     writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
     mkdirSync(join(packageRoot, 'src/agent'), { recursive: true });
     writeFileSync(join(packageRoot, 'src/agent/definition.ts'), `export const AGENT_DEFINITION = ${JSON.stringify(claudeDefinition.AGENT_DEFINITION)}; export const AGENT_STATE_SHARING_DESCRIPTOR = ${JSON.stringify(claudeDefinition.AGENT_STATE_SHARING_DESCRIPTOR)};`);

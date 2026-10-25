@@ -124,7 +124,8 @@ describe('buildCliDist', () => {
       const compilerRunner = resolve(dirname(fileURLToPath(import.meta.url)), '../../../scripts/workspaces/runTypeScriptCli.mjs');
       const checked = spawnSync(process.execPath, [compilerRunner, '--singleThreaded',
         ...projectNames.flatMap(name => ['--project', `tsconfig.${name}.json`])], {
-        cwd: packageRoot, encoding: 'utf8',
+        // The prepared-declaration consumer reads Microsoft's `.cache/tsc` layout; tsrs keeps its own `.tsrs` caches.
+        cwd: packageRoot, encoding: 'utf8', env: { ...process.env, HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' },
       });
       expect(checked.status, checked.stdout + checked.stderr).toBe(0);
       if (missingLeaf) rmSync(join(packageRoot, 'node_modules/.cache/foundation/foundation.d.ts'));

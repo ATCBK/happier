@@ -49,8 +49,9 @@ describe('rmDist', () => {
       writeFileSync(join(rootDir, 'package-dist', 'index.mjs'), 'export const previous = true;\n', 'utf8');
       process.chdir(rootDir);
 
+      // This case covers dist removal only; the lock owner has its own case below.
       await main(['node', 'rmDist.mjs'], {
-        lockModulePath: '',
+        skipLock: true,
       });
 
       expect(existsSync(join(rootDir, 'dist', 'index.mjs'))).toBe(false);

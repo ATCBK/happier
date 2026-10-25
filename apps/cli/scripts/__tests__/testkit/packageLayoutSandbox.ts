@@ -122,6 +122,8 @@ export function writeBundledPluginSourceInputs(options: {
     if (options.writePackageJson !== false) {
         writeSandboxJsonFile(join(packageDir, 'package.json'), {
             name: bundledPluginPackageName(options.pluginId),
+            // Source inspection imports through a namespaced ESM loader; a CJS package cannot resolve it.
+            type: 'module',
         });
     }
     writeSandboxTextFile(
