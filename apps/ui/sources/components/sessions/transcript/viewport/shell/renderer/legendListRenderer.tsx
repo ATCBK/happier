@@ -443,7 +443,8 @@ function LegendListTranscriptRendererInner<TItem>(
     const emitSynthesizedContentSize = React.useCallback(() => {
         // A landing, restore or prepend moves the list without a scroll event of its own: the header's
         // shade reads the settled offset on the same layout commit.
-        const settledOffset = webScrollableElementRef.current?.scrollTop ?? legendListRef.current?.getState().scroll;
+        // The Legend surface may not have published a state yet; a missing offset reports nothing.
+        const settledOffset = webScrollableElementRef.current?.scrollTop ?? legendListRef.current?.getState()?.scroll;
         if (typeof settledOffset === 'number') paneHeaderScrollSinkRef.current?.reportTopDistance(settledOffset);
         const emit = onContentSizeChangeRef.current;
         if (!emit) return;

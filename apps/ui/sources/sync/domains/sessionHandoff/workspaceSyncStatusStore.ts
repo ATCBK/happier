@@ -5,7 +5,6 @@ import { getWorkspaceSyncStatus, listWorkspaceSyncStatuses, watchWorkspaceSyncSt
 import type { WorkspaceSyncStatusWatchSnapshotV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { isMachineRpcTimeoutError } from '@happier-dev/protocol/rpcErrors';
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
-import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import { invalidateWorkspaceSyncConflicts } from './workspaceSyncConflictStore';
 
 export type WorkspaceSyncStatusScope = Readonly<{
@@ -51,6 +50,21 @@ type WatchSnapshot = Readonly<{
     admissions: readonly Readonly<{ entry: Entry; generation: number }>[];
 }>;
 
+// The Machine store reaches this module from storage. Keep the Socket transport
+// off that static graph (storage -> apiSocket -> storage would be a cycle); the
+// watch request itself is issued through the same lazily loaded transport.
+function subscribeControllerRecovery(input: ControllerScope, recover: (revalidate?: boolean) => void): () => void {
+    let stop: (() => void) | null = null;
+    let retired = false;
+    void import('@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery').then(({ subscribeMachineRpcRecovery }) => {
+        if (!retired) stop = subscribeMachineRpcRecovery({ serverId: input.serverId, machineId: input.controllerMachineId }, recover);
+    });
+    return () => {
+        retired = true;
+        stop?.();
+    };
+}
+
 // The shared owner supplies cancellation, parked renewal and transport recovery.
 // Per-relationship entries remain the sole retained display/status owner.
 const controllerWatches = createSharedSubscriptionStore<ControllerScope, number | undefined, WatchSnapshot, typeof watchWorkspaceSyncStatuses, typeof watchWorkspaceSyncStatuses>({
@@ -76,9 +90,7 @@ const controllerWatches = createSharedSubscriptionStore<ControllerScope, number 
         }
     },
     defaultWatchClient: watchWorkspaceSyncStatuses,
-    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({
-        serverId: input.serverId, machineId: input.controllerMachineId,
-    }, recover),
+    subscribeRecovery: subscribeControllerRecovery,
     applySnapshot: (_state, reply) => reply.snapshot.revision,
     onWatchSnapshot: (_input, reply) => applyStatusWatchSnapshot(reply),
     watch: async ({ input, state, watchClient, signal }) => {

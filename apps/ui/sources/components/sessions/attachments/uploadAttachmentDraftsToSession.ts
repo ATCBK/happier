@@ -10,8 +10,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
 import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
-import { classifyTransferFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
-import { readTransferFailureCode } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferFailureCode';
+import { classifyTransferFailure, readTransferFailureCode } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 

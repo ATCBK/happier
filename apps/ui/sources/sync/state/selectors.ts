@@ -47,8 +47,9 @@ export function readSessionDisplayTitleField(
                 : '';
     return {
         // A transient prompt title never replaces an explicit name or revives unreadable metadata.
+        // A fallback title is an already projected readable title: keep it as written.
         value: (rawRenderableValue ? readableMessageText(rawRenderableValue) : null) || (metadata && !normalizeTransientTitleText(metadata.name)
-            ? readFirstUserMessageTitle(transient?.messages) ?? normalizeTransientTitleText(transient?.fallbackTitle)
+            ? readFirstUserMessageTitle(transient?.messages) ?? (transient?.fallbackTitle?.trim() || null)
             : null),
         updatedAt: typeof summary?.updatedAt === 'number' && Number.isFinite(summary.updatedAt)
             ? summary.updatedAt

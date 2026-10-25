@@ -15,7 +15,7 @@ import {
 } from '@/voice/credentials/selectedMachineClient';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { downloadBulkPayloadViaMachineRpcToDestination } from '@/sync/domains/transfers/runtime/transferRuntime/carriers/downloadBulkPayloadViaMachineRpcToDestination';
-import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/bulkTransferFileDestination';
+import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
 
 type VoiceDiagnosticsMachineClient = Readonly<{

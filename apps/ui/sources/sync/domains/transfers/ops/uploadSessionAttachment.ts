@@ -3,7 +3,6 @@ import { describeAttachmentUploadFileSource } from '@/sync/domains/attachments/a
 import { resolveUploadRelativePath } from '@/sync/domains/transfers/uploadRelativePath';
 import { randomUUID } from '@/platform/randomUUID';
 import { openLocalUploadSourceReader, resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
-import { uploadDaemonSessionAttachmentFromReader } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
@@ -12,7 +11,8 @@ import {
     retainTransferFinalizeRecovery,
     settleTransferFinalizeRecovery,
     type TransferFinalizeRecoveryFailure,
-} from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+    uploadDaemonSessionAttachmentFromReader,
+} from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 
