@@ -46,7 +46,7 @@ type ScalarPaths<T> = {
 }[keyof T & string];
 type VoicePreferencePath = ScalarPaths<Omit<VoiceSettings, 'providers' | 'credentialBindings'>>;
 export type LocalConversationPreferencePath = Exclude<ScalarPaths<VoiceLocalConversationSettings>,
-    | 'agent.agentId' | 'agent.agentTargetKey' | 'agent.agentProjectionGeneration'
+    | 'agent.agentId' | 'agent.agentTargetKey'
     | 'agent.agentIdentity.pluginId' | 'agent.agentIdentity.localId'>;
 
 export function createVoiceSettingBindingsV1<T extends {voice: VoiceSettings}>(input: Readonly<{

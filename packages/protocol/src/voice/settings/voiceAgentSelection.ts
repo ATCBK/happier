@@ -33,12 +33,11 @@ export function applyVoiceAgentSelectionV1(voice: VoiceSettings, choice: VoiceAg
         return owner.writeLocalConversationVoiceSettings(voice, { ...config, agent: { ...config.agent,
             agentId: entry.agentId, agentTargetKey: entry.backendTargetKey,
             agentIdentity: entry.isBuiltIn ? null : entry.identity,
-            agentProjectionGeneration: entry.isBuiltIn ? null : entry.projectionGeneration,
         } });
     }
     const agentId = choice.agentId.trim();
     if (!agentId || agentId === config.agent.agentId.trim()) return voice;
     return owner.writeLocalConversationVoiceSettings(voice, { ...config, agent: { ...config.agent,
-        agentId, agentTargetKey: null, agentIdentity: null, agentProjectionGeneration: null,
+        agentId, agentTargetKey: null, agentIdentity: null,
     } });
 }

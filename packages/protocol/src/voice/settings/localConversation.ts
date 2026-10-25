@@ -31,11 +31,6 @@ defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z._default((
   const parsed = createStoredReadSchema(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(value);
   return parsed.success ? parsed.data : null;
 }), VoiceAgentSelectionIdentityValueSchema), null));
-const VoiceAgentSelectionProjectionGenerationSchema = z._default((<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => {
-    if (value === null || value === undefined) return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
-  }), z.nullable(z.number().check(z.int(), z.nonnegative()))), null);
 
 export const VoiceLocalConversationProviderChatSchema = z.discriminatedUnion('status', [
   z.strictObject({
@@ -77,8 +72,6 @@ export const VoiceLocalConversationSchema = z.object({
        * `null` for bundled Agents, which need no contribution identity.
        */
       agentIdentity: VoiceAgentSelectionIdentitySchema,
-      /** Selection-time catalog projection generation, carried as evidence. */
-      agentProjectionGeneration: VoiceAgentSelectionProjectionGenerationSchema,
       // Read-only legacy migration inputs. Canonical machine selection is root-owned.
       machineTargetMode: z._default(z.enum(['auto', 'fixed']), 'auto'),
       machineTargetId: z._default(z.nullable(z.string()), null),
@@ -111,7 +104,6 @@ export const VoiceLocalConversationSchema = z.object({
       transcript: z.prefault(z
         .object({
           persistenceMode: z._default(z.enum(['ephemeral', 'persistent']), 'ephemeral'),
-          epoch: z._default(z.number().check(z.int(), z.minimum(0)), 0),
         }), {}),
       chatModelSource: z._default(z.enum(['session', 'custom']), 'custom'),
       chatModelId: z._default(z.string(), 'default'),

@@ -28,6 +28,19 @@ export const VOICE_DIAGNOSTICS_ACCOUNT_SETTING_KEY = 'voiceDiagnosticsV1' as con
 export const VOICE_SETTINGS_ACCOUNT_SETTING_KEY = 'voiceSettingsV1' as const;
 export const VOICE_SETTINGS_CURRENT_WRITER_MARKER = 'happierVoiceSettingsV1' as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** 0.2 reset boundary: read-only seed when the transcript-memory row is absent. */
+export function readLegacyVoiceTranscriptEpoch(account: unknown): number {
+    if (!isRecord(account) || !isRecord(account.voice) || !isRecord(account.voice.adapters)) return 0;
+    const local = account.voice.adapters.local_conversation;
+    if (!isRecord(local) || !isRecord(local.agent) || !isRecord(local.agent.transcript)) return 0;
+    const epoch = local.agent.transcript.epoch;
+    return typeof epoch === 'number' && Number.isInteger(epoch) && epoch >= 0 ? epoch : 0;
+}
+
 const DEFAULT_DIAGNOSTICS = VoiceSpeechDiagnosticsSettingsV1Schema.parse({});
 const PREDECESSOR_VOICE_PROVIDER_IDS = new Set([
     'realtime_elevenlabs',
@@ -94,10 +107,6 @@ export function createVoiceSettingsPersistenceOwner(options: Readonly<{
     voiceOwner: VoiceSettingsOwner;
 }>) {
     const { voiceSettingsDefaults, voiceSettingsParse, getCanonicalVoiceProviderSettingsOwner, isReservedVoiceSettingsRootKey } = options.voiceOwner;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function hasOwn(record: object, key: PropertyKey): boolean {
     return Object.prototype.hasOwnProperty.call(record, key);
@@ -1095,6 +1104,16 @@ function createPredecessorVoiceProjection(
                     preserveUnchangedChat,
                 )
                 : withSpeechCredentials;
+            if (providerId === 'local_conversation') {
+                // Keep the retained 0.2 source through unrelated preference saves.
+                // Current preferences never own/increment it; a memory row wins.
+                const epoch = readLegacyVoiceTranscriptEpoch({ voice: compatibilityVoice });
+                const adapter = adapters[providerId];
+                if (epoch > 0 && isRecord(adapter) && isRecord(adapter.agent)) {
+                    const transcript = isRecord(adapter.agent.transcript) ? adapter.agent.transcript : {};
+                    adapters[providerId] = { ...adapter, agent: { ...adapter.agent, transcript: { ...transcript, epoch } } };
+                }
+            }
             continue;
         }
         // These retired tuning values belong only to the predecessor sidecar.
