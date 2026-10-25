@@ -164,7 +164,7 @@ export async function installSessionOpsNetworkBoundary() {
         if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
             id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)), accountId,
         }) });
-        return Response.json({}, { status: 404 });
+        return Response.json({ error: 'not_found' }, { status: 404 });
     });
     setRuntimeFetch(runtimeFetchBoundary);
     return {

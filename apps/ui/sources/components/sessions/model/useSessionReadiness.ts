@@ -7,6 +7,8 @@ import { createUiSessionStatusGet } from '@/sync/ops/actions/sessionStatusAction
 import { readSessionReadinessRepair } from './sessionReadinessViewModel';
 import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
 import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 /** Opened Bot/People/picker detail only: the status owner assembles all facts, with explicit retry. */
 export function useSessionReadiness(input: Readonly<{
@@ -67,9 +69,19 @@ export function useSessionReadiness(input: Readonly<{
         }
     }, [accountLifetime, enabled, key, sessionId, operation, credentialPurpose, credentialTeamSelection]);
     React.useEffect(() => {
-        if (enabled) void read(false);
-        return () => { request.current?.abort(); };
-    }, [enabled, read]);
+        if (!enabled) return;
+        const unsubscribe = subscribeHomeAccountChange(event => {
+            if (!areServerProfileIdentifiersEquivalent(event.serverId, accountLifetime.scope.serverId)) return;
+            if (event.changeKinds && !event.changeKinds.some(kind => kind === 'session' || kind === 'share')) return;
+            if (event.entityIds && !event.entityIds.includes(sessionId)) return;
+            // The wake supplies no authority. Reread this Session through the
+            // same status owner so a changed grant cannot leave View-only copy
+            // beside a composer that already accepts input.
+            void read(false);
+        }, { serverIds: [accountLifetime.scope.serverId] });
+        void read(false);
+        return () => { unsubscribe(); request.current?.abort(); };
+    }, [accountLifetime.scope.serverId, enabled, read, sessionId]);
     const refresh = React.useCallback(() => read(true), [read]);
     const readiness = enabled && state.key === key ? state.readiness : null;
     return React.useMemo(() => ({ readiness, repair: readiness ? readSessionReadinessRepair(readiness) : null,

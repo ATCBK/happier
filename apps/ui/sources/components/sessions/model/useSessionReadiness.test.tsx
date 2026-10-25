@@ -9,15 +9,55 @@ import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@hap
 import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { buildConnectedAccountPurposeTargetChoices } from '@/sync/domains/connectedServices/connectedAccountPurposeTargetChoices';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { useSessionReadiness } = await import('./useSessionReadiness');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { createUiSessionStatusGet } = await import('@/sync/ops/actions/sessionStatusAction');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 
 afterEach(() => { standardCleanup(); storage.setState(storage.getInitialState(), true); network.resetRequests(); });
 afterAll(() => network.dispose());
+
+it('updates demanded readiness after a pushed Session access change without polling or unrelated reads', async () => {
+    const home = await network.addHome('https://readiness-access.test', 'alice');
+    const features = createRootLayoutFeaturesResponse();
+    tryWriteServerEnabledBitInPlace(features, 'sharing.session', true);
+    primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features } });
+    const scope = { serverId: home.id, accountId: 'alice' };
+    const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+    let level: 'view' | 'admin' = 'view';
+    const session = createSessionFixture({ id: 'shared-bot', serverId: home.id, encryptionMode: 'plain',
+        metadata: { machineId: 'sleeping', path: '/work', host: 'laptop', flavor: 'codex' },
+        access: createSessionAccessFixture(level) });
+    storage.setState({ machineListByServerId: { [home.id]: [createMachineFixture({ id: 'sleeping', active: false, activeAt: 0 })] } });
+    network.resetRequests();
+    network.setHttpResponder(async input => new URL(String(input)).pathname === `/v2/sessions/${session.id}`
+        ? Response.json(createPlainSessionByIdResponseFixture({ ...session, access: createSessionAccessFixture(level) })) : null);
+    const hook = await renderHook(({ enabled }: { enabled: boolean }) => useSessionReadiness({
+        accountLifetime, sessionId: session.id, enabled,
+    }), { initialProps: { enabled: true } });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ cause: 'invocation', invocation: { level: 'view' } }));
+    const readCount = () => network.httpRequests.filter(request => new URL(request.url).pathname === `/v2/sessions/${session.id}`).length;
+    const before = readCount();
+    level = 'admin';
+    await act(async () => {
+        publishHomeAccountChange('another-home', [session.id], { changeKinds: ['share'] });
+        publishHomeAccountChange(home.id, ['another-session'], { changeKinds: ['share'] });
+        publishHomeAccountChange(home.id, [session.id], { changeKinds: ['artifact'] });
+    });
+    expect(readCount()).toBe(before);
+    await act(async () => { publishHomeAccountChange(home.id, [session.id], { changeKinds: ['share'] }); });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ cause: 'machine', invocation: { level: 'admin' } }));
+    expect(readCount()).toBe(before + 1);
+    await hook.rerender({ enabled: false });
+    await act(async () => { publishHomeAccountChange(home.id, [session.id], { changeKinds: ['share'] }); });
+    expect(readCount()).toBe(before + 1);
+});
 
 it('demands the operation Account purpose and observes reconnect acknowledgement without changing conversation readiness', async () => {
     const home = await network.addHome('https://readiness-credential.test', 'alice');
