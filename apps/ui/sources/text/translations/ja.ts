@@ -4746,6 +4746,8 @@ localTailscale: {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "サイドレールにタブを表示",
+      sideRailSubtitle: "オフにすると、Happier のタブバーとスワイプ操作を使用できます。",
       title: 'タブバー',
       footer: '下部のタブバーをカスタマイズします。',
       showLabels: 'タブのラベルを表示',

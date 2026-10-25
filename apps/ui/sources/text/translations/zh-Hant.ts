@@ -4113,6 +4113,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
     settingsAppearance: {
       tabBarAppearance: {
+        sideRailTitle: "在側邊欄顯示分頁",
+        sideRailSubtitle: "關閉後即可使用 Happier 的分頁列與滑動手勢。",
         title: '標籤列',
         footer: '自訂底部標籤列。',
         showLabels: '顯示標籤列文字',

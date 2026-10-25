@@ -4159,6 +4159,8 @@ export const fr: TranslationStructure = {
 
     settingsAppearance: {
       tabBarAppearance: {
+        sideRailTitle: "Onglets dans la barre latérale",
+        sideRailSubtitle: "Désactivez cette option pour utiliser la barre d’onglets de Happier et ses gestes de balayage.",
         title: 'Barre d’onglets',
         footer: 'Personnalise la barre d’onglets du bas.',
         showLabels: 'Afficher les libellés d’onglets',

@@ -4342,6 +4342,8 @@ export const zhHans: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "在侧边栏中显示标签页",
+      sideRailSubtitle: "关闭后使用 Happier 的标签栏及其滑动手势。",
       title: '标签栏',
       footer: '自定义底部标签栏。',
       showLabels: '显示标签栏文字',

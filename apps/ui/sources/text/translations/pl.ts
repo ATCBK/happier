@@ -4487,6 +4487,8 @@ export const pl: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "Karty na pasku bocznym",
+      sideRailSubtitle: "Wyłącz, aby używać paska kart Happier i gestów przesuwania.",
       title: 'Pasek kart',
       footer: 'Dostosuj dolny pasek kart.',
       showLabels: 'Pokaż etykiety kart',

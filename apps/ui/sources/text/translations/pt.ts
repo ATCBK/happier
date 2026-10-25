@@ -4577,6 +4577,8 @@ export const pt: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "Abas na barra lateral",
+      sideRailSubtitle: "Desative para usar a barra de abas do Happier e seus gestos de deslizar.",
       title: 'Barra de abas',
       footer: 'Personalize a barra de abas inferior.',
       showLabels: 'Mostrar rótulos das abas',

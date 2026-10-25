@@ -4799,6 +4799,8 @@ export const it: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "Schede nella barra laterale",
+      sideRailSubtitle: "Disattiva questa opzione per usare la barra delle schede di Happier e i suoi gesti di scorrimento.",
       title: 'Barra schede',
       footer: 'Personalizza la barra delle schede in basso.',
       showLabels: 'Mostra etichette schede',

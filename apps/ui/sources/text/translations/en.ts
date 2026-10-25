@@ -4179,6 +4179,8 @@ export const en = {
 
     settingsAppearance: {
       tabBarAppearance: {
+        sideRailTitle: "Tabs in side rail",
+        sideRailSubtitle: "Turn off to use Happier's tab bar and its swipe gestures.",
         title: 'Tab bar',
         footer: 'Customize the bottom tab bar.',
         showLabels: 'Show tab labels',

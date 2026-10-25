@@ -4407,6 +4407,8 @@ export const ru: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "Вкладки на боковой панели",
+      sideRailSubtitle: "Отключите, чтобы использовать панель вкладок Happier и жесты смахивания.",
       title: 'Панель вкладок',
       footer: 'Настройте нижнюю панель вкладок.',
       showLabels: 'Показывать подписи вкладок',

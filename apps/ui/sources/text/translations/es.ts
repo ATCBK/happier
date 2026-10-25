@@ -4452,6 +4452,8 @@ export const es: TranslationStructure = {
 
   settingsAppearance: {
     tabBarAppearance: {
+      sideRailTitle: "Pestañas en la barra lateral",
+      sideRailSubtitle: "Desactiva esta opción para usar la barra de pestañas de Happier y sus gestos de deslizamiento.",
       title: 'Barra de pestañas',
       footer: 'Personaliza la barra de pestañas inferior.',
       showLabels: 'Mostrar etiquetas de pestañas',

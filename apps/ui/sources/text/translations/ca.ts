@@ -4248,6 +4248,8 @@ export const ca: TranslationStructure = {
 
     settingsAppearance: {
       tabBarAppearance: {
+        sideRailTitle: "Pestanyes a la barra lateral",
+        sideRailSubtitle: "Desactiva aquesta opció per utilitzar la barra de pestanyes de Happier i els seus gestos de lliscament.",
         title: 'Barra de pestanyes',
         footer: 'Personalitza la barra de pestanyes inferior.',
         showLabels: 'Mostra les etiquetes de les pestanyes',

@@ -4159,6 +4159,8 @@ export const de: TranslationStructure = {
 
     settingsAppearance: {
       tabBarAppearance: {
+        sideRailTitle: "Tabs in der Seitenleiste",
+        sideRailSubtitle: "Deaktiviere diese Option, um Happiers Tableiste und ihre Wischgesten zu verwenden.",
         title: 'Tab-Leiste',
         footer: 'Die untere Tab-Leiste anpassen.',
         showLabels: 'Tab-Beschriftungen zeigen',
