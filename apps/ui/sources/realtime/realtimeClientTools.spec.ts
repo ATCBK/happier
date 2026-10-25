@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -54,6 +53,8 @@ async function setCurrentUiPrivacy(currentUiContextMode: 'off' | 'on_demand' | '
 
 describe('realtimeClientTools action projection', () => {
   beforeEach(async () => {
+    // The runner resets runtimeFetch after every case; reclaim the Home boundary before this case connects.
+    await homes.reset();
     webLocks = installWebLockManagerMock();
     await loadSyncSingletonForTests();
     const { getStorage } = await import('@/sync/domains/state/storage');
@@ -105,7 +106,7 @@ describe('realtimeClientTools action projection', () => {
     expect(outgoing).toEqual([]);
   });
 
-  it('routes structured user-action answers through the shared voice handlers', async () => {
+  it('routes structured user-action answers through the shared voice handlers as a person-approval proposal', async () => {
     const { getStorage } = await import('@/sync/domains/state/storage');
     getStorage().setState({ sessions: { s1: createSessionFixture({
       id: 's1', serverId: homeId, active: true,
@@ -122,11 +123,13 @@ describe('realtimeClientTools action projection', () => {
       answers: [{ question: 'Continue?', answer: 'Yes' }],
     });
 
-    expect(JSON.parse(result)).toMatchObject({ ok: true });
-    expect(outgoing).toEqual([expect.objectContaining({
-      method: 's1:' + RPC_METHODS.SESSION_USER_ACTION_ANSWER,
-      params: { id: 'req_question', approved: true, answers: { 'Continue?': ['Yes'] } },
-    })]);
+    // A spoken answer is an Account-automation proposal: the person approves it before the Session RPC is sent.
+    expect(JSON.parse(result)).toMatchObject({
+      ok: true, kind: 'approval_request_created', actionId: 'session.user_action.answer',
+    });
+    expect(outgoing).toEqual([]);
+    expect(homes.requests.filter(request => request.path === '/v1/artifacts').map(request => request.input))
+      .toEqual([expect.objectContaining({ kind: 'v1:other:approval_request.v1', approvalSessionId: 's1' })]);
   });
 
   it.each(['on_demand', 'automatic'] as const)(

@@ -239,7 +239,7 @@ describe('useChangedFilesData', () => {
                     source: 'scm_checkpoint', confidence: 'exact', provider: 'scm:git',
                 }],
             },
-            scopeId: 's1:/repo', startRef: 'refs/happier/start', finalRef: 'refs/happier/final',
+            repoRootPath: '/repo', scopeId: 's1:/repo', startRef: 'refs/happier/start', finalRef: 'refs/happier/final',
         });
         const message: Message = {
             kind: 'tool-call', id: 'canonical-diff', localId: null, createdAt: 2, children: [],

@@ -79,7 +79,8 @@ vi.mock('@/components/sessions/transcript/TranscriptList', () => ({
     },
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useHeaderHeight: () => 64,
 }));
 

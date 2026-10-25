@@ -196,7 +196,8 @@ let publishedArtifactId: string | null = null;
 const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/')) {
-        const response = await artifactStore.handle(path, init ?? {});
+        // The Profile catalog filters its Artifact census by kind on the query string.
+        const response = await artifactStore.handle(`${path}${new URL(String(url)).search}`, init ?? {});
         if (response?.ok && path === '/v1/artifacts' && init?.method === 'POST') publishedArtifactId = artifactStore.list().at(-1)?.id ?? null;
         if (response) return response;
     }
