@@ -941,6 +941,7 @@ export type SavedSecretSharingActionInputById = {
                             id: string;
                             addedAt: number;
                             name?: string | undefined;
+                            reasoningEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[] | undefined;
                         }[]>;
                         modelVisibilityByRef: Record<string, 'hidden'>;
                         modelPickerVisibilityByConnectionId?: Record<string, boolean> | undefined;

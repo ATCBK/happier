@@ -73,6 +73,7 @@ export type AccountProfileActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'peakParallel' | 'cost' | 'sessions' | 'busy' | 'steering' | undefined;
@@ -362,6 +363,7 @@ export type AccountProfileActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'peakParallel' | 'cost' | 'sessions' | 'busy' | 'steering' | undefined;
@@ -651,6 +653,7 @@ export type AccountProfileActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'peakParallel' | 'cost' | 'sessions' | 'busy' | 'steering' | undefined;
@@ -1036,6 +1039,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -2046,6 +2050,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -2565,6 +2570,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -3084,6 +3090,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -3605,6 +3612,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -4124,6 +4132,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;
@@ -4643,6 +4652,7 @@ export type AccountProfileActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             } | null;
             snapshot: {
                 v: 1;

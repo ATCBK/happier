@@ -751,6 +751,10 @@ export type DiscussionActionInputById = {
             } | undefined;
         };
         creationLocalId?: string | undefined;
+        attachmentSources?: {
+            blobId: string;
+            path: string;
+        }[] | undefined;
         anchor?: {
             kind: 'task';
             entry: Readonly<{
@@ -960,6 +964,10 @@ export type DiscussionActionInputById = {
                 reason: string;
             };
         };
+        attachmentSources?: {
+            blobId: string;
+            path: string;
+        }[] | undefined;
         localId?: string | undefined;
         mentionedAccountIds?: string[] | undefined;
         mentionedSessionIds?: string[] | undefined;
@@ -1007,34 +1015,6 @@ export type DiscussionActionInputById = {
         lastReadSeq: number;
     };
     readonly "discussion.reply": {
-        replyTarget: {
-            kind: 'doc_passage';
-            doc: {
-                ref: {
-                    artifactId: string;
-                    kind: 'doc';
-                    serverId: string;
-                };
-                revision: {
-                    headerVersion: number;
-                    bodyVersion: number;
-                };
-            };
-        } | {
-            kind: 'task';
-            entry: Readonly<{
-                source: Readonly<{
-                    pluginId: string;
-                    localId: string;
-                }>;
-                kindId: string;
-                collisionScope: string;
-                entryId: string;
-            }>;
-        } | {
-            kind: 'message';
-            messageId: string;
-        };
         discussionId: string;
         content: {
             v: 1;
@@ -1206,6 +1186,38 @@ export type DiscussionActionInputById = {
                 reason: string;
             };
         };
+        replyTarget: {
+            kind: 'doc_passage';
+            doc: {
+                ref: {
+                    artifactId: string;
+                    kind: 'doc';
+                    serverId: string;
+                };
+                revision: {
+                    headerVersion: number;
+                    bodyVersion: number;
+                };
+            };
+        } | {
+            kind: 'task';
+            entry: Readonly<{
+                source: Readonly<{
+                    pluginId: string;
+                    localId: string;
+                }>;
+                kindId: string;
+                collisionScope: string;
+                entryId: string;
+            }>;
+        } | {
+            kind: 'message';
+            messageId: string;
+        };
+        attachmentSources?: {
+            blobId: string;
+            path: string;
+        }[] | undefined;
         localId?: string | undefined;
         mentionedAccountIds?: string[] | undefined;
         mentionedSessionIds?: string[] | undefined;

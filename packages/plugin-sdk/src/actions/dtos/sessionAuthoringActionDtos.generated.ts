@@ -49,6 +49,14 @@ export type SessionAuthoringActionInputById = {
                 detail?: JsonValue | undefined;
             } | undefined;
             profileId?: string | undefined;
+            agentTarget?: {
+                kind: 'agent';
+                identity: {
+                    pluginId: string;
+                    localId: string;
+                };
+                definitionId?: string | undefined;
+            } | undefined;
             origin?: {
                 kind: 'project';
                 accountId: string;
@@ -237,7 +245,7 @@ export type SessionAuthoringActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'browser' | 'action' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'commit' | 'terminal' | 'browser' | 'branch' | 'action' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'workflow' | 'neutral' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };

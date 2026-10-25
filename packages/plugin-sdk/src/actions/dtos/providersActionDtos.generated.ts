@@ -991,6 +991,7 @@ export type ProvidersActionInputById = {
                     materialization: 'spawnEnv' | 'engineConfig' | 'configFile';
                     applyPolicy: 'unsupported' | 'live' | 'next_prompt' | 'restart_session';
                     supportsFreeformModelIds: boolean;
+                    supportsReasoningEffort?: true | undefined;
                 };
                 deployment: {
                     kind: 'external';
@@ -1068,6 +1069,7 @@ export type ProvidersActionInputById = {
                     materialization: 'spawnEnv' | 'engineConfig' | 'configFile';
                     applyPolicy: 'unsupported' | 'live' | 'next_prompt' | 'restart_session';
                     supportsFreeformModelIds: boolean;
+                    supportsReasoningEffort?: true | undefined;
                 };
                 deployment: {
                     kind: 'managedLocal';

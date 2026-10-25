@@ -164,7 +164,7 @@ export type ComposerIngressActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'workflow' | 'neutral' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -200,7 +200,7 @@ export type ComposerIngressActionInputById = {
                     presentation?: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'workflow' | 'neutral' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     } | undefined;
                 };

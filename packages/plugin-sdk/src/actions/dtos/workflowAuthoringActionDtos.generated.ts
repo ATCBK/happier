@@ -537,6 +537,48 @@ export type WorkflowAuthoringActionInputById = {
                 } | undefined;
             }[];
         } | {
+            kind: 'upsert_role';
+            role: {
+                roleId: string;
+                name: string;
+                instructions: string;
+                runsAs: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'review' | 'agent' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                };
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'deny' | 'allow' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            } | {
+                roleId: string;
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                runsAs?: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'review' | 'agent' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'deny' | 'allow' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            };
+        } | {
+            kind: 'remove_role';
+            roleId: string;
+        } | {
             kind: 'set_final_output';
             finalOutput: {
                 kind: 'result';

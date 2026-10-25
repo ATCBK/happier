@@ -208,7 +208,59 @@ export type ScmDiffSummaryActionInputById = {
         } | undefined;
         outputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
     };
-    readonly "scm.diffSummary.result.list": Record<string, never>;
+    readonly "scm.diffSummary.result.list": {
+        query?: {
+            cwd: string;
+            sessionId?: string | null | undefined;
+            comparisons?: {
+                source: {
+                    kind: 'turnCheckpoint';
+                    sessionId?: string;
+                    turnId?: string;
+                    checkpointReceiptId?: string;
+                    evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled';
+                } | {
+                    kind: 'session';
+                    sessionId: string;
+                } | {
+                    kind: 'workingTree';
+                } | {
+                    kind: 'branch';
+                    head: string;
+                    base: string;
+                } | {
+                    kind: 'commit';
+                    commit: string;
+                    parent?: string;
+                } | {
+                    kind: 'pullRequest';
+                    locator: {
+                        providerId: string;
+                        repository: string;
+                        number: number;
+                        baseOid?: string;
+                        headOid?: string;
+                        sourceAction?: {
+                            action: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            input?: JsonValue;
+                            messageActionReference?: {
+                                v: 1;
+                                sessionId: string;
+                                messageId: string;
+                                observedRevision: string;
+                            };
+                        };
+                    };
+                };
+                outputs: ('summary' | 'walkthrough' | 'commitPlan')[];
+                comparisonId?: string | undefined;
+            }[] | undefined;
+        } | undefined;
+        includeUsage?: boolean | undefined;
+    };
     readonly "scm.diffSummary.result.clear": {
         results: {
             cwd: string;
@@ -1566,14 +1618,14 @@ export type ScmDiffSummaryActionResultById = {
         }[];
         count: number;
         bytes: number;
-        sevenDayCost: {
+        sevenDayCost?: {
             status: 'unavailable' | 'partial';
             pricedRunCount: number;
             unpricedRunCount: number;
             sinceMs: number;
             untilMs: number;
             estimatedUsd?: number | undefined;
-        };
+        } | undefined;
     } | {
         success: false;
         errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';

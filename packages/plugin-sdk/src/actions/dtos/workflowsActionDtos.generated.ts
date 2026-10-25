@@ -237,7 +237,7 @@ export type WorkflowsActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -280,7 +280,7 @@ export type WorkflowsActionInputById = {
                                 label: string;
                                 typeLabel: string;
                                 description?: string | undefined;
-                                icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                                icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                             };
                         }[] | undefined;
@@ -347,7 +347,7 @@ export type WorkflowsActionInputById = {
                             label: string;
                             typeLabel: string;
                             description?: string | undefined;
-                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -1009,6 +1009,48 @@ export type WorkflowsActionInputById = {
                     hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
+        } | {
+            kind: 'upsert_role';
+            role: {
+                roleId: string;
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                runsAs?: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'allow' | 'deny' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            } | {
+                roleId: string;
+                name: string;
+                instructions: string;
+                runsAs: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                };
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'allow' | 'deny' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            };
+        } | {
+            kind: 'remove_role';
+            roleId: string;
         } | {
             kind: 'set_final_output';
             finalOutput: {
@@ -11291,7 +11333,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -12060,7 +12102,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -13071,7 +13113,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'workflow' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | 'watch' | 'link' | 'tag' | 'asset' | 'branch' | 'commit' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];

@@ -31,6 +31,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -45,6 +46,7 @@ export type UsageActionInputById = {
             backendModes?: string[] | undefined;
         };
         intent: 'copy' | 'save' | 'share';
+        sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
         format?: 'square' | 'story' | 'link-preview' | undefined;
         selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
@@ -85,6 +87,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -145,6 +148,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -158,6 +162,7 @@ export type UsageActionInputById = {
             workspaceIds?: string[] | undefined;
             backendModes?: string[] | undefined;
         };
+        sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
         format?: 'square' | 'story' | 'link-preview' | undefined;
         selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
@@ -195,6 +200,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -208,6 +214,7 @@ export type UsageActionInputById = {
             workspaceIds?: string[] | undefined;
             backendModes?: string[] | undefined;
         };
+        sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
         format?: 'square' | 'story' | 'link-preview' | undefined;
         selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
@@ -245,6 +252,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -285,6 +293,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -327,6 +336,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -368,6 +378,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -555,6 +566,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -597,6 +609,7 @@ export type UsageActionInputById = {
             machines?: string[] | undefined;
             projects?: string[] | undefined;
             sources?: string[] | undefined;
+            execution?: 'unknown' | 'happier' | 'outside' | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
@@ -658,6 +671,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -978,6 +994,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -1025,6 +1042,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -1345,6 +1365,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -1392,6 +1413,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -1712,6 +1736,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -1760,6 +1785,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -2080,6 +2108,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -2178,6 +2207,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -2498,6 +2530,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -2554,6 +2587,9 @@ export type UsageActionResultById = {
                     asOfMs?: number | undefined;
                 }[];
                 pending: boolean;
+                execution?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                } | undefined;
                 night?: {
                     detailStatus: 'unknown' | 'partial' | 'available';
                 } | undefined;
@@ -2874,6 +2910,7 @@ export type UsageActionResultById = {
                     };
                 }[] | undefined;
             } | undefined;
+            sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
         } | {
             kind: 'unavailable';
             reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -2920,6 +2957,9 @@ export type UsageActionResultById = {
                 asOfMs?: number | undefined;
             }[];
             pending: boolean;
+            execution?: {
+                status: 'unknown' | 'complete' | 'partial';
+            } | undefined;
             night?: {
                 detailStatus: 'unknown' | 'partial' | 'available';
             } | undefined;
@@ -3240,6 +3280,7 @@ export type UsageActionResultById = {
                 };
             }[] | undefined;
         } | undefined;
+        sourceSelection?: 'whole_usage' | 'happier_only' | undefined;
     } | {
         kind: 'unavailable';
         reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
@@ -3285,6 +3326,7 @@ export type UsageActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             };
             shownQuery: {
                 granularity: 'hour' | 'day' | 'week' | 'month';
@@ -3323,6 +3365,7 @@ export type UsageActionResultById = {
                 includeModelTimeline?: boolean | undefined;
                 includeMessageStats?: boolean | undefined;
                 activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                execution?: 'unknown' | 'happier' | 'outside' | undefined;
             };
             sources: {
                 source: string;
@@ -5311,6 +5354,7 @@ export type UsageActionResultById = {
                     includeModelTimeline?: boolean | undefined;
                     includeMessageStats?: boolean | undefined;
                     activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                    execution?: 'unknown' | 'happier' | 'outside' | undefined;
                 };
                 source: {
                     source: string;
@@ -8107,6 +8151,7 @@ export type UsageActionResultById = {
                         includeModelTimeline?: boolean | undefined;
                         includeMessageStats?: boolean | undefined;
                         activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+                        execution?: 'unknown' | 'happier' | 'outside' | undefined;
                     };
                     lookbackMs: number;
                     actionId: 'workflow.trigger.add';

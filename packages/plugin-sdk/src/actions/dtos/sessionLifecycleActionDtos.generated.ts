@@ -610,7 +610,7 @@ export type SessionLifecycleActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'workflow' | 'review' | 'new' | 'branch' | 'commit' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'watch' | 'link' | 'tag' | 'asset' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -945,7 +945,7 @@ export type SessionLifecycleActionInputById = {
                         label: string;
                         typeLabel: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'workflow' | 'review' | 'new' | 'branch' | 'commit' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'watch' | 'link' | 'tag' | 'asset' | 'download' | 'locked' | 'run' | 'stop' | 'send' | 'generate' | 'neutral' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                     content?: {

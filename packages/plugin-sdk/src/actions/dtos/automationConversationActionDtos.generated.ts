@@ -39,6 +39,7 @@ export type AutomationConversationActionInputById = {
             };
             opaqueContext: JsonValue;
         };
+        prUpdate?: JsonValue | undefined;
         hostEvidence?: {
             sessionId: string;
             triggerId: string;
