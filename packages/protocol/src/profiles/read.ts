@@ -218,6 +218,7 @@ export function readAiLaunchProfileCollection(raw: unknown, options?: Readonly<{
     for (const resource of options.artifactsById.values()) {
       if (resource.header.kind !== 'launch-profile.v1' || referenced.has(resource.artifactId) || !['view', 'edit', 'admin'].includes(resource.access ?? '')) continue;
       const shared = readAiLaunchProfileCollection([{ artifactId: resource.artifactId }], { artifactsById: options.artifactsById });
+      diagnostics.push(...shared.diagnostics.map(diagnostic => ({ ...diagnostic, index: entries.length })));
       entries.push(...shared.entries);
     }
   }
@@ -314,6 +315,7 @@ export function readAiLaunchProfileRecords(raw: readonly unknown[], options?: Re
   });
   if (options?.includeShared) {
     const shared = readAiLaunchProfileCollection([], { artifactsById: options.artifactsById, includeShared: true });
+    diagnostics.push(...shared.diagnostics.map(diagnostic => ({ ...diagnostic, index: raw.length + diagnostic.index })));
     for (const entry of shared.entries) {
       if (entry.kind !== 'opaque' && entry.artifactId && !referencedArtifactIds.has(entry.artifactId)) entries.push(entry);
     }

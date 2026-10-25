@@ -21,6 +21,15 @@ import {
 } from './read.js';
 
 describe('readAiLaunchProfileCollection', () => {
+  it('keeps unreadable shared definitions visible as incomplete in both catalog projections', () => {
+    const artifact = { artifactId: 'unreadable-shared', access: 'view' as const,
+      header: { kind: 'launch-profile.v1', profileId: 'shared', name: 'Shared' }, body: null };
+    const options = { artifactsById: new Map([[artifact.artifactId, artifact]]), includeShared: true };
+    for (const result of [readAiLaunchProfileCollection([], options), readAiLaunchProfileRecords([], options)]) {
+      expect(result.diagnostics).toEqual([{ index: 0, reason: 'artifact_unavailable' }]);
+    }
+  });
+
   it('admits the canonical enriched opened projection and refuses unknown public fields or invalid source revisions', () => {
     const result = readAiLaunchProfileRecords([{ v: 1, id: 'legacy', enabled: false,
       definition: { kind: 'legacy', profile: { id: 'legacy', name: 'Legacy', createdAt: 1, updatedAt: 1,

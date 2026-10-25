@@ -41,76 +41,100 @@ export async function readMachineReferenceCensusV1(input: Readonly<{
   if (!input.machineId) return { homeId: input.homeId, machineId: null, coverage: 'partial', references, unavailable: ['target'] };
   const homes = new Set([input.homeId, ...(input.homeAliases ?? [])]);
   const matches = (homeId: string, machineId: string) => homes.has(homeId) && machineId === input.machineId;
-  try {
-    let cursor: string | undefined;
-    do {
-      input.signal?.throwIfAborted();
-      const page = await ports.artifacts.list({
-        limit: 500, kind: 'work-board.v1', coarseKind: 'work_board',
-        ...(cursor ? { cursor } : {}), signal: input.signal,
-      });
-      if (page.coverage !== 'complete') unavailable.add('artifacts');
-      for (const row of page.items) {
-        if (row.header.kind !== 'work-board.v1') continue;
-        try {
-          const artifact = await ports.artifacts.read(row.artifactId, { signal: input.signal, fresh: true });
-          if (!artifact) { unavailable.add('artifacts'); continue; }
-          const board = readWorkBoardArtifactV1({ artifactId: artifact.artifactId, header: artifact.header, body: artifact.body });
-          if (!board) { unavailable.add('artifacts'); continue; }
-          if (board.source.picked.some(ref => ref.kind === 'machine' && matches(ref.qualifiedId.serverId, ref.qualifiedId.id))) {
-            references.push({ kind: 'board', id: board.id, name: board.name });
-          }
-        } catch { unavailable.add('artifacts'); }
+  const readBoards = async () => {
+    const references: MachineReferenceV1[] = [];
+    try {
+      let cursor: string | undefined;
+      do {
+        input.signal?.throwIfAborted();
+        const page = await ports.artifacts.list({
+          limit: 500, kind: 'work-board.v1', coarseKind: 'work_board', includeBody: true,
+          ...(cursor ? { cursor } : {}), signal: input.signal,
+        });
+        if (page.coverage !== 'complete') unavailable.add('artifacts');
+        for (const row of page.items) {
+          if (row.header.kind !== 'work-board.v1') continue;
+          try {
+            const board = readWorkBoardArtifactV1({ artifactId: row.artifactId, header: row.header, body: row.body ?? null });
+            if (!board) { unavailable.add('artifacts'); continue; }
+            if (board.source.picked.some(ref => ref.kind === 'machine' && matches(ref.qualifiedId.serverId, ref.qualifiedId.id))) {
+              references.push({ kind: 'board', id: board.id, name: board.name });
+            }
+          } catch { unavailable.add('artifacts'); }
+        }
+        if (page.nextCursor !== undefined && page.nextCursor === cursor) throw new Error('artifact_list_cursor_invalid');
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch { unavailable.add('artifacts'); }
+    return references;
+  };
+  const readProfiles = async () => {
+    const references: MachineReferenceV1[] = [];
+    try {
+      const settings = await ports.readSettings();
+      const catalog = await ports.readProfileCatalog?.(settings);
+      if (!catalog || (catalog.status !== 'ready' && catalog.status !== 'partial') || !catalog.source) throw new Error('profile_catalog_unavailable');
+      if (catalog.status === 'partial') unavailable.add('profiles');
+      if (catalog.source === 'legacy' && settings.profiles !== undefined && !Array.isArray(settings.profiles)) unavailable.add('profiles');
+      const profileRows = catalog.source === 'destination' ? catalog.records.map(row => row.record)
+        : Array.isArray(settings.profiles) ? settings.profiles : [];
+      const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, {
+        read: (artifactId, options) => ports.artifacts.read(artifactId, { ...options, fresh: true }),
+        readMany: async (artifactIds, options) => {
+          const rows = await ports.artifacts.readMany(artifactIds, { ...options, fresh: true });
+          if (rows.some((row, index) => !row || row.artifactId !== artifactIds[index])) unavailable.add('profiles');
+          return rows;
+        },
+        list: async options => {
+          const page = await ports.artifacts.list(options);
+          if (page.coverage !== 'complete') unavailable.add('profiles');
+          return page;
+        },
+      }, input.signal);
+      const profiles = catalog.source === 'destination'
+        ? readAiLaunchProfileRecords(profileRows, { artifactsById, includeShared: true })
+        : readAiLaunchProfileCollection(profileRows, { artifactsById, includeShared: true });
+      if (profiles.diagnostics.length > 0) unavailable.add('profiles');
+      for (const entry of profiles.entries) {
+        if (entry.kind === 'opaque') continue;
+        const placement = 'v' in entry.profile ? entry.profile.placement : undefined;
+        if (placement && typeof placement === 'object' && matches(placement.fixed.serverId, placement.fixed.machineId)) {
+          references.push({ kind: 'profile', id: entry.profile.id, name: entry.profile.name });
+        }
       }
-      if (page.nextCursor !== undefined && page.nextCursor === cursor) throw new Error('artifact_list_cursor_invalid');
-      cursor = page.nextCursor;
-    } while (cursor);
-  } catch { unavailable.add('artifacts'); }
-  try {
-    const settings = await ports.readSettings();
-    const catalog = await ports.readProfileCatalog?.(settings);
-    if (!catalog || (catalog.status !== 'ready' && catalog.status !== 'partial') || !catalog.source) throw new Error('profile_catalog_unavailable');
-    if (catalog.status === 'partial') unavailable.add('profiles');
-    const profileRows = catalog.source === 'destination' ? catalog.records.map(row => row.record)
-      : Array.isArray(settings.profiles) ? settings.profiles : [];
-    const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, {
-      read: (artifactId, options) => ports.artifacts.read(artifactId, { ...options, fresh: true }),
-      readMany: (artifactIds, options) => ports.artifacts.readMany(artifactIds, { ...options, fresh: true }),
-    }, input.signal);
-    // The catalog gives exact ids for referenced profile Artifacts. Shared-only
-    // profiles remain undiscoverable until Artifacts expose a narrow public
-    // exact-kind source; do not scan the entire coarse `other` inventory here.
-    unavailable.add('profiles');
-    const profiles = catalog.source === 'destination'
-      ? readAiLaunchProfileRecords(profileRows, { artifactsById })
-      : readAiLaunchProfileCollection(profileRows, { artifactsById });
-    if (profiles.diagnostics.length > 0) unavailable.add('profiles');
-    for (const entry of profiles.entries) {
-      if (entry.kind === 'opaque') continue;
-      const placement = 'v' in entry.profile ? entry.profile.placement : undefined;
-      if (placement && typeof placement === 'object' && matches(placement.fixed.serverId, placement.fixed.machineId)) {
-        references.push({ kind: 'profile', id: entry.profile.id, name: entry.profile.name });
+    } catch { unavailable.add('profiles'); }
+    return references;
+  };
+  const readPools = async () => {
+    const references: MachineReferenceV1[] = [];
+    try {
+      const { pools } = await ports.readPools();
+      for (const { pool } of pools) if (pool.members.some(member => member.machineId === input.machineId)) {
+        references.push({ kind: 'machine_pool', id: pool.id, name: pool.name });
       }
-    }
-  } catch { unavailable.add('profiles'); }
-  try {
-    const { pools } = await ports.readPools();
-    for (const { pool } of pools) if (pool.members.some(member => member.machineId === input.machineId)) {
-      references.push({ kind: 'machine_pool', id: pool.id, name: pool.name });
-    }
-  } catch { unavailable.add('pools'); }
-  try {
-    let cursor: string | undefined;
-    do {
-      input.signal?.throwIfAborted();
-      const page = await ports.readAssignments(cursor);
-      for (const assignment of page.automations) if (assignment.assignments.some(member => member.machineId === input.machineId)) {
-        references.push({ kind: assignment.workflowDefinitionId ? 'workflow_assignment' : 'automation_assignment', id: assignment.id, name: assignment.name });
-      }
-      if (page.nextCursor !== null && page.nextCursor === cursor) throw new Error('automation_list_cursor_invalid');
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
-  } catch { unavailable.add('assignments'); }
+    } catch { unavailable.add('pools'); }
+    return references;
+  };
+  const readAssignments = async () => {
+    const references: MachineReferenceV1[] = [];
+    try {
+      let cursor: string | undefined;
+      do {
+        input.signal?.throwIfAborted();
+        const page = await ports.readAssignments(cursor);
+        for (const assignment of page.automations) if (assignment.assignments.some(member => member.machineId === input.machineId)) {
+          references.push({ kind: assignment.workflowDefinitionId ? 'workflow_assignment' : 'automation_assignment', id: assignment.id, name: assignment.name });
+        }
+        if (page.nextCursor !== null && page.nextCursor === cursor) throw new Error('automation_list_cursor_invalid');
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    } catch { unavailable.add('assignments'); }
+    return references;
+  };
+  // These Account-owned sources are independent. Preserve presentation order
+  // while a slow family cannot serialize the other fresh checks behind it.
+  const families = await Promise.all([readBoards(), readProfiles(), readPools(), readAssignments()]);
   input.signal?.throwIfAborted();
-  return { homeId: input.homeId, machineId: input.machineId, coverage: unavailable.size === 0 ? 'complete' : 'partial', references, unavailable: [...unavailable] };
+  return { homeId: input.homeId, machineId: input.machineId, coverage: unavailable.size === 0 ? 'complete' : 'partial', references: families.flat(),
+    unavailable: (['artifacts', 'profiles', 'pools', 'assignments'] as const).filter(source => unavailable.has(source)) };
 }
