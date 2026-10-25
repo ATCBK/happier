@@ -19,7 +19,7 @@ import {
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
-import { areSessionAddressesEqual, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { normalizeVoiceRuntimeFailureCode } from '../voiceRuntimeFailureCode';
 
@@ -596,8 +596,10 @@ export function createAgentSessionRealtimeService(input: Readonly<{
         if (parsed.data.status !== 'started') return { status: parsed.data.status };
         watchTerminal();
         const preparedInstructionsFor = parsed.data.preparedInstructionsFor;
-        if (areSessionAddressesEqual(preparedInstructionsFor, input.conversationSessionAddress)) {
-          input.onStarted(handle, preparedInstructionsFor);
+        if (preparedInstructionsFor?.sessionId === input.conversationSessionAddress.sessionId) {
+          // The authenticated RPC route owns the Home identity; daemon-local
+          // profile names in a receipt cannot retarget this presentation fact.
+          input.onStarted(handle, input.conversationSessionAddress);
         } else {
           input.onStarted(handle);
         }

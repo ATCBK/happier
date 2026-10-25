@@ -12,13 +12,15 @@ import {
   type VoiceProviderContribution,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
 import { registerAgentSessionRealtimeVoiceRpc } from './registerAgentSessionRealtimeVoiceRpc';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 import type { VoicePromptPreparation } from '@/agent/voice/agent/voiceAgentTypes';
+import { readSettings, writeSettings } from '@/persistence';
+import { adoptServerProfileHomeConnectionDescriptor } from '@/server/serverProfiles';
 
 const agentRef = { pluginId: 'happier.agent.codex', localId: 'codex' } as const;
 const providerRef = { pluginId: 'happier.agent.codex', localId: 'realtime-codex' } as const;
@@ -199,6 +201,12 @@ describe('Agent-session realtime Voice session RPC', () => {
   const oversizedSdp = `${exactSdp}x`;
   it.each(['started', 'failed', 'superseded', 'no_instructions'] as const)(
     'acknowledges prepared instructions only after a current native start: %s', async (outcome) => {
+      const settings = await readSettings();
+      onTestFinished(() => writeSettings(settings));
+      await adoptServerProfileHomeConnectionDescriptor({ observation: 'exact', suggestedName: 'Native receipt', descriptor: {
+        v: 1, homeServerIdentityId: 'server-a', canonicalServerUrl: 'https://native.example.test', revision: 1,
+        endpoints: [{ kind: 'https', url: 'https://native.example.test' }],
+      } });
       const fixture = runtimeFixture();
       let sessionId = 'session-1';
       let release!: () => void;

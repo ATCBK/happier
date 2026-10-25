@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
@@ -37,13 +37,25 @@ function doc(id: string, markdown: string): PromptLibraryStoredArtifact {
     body: JSON.stringify({ v: 1, markdown, createdAtMs: 1, updatedAtMs: 1 }),
   };
 }
+async function installExactHomeIdentity(profileId: string, homeServerIdentityId: string) {
+  const previous = await readSettings();
+  await writeSettings({ ...previous, servers: { ...previous.servers, [profileId]: {
+    id: profileId, name: 'Receipt Home', serverUrl: 'https://receipt.example.test', webappUrl: 'https://receipt.example.test',
+    createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact',
+    homeConnectionDescriptor: { v: 1, homeServerIdentityId, canonicalServerUrl: 'https://receipt.example.test', revision: 1,
+      endpoints: [{ kind: 'https', url: 'https://receipt.example.test' }] },
+  } } });
+  onTestFinished(async () => { await writeSettings(previous); });
+}
 describe('resolveCliVoicePromptStackBlocks', () => {
   it.each(['Instructions', ''])('receipts only the admitted reserved Session instruction entry (%j)', async markdown => {
+    await installExactHomeIdentity('home', 'srv_receipt_home');
     const args = { sessionId: 'target', serverId: 'home', accountEntries: [], profileEntries: [],
       sessionMetadata: { work: { promptStack: [{ ...entry('session.instructions'), required: true }] } },
       readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
       readArtifact: async () => doc('session.instructions', markdown) };
-    expect(await resolveCliVoicePromptPreparation(args)).toHaveProperty('preparedInstructionsFor', { serverId: 'home', sessionId: 'target' });
+    expect(await resolveCliVoicePromptPreparation(args)).toHaveProperty('preparedInstructionsFor', { serverId: 'srv_receipt_home', sessionId: 'target' });
+    expect(await resolveCliVoicePromptPreparation({ ...args, serverId: 'unknown-profile' })).not.toHaveProperty('preparedInstructionsFor');
     expect(await resolveCliVoicePromptPreparation({ ...args, sessionMetadata: { work: { promptStack: [entry('other')] } } }))
       .not.toHaveProperty('preparedInstructionsFor');
     expect(await resolveCliVoicePromptPreparation({ ...args, sessionId: null, sessionMetadata: undefined }))
@@ -59,6 +71,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
     }
   });
   it('reads the hidden control binding and exact target Session instead of using its control or Voice profile', async () => {
+    await installExactHomeIdentity(configuration.activeServerId, 'srv_control_home');
     const credentials = { token: 'exact-session-reader', encryption: null };
     const hidden = buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true });
     let markdown = 'FIRST_TARGET';
@@ -87,7 +100,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
       } };
     expect(await resolveCliVoicePromptStackBlocks(args)).toEqual(['FIRST_TARGET']);
     expect(await resolveCliVoicePromptPreparation(args)).toHaveProperty('preparedInstructionsFor', {
-      serverId: configuration.activeServerId, sessionId: 'exact-target',
+      serverId: 'srv_control_home', sessionId: 'exact-target',
     });
     markdown = 'EDITED_TARGET';
     expect(await resolveCliVoicePromptStackBlocks(args)).toEqual(['EDITED_TARGET']);

@@ -108,8 +108,8 @@ describe('bound Agent-session realtime service', () => {
       expect(result.status).toBe('started');
       if (result.status !== 'started') return;
       expect(result).not.toHaveProperty('preparedInstructionsFor');
-      if (preparedInstructionsFor.serverId === 'server-a' && preparedInstructionsFor.sessionId === 'session-1') {
-        expect(onStarted).toHaveBeenCalledWith(result.handle, preparedInstructionsFor);
+      if (preparedInstructionsFor.sessionId === 'session-1') {
+        expect(onStarted).toHaveBeenCalledWith(result.handle, { serverId: 'server-a', sessionId: 'session-1' });
       }
       else expect(onStarted).toHaveBeenCalledWith(result.handle);
       await cleanupBoundAgentSessionRealtimeService(service);

@@ -5,7 +5,7 @@ import {
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { configuration } from '@/configuration';
 import { resolveCliHomeTarget } from '@/server/homeTarget';
-import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
   readActiveAccountPromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -262,11 +262,13 @@ export async function resolveCliVoicePromptPreparation(args?: CliVoicePromptStac
     const hasSession = input?.sessionMetadata !== undefined && !isVoiceConversationSystemSessionMetadata(input.sessionMetadata);
     const memoryEnabled = !hasSession || readSessionMemoryEnabledV1(input?.sessionMetadata);
     const memoryRecallGuidanceEnabled = memoryEnabled && await resolveCliMemoryRecallGuidanceEnabled({ surfaces: ['voice'] });
-    await target.assertCurrent();
-    const preparedInstructionsFor = hasSession && input?.sessionId
+    const preparedHomeIdentity = hasSession && input?.sessionId
       && admittedEntries.some(entry => entry.layer === 'session' && entry.entryId === 'session.instructions'
         && (entry.outcome === 'ready' || entry.outcome === 'valid-empty'))
-      ? { serverId: input.serverId ?? configuration.activeServerId, sessionId: input.sessionId } : undefined;
+      ? await resolveServerProfileHomeIdentityId(input.serverId ?? configuration.activeServerId) : null;
+    await target.assertCurrent();
+    const preparedInstructionsFor = preparedHomeIdentity && input?.sessionId
+      ? { serverId: preparedHomeIdentity, sessionId: input.sessionId } : undefined;
     return { systemAppendBlocks, memoryRecallGuidanceEnabled,
       ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}),
       disabledActionIds: hasSession ? MEMORY_WRITE_ACTION_IDS_V1.filter(id => !isActionEnabledWithSessionMemory(id, memoryEnabled)) : [] };

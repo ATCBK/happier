@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 
@@ -508,6 +508,14 @@ function createPromptCaptureBackend(
 
 describe('VoiceAgentManager', () => {
   it.each(['delivered', 'refused', 'cancelled'] as const)('publishes instruction receipts through the real stream reader only after %s delivery', async outcome => {
+    const previousSettings = await readSettings();
+    await updateSettings(current => ({ ...current, servers: { ...current.servers, home: {
+      id: 'home', name: 'Receipt Home', serverUrl: 'https://receipt.example.test', webappUrl: 'https://receipt.example.test',
+      createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact',
+      homeConnectionDescriptor: { v: 1, homeServerIdentityId: 'srv_receipt_home', canonicalServerUrl: 'https://receipt.example.test',
+        revision: 1, endpoints: [{ kind: 'https', url: 'https://receipt.example.test' }] },
+    } } }));
+    onTestFinished(async () => { await writeSettings(previousSettings); });
     let release!: () => void;
     let entered!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
@@ -556,7 +564,7 @@ describe('VoiceAgentManager', () => {
       await cancellation;
       let read = cancelledRead ?? await readStream(0, true);
       while (!read.done) read = await readStream(read.nextCursor, true);
-      if (outcome === 'delivered') expect(read).toHaveProperty('preparedInstructionsFor', { serverId: 'home', sessionId: 'target' });
+      if (outcome === 'delivered') expect(read).toHaveProperty('preparedInstructionsFor', { serverId: 'srv_receipt_home', sessionId: 'target' });
       else expect(read).not.toHaveProperty('preparedInstructionsFor');
     } finally { release(); await manager.dispose(); }
   });

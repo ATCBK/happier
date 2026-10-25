@@ -194,6 +194,8 @@ describe('Voice streaming through retained initialization, execution transport a
         const { sendVoiceTextTurn } = await import('@/voice/local/sendVoiceTextTurn');
         const { createVoicePlaybackController } = await import('@/voice/runtime/playback/VoicePlaybackController');
         const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        machine.reset();
+        onTestFinished(() => machine.reset());
         const { deriveLocalVoiceSessionSnapshot } = await import('@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot');
         const { readLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
         const settings = f.storage.getState().settings;
