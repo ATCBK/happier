@@ -566,18 +566,19 @@ describe('voice settings mixed-version persistence', () => {
         expect(parsed.voiceDiagnosticsV1).toEqual(DISABLED_DIAGNOSTICS);
     });
 
-    it('preserves bounded future voice namespaces inertly and drops unsafe or oversized values', () => {
-        const oversized = 'x'.repeat(65_537);
+    it('retains unknown strict JSON without Voice-local budgets and drops unsafe values', () => {
+        // Account Settings owns write budgets; these exceed the retired Voice-only limits.
+        const large = 'x'.repeat(65_537);
         const cyclic: Record<string, unknown> = {};
         cyclic.self = cyclic;
-        const tooDeep: Record<string, unknown> = {};
-        let depthCursor = tooDeep;
+        const deep: Record<string, unknown> = {};
+        let depthCursor = deep;
         for (let depth = 0; depth < 34; depth += 1) {
             const next: Record<string, unknown> = {};
             depthCursor.next = next;
             depthCursor = next;
         }
-        const tooManyEntries = Object.fromEntries(
+        const wide = Object.fromEntries(
             Array.from({ length: 4_097 }, (_, index) => [`key_${index}`, index]),
         );
         const input = JSON.parse(JSON.stringify({
@@ -588,12 +589,13 @@ describe('voice settings mixed-version persistence', () => {
             },
             constructor: { polluted: true },
             toString: 'shadowed',
-            oversized_namespace: oversized,
+            large_namespace: large,
         })) as Record<string, unknown>;
         input.cyclic_namespace = cyclic;
-        input.too_deep_namespace = tooDeep;
-        input.too_many_entries_namespace = tooManyEntries;
+        input.deep_namespace = deep;
+        input.wide_namespace = wide;
         input.non_json_namespace = { value: undefined };
+        input.prototype_namespace = Object.create({ inherited: true });
 
         const parsed = voiceSettingsParse(input) as VoiceSettings & Record<string, unknown>;
         const persisted = normalizeVoiceDiagnosticsServerDelta({ voice: parsed });
@@ -602,10 +604,12 @@ describe('voice settings mixed-version persistence', () => {
         expect((persisted.voice as Record<string, unknown>).future_namespace_v2).toEqual(input.future_namespace_v2);
         expect(parsed).not.toHaveProperty('constructor');
         expect(Object.prototype.hasOwnProperty.call(parsed, 'toString')).toBe(false);
-        expect(parsed).not.toHaveProperty('oversized_namespace');
+        for (const key of ['large_namespace', 'deep_namespace', 'wide_namespace']) {
+            expect(parsed[key]).toEqual(input[key]);
+            expect((persisted.voice as Record<string, unknown>)[key]).toEqual(input[key]);
+        }
         expect(parsed).not.toHaveProperty('cyclic_namespace');
-        expect(parsed).not.toHaveProperty('too_deep_namespace');
-        expect(parsed).not.toHaveProperty('too_many_entries_namespace');
         expect(parsed).not.toHaveProperty('non_json_namespace');
+        expect(parsed).not.toHaveProperty('prototype_namespace');
     });
 });
