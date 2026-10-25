@@ -36,6 +36,7 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
@@ -739,7 +740,9 @@ async function createLocalVoiceAccountHarness() {
                             decodeURIComponent(messagesPage[1]),
                         ])) ?? [], hasMore: false,
                     }));
-                    return undefined;
+                    // The rest of the bootstrap census reads this Home as an empty Account; an unanswered read would
+                    // retry with backoff and hold resume until its sync wait budget expires.
+                    return createEmptyAccountBootstrapHttpResponse(`${path}${request.url.search}`, init) ?? undefined;
                 }).handle,
             });
             const disconnect = await homes.restoreActiveConnection();

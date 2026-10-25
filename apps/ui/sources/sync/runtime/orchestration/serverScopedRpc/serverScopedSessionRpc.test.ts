@@ -366,7 +366,7 @@ describe('sessionRpcWithServerScope', () => {
     const client = new DaemonVoiceAgentClient({ serverId: 'server-a', accountId: 'account-a' });
     const handle: VoiceAgentHandle = {
       client, accountLifetime, metadataSessionId: 'session-1', backend: 'daemon',
-      voiceAgentId: 'run-a', rpcSessionId: 'session-1', agentBackendId: 'claude',
+      voiceAgentId: 'run-a', rpcSessionId: 'session-1', agentBackendId: 'claude', transcriptEpoch: 0,
     };
     const handles = new Map([['session-1', handle]]);
     const recovery = createVoiceRunRecovery({

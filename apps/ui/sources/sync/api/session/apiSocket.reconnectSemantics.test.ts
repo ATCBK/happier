@@ -97,6 +97,24 @@ describe('apiSocket reconnect semantics', () => {
         } finally { currentness.dispose(); }
     });
 
+    it.each([false, true])('preserves finite Account currentness on intentional transport withdrawal (observation: %s)', async withObservation => {
+        const { captureAccountEncryptionCurrentness, getAccountEncryptionModeCacheRevision, invalidateAccountEncryptionModeCache } = await import('../account/apiAccountEncryptionMode');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const credentials: AuthCredentials = { token: `hdr.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'socket-account' })), 'base64')}.sig` };
+        const { socket, apiSocket } = await boot(withObservation ? { credentials } : {});
+        await connect(socket);
+        const currentness = captureAccountEncryptionCurrentness();
+        try {
+            const revision = getAccountEncryptionModeCacheRevision();
+            apiSocket.disconnect();
+            expect(currentness.isCurrent()).toBe(true);
+            expect(getAccountEncryptionModeCacheRevision()).toBeGreaterThan(revision);
+            expect(apiSocket.getAccountEncryptionObservationBinding(credentials)).toBeNull();
+            invalidateAccountEncryptionModeCache({ reason: 'scope-reset' });
+            expect(currentness.isCurrent()).toBe(false);
+        } finally { currentness.dispose(); }
+    });
+
     it('borrows the admitted Account socket identity without recurring mode HTTP after warm-up', async () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         await upsertAndActivateServer({ serverUrl: endpoint, scope: 'device' });
