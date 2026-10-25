@@ -368,7 +368,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   homeDomainActionRow({
     id: 'teams.list', approval: {result: 'required'},
     title: 'List Teams',
-    description: 'Page through the Teams visible in this Home for the authenticated Account.',
+    description: 'List visible Team names and IDs in this Home for the authenticated Account; resolve a Team by name before listing or changing its Groups.',
     safety: 'safe',
     sideEffectClass: 'read',
     cliPath: ['teams', 'list'],
