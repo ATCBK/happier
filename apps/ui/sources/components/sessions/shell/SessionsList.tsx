@@ -636,7 +636,6 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         headerFilters,
         pathname,
         sessionListSurfaceDataActive: surfaceOwnership.dataActive,
-        storageKind: props.storageKind,
     });
     const sessionListWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
     const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
@@ -1956,7 +1955,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                         onRenameWorkspace={handleRenameWorkspace}
                         onResetWorkspaceName={handleResetWorkspaceName}
                         onCreateSession={() => handleCreateSessionFromProject(item)}
-                        onAddFolder={() => handleAddFolderToProject(item)}
+                        onAddFolder={folderActionsEnabled && resolveDurableWorkspaceRefForSessionListHeader(item)
+                            ? () => handleAddFolderToProject(item)
+                            : undefined}
                         collapsed={Boolean(collapsedKeys[collapseKey])}
                         onToggleCollapse={() => handleToggleCollapse(collapseKey)}
                         headerTestId={headerTestId}

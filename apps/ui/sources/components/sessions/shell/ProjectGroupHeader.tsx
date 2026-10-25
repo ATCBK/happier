@@ -128,7 +128,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     onRenameWorkspace: (workspaceKey: string, currentLabel: string) => void;
     onResetWorkspaceName: (workspaceKey: string) => void;
     onCreateSession: () => void;
-    onAddFolder: () => void | Promise<void>;
+    onAddFolder?: () => void | Promise<void>;
     collapsed: boolean;
     onToggleCollapse: () => void;
     headerTestId: string;
@@ -164,6 +164,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const nativeEllipsizeMode = !isWeb && !hasCustomLabel ? 'head' : 'tail';
     const actionIconColor = theme.colors.text.secondary;
     const canCreateSession = typeof onCreateSession === 'function' && Boolean(item.workspaceScopeHint);
+    const canAddFolder = typeof onAddFolder === 'function';
     const favicon = useWorkspaceFavicon({
         enabled: workspaceFaviconsEnabled,
         serverId: item.workspaceScopeHint?.serverId ?? item.serverId ?? null,
@@ -177,7 +178,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                 id: 'add-folder',
                 title: t('sessionsList.addFolder'),
                 icon: <Icon name="folder-open" size={16} color={actionIconColor} />,
-                disabled: !canCreateSession,
+                disabled: !canAddFolder,
             },
             {
                 id: 'rename',
@@ -195,11 +196,11 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
             });
         }
         return items;
-    }, [hasCustomLabel, actionIconColor, canCreateSession, props.onMoveUp, props.onMoveDown]);
+    }, [hasCustomLabel, actionIconColor, canAddFolder, props.onMoveUp, props.onMoveDown]);
 
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (itemId === 'add-folder') {
-            await onAddFolder();
+            await onAddFolder?.();
         } else if (itemId === 'rename') {
             onRenameWorkspace(workspaceKey, displayTitle);
         } else if (itemId === 'move-up') {

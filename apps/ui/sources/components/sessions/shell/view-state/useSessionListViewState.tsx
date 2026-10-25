@@ -61,7 +61,6 @@ import {
 import { getAllKnownTags } from '../sessionTagUtils';
 import { useSessionAttentionStandingInputs } from '@/hooks/session/useSessionAttentionStandingInputs';
 import { useSessionListFocusedFolderState } from './useSessionListFocusedFolderState';
-import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
 import {
     filterSessionListItemsForHeaderControls,
     hasActiveSessionListHeaderFilters,
@@ -145,7 +144,6 @@ function measureSessionListRenderDerivation<T>(
 export type UseSessionListViewStateInput = Readonly<{
     data: SessionListViewItem[] | null;
     pathname: string;
-    storageKind?: SessionListStorageFilter;
     headerFilters?: SessionListHeaderFilterInput;
     sessionListSurfaceDataActive?: boolean;
 }>;
@@ -155,7 +153,6 @@ export function useSessionListViewState({
     headerFilters,
     pathname,
     sessionListSurfaceDataActive = true,
-    storageKind,
 }: UseSessionListViewStateInput) {
     const isTablet = useIsTablet();
     const [sessionMruOrderV1, setSessionMruOrderV1] = useLocalSettingMutable('sessionMruOrderV1');
@@ -192,7 +189,7 @@ export function useSessionListViewState({
     const showServerBadge = selection.enabled && selection.presentation === 'flat-with-badge' && selectedServerCount > 1;
     const showPinnedServerBadge = selection.enabled && selectedServerCount > 1;
     const selectable = isTablet;
-    const folderActionsEnabled = storageKind !== 'direct' && sessionFoldersDecision?.state === 'enabled';
+    const folderActionsEnabled = sessionFoldersDecision?.state === 'enabled';
     const sessionFolderViewMode: SessionFolderViewModeV1 = sessionFolderViewModeRaw === 'tree' ? 'tree' : 'off';
     const sessionListSavedFolderSortMode = normalizeSessionListFolderSortMode(sessionListFolderSortModeRaw);
     const sessionListOrderingMode = normalizeSessionListOrderingModeV1(sessionListOrderingModeRaw);

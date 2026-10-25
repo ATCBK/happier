@@ -47,7 +47,6 @@ export type SessionActionTarget = Readonly<{
     hasAdminAccess: boolean;
     canStop: boolean;
     canArchive: boolean;
-    canMoveToFolder: boolean;
     canRename: boolean;
     canResume: boolean;
     canDelete: boolean;

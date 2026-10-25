@@ -1108,11 +1108,11 @@ const SessionItemContent = React.memo(
             const actions: Array<{ name: string; label: string }> = [];
             if (onMoveUp) actions.push({ name: 'moveUp', label: t('common.moveUp') });
             if (onMoveDown) actions.push({ name: 'moveDown', label: t('common.moveDown') });
-            if (sessionActionTarget.canMoveToFolder && onMoveToFolder) actions.push({ name: 'moveToFolder', label: t('sessionsList.moveToFolder') });
-            if (sessionActionTarget.canMoveToFolder && onMoveToWorkspaceRoot) actions.push({ name: 'moveToWorkspaceRoot', label: t('sessionsList.moveToWorkspaceRoot') });
+            if (onMoveToFolder) actions.push({ name: 'moveToFolder', label: t('sessionsList.moveToFolder') });
+            if (onMoveToWorkspaceRoot) actions.push({ name: 'moveToWorkspaceRoot', label: t('sessionsList.moveToWorkspaceRoot') });
             if (draft && onDeleteDraft) actions.push({ name: 'deleteDraft', label: t('sessionDrafts.delete.action') });
             return actions;
-        }, [draft, onDeleteDraft, onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp, sessionActionTarget.canMoveToFolder]);
+        }, [draft, onDeleteDraft, onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp]);
 
         const handleAccessibilityAction = React.useCallback((event: { nativeEvent?: { actionName?: string } }) => {
             switch (event.nativeEvent?.actionName) {
@@ -1123,16 +1123,16 @@ const SessionItemContent = React.memo(
                     onMoveDown?.();
                     break;
                 case 'moveToFolder':
-                    if (sessionActionTarget.canMoveToFolder) onMoveToFolder?.();
+                    onMoveToFolder?.();
                     break;
                 case 'moveToWorkspaceRoot':
-                    if (sessionActionTarget.canMoveToFolder) onMoveToWorkspaceRoot?.();
+                    onMoveToWorkspaceRoot?.();
                     break;
                 case 'deleteDraft':
                     void confirmDeleteDraft();
                     break;
             }
-        }, [confirmDeleteDraft, onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp, sessionActionTarget.canMoveToFolder]);
+        }, [confirmDeleteDraft, onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp]);
 
         const pendingBadge = formatPendingCountBadge(pendingCount);
         const tagChipDensity: 'default' | 'compact' | 'minimal' = isMinimal ? 'minimal' : compact ? 'compact' : 'default';

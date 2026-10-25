@@ -42,13 +42,13 @@ function createOwnedRawSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('session action availability', () => {
-    it('does not offer folder assignment for direct sessions', () => {
+    it.each(['rowMenu', 'nativeContextMenu'] as const)('offers folder assignment for direct sessions on %s', (surface) => {
         const session: SessionListRenderableSession = {
             ...createOwnedRawSession(),
             metadata: { path: '/repo', directSessionV1: { v: 1 } },
         };
         const target = createSessionActionTarget({ session, serverId: 'server-a' });
-        expect(listVisibleSessionActionIds({ target, surface: 'rowMenu' })).not.toContain(SESSION_ACTION_MOVE_TO_FOLDER_ID);
+        expect(listVisibleSessionActionIds({ target, surface })).toContain(SESSION_ACTION_MOVE_TO_FOLDER_ID);
     });
 
     it('offers standalone Resume only for an inactive resumable session', () => {
