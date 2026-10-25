@@ -3,6 +3,27 @@ import { SETTINGS_DECLARATION_ACTION_IDS_V1, SettingsDeclarationActionInputSchem
 import { getActionSpec } from './actionSpecs.js';
 
 describe('Voice credential source operation admission', () => {
+  it('admits reference-only Voice binding, removal and recipient review, rejecting material and authority', () => {
+    const schema = SettingsDeclarationActionInputSchemasV1['settings.invoke'];
+    const base = { kind: 'voice_saved_secret', credentialSlotId: 'api_key', expectedSettingsVersion: 3,
+      machineId: 'machine-a', expectedSecretId: null, expectedSecretUpdatedAt: null };
+    for (const operation of [
+      { ...base, operation: 'bind', secretId: 'happier:shared-secret:v1:existing' },
+      { ...base, operation: 'remove', expectedSecretId: 'existing', expectedSecretUpdatedAt: 2 },
+      { ...base, operation: 'review', expectedSecretId: 'existing', expectedSecretUpdatedAt: 2 },
+      { ...base, operation: 'inspect' },
+    ]) {
+      expect(schema.safeParse({ anchor: 'voiceConversations.provider.acme.voice/realtime.credential', input: operation }).success).toBe(true);
+      for (const extra of [{ value: 'private' }, { approvedRecipientContractDigest: 'caller-approval' }, { confirmed: true }, { accountId: 'other' }]) {
+        expect(schema.safeParse({ anchor: 'voiceConversations.provider.acme.voice/realtime.credential', input: { ...operation, ...extra } }).success).toBe(false);
+      }
+    }
+    for (const value of [null, { v: 1, bindingsByServiceId: { 'happier.agent.codex/openai-codex': { source: 'connected', profileId: 'work' } } },
+      { v: 1, bindingsByServiceId: { 'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'pool' } } }]) {
+      expect(schema.safeParse({ anchor: 'voiceConversations.provider.acme.voice/realtime.globalConnectedServices',
+        input: { kind: 'voice_connected_services', expectedSettingsVersion: 3, value } }).success).toBe(true);
+    }
+  });
   it('admits exact source choices without accepting secret values or caller authority', () => {
     const schema = SettingsDeclarationActionInputSchemasV1['settings.invoke'];
     const input = { kind: 'voice_credential_source', credentialSlotId: 'api_key', expectedSettingsVersion: 3,

@@ -2,7 +2,8 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../connect/connectedAccountPurposeBindings.js';
-import { PluginCredentialAccessSlotIdSchema } from '../plugins/permissions/grants.js';
+import { VoiceCredentialSlotIdSchema } from '../plugins/contributions/voiceProviders.js';
+import { PersistedConnectedServiceBindingsV1Schema } from '../connect/connectedServiceBindings.js';
 
 export const SETTINGS_DECLARATION_ACTION_IDS_V1 = ['settings.list', 'settings.get', 'settings.set', 'settings.reset', 'settings.invoke'] as const;
 export type SettingsDeclarationActionIdV1 = typeof SETTINGS_DECLARATION_ACTION_IDS_V1[number];
@@ -17,6 +18,15 @@ const SettingsDeclarationScalarChoiceV1Schema = lazyZodSchema(() => z.union([z.s
 const AnchorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const SettingKeySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const OperationIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const VoiceSavedSecretOperationBasisSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('voice_saved_secret'),
+  credentialSlotId: VoiceCredentialSlotIdSchema,
+  machineId: z.optional(z.nullable(OperationIdSchema)),
+  expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
+  expectedSecretId: z.nullable(OperationIdSchema),
+  expectedSecretUpdatedAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  expectedRecipientContractDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/))),
+}));
 export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection', 'project', 'public_profile_draft']));
 /** Resource identity only; caller Account and authority come from Action admission. */
 export const SettingsDeclarationTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -30,7 +40,7 @@ export const SettingsDeclarationTargetV1Schema = lazyZodSchema(() => z.discrimin
 export type SettingsDeclarationTargetV1 = z.infer<typeof SettingsDeclarationTargetV1Schema>;
 export type SettingsDeclarationTargetKindV1 = SettingsDeclarationTargetV1['kind'];
 /** Exact operation targets, never a settings path, credential value or caller confirmation. */
-export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('atmosphere_picture_add'), source: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('picked') }),
     z.strictObject({ kind: z.literal('url'), url: z.url().check(z.refine(value => /^https?:\/\//i.test(value))) }),
@@ -43,7 +53,13 @@ export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.d
   z.strictObject({ kind: z.literal('account_encryption_mode_convert'), toMode: z.enum(['plain', 'e2ee']) }),
   z.strictObject({ kind: z.literal('model_pack'), packId: OperationIdSchema, machineId: z.optional(OperationIdSchema) }),
   z.strictObject({ kind: z.literal('voice_preview'), voiceId: OperationIdSchema }),
-  z.strictObject({ kind: z.literal('voice_credential_source'), credentialSlotId: PluginCredentialAccessSlotIdSchema,
+  z.strictObject({ kind: z.literal('voice_connected_services'),
+    expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
+    value: z.nullable(PersistedConnectedServiceBindingsV1Schema),
+  }),
+  z.extend(VoiceSavedSecretOperationBasisSchema, { operation: z.literal('bind'), secretId: OperationIdSchema }),
+  z.extend(VoiceSavedSecretOperationBasisSchema, { operation: z.enum(['inspect', 'remove', 'review']) }),
+  z.strictObject({ kind: z.literal('voice_credential_source'), credentialSlotId: VoiceCredentialSlotIdSchema,
     expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
     // A displayed declaration may fence its gesture; automated callers use the declaration captured at admission.
     expectedContractDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/))),

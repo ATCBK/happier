@@ -172,6 +172,43 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'voice_preview';
             voiceId: string;
         } | {
+            kind: 'voice_connected_services';
+            expectedSettingsVersion: number;
+            value: {
+                v: 1;
+                bindingsByServiceId: Record<string, {
+                    source: 'native';
+                } | {
+                    source: 'connected';
+                    profileId: string;
+                    selection?: 'profile' | undefined;
+                } | {
+                    source: 'connected';
+                    selection: 'group';
+                    groupId: string;
+                    profileId?: string | undefined;
+                }>;
+            } | null;
+        } | {
+            kind: 'voice_saved_secret';
+            credentialSlotId: string;
+            expectedSettingsVersion: number;
+            expectedSecretId: string | null;
+            expectedSecretUpdatedAt: number | null;
+            operation: 'bind';
+            secretId: string;
+            machineId?: string | null | undefined;
+            expectedRecipientContractDigest?: string | undefined;
+        } | {
+            kind: 'voice_saved_secret';
+            credentialSlotId: string;
+            expectedSettingsVersion: number;
+            expectedSecretId: string | null;
+            expectedSecretUpdatedAt: number | null;
+            operation: 'review' | 'inspect' | 'remove';
+            machineId?: string | null | undefined;
+            expectedRecipientContractDigest?: string | undefined;
+        } | {
             kind: 'voice_credential_source';
             credentialSlotId: string;
             expectedSettingsVersion: number;
