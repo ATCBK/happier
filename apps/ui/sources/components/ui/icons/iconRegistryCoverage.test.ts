@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { BUILTIN_WIDGET_DESCRIPTORS_V1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
+import { PLUGIN_UI_ICON_TOKENS_V1 } from '@happier-dev/protocol/plugins/ui';
 
 const SOURCES_DIR = join(__dirname, '..', '..', '..');
 const REGISTRY_FILE = join(__dirname, 'iconRegistry.generated.ts');
@@ -20,6 +21,8 @@ const NAME_PATTERNS = [
     /\bicon="([a-z][a-z0-9-]{2,})"/g,
     /\b(?:iconName|agentPickerIconName|iconIonName|menuIcon|icon)\s*:\s*['"]([a-z][a-z0-9-]{2,})['"]/g,
 ];
+
+const PLUGIN_UI_ICON_TOKENS: ReadonlySet<string> = new Set(PLUGIN_UI_ICON_TOKENS_V1);
 
 function walk(dir: string, out: string[] = []): string[] {
     for (const entry of readdirSync(dir)) {
@@ -51,12 +54,15 @@ describe('icon registry coverage', () => {
         const unregistered = new Set<string>();
         for (const file of walk(SOURCES_DIR)) {
             const source = readFileSync(file, 'utf8');
+            // Plugin UI components name icons by semantic token (`PluginUiIconTokenV1`), which the
+            // plugin icon-token resolver maps into this registry; such a token is not an app name.
+            const pluginUiTokens = source.includes("from '@happier-dev/plugin-ui") ? PLUGIN_UI_ICON_TOKENS : null;
             for (const pattern of NAME_PATTERNS) {
                 for (const match of source.matchAll(pattern)) {
                     // Picker fields always name icons; elsewhere only multi-word names are
                     // unambiguous, since a bare `icon:` field can also hold a domain value.
                     const isAgentPickerIcon = match[0].startsWith('agentPickerIconName');
-                    if ((isAgentPickerIcon || match[1].includes('-')) && !registry.has(match[1])) unregistered.add(match[1]);
+                    if ((isAgentPickerIcon || match[1].includes('-')) && !registry.has(match[1]) && !pluginUiTokens?.has(match[1])) unregistered.add(match[1]);
                 }
             }
         }

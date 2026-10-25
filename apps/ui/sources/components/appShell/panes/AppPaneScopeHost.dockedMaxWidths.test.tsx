@@ -173,7 +173,7 @@ describe('AppPaneScopeHost (docked max widths)', () => {
         // The lab's side column (lane12-final `xp-side`, app-surfaces `ss-side`) is 340 px wide.
         expect(await render(1440, 340)).toBe(340);
         expect(await render(946, 340)).toBe(340);
-        // A width the user chose still scales with the window, as before.
-        expect(await render(1440, 400)).toBe(480);
+        // A width the user chose is fixed pixels; it no longer scales with the window.
+        expect(await render(1440, 400)).toBe(400);
     });
 });

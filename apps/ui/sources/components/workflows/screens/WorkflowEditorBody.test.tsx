@@ -58,7 +58,8 @@ const bindingBoundaries: Array<() => Promise<void>> = [];
 const retireEditorContents: Array<() => Promise<void>> = [];
 let executeWorkflowCommand: (commandId: KeyboardCommandId) => boolean = () => false;
 let restoreKeyboardWindow: (() => void) | undefined;
-let windowDimensions = { width: 1200, height: 800 };
+// The react-native mock is evaluated during the hoisted imports, so the window it reads is hoisted with it.
+const viewport = vi.hoisted(() => ({ window: { width: 1200, height: 800 } }));
 // These are fixture inputs to the real storage/pane owners, not pane decisions.
 const paneState = {
     detailsAvailable: true,
@@ -104,9 +105,9 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
         if (nativeElement.type === 'View' || nativeElement.type === 'Pressable') return {
             addEventListener() {},
             removeEventListener() {},
-            getBoundingClientRect: () => ({ left: 100, top: 100, width: Math.min(600, windowDimensions.width), height: 40 }),
+            getBoundingClientRect: () => ({ left: 100, top: 100, width: Math.min(600, viewport.window.width), height: 40 }),
             measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) =>
-                callback(100, 100, Math.min(600, windowDimensions.width), 40),
+                callback(100, 100, Math.min(600, viewport.window.width), 40),
         };
         // Native text refs are an OS boundary. The real AgentInput and
         // MultiTextInput own focus requests, restored selection and edits.
@@ -114,7 +115,7 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
         const input = { focus: promptFocus, blur: () => {}, setSelection: () => {}, setTextAndSelection: () => {},
             offsetAtPoint: async () => null, setDropCaret: () => {},
             measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) =>
-                callback(0, 0, windowDimensions.width, 0) } satisfies NativeComposerInputHandle;
+                callback(0, 0, viewport.window.width, 0) } satisfies NativeComposerInputHandle;
         return { ...input, setNativeProps: () => {} };
     } });
     let retired = false;
@@ -127,7 +128,7 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
     };
     retireEditorContents.push(retireContent);
     const settlePopoverLayout = async () => {
-        await act(async () => { reportPopoverContentLayout(screen, { width: Math.min(360, windowDimensions.width), height: 320 }); });
+        await act(async () => { reportPopoverContentLayout(screen, { width: Math.min(360, viewport.window.width), height: 320 }); });
         await flushHookEffects({ cycles: 2, frames: 1 });
     };
     return { ...screen, visibleModals: () => modalEntries.filter(entry => 'visible' in entry && entry.visible === true), retireContent,
@@ -169,7 +170,7 @@ vi.mock('react-native', async () => {
     const { createRenderCommitCounter, useRenderCommitCounter } = await import('@/dev/testkit/performance/counts');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     const native = await createReactNativeWebMock({
-        useWindowDimensions: () => windowDimensions,
+        useWindowDimensions: () => viewport.window,
     });
     // Observe executions and layout commits at the native boundary. The real
     // editor, menus, composers, inspector and store subscriptions run beneath it.
@@ -224,7 +225,7 @@ beforeEach(() => {
     promptFocus.mockClear();
     executeWorkflowCommand = () => false;
     restoreKeyboardWindow = withPopoverWebGlobals();
-    windowDimensions = { width: 1200, height: 800 };
+    viewport.window = { width: 1200, height: 800 };
     paneState.detailsAvailable = true;
     paneState.rightOpen = false;
     getStorage().setState({ settings: settingsDefaults, localSettings: localSettingsDefaults });
@@ -1020,9 +1021,9 @@ describe('workflow editor body', () => {
         await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
         expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
         const firstCard = currentAnchor();
-        windowDimensions = { width: 390, height: 844 };
+        viewport.window = { width: 390, height: 844 };
         await screen.update(React.cloneElement(element));
-        windowDimensions = { width: 1440, height: 1000 };
+        viewport.window = { width: 1440, height: 1000 };
         await screen.update(React.cloneElement(element));
         expect(cardNodes.at(-1)).not.toBe(firstCard);
         expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
@@ -1109,7 +1110,7 @@ describe('workflow editor body', () => {
     });
 
     it('opens workflow settings as the canonical full-width solid phone sheet', async () => {
-        windowDimensions = { width: 390, height: 844 };
+        viewport.window = { width: 390, height: 844 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const screen = await renderBody(harness, { onRunNow: () => {} });
@@ -1121,7 +1122,7 @@ describe('workflow editor body', () => {
     });
 
     it('opens the same controlled step options as the canonical phone sheet', async () => {
-        windowDimensions = { width: 390, height: 844 };
+        viewport.window = { width: 390, height: 844 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const changed = vi.fn();
@@ -1624,7 +1625,7 @@ describe('workflow editor body', () => {
     });
 
     it('keeps Undo and Redo as icon controls on a phone, their labels only as accessible names (DESIGN-6 N20)', async () => {
-        windowDimensions = { width: 390, height: 700 };
+        viewport.window = { width: 390, height: 700 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const undo = vi.fn();
@@ -1639,7 +1640,7 @@ describe('workflow editor body', () => {
     });
 
     it('recomposes on a phone: the name stays in the page, value rows, Steps | Flow and a bottom bar', async () => {
-        windowDimensions = { width: 390, height: 700 };
+        viewport.window = { width: 390, height: 700 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const { KeyboardAwareScrollView } = await import('@/components/ui/keyboardAvoidance/KeyboardAwareScrollView');
@@ -1680,7 +1681,7 @@ describe('workflow editor body', () => {
         { width: 390, hasHistory: true },
         { width: 1400, hasHistory: false },
     ])('keeps one visible Back in the hosted editor (width: $width, has history: $hasHistory)', async ({ width, hasHistory }) => {
-        windowDimensions = { width, height: 700 };
+        viewport.window = { width, height: 700 };
         paneState.detailsAvailable = width > 390;
         const harness = await loadHarness();
         const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
@@ -1729,7 +1730,7 @@ describe('workflow editor body', () => {
         expect(replace).not.toHaveBeenCalled();
     });
     it.each([false, true])('keeps generic phone chrome and exactly one Back (pushed: %s)', async hasHistory => {
-        windowDimensions = { width: 390, height: 844 };
+        viewport.window = { width: 390, height: 844 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
@@ -1869,7 +1870,7 @@ describe('workflow editor body', () => {
     });
 
     it('keeps built-in Duplicate beside the primary in the phone bar, not under the value sheet', async () => {
-        windowDimensions = { width: 390, height: 700 };
+        viewport.window = { width: 390, height: 700 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
         const duplicate = vi.fn();

@@ -291,7 +291,12 @@ describe('WidgetSetupStep discovery', () => {
         expect(completed).not.toHaveBeenCalled();
         const beforeRebuild = entriesBuilt;
         readable = true;
-        await act(async () => { await store.refresh(); });
+        // Recovery reopens the Board: an idle store reads no Board body without a view's demand.
+        await act(async () => {
+            const release = store.retainView(() => () => {}, 'all');
+            store.invalidateBodies();
+            try { await store.refresh(); } finally { release(); }
+        });
         expect(entriesBuilt).toBeGreaterThan(beforeRebuild);
         expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
         await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });

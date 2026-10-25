@@ -549,11 +549,15 @@ it('retains exact WorkBoard option admission across delayed responsive remounts 
     const instance: WidgetInstanceV1 = { v: 1, id: 'daily', definition,
         bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
             field.path === 'period' ? { kind: 'context', slot: 'period' }
-                : { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
+                // A presentation-only field (the flow Style) is not a query path; bind its first declared choice.
+                : { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path) === undefined
+                    ? field.options?.[0]?.value : readInputPath(query, field.path)) }])) };
     const storedBoard = WorkBoardV1Schema.parse({ ...board, widgets: [{ kind: 'widget', ref: { surface: scope, instanceId: instance.id }, instance, size: 'medium' }] });
     boardHttp.seed(storedBoard);
     const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [storedBoard] });
     const store = createWorkBoardAccountStore(persistence.transport, () => lifetime?.isCurrent() === true);
+    // The canvas is an open view of this Board: an idle store reads no Board body without that demand.
+    const releaseBoardView = store.retainView(() => () => {}, `board:${board.id}`);
     await store.refresh();
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: account.serverId, platform: 'web' as const, accountLifetime: lifetime };
@@ -604,7 +608,7 @@ it('retains exact WorkBoard option admission across delayed responsive remounts 
         await React.act(async () => { await connection.dispose(); disconnected = true; });
         await screen.update(<Probe key="retired" />);
         expect(observed.at(-1)?.status).not.toBe('ready');
-    } finally { await screen.unmount(); store.retire(); if (!disconnected) await connection.dispose(); disposeActionLoader(); }
+    } finally { await screen.unmount(); releaseBoardView(); store.retire(); if (!disconnected) await connection.dispose(); disposeActionLoader(); }
 });
 
 it('shows its stored value while its choices are pending, and after the read is refused', async () => {
