@@ -5387,7 +5387,9 @@ describe('native Agent session host adapter', () => {
                 expect(raw.method).toBe(`${hostSession.sessionId}:${SESSION_RPC_METHODS.SESSION_GOAL_GET}`);
                 return { ok: true, result: await hostSession.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, raw.params) };
             } });
-            return { socket, transport: { connect: async () => {}, destroy: async () => {}, onDisconnected: () => () => {} } };
+            // The Home socket connection is the substituted boundary; the stub carries only the surface this path uses.
+            return { socket, transport: { connect: async () => {}, destroy: async () => {}, onDisconnected: () => () => {} } } as
+                unknown as ReturnType<typeof sockets.createUserScopedSocketConnection>;
         });
         const settingsBoundary = vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6,
             onboardingCompleted: true, machineId: 'machine-1' });
@@ -5565,7 +5567,8 @@ describe('native Agent session host adapter', () => {
         );
         const runtime = await factory({ plugin: { id: 'happier.agent.codex', version: '0.0.0' },
             agent: { id: 'codex' }, signal: new AbortController().signal });
-        const sessions = runtime.sessions!;
+        if (!runtime.sessions) throw new Error('Codex runtime opens Sessions');
+        const sessions = runtime.sessions;
         const contributions = createExternalContributionFixtures('codex');
         const agent: ResolvedAgentContribution = {
             ...contributions.agent, pluginId: 'happier.agent.codex', provenance: 'first_party', source: { kind: 'bundled' },

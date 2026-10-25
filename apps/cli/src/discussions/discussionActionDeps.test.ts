@@ -134,7 +134,7 @@ describe('Home Discussion resource transport', () => {
         ...(actionId === 'discussion.reply' ? { replyTarget: { kind: 'message' as const, messageId: 'parent' } } : {}) };
     const result = await deps({ actionId, input,
       context: { ...context, surface: 'agent', defaultSessionId: 'agent-session',
-        actionCaller: { kind: 'session', sessionId: 'agent-session' } } });
+        actionCaller: { kind: 'session', sessionId: 'agent-session', starterDepth: 0, turnDepth: 0 } } });
     expect(result).toMatchObject(actionId === 'discussion.create' ? { firstMessage: { content: attached } } : { message: { content: attached } });
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({ sessionId: 'agent-session', attachmentSources });
@@ -150,7 +150,7 @@ describe('Home Discussion resource transport', () => {
       { externalActionExecutionAuthorization: execution },
     ]) {
       expect(await deps({ actionId, input, context: { ...context, ...external, surface: 'agent',
-        defaultSessionId: 'agent-session', actionCaller: { kind: 'session', sessionId: 'agent-session' } } }))
+        defaultSessionId: 'agent-session', actionCaller: { kind: 'session', sessionId: 'agent-session', starterDepth: 0, turnDepth: 0 } } }))
         .toMatchObject({ ok: false, errorCode: 'discussion_attachment_upload_authority_unavailable' });
     }
     expect(published).toHaveLength(1);

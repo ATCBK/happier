@@ -825,7 +825,7 @@ describe('current-global External Sessions takeover source resolution', () => {
     setActiveAccountSettingsSnapshot(snapshot);
     const rawWake = vi.fn();
     const unsubscribe = subscribeActiveAccountSettingsSnapshot(rawWake);
-    const validateSource = vi.fn<ExternalSessionExecutionSurface['validateSource']>(async ({ source }) => ({ ok: true, source }));
+    const validateSource = vi.fn<NonNullable<ExternalSessionExecutionSurface['validateSource']>>(async ({ source }) => ({ ok: true, source }));
     const surface: ExternalSessionExecutionSurface = {
       validateSource,
       listCandidates: async () => ({ candidates: [], nextCursor: null }),

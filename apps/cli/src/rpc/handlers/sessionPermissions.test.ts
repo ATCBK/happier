@@ -10,7 +10,7 @@ function createRpcHarness() {
   return {
     handlers,
     rpcHandlerManager: {
-      registerHandler(method: string, handler: (input: unknown, context?: never) => Promise<unknown>) {
+      registerHandler(method: string, handler: (input: unknown, context?: unknown) => Promise<unknown>) {
         handlers.set(method, handler);
       },
     },

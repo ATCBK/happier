@@ -27,6 +27,9 @@ import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { CommittedTranscriptMessageOptions } from '@/api/session/transcriptPort';
 import { normalizeRawMessage } from '@happier-dev/session-core/raw';
 import { ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { HappierMetaEnvelopeSchema } from '@happier-dev/protocol/messages/structured/HappierMetaEnvelope';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { readScmDiffSummaryPublicationReceipt } from '../../../../../../ui/sources/sync/domains/scm/diffSummary/publicationReceipt';
 
@@ -266,7 +269,13 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
                 outputs: [{ kind: 'walkthrough', change: 'created' }] });
             expect(ScmDiffSummaryPublicationReceiptSchema.parse(receipts[0]?.meta?.scmResultUpdate).outputs)
                 .toEqual([{ kind: 'walkthrough', change: 'created' }]);
-            const receipt = readScmDiffSummaryPublicationReceipt(receipts[0]?.meta);
+            const normalizedReceipt = normalizeRawMessage('saved-receipt', receipts[0]?.localId ?? null, 3,
+                buildAcpAgentMessageEnvelope({ provider: 'test.agent', body: receipts[0]?.body, meta: receipts[0]?.meta }));
+            expect(normalizedReceipt?.meta?.scmResultUpdate).toEqual(receipts[0]?.meta?.scmResultUpdate);
+            const envelope = createStoredReadSchema(HappierMetaEnvelopeSchema).parse(normalizedReceipt?.meta?.happier);
+            expect(envelope.kind).toBe('scm_diff_summary.v1');
+            const admittedOutput = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).parse(envelope.payload);
+            const receipt = readScmDiffSummaryPublicationReceipt(admittedOutput, normalizedReceipt?.meta?.scmResultUpdate);
             expect(receipt?.output).toEqual(internals.runs.get('run-1')?.structuredMeta?.payload);
             expect(receipt?.publication.outputs).toEqual([{ kind: 'walkthrough', change: 'created' }]);
             expect(receipt?.publication.updateNotice).toMatchObject({ kind: 'generation', revision: receipt?.output.revision,
