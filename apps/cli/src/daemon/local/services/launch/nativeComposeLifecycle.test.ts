@@ -27,6 +27,13 @@ describe('Compose exact native resource lifetime', () => {
         return { Id: id.repeat(64), Config: { Labels: { 'com.docker.compose.project': 'happier-test', 'com.docker.compose.service': 'worker' } },
             State: { Status: state }, NetworkSettings: { Ports: ports } };
     }
+    it('reads a bounded diagnostic from admitted container IDs without rediscovering resources', async () => {
+        const h = fixture();
+        await h.control.lifecycle.inspect();
+        h.requests.length = 0;
+        expect(await h.control.lifecycle.logs?.({ maxBytes: 8_192 })).toBe('native output');
+        expect(h.requests).toEqual([['logs', '--tail', '8192', 'a'.repeat(64)]]);
+    });
     it('recovers the incumbent identity, treats unavailable inspection as unknown, and never stops a replacement', async () => {
         const h = fixture();
         expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'running', endpoint: null });
@@ -149,12 +156,12 @@ describe('Compose exact native resource lifetime', () => {
             const id = (await run(list)).stdout.trim();
             expect(id).toMatch(/^[a-f0-9]{64}$/u);
             const observation = await first.lifecycle.inspect();
-            if (observation.phase !== 'running') throw new Error(`Native fixture did not stay running: ${await first.lifecycle.logs?.()}`);
+            if (observation.phase !== 'running') throw new Error(`Native fixture did not stay running: ${await first.lifecycle.logs?.({ maxBytes: 8_192 })}`);
             expect(observation).toMatchObject({ phase: 'running', readiness: 'not_reported' });
             expect(observation.endpoint).toBeTruthy();
             await expect(fetch(observation.endpoint!).then(response => response.text())).resolves.toContain('fx16-http');
-            expect(await first.lifecycle.logs?.()).toContain('fx16-out');
-            expect(await first.lifecycle.logs?.()).toContain('fx16-err');
+            expect(await first.lifecycle.logs?.({ maxBytes: 8_192 })).toContain('fx16-out');
+            expect(await first.lifecycle.logs?.({ maxBytes: 8_192 })).toContain('fx16-err');
             const cancelled = new AbortController();
             // Docker's exact-resource kill event proves Stop reached the daemon
             // before cancellation. The fixture ignores TERM, using Docker's own

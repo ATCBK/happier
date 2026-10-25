@@ -8,6 +8,7 @@ import type {
     PluginProcessHandle,
     PluginProcessResult,
 } from '@happier-dev/plugin-sdk/exec';
+import type { ManagedServiceNativeObservationV1 } from '@happier-dev/plugin-sdk/managed-services';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
@@ -165,6 +166,174 @@ describe('createManagedServiceProcessSupervisorHost', () => {
     afterEach(() => {
         vi.useRealTimers();
         vi.restoreAllMocks();
+    });
+
+    it.each(['ready', 'not_reported'] as const)('publishes only changed native lifecycle facts (%s)', async (readiness) => {
+        vi.useFakeTimers();
+        let observation: ManagedServiceNativeObservationV1 = { phase: 'running', readiness, endpoint: null };
+        let inspections = 0;
+        let failed = false;
+        const { servers } = createHarness();
+        const handle = await servers.supervise(managedSpec('native-facts', {
+            mode: { kind: 'native', instance: { adapter: { pluginId: 'fixture.plugin', localId: 'native' }, nativeResourceId: 'resource' },
+                lifecycle: {
+                    async inspect() {
+                        inspections += 1;
+                        if (failed) throw new Error('native inspection failed');
+                        return { ...observation };
+                    },
+                    async stop() { observation = { ...observation, phase: 'stopped' }; return { status: 'stopped' }; },
+                } },
+        }));
+        const changes = vi.fn<(value: ManagedServiceProcessSnapshot) => void>();
+        const subscription = handle.observe!(changes);
+        changes.mockClear();
+        try {
+            const before = inspections;
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(inspections - before).toBe(3);
+            expect(changes).toHaveBeenCalledTimes(0);
+            if (readiness === 'ready') {
+                // Direct diagnostics retain the most recent successful liveness sample.
+                expect(handle.snapshot().lastHealthyAtMs).toBe(Date.now());
+                await handle.waitUntilHealthy();
+                expect(changes).toHaveBeenCalledTimes(0);
+            } else {
+                await expect(handle.waitUntilHealthy()).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
+            }
+            for (const next of [
+                { phase: 'running', readiness: 'not_ready', endpoint: null },
+                { phase: 'running', readiness: 'ready', endpoint: null },
+                { phase: 'running', readiness: 'ready', endpoint: 'http://127.0.0.1:4312' },
+            ] as const) {
+                observation = next;
+                await vi.advanceTimersByTimeAsync(5_000);
+                expect(changes).toHaveBeenCalledTimes(1);
+                changes.mockClear();
+                await vi.advanceTimersByTimeAsync(5_000);
+                expect(changes).toHaveBeenCalledTimes(0);
+            }
+            failed = true;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(handle.snapshot()).toMatchObject({ state: 'unhealthy', nativePhase: 'unknown', baseUrl: null });
+            expect(changes).toHaveBeenCalledTimes(1);
+            changes.mockClear();
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(changes).toHaveBeenCalledTimes(0);
+            failed = false;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(changes).toHaveBeenCalledTimes(1);
+            expect(handle.snapshot()).toMatchObject({ state: 'healthy', baseUrl: 'http://127.0.0.1:4312' });
+            changes.mockClear();
+            expect(await handle.stop()).toEqual({ status: 'stopped' });
+            // Resource termination precedes proof that the owned starter tree settled.
+            expect(changes.mock.calls.map(([value]) => value.state)).toEqual(['unhealthy', 'stopped']);
+            changes.mockClear();
+            expect(await handle.stop()).toEqual({ status: 'stopped' });
+            expect(changes).toHaveBeenCalledTimes(0);
+            const stoppedInspections = inspections;
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(inspections).toBe(stoppedInspections);
+            expect(changes).toHaveBeenCalledTimes(0);
+        } finally {
+            subscription.dispose();
+            await handle.dispose();
+        }
+    });
+
+    it('settles a built-in native log failure without republishing the same diagnostic', async () => {
+        vi.useFakeTimers();
+        const terminal = deferred<PluginProcessResult>();
+        terminal.resolve(CLEAN_EXIT);
+        const { servers } = createHarness([createProcess(42, terminal)]);
+        let inspections = 0;
+        let failed = false;
+        const handle = await servers.supervise(managedSpec('native-log-failure', {
+            mode: { kind: 'native', builtinLifecycle: {
+                async inspect() { inspections += 1; if (failed) throw new Error('native inspection failed'); return { phase: 'running', readiness: 'ready', endpoint: null }; },
+                async logs() { throw new Error('native logs unavailable'); },
+                async stop() { return { status: 'stopped' }; },
+            } },
+        }));
+        const changes = vi.fn<(value: ManagedServiceProcessSnapshot) => void>();
+        const subscription = handle.observe!(changes);
+        changes.mockClear();
+        try {
+            failed = true;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(handle.snapshot().diagnostics.filter(value => value.code === 'native_service_logs_unavailable')).toHaveLength(1);
+            changes.mockClear();
+            const before = inspections;
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(inspections - before).toBe(3);
+            expect(changes).toHaveBeenCalledTimes(0);
+            expect(handle.snapshot().diagnostics.filter(value => value.code === 'native_service_logs_unavailable')).toHaveLength(1);
+            expect(await handle.stop()).toEqual({ status: 'stopped' });
+            expect(changes).toHaveBeenCalledTimes(1);
+        } finally {
+            subscription.dispose();
+            await handle.dispose();
+        }
+    });
+
+    it.each(['builtin', 'external', 'without-output'] as const)('reads bounded native output only for failure diagnostics (%s)', async (adapter) => {
+        vi.useFakeTimers();
+        let failed = false;
+        let unknown = false;
+        let inspections = 0;
+        const inspect = async (): Promise<ManagedServiceNativeObservationV1> => {
+            inspections += 1;
+            if (failed) throw new Error('native inspection failed');
+            return { phase: unknown ? 'unknown' : 'running', readiness: 'ready', endpoint: null };
+        };
+        const stop = async () => ({ status: 'stopped' as const });
+        const reads: number[] = [];
+        const output = async (options: Readonly<{ maxBytes: number }>) => {
+            reads.push(options.maxBytes);
+            return 'native failure detail native-output-fixture-secret';
+        };
+        const terminal = deferred<PluginProcessResult>();
+        terminal.resolve(CLEAN_EXIT);
+        const { servers } = createHarness([createProcess(42, terminal)]);
+        const handle = await servers.supervise(managedSpec(`native-output-${adapter}`, {
+            launch: { executable: { kind: 'systemTool', id: 'fixture.server' }, env: { FIXTURE_SECRET: 'native-output-fixture-secret' } },
+            mode: adapter === 'builtin' ? { kind: 'native', builtinLifecycle: { inspect, stop, logs: output } }
+                : { kind: 'native', instance: { adapter: { pluginId: 'fixture.plugin', localId: 'native' }, nativeResourceId: 'resource' },
+                    lifecycle: { inspect, stop, ...(adapter === 'external' ? { logs: async (_instance, options) => output(options) } : {}) } },
+        }));
+        try {
+            const before = inspections;
+            await vi.advanceTimersByTimeAsync(50_000);
+            expect(inspections - before).toBe(10);
+            expect(reads).toEqual([]);
+            failed = true;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(handle.snapshot()).toMatchObject({ state: 'unhealthy', nativePhase: 'unknown',
+                diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'plugin_managed_service_native_observation_failed' })]) });
+            expect(reads).toEqual(adapter === 'without-output' ? [] : [8_192]);
+            if (adapter !== 'without-output') expect(handle.snapshot().diagnostics).toContainEqual(
+                expect.objectContaining({ code: 'native_service_output', message: expect.stringContaining('native failure detail') }));
+            expect(JSON.stringify(handle.snapshot().diagnostics)).not.toContain('native-output-fixture-secret');
+            if (adapter === 'without-output') expect(handle.snapshot().diagnostics.some(value =>
+                value.code === 'native_service_output' || value.code === 'native_service_logs_unavailable')).toBe(false);
+            await vi.advanceTimersByTimeAsync(50_000);
+            expect(reads).toHaveLength(adapter === 'without-output' ? 0 : 1);
+            failed = false;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(handle.snapshot().state).toBe('healthy');
+            unknown = true;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(handle.snapshot().state).toBe('unhealthy');
+            expect(reads).toHaveLength(adapter === 'without-output' ? 0 : 2);
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(reads).toHaveLength(adapter === 'without-output' ? 0 : 2);
+            const explicitInspection = handle.waitUntilHealthy({ timeoutMs: 100 }).catch((error: unknown) => error);
+            await vi.advanceTimersByTimeAsync(100);
+            expect(await explicitInspection).toMatchObject({ code: 'plugin_managed_server_health_timeout' });
+            expect(reads).toHaveLength(adapter === 'without-output' ? 0 : 3);
+            await handle.stop();
+            expect(reads).toHaveLength(adapter === 'without-output' ? 0 : 3);
+        } finally { await handle.dispose(); }
     });
 
     it.each([
@@ -602,8 +771,13 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                 },
             } },
         }));
+        const changes = vi.fn<(value: ManagedServiceProcessSnapshot) => void>();
+        const subscription = handle.observe!(changes);
+        changes.mockClear();
         expect(await handle.stop()).toEqual({ status: 'stopped' });
         expect(handle.snapshot()).toMatchObject({ state: 'stopped', nativePhase: 'stopped' });
+        expect(changes.mock.calls.map(([value]) => value.state)).toEqual(['unhealthy', 'stopped']);
+        subscription.dispose();
     });
 
     it('consumes native readiness and endpoint from one observation after the starter exits', async () => {

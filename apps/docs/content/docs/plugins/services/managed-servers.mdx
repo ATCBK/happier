@@ -29,6 +29,17 @@ stopped. A definitive native stop settles the handle; an accepted-only stop
 needs a stopped observation. Unsupported or unconfirmed stop retains custody
 and does not permit replacing the resource as though it had stopped.
 
+In 0.3 development source, a native lifecycle may also supply
+`logs(instance, { maxBytes, signal }, context)` for failure diagnostics. Use the
+exact admitted instance and the provided byte budget to bound the native read;
+tools with line-based tails can use their bounded tail granularity. The host
+sanitizes and retains the result within that UTF-8 byte budget as
+`native_service_output` on the service snapshot. Collection happens on a failure
+transition or one explicit failed health inspection. Healthy and unchanged
+watchdog samples do not read logs. This callback is optional: omitting it keeps
+inspection and Stop working, and the failure remains reportable without output.
+It does not provide a live log stream or promise a Services-page output viewer.
+
 These are development-source contracts, not a claim that sessionless Project
 Services or every native tool is available. Native supervision requires the
 current admitted lifecycle role; an unavailable role refuses before launch.

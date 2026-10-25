@@ -403,6 +403,11 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                     return recovery;
                 };
                 processMode = { kind: 'native', instance, lifecycle: {
+                    async logs(candidate, options) {
+                        const current = await resolveCurrentLifecycle();
+                        try { return await current.lifecycle.logs?.(candidate, options) ?? ''; }
+                        finally { await current.release(); }
+                    },
                     async inspect(candidate, options) {
                         const current = await resolveCurrentLifecycle();
                         try { return await current.lifecycle.inspect(candidate, options); }

@@ -69,6 +69,30 @@ const manifest = {
   },
 } satisfies PluginManifest;
 
+it.each([false, true])('retains optional native failure output in the public testkit (logs=%s)', async (withLogs) => {
+  const instance = { adapter: { pluginId: 'acme.native-output', localId: 'resource' }, nativeResourceId: 'exact-resource' };
+  const testkit = await createPluginTestkit({
+    manifest: { schemaVersion: 2, id: instance.adapter.pluginId, version: '1.0.0', displayName: 'Native output',
+      runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.js' },
+      contributes: { projectNativeAdapters: [{ id: 'resource', files: ['resource.json'], roles: ['nativeServiceLifecycle'] }] } },
+    module: { activate(api) {
+      api.projectNativeAdapters.register('resource', { nativeServiceLifecycle: {
+        async inspect() { return { phase: 'unknown', readiness: 'not_reported', endpoint: null }; },
+        async stop() { return { status: 'stopped' }; },
+        ...(withLogs ? { async logs(candidate, options) {
+          return `${candidate.nativeResourceId}: native failure`.slice(-options.maxBytes);
+        } } satisfies Pick<NonNullable<PluginTestkitRegistrationByFamily['projectNativeAdapters']['nativeServiceLifecycle']>, 'logs'> : {}),
+      } });
+    } },
+  });
+  try {
+    const lifecycle = testkit.registration('projectNativeAdapters', 'resource')?.nativeServiceLifecycle;
+    expect(await lifecycle?.inspect(instance)).toEqual({ phase: 'unknown', readiness: 'not_reported', endpoint: null });
+    expect(await lifecycle?.logs?.(instance, { maxBytes: 8_192 })).toBe(withLogs ? 'exact-resource: native failure' : undefined);
+    expect(await lifecycle?.stop(instance)).toEqual({ status: 'stopped' });
+  } finally { await testkit.dispose(); }
+});
+
 it('keeps rejected manifest field paths in public testkit errors', async () => {
   const plugin = definePlugin({
     id: 'acme.manifest-diagnostics',

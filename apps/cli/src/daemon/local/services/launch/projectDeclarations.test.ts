@@ -24,6 +24,7 @@ import type { PtyExitEvent, PtyProcess, PtySpawnParams } from '@/terminal/pty/pr
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { MANAGED_SERVICE_NUMERIC_CONTRACT } from '@/plugins/runtime/invocation/services/managedServiceSpecNormalization';
 import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { discoverLocalServiceRunTargets } from './runTargets';
 import { createProjectServiceDeclarationStarter } from './projectDeclarations';
@@ -1698,7 +1699,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         }
     }, 120_000);
 
-    it.each(['foreground_native_service', 'no_setup_live_root', 'no_setup_worker', 'retired_worker', 'setup_live_root', 'setup_exited_root_with_live_descendant', 'no_setup_with_native_helper', 'pre_final_native_helper', 'detached_native_resource', 'detached_native_resource_accepted_stop', 'detached_native_resource_accepted_stop_worker'] as const)('retains the actual selected plugin environment through Service Start and unconfirmed Stop until owned tree settlement (%s)', async fixtureKind => {
+    it.each(['foreground_native_service', 'no_setup_live_root', 'no_setup_worker', 'retired_worker', 'setup_live_root', 'setup_exited_root_with_live_descendant', 'no_setup_with_native_helper', 'pre_final_native_helper', 'detached_native_resource', 'detached_native_resource_failure_output', 'detached_native_resource_accepted_stop', 'detached_native_resource_accepted_stop_worker'] as const)('retains the actual selected plugin environment through Service Start and unconfirmed Stop until owned tree settlement (%s)', async fixtureKind => {
         const detachedNative = fixtureKind.startsWith('detached_native_resource');
         const foregroundNative = fixtureKind === 'foreground_native_service';
         let acceptedNativeStop = fixtureKind.includes('accepted_stop');
@@ -1732,6 +1733,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         const nativeInstance: ManagedServiceNativeInstanceV1 = { adapter: pixiAdapter, nativeResourceId: 'observed-external-service-instance' };
         let nativeStopped = false;
         let nativeObservation: 'known' | 'unknown' | 'failed' = 'known';
+        let nativeOutputReads = 0;
         const stoppedResources: ManagedServiceNativeInstanceV1[] = [];
         const installedToolPath = join(h.root, process.platform === 'win32' ? 'pixi.exe' : 'pixi');
         if (withNativeHelper || detachedNative || foregroundNative) {
@@ -1765,6 +1767,14 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
                                     cwd: request.root, reviewInputs: request.files, ...(detachedNative ? { nativeInstance } : {}) };
                             },
                             ...(detachedNative ? { nativeServiceLifecycle: {
+                                async logs(instance: typeof nativeInstance, options, context) {
+                                    expect(instance).toEqual(nativeInstance);
+                                    expect(options.maxBytes).toBe(8_192);
+                                    if (!context) throw new Error('Native output lost admitted invocation services');
+                                    nativeOutputReads += 1;
+                                    const bytes = await context.services.fs.readFile({ root: 'workspace', relativePath: 'pixi.toml' });
+                                    return `native output: ${new TextDecoder().decode(bytes)}`;
+                                },
                                 async inspect(instance: typeof nativeInstance, _options, context) {
                                     expect(instance).toEqual(nativeInstance);
                                     if (!context) throw new Error('Native lifecycle lost admitted invocation services');
@@ -1912,6 +1922,18 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
                     catch (error) { return error instanceof Error && 'code' in error && error.code === 'ESRCH'; }
                 }).toBe(true);
                 expect(handle.snapshot()).toMatchObject({ mode: 'native', state: 'running', baseUrl: null });
+                expect(nativeOutputReads).toBe(0);
+                if (fixtureKind === 'detached_native_resource_failure_output') {
+                    nativeObservation = 'failed';
+                    // Join the real watchdog's failure before checking the asynchronous diagnostic.
+                    await vi.waitFor(() => expect(handle.snapshot().state).toBe('unhealthy'), {
+                        timeout: MANAGED_SERVICE_NUMERIC_CONTRACT.healthIntervalMs.defaultValue * 2,
+                    });
+                    await vi.waitFor(() => expect(handle.snapshot().diagnostics).toContainEqual(
+                        expect.objectContaining({ code: 'native_service_output', message: expect.stringContaining('native output:') })));
+                    expect(nativeOutputReads).toBe(1);
+                    nativeObservation = 'known';
+                }
                 await expect(handle.stop()).rejects.toMatchObject({ code: 'plugin_managed_server_termination_incomplete' });
                 expect(handle.snapshot().state).not.toBe('stopped');
                 expect(environmentObservation.signal?.aborted).toBe(false);

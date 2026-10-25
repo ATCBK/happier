@@ -155,11 +155,12 @@ export function createNativeComposeLifecycle(input: Readonly<{
         markStarted() { starterStarted = true; observedEmpty = false; },
         get redactedValues() { return Object.values(launch?.env ?? {}).filter((value): value is string => typeof value === 'string' && value.length > 0); },
         async logs(options) {
-            const rows = await read(options?.signal);
-            if (!rows || !ids?.length) throw new Error('native_service_observation_unavailable');
+            if (!ids?.length) throw new Error('native_service_observation_unavailable');
             const output: string[] = [];
-            for (const row of rows) {
-                const result = await run(['logs', row.id], options?.signal);
+            for (const id of ids) {
+                // Docker tails by lines; the diagnostic byte budget also bounds that
+                // upstream window. Do not rediscover an already admitted instance.
+                const result = await run(['logs', '--tail', String(options.maxBytes), id], options.signal);
                 if (result.exitCode !== 0) throw new Error('native_service_logs_unavailable');
                 output.push(result.stdout + (result.stderr ?? ''));
             }

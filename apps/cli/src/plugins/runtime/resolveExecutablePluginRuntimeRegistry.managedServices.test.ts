@@ -43,6 +43,7 @@ import {
     createProjectNativeEnvironmentIoForHost,
 } from './invocation/services/exec';
 import type { ProjectManagedServiceSupervisionInput } from './invocation/services/managedServicesOwner';
+import { MANAGED_SERVICE_NUMERIC_CONTRACT } from './invocation/services/managedServiceSpecNormalization';
 
 async function loadInstalledManagedServiceFixture(input: Readonly<{
     happyHomeDir: string;
@@ -169,6 +170,8 @@ describe('resolveExecutablePluginRuntimeRegistry managed-services production own
         const toolName = process.platform === 'win32' ? 'native-launcher.exe' : 'native-launcher';
         const starterReceipt = join(happyHomeDir, 'starter-exited');
         const stopReceipt = join(happyHomeDir, 'native-stopped.json');
+        const failureReceipt = join(happyHomeDir, 'native-failed');
+        const logsReceipt = join(happyHomeDir, 'native-logs.json');
         const previousPath = process.env.PATH;
         let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
         try {
@@ -207,10 +210,11 @@ describe('resolveExecutablePluginRuntimeRegistry managed-services production own
             // This external plugin is the native-system boundary; activation,
             // admission, Exec, and managed-service ownership remain real.
             await writeFile(join(pluginRoot, 'daemon.mjs'), [
-                "import { writeFile } from 'node:fs/promises';",
+                "import { access, writeFile } from 'node:fs/promises';",
                 'export function activate(api) {',
                 "  api.projectNativeAdapters.register('compose', { nativeServiceLifecycle: {",
-                "    async inspect() { return { phase: 'running', readiness: 'not_reported', endpoint: null }; },",
+                `    async inspect() { try { await access(${JSON.stringify(failureReceipt)}); } catch { return { phase: 'running', readiness: 'not_reported', endpoint: null }; } throw new Error('Native fixture failed'); },`,
+                `    async logs(instance, options, context) { if (!context) throw new Error('Missing admitted output context'); await writeFile(${JSON.stringify(logsReceipt)}, JSON.stringify({ instance, maxBytes: options.maxBytes })); return 'external native diagnostic'; },`,
                 `    async stop(instance) { await writeFile(${JSON.stringify(stopReceipt)}, JSON.stringify(instance)); return { status: 'stopped' }; },`,
                 '  } });',
                 '}',
@@ -254,6 +258,14 @@ describe('resolveExecutablePluginRuntimeRegistry managed-services production own
             });
             await vi.waitFor(async () => expect(await readFile(starterReceipt, 'utf8')).toBe('exited'));
             expect(handle.snapshot()).toMatchObject({ mode: 'native', state: 'running', nativePhase: 'running', baseUrl: null });
+            await expect(readFile(logsReceipt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+            await writeFile(failureReceipt, 'failed');
+            await vi.waitFor(() => expect(handle.snapshot().state).toBe('unhealthy'), {
+                timeout: MANAGED_SERVICE_NUMERIC_CONTRACT.healthIntervalMs.defaultValue * 2,
+            });
+            await vi.waitFor(() => expect(handle.snapshot().diagnostics).toContainEqual(
+                expect.objectContaining({ code: 'native_service_output', message: 'external native diagnostic' })));
+            expect(JSON.parse(await readFile(logsReceipt, 'utf8'))).toEqual({ instance, maxBytes: 8_192 });
             // Retirement removes admission for new work, not custody of this
             // exact native resource. The captured stop must still settle it.
             await runtime.dispose();

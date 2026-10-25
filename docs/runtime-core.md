@@ -1478,6 +1478,15 @@ admitted endpoint changes. Successful ready samples still refresh
 lifecycle subscribers. Inspection failure withdraws running evidence once, and
 recovery publishes the newly observed facts through the same owner.
 
+Native output is collected only for a failure transition or one explicit failed
+health inspection. Healthy and unchanged watchdog observations perform no log IO.
+The optional public `ManagedServiceNativeLifecycleV1.logs` callback receives the
+existing diagnostic byte budget and admitted invocation context; an adapter
+without it retains the failure diagnostic without output. Built-in Compose
+uses its already-admitted container IDs and a bounded Docker tail. The supervisor
+sanitizes and retains this output as `native_service_output`; it is a bounded
+failure diagnostic, not a long-lived Service output reader.
+
 Complete Project binding reads join an in-flight establishment at this owner and
 re-read its published handle before returning. A pending Start or Move therefore
 keeps its native read pending rather than publishing a Machine-unavailable

@@ -871,9 +871,11 @@ export function snapshotStaticRegistrationValue<
             const serviceLifecycle = Reflect.get(receiver, 'nativeServiceLifecycle');
             if (serviceLifecycle !== undefined) {
                 const lifecycle = requireObject(serviceLifecycle, 'Native service lifecycle');
+                const logs = captureStaticRegistrationMethod<NonNullable<ManagedServiceNativeLifecycleV1['logs']>>(lifecycle, 'logs', 'Native service lifecycle.logs', false);
                 runtime.nativeServiceLifecycle = Object.freeze({
                     inspect: captureStaticRegistrationMethod<ManagedServiceNativeLifecycleV1['inspect']>(lifecycle, 'inspect', 'Native service lifecycle.inspect', true)!,
                     stop: captureStaticRegistrationMethod<ManagedServiceNativeLifecycleV1['stop']>(lifecycle, 'stop', 'Native service lifecycle.stop', true)!,
+                    ...(logs ? { logs } : {}),
                 });
             }
             return Object.freeze(runtime) as PluginRegistrationValueByFamily[TFamily];

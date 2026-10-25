@@ -4155,7 +4155,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 return null;
             }
             return Object.freeze({
-                inspect: captured.lifecycle.inspect,
+                ...captured.lifecycle,
                 async stop(...args: Parameters<typeof captured.lifecycle.stop>) {
                     const result = await captured.lifecycle.stop(...args);
                     if (result.status === 'stopped') await captured.release();

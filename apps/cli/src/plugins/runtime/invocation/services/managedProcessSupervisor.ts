@@ -121,7 +121,7 @@ type ManagedServiceProcessLaunch =
 export type ProjectBuiltinNativeLifecycle = Readonly<{
     inspect(options?: Readonly<{ signal?: AbortSignal }>): Promise<ManagedServiceNativeObservationV1>;
     stop(options?: Readonly<{ signal?: AbortSignal }>): ReturnType<ManagedServiceNativeLifecycleV1['stop']>;
-    logs?(options?: Readonly<{ signal?: AbortSignal }>): Promise<string>;
+    logs?(options: Parameters<NonNullable<ManagedServiceNativeLifecycleV1['logs']>>[1]): Promise<string>;
     prepareStart?(options?: Readonly<{ signal?: AbortSignal }>): Promise<void>;
     /** Builtin native codecs retain uncertainty once their starter can create resources. */
     markStarted?(): void;
@@ -1445,11 +1445,11 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             }
         }
 
-        async function checkHealth(signal: AbortSignal | undefined, timeoutMs?: number): Promise<boolean> {
+        async function checkHealth(signal: AbortSignal | undefined, timeoutMs?: number, explicitNativeInspection = false): Promise<boolean> {
             assertNotAborted(signal);
             assertGenerationUsable();
             if (spec.mode.kind === 'native') {
-                const observation = await inspectNative(signal);
+                const observation = await inspectNative(signal, explicitNativeInspection);
                 return observation.phase === 'running' && observation.readiness === 'ready';
             }
             const healthCheck = spec.healthCheck;
@@ -1581,9 +1581,12 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 }
                 // An address observation never establishes readiness for an endpoint-free lifetime.
                 if (!healthCheck && spec.mode.kind !== 'native') return;
-                if (await checkHealth(undefined, healthCheck?.timeoutMs)) {
+                const healthy = await checkHealth(undefined, healthCheck?.timeoutMs);
+                // Native inspection admits and publishes its lifecycle facts itself.
+                if (spec.mode.kind === 'native') return;
+                if (healthy) {
                     consecutiveHealthMisses = 0;
-                    if (!isStopped() && (!processTerminal || spec.mode.kind === 'native') && isGenerationUsable()) {
+                    if (!isStopped() && !processTerminal && isGenerationUsable()) {
                         setSnapshot({
                             ...snapshot,
                             state: 'healthy',
@@ -1595,9 +1598,6 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 }
             } catch {
                 // A failed probe is one missed interval; the bounded watchdog decides terminal health truth.
-                if (spec.mode.kind === 'native' && !isStopped()) {
-                    setUnhealthy('plugin_managed_service_native_observation_failed');
-                }
             } finally {
                 watchdogInFlight = false;
             }
@@ -1630,12 +1630,45 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             if (portReservation === reservation) portReservation = null;
         }
 
-        async function inspectNative(signal?: AbortSignal): Promise<ManagedServiceNativeObservationV1> {
+        async function collectNativeFailureOutput(signal?: AbortSignal): Promise<void> {
+            if (spec.mode.kind !== 'native' || isStopping() || nativeStopped || !isGenerationUsable()) return;
+            const mode = spec.mode;
+            const logs = mode.builtinLifecycle
+                ? mode.builtinLifecycle.logs?.bind(mode.builtinLifecycle)
+                : mode.lifecycle.logs?.bind(mode.lifecycle, mode.instance);
+            if (!logs) return;
+            const outputSignal = AbortSignal.any([entry.lifecycle.signal, lifecycleProbeController.signal, ...(signal ? [signal] : [])]);
+            if (outputSignal.aborted) return;
+            try {
+                const output = await waitWithAbort(logs({ maxBytes: MAX_MANAGED_SERVICE_DIAGNOSTIC_BYTES, signal: outputSignal }), outputSignal);
+                if (outputSignal.aborted || isStopping() || nativeStopped || !isGenerationUsable()) return;
+                const message = sanitizeExecDiagnosticText(output, MAX_MANAGED_SERVICE_DIAGNOSTIC_BYTES, {
+                    redactedValues: [...launchRedactedValues, ...(mode.builtinLifecycle?.redactedValues ?? [])
+                        .flatMap(rawCredential => readCredentialRedactionValues({ rawCredential }))],
+                });
+                if (message && !snapshot.diagnostics.some(item => item.code === 'native_service_output' && item.message === message)) {
+                    setSnapshot({ ...snapshot, ...retainManagedServiceDiagnostic(snapshot, {
+                        code: 'native_service_output', severity: 'info', message,
+                    }) });
+                }
+            } catch {
+                if (outputSignal.aborted || isStopping() || nativeStopped || !isGenerationUsable()) return;
+                // Log failure cannot withdraw a separate native lifetime observation.
+                if (!snapshot.diagnostics.some(diagnostic => diagnostic.code === 'native_service_logs_unavailable')) {
+                    setSnapshot({ ...snapshot, ...retainManagedServiceDiagnostic(snapshot, {
+                        code: 'native_service_logs_unavailable', severity: 'warning',
+                    }) });
+                }
+            }
+        }
+
+        async function inspectNative(signal?: AbortSignal, explicitFailureOutput = false): Promise<ManagedServiceNativeObservationV1> {
             if (spec.mode.kind !== 'native') {
                 return fail('plugin_managed_service_unavailable', 'Native lifecycle is unavailable');
             }
             assertNotAborted(signal);
             assertGenerationUsable();
+            const wasFailed = snapshot.state === 'unhealthy' || snapshot.state === 'failed' || snapshot.nativePhase === 'stopped';
             try {
                 const observation = await waitWithAbort(spec.mode.builtinLifecycle
                     ? spec.mode.builtinLifecycle.inspect({ signal })
@@ -1661,7 +1694,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     : observation.phase === 'unknown'
                         ? 'unhealthy'
                         : observation.readiness === 'ready' ? 'healthy' : 'running';
-                setSnapshot({
+                const next: ManagedServiceProcessSnapshot = {
                     ...snapshot,
                     state,
                     readiness: observation.readiness,
@@ -1671,23 +1704,21 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     ...(observation.phase === 'running' && observation.readiness === 'ready'
                         ? { lastHealthyAtMs: now() }
                         : {}),
-                });
-                if (spec.mode.builtinLifecycle?.logs && observation.phase === 'running') {
-                    try {
-                        const message = sanitizeExecDiagnosticText(await spec.mode.builtinLifecycle.logs({ signal }),
-                            MAX_MANAGED_SERVICE_DIAGNOSTIC_BYTES, { redactedValues: spec.mode.builtinLifecycle.redactedValues });
-                        if (message && !snapshot.diagnostics.some(item => item.code === 'native_service_output' && item.message === message)) {
-                            setSnapshot({ ...snapshot, ...retainManagedServiceDiagnostic(snapshot, {
-                                code: 'native_service_output', severity: 'info', message,
-                            }) });
-                        }
-                    } catch {
-                        if (signal?.aborted) assertNotAborted(signal);
-                        // Log failure cannot withdraw a separate native lifetime observation.
-                        setSnapshot({ ...snapshot, ...retainManagedServiceDiagnostic(snapshot, {
-                            code: 'native_service_logs_unavailable', severity: 'warning',
-                        }) });
-                    }
+                };
+                if (snapshot.state !== next.state
+                    || snapshot.readiness !== next.readiness
+                    || snapshot.nativePhase !== next.nativePhase
+                    || snapshot.baseUrl !== next.baseUrl
+                    || snapshot.port !== next.port) {
+                    setSnapshot(next);
+                } else if (snapshot.lastHealthyAtMs !== next.lastHealthyAtMs) {
+                    // A diagnostic read retains fresh liveness without invalidating
+                    // semantic lifecycle subscribers on every watchdog sample.
+                    snapshot = freezeSnapshot(next);
+                }
+                if ((!wasFailed || explicitFailureOutput) && (state === 'unhealthy' || observation.phase === 'stopped'
+                    || explicitFailureOutput && observation.readiness === 'not_ready')) {
+                    await collectNativeFailureOutput(signal);
                 }
                 return observation;
             } catch (error) {
@@ -1696,12 +1727,16 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 if (!nativeStopped && snapshot.nativePhase !== 'stopped' && !isStopped() && !signal?.aborted
                     && !entry.lifecycle.signal.aborted && isGenerationUsable()) {
                     endpoint = null;
-                    setSnapshot({ ...snapshot, state: 'unhealthy', nativePhase: 'unknown',
-                        readiness: 'not_reported', baseUrl: null, port: null,
-                        ...retainManagedServiceDiagnostic(snapshot, {
-                            code: 'plugin_managed_service_native_observation_failed', severity: 'error',
-                        }) });
+                    const code = 'plugin_managed_service_native_observation_failed';
+                    if (snapshot.state !== 'unhealthy' || snapshot.nativePhase !== 'unknown'
+                        || snapshot.readiness !== 'not_reported' || snapshot.baseUrl !== null || snapshot.port !== null
+                        || !snapshot.diagnostics.some(diagnostic => diagnostic.code === code)) {
+                        setSnapshot({ ...snapshot, state: 'unhealthy', nativePhase: 'unknown',
+                            readiness: 'not_reported', baseUrl: null, port: null,
+                            ...retainManagedServiceDiagnostic(snapshot, { code, severity: 'error' }) });
+                    }
                     await releaseEndpointProjection();
+                    if (!wasFailed || explicitFailureOutput) await collectNativeFailureOutput(signal);
                 }
                 throw error;
             }
@@ -1739,8 +1774,10 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                                 );
                             }
                         }
-                        setSnapshot({ ...snapshot,
-                            state: hasProvenManagedProcessTermination() ? 'stopped' : 'unhealthy', nativePhase: 'stopped' });
+                        const state = hasProvenManagedProcessTermination() ? 'stopped' : 'unhealthy';
+                        if (snapshot.state !== state || snapshot.nativePhase !== 'stopped') {
+                            setSnapshot({ ...snapshot, state, nativePhase: 'stopped' });
+                        }
                     }
                     if (!processDisposed) {
                         if (!process) {
@@ -1837,7 +1874,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     const release = retainedLaunchRelease;
                     await release?.();
                     retainedLaunchRelease = null;
-                    if (processDisposed) {
+                    if (processDisposed && !isStopped()) {
                         setSnapshot({ ...snapshot, state: 'stopped' });
                     }
                 })();
@@ -2399,6 +2436,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                     }
                     await assertProcessRunning();
                 };
+                let explicitNativeInspection = true;
                 try {
                     while (deadline === undefined || now() <= deadline) {
                         await assertWaitUsable();
@@ -2411,20 +2449,25 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                                 remainingMs === undefined ? undefined : spec.healthCheck
                                     ? Math.min(spec.healthCheck.timeoutMs, remainingMs)
                                     : remainingMs,
+                                explicitNativeInspection,
                             ), signal);
                         } catch (error) {
                             await assertWaitUsable();
                             if (deadlineController.signal.aborted) break;
                             if (isPluginError(error)) throw error;
+                        } finally {
+                            explicitNativeInspection = false;
                         }
                         await assertWaitUsable();
                         if (deadlineController.signal.aborted) break;
                         if (healthy) {
-                            setSnapshot({
-                                ...snapshot,
-                                state: 'healthy',
-                                lastHealthyAtMs: now(),
-                            });
+                            if (spec.mode.kind !== 'native') {
+                                setSnapshot({
+                                    ...snapshot,
+                                    state: 'healthy',
+                                    lastHealthyAtMs: now(),
+                                });
+                            }
                             await publishEndpointProjection();
                             await assertWaitUsable();
                             startWatchdog();

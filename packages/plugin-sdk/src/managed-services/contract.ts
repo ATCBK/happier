@@ -318,6 +318,13 @@ export interface ManagedServiceNativeLifecycleV1 {
      * Existing resource-only adapters may ignore it; it is never serialized or plugin-supplied.
      */
     inspect(instance: ManagedServiceNativeInstanceV1, options?: PluginCancellationOptions, context?: PluginInvocationContext): Promise<ManagedServiceNativeObservationV1>;
+    /** Optional failure-diagnostic output for this exact admitted instance, not a live log stream.
+     * Called on failure transitions or an explicit failed inspection, never healthy/unchanged
+     * watchdog samples. Bound the native read using maxBytes (UTF-8), or the native tool's
+     * bounded tail granularity; the host sanitizes and retains at most that byte budget.
+     * Hosts without output support may ignore this callback; omission leaves lifecycle intact.
+     */
+    logs?(instance: ManagedServiceNativeInstanceV1, options: PluginCancellationOptions & Readonly<{ maxBytes: number }>, context?: PluginInvocationContext): Promise<string>;
     stop(instance: ManagedServiceNativeInstanceV1, options?: PluginCancellationOptions, context?: PluginInvocationContext): Promise<Readonly<{
         status: 'stopped' | 'accepted' | 'unsupported' | 'termination_incomplete';
     }>>;

@@ -277,6 +277,13 @@ export async function resolveProjectNativeAdapter(params: Readonly<{
                 return production.invocationContext;
             };
             return { kind: 'ready', release: async () => { await production?.release(); }, lifecycle: Object.freeze({
+                ...(lifecycle.logs ? { async logs(candidate: ManagedServiceNativeInstanceV1, options: Parameters<NonNullable<ManagedServiceNativeLifecycleV1['logs']>>[1]) {
+                    if (!current()) throw new ProjectNativeAdapterInvocationError('native_adapter_retired');
+                    if (!matchesInstance(candidate)) throw new ProjectNativeAdapterInvocationError('native_adapter_reference_mismatch');
+                    const result = await lifecycle.logs!(retained, options, context());
+                    if (!current()) throw new ProjectNativeAdapterInvocationError('native_adapter_retired');
+                    return result;
+                } } : {}),
                 async inspect(candidate: ManagedServiceNativeInstanceV1, options?: PluginCancellationOptions) {
                     if (!current()) throw new ProjectNativeAdapterInvocationError('native_adapter_retired');
                     if (!matchesInstance(candidate)) throw new ProjectNativeAdapterInvocationError('native_adapter_reference_mismatch');
