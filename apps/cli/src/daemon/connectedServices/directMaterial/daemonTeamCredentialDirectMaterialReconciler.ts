@@ -44,7 +44,7 @@ type DirectMaterialSourcePredicate =
 
 type DirectMaterialSourceRevisions = Readonly<{
   settings: number | null;
-  providerCatalog: number | null;
+  providerCatalog: number | 'absent' | null;
   connectedConfiguration: number | null;
   accountLifetime: number | null;
 }>;
