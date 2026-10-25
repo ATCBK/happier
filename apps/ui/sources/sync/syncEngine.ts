@@ -7,6 +7,7 @@ import { type SessionMessageV1, type SessionMessagesPageV1 } from '@happier-dev/
 import { projectSessionMetadataForWire } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 import { parsePermissionIntentAlias, resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
 import { projectComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
+import { MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1 } from '@happier-dev/protocol/changes';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { EMPTY_PROJECT_AUTHORING_SESSION_INPUTS } from '@/sync/store/domains/projectAuthoringSessions';
 import {
