@@ -54,20 +54,26 @@ it('keeps arrangement slots mounted while producer portals preserve their own co
     await act(async () => { root.render(render('new')); });
     const section = host.querySelector('section');
     const slot = section?.firstElementChild;
-    const input = host.querySelector('textarea')!;
+    // The web composer is a contenteditable editor; select part of its draft text.
+    const editor = 'textarea, [data-happier-text-input="true"]';
+    const input = host.querySelector<HTMLElement>(editor)!;
     input.focus();
-    input.setSelectionRange(2, 5);
+    const selection = document.createRange();
+    selection.setStart(input.querySelector('p')!.firstChild!, 2);
+    selection.setEnd(input.querySelector('p')!.firstChild!, 5);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(selection);
     expect(slot?.textContent).toBe('new');
     await act(async () => { root.render(render('created', true)); });
     // A loading successor has no active input. The draft owner, rather than a
-    // parked textarea, carries the document to the newly mounted composer.
-    expect(host.querySelector('textarea')).toBeNull();
+    // parked editor, carries the document to the newly mounted composer.
+    expect(host.querySelector(editor)).toBeNull();
     await act(async () => { root.render(render('created')); });
     expect(slot?.textContent).toBe('created');
     expect(host.querySelector('section')).toBe(section);
     expect(section?.firstElementChild).toBe(slot);
     expect(mounts).toBe(1);
-    const successor = host.querySelector('textarea')!;
+    const successor = host.querySelector<HTMLElement>(editor)!;
     expect(successor).not.toBe(input);
-    expect(successor.value).toBe('Successor draft');
+    expect(successor.textContent).toBe('Successor draft');
 });

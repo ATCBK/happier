@@ -169,7 +169,8 @@ describe('MessageView runtime failure rows', () => {
         }));
         expect(rings('failure')).toHaveLength(0);
         expect(rings('rejection')).toHaveLength(1);
-        await act(() => { vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS); });
+        // The cue's duration starts once the landed row paints it (one frame).
+        await act(() => { vi.advanceTimersToNextFrame(); vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS); });
         expect(screen.findAllHostsByTestId('transcript-jump-highlight')).toHaveLength(0);
     });
 });

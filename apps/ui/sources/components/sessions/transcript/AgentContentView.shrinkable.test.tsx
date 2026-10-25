@@ -5,7 +5,8 @@ import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useHeaderHeight: () => 0,
 }));
 

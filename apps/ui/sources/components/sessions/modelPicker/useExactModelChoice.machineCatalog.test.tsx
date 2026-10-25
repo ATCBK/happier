@@ -5,6 +5,7 @@ import { createProviderErrorV1, PluginProjectionV2Schema } from '@happier-dev/pr
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { createDeferred, renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -48,7 +49,8 @@ beforeEach(async () => {
     } };
     return { errorCode: 'method_not_found', error: 'Method not found' };
   });
-  serverId = (await account.restore({ waivedActions: ['providers.models.refresh'],
+  // The picker's own Machine row: model discovery admits an own worker before its raw RPC path (fddb78c8af).
+  serverId = (await account.restore({ waivedActions: ['providers.models.refresh'], machines: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })],
     settings: { experiments: true, featureToggles: { providers: true } } })).serverId;
 });
 afterEach(async () => { await act(async () => { Modal.hideAll(); }); await standardCleanup(); await account.reset(); });

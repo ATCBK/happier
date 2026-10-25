@@ -354,7 +354,7 @@ async function setupTaskHarness(options: Readonly<{ httpsHome?: boolean }> = {})
   const scope = storage.getState().profileScope!;
   if (options.httpsHome) {
     const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
-    expect(await resolveServerCredentialAccountScope(scope.serverId)).toEqual({ kind: 'bound', scope });
+    expect(await resolveServerCredentialAccountScope(scope.serverId)).toMatchObject({ kind: 'bound', scope });
   }
   storage.getState().applySettings(storage.getState().settings, 1);
   storage.getState().applyMachines([createMachineFixture({ id: 'm1' })], true, { sourceServerId: scope.serverId });

@@ -105,7 +105,7 @@ async function setup(options: Readonly<{ signedIn?: boolean; start?: boolean; re
         return readinessResponse(request, options.signedIn ?? true, reviewer, options.missingReadiness);
     }, request: async (url, init) => reviewInventoryResponse(url, init, false, reviewer) ?? (new URL(String(url)).pathname === ACP_CATALOG_ROWS_ROUTE_V1
         ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: { t: 'plain', v: reviewer?.record ?? { v: 1, definitions: [] } } }))
-        : sessionHttp.request(url)),
+        : sessionHttp.request(url, init)),
     });
     const onStarted = vi.fn();
     const onClose = vi.fn();

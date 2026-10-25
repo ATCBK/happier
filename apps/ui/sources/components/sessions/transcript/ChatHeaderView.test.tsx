@@ -68,7 +68,8 @@ vi.mock('@react-navigation/native', () => createReactNavigationNativeMock({
 
 vi.mock('expo-router', () => createExpoRouterMock().module);
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useHeaderHeight: () => 44,
 }));
 

@@ -112,7 +112,8 @@ vi.mock('@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime',
     },
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useDeviceType: () => sessionRightPanelDeviceType.value,
     useHeaderHeight: () => 56,
 }));

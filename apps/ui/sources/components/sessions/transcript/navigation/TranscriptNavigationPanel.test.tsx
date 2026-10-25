@@ -9,11 +9,6 @@ import {
 } from '@/dev/testkit';
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
 import type { TranscriptNavigationEntry } from './transcriptNavigationTypes';
-import {
-    PaneHeaderSlotProvider,
-    PaneHeaderSlotScope,
-    usePublishedPaneHeaderContent,
-} from '@/components/appShell/panes/paneHeaderSlot';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -55,6 +50,9 @@ vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/ico
 
 // Resolve after the shared boundary options are configured, before timed interactions.
 await import('./TranscriptNavigationPanel');
+// The pane header slot graph imports React Native, so it also resolves only after the boundary options are set.
+const { PaneHeaderSlotProvider, PaneHeaderSlotScope, usePublishedPaneHeaderContent } =
+    await import('@/components/appShell/panes/paneHeaderSlot');
 
 function entry(overrides: Partial<TranscriptNavigationEntry> & Pick<TranscriptNavigationEntry, 'id' | 'kind' | 'seq' | 'promptPreview'>): TranscriptNavigationEntry {
     const pinned = overrides.pinned ?? overrides.kind.startsWith('pinned-');

@@ -191,7 +191,9 @@ describe('MessageView jump landing highlight', () => {
         expect(findOverlaysWithin(screen.findByTestId('row-u1'), TRANSCRIPT_JUMP_HIGHLIGHT_TEST_ID)).toHaveLength(1);
         expect(findOverlaysWithin(screen.findByTestId('row-a1'), TRANSCRIPT_JUMP_HIGHLIGHT_TEST_ID)).toHaveLength(0);
 
+        // The cue's duration starts once the landed row paints it (one frame).
         await act(async () => {
+            vi.advanceTimersToNextFrame();
             vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS);
         });
 
@@ -320,7 +322,9 @@ describe('MessageView jump landing highlight', () => {
         expect(findOverlaysWithin(screen.findByTestId('row-u1'), TRANSCRIPT_JUMP_HIGHLIGHT_TEST_ID)).toHaveLength(1);
         expect(jumpFadeCalls(timingSpy.mock.calls)).toHaveLength(0);
 
+        // The cue's duration starts once the landed row paints it (one frame).
         await act(async () => {
+            vi.advanceTimersToNextFrame();
             vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS);
         });
 
