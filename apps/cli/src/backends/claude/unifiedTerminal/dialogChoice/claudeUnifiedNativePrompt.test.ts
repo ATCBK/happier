@@ -55,6 +55,22 @@ function createHarness() {
 }
 
 describe('native prompts through the existing terminal dialog owner', () => {
+  it('publishes the full hook-owned questions while their native tab header is above the viewport', async () => {
+    const { session, broker, client } = createHarness();
+    const screen = readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.310-question-clipped.txt', import.meta.url), 'utf8');
+    const input = JSON.parse(readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.310-question-clipped-input.json', import.meta.url), 'utf8'));
+    session.onClaudeSessionHook({ hook_event_name: 'ClaudeNativePrompt', session_id: 'claude-native-session',
+      tool_use_id: 'toolu-clipped-question', tool_name: 'AskUserQuestion', tool_input: input,
+    });
+    const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(screen));
+    expect(dialog).toMatchObject({ kind: 'native', dialogId: 'ask_user_question' });
+    if (!dialog) throw new Error('expected current native question');
+    const pending = broker.requestDialogChoice({ dialog });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(client.agentState.requests['toolu-clipped-question']).toMatchObject({ arguments: { questions: input.questions } }));
+    await broker.dispose();
+  });
+
   it('releases native input after repeated ingress observes one tool prompt resolved in the terminal', async () => {
     const { session, broker, client } = createHarness();
     const injected: string[] = [];

@@ -5,6 +5,7 @@ import { answerClaudeNativeQuestion, matchesClaudeNativeQuestionScreen, parseCla
 import { createFakeControlPort } from './fakeControlPort';
 import { parseClaudeScreenState, resolveClaudeScreenInFlightSteerVeto } from './screenState';
 import { wrapBracketedPaste } from '@/agent/runtime/terminal/injection/bracketedPaste';
+import type { StructuredQuestionLike } from '@happier-dev/protocol';
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/claude-2.1.304-question-${name}.txt`, import.meta.url), 'utf8');
 const single = fixture('single');
@@ -35,6 +36,63 @@ const focus = (screen: string, from: string, to: string) => screen.replace(`❯ 
 const controls = { isCurrent: () => true, wait: async () => undefined, settleMs: 0, verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2 };
 
 describe('native Claude AskUserQuestion (2.1.304 captures)', () => {
+  it('matches the live 80x24 question with offscreen tabs to its unique complete hook-owned question and choices', () => {
+    const screen = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-clipped.txt', import.meta.url), 'utf8');
+    const input: { questions: StructuredQuestionLike[] } = JSON.parse(readFileSync(new URL('./__fixtures__/claude-2.1.310-question-clipped-input.json', import.meta.url), 'utf8'));
+    const parsed = parseClaudeNativeQuestionScreen(screen);
+    expect(parsed).toMatchObject({ kind: 'question', tabs: null });
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input.questions)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, [input.questions[0]!, ...input.questions])).toBe(false);
+    expect(matchesClaudeNativeQuestionScreen(parseClaudeNativeQuestionScreen(screen.split('\n').slice(1).join('\n'))!, input.questions)).toBe(false);
+    const width = screen.split('\n').find((line) => /^─+$/u.test(line))!.length;
+    const split = screen.split('\n').map((line) => `${line.padEnd(width + 4)}Unrelated adjacent panel`).join('\n');
+    expect(matchesClaudeNativeQuestionScreen(parseClaudeNativeQuestionScreen(split)!, input.questions)).toBe(true);
+    const state = parseClaudeScreenState(screen);
+    expect(state.nativeQuestionPresentation).not.toBeNull();
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('native_question');
+  });
+
+  it('recognizes a complete question and choices when the terminal clips only its tab header', async () => {
+    const clipped = single.slice(single.indexOf('Which probe color?\n\n❯ 1.'));
+    const parsed = parseClaudeNativeQuestionScreen(clipped);
+    expect(parsed).toMatchObject({ kind: 'question', question: 'Which probe color?' });
+    expect(matchesClaudeNativeQuestionScreen(parsed!, questions)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, [{ ...questions[0]!, question: 'Which other probe color?' }])).toBe(false);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, [{ ...questions[0]!, options: ['Amber', 'Green'] }])).toBe(false);
+    const port = createFakeControlPort({ captures: [clipped, idle] });
+    await expect(answerClaudeNativeQuestion({ ...controls, port, questions, answers: { 'Which probe color?': ['Amber'] } })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter']);
+    expect(matchesClaudeNativeQuestionScreen(parseClaudeNativeQuestionScreen(clipped.replace('Which probe color?', 'probe color?'))!, questions)).toBe(false);
+    expect(parseClaudeNativeQuestionScreen(clipped.replace('Enter to select · ↑/↓ to navigate · Esc to cancel', '❯ Next task'))).toBeNull();
+  });
+
+  it('retains visible tabs without their upper rule and matches a complete review after its tabs scroll offscreen', () => {
+    const noUpperRule = single.slice(single.indexOf(' ☐ Header Color'));
+    const question = parseClaudeNativeQuestionScreen(noUpperRule);
+    expect(question).not.toBeNull();
+    expect(matchesClaudeNativeQuestionScreen(question!, questions)).toBe(true);
+    const clippedReview = review.slice(review.indexOf('Review your answers'));
+    const parsed = parseClaudeNativeQuestionScreen(clippedReview);
+    expect(parsed).toMatchObject({ kind: 'review', tabs: null });
+    expect(matchesClaudeNativeQuestionScreen(parsed!, multipleQuestions)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, [multipleQuestions[1]!, multipleQuestions[0]!])).toBe(false);
+    expect(parseClaudeNativeQuestionScreen(clippedReview + '\nUnknown active dialog')).toBeNull();
+    const incomplete = partialReview.slice(partialReview.indexOf('Review your answers'));
+    expect(parseClaudeNativeQuestionScreen(incomplete)).toBeNull();
+  });
+
+  it('matches every question in the live 80x21 review with offscreen tabs before final submission', () => {
+    const screen = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-clipped-review.txt', import.meta.url), 'utf8');
+    const input: { questions: StructuredQuestionLike[] } = JSON.parse(readFileSync(new URL('./__fixtures__/claude-2.1.310-question-clipped-review-input.json', import.meta.url), 'utf8'));
+    const parsed = parseClaudeNativeQuestionScreen(screen);
+    expect(parsed).toMatchObject({ kind: 'review', tabs: null });
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input.questions)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input.questions.slice(1))).toBe(false);
+    const partial = screen.replace(/^.*● S1:.+\n/mu, '');
+    const partialReview = parseClaudeNativeQuestionScreen(partial);
+    expect(partialReview === null || !matchesClaudeNativeQuestionScreen(partialReview, input.questions)).toBe(true);
+  });
+
   it('recognizes the live Claude 309 question above its trailing native session-title rule', () => {
     const screen = readFileSync(new URL('./__fixtures__/claude-2.1.309-question-session-title.txt', import.meta.url), 'utf8');
     expect(parseClaudeNativeQuestionScreen(screen)).toMatchObject({ kind: 'question', question: 'Which live Happier probe color?' });

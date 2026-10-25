@@ -5,7 +5,8 @@ import { readClaudeNativeDialogScreenLines } from './nativeScreenCapture';
 
 export type ClaudeNativeQuestionPresentation = Readonly<{
   kind: 'question' | 'review';
-  tabs: readonly Readonly<{ header: string; answered: boolean }>[];
+  /** Null when the terminal viewport clips off the native tab row. */
+  tabs: readonly Readonly<{ header: string; answered: boolean }>[] | null;
   question: string | null;
   multiSelect: boolean;
   nextFocused: boolean;
@@ -64,22 +65,25 @@ export function parseClaudeNativeQuestionScreen(rawText: string): ClaudeNativeQu
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     if (HEADER.test(lines[index]!)) { headerIndex = index; break; }
   }
-  if (headerIndex < 0) return null;
-  const boundary = /^([─━]+)(?:\s.*)?$/u.exec(lines[headerIndex - 1] ?? '');
-  if (!boundary) return null;
+  const bodyStart = headerIndex + 1;
+  const review = lines.slice(bodyStart).find((line) => line.trim().length > 0)?.trim() === 'Review your answers';
+  const boundary = /^([─━]+)(?:\s.*)?$/u.exec(lines[headerIndex - 1] ?? '')
+    ?? lines.map((line) => /^([─━]+)(?:\s.*)?$/u.exec(line)).reverse().find((match) => match !== null);
+  if (!boundary && !review) return null;
   // Claude's split view can place unrelated content beside its dialog. The native
   // rule establishes the dialog's own width, rather than the full terminal width.
-  const width = boundary[1]!.length;
-  lines = lines.map((line, index) => index >= headerIndex ? clipDialogLine(line, width).trimEnd() : line);
-  const header = lines[headerIndex]!.trim();
+  if (boundary) {
+    const width = boundary[1]!.length;
+    lines = lines.map((line, index) => index >= headerIndex ? clipDialogLine(line, width).trimEnd() : line);
+  }
+  const header = lines[headerIndex]?.trim() ?? '';
   const multiple = header.startsWith('←');
   if (multiple && !/\s+✔ Submit\s+→$/u.test(header)) return null;
   const tabText = multiple ? header.replace(/^←\s+/u, '').replace(/\s+✔ Submit\s+→$/u, '') : header;
-  const tabs = [...tabText.matchAll(/([☐☒])\s+([^☐☒]+?)(?=\s+[☐☒]|$)/gu)]
+  const tabs = headerIndex < 0 ? null : [...tabText.matchAll(/([☐☒])\s+([^☐☒]+?)(?=\s+[☐☒]|$)/gu)]
     .map((match) => ({ header: match[2]!.trim(), answered: match[1] === '☒' }));
-  if (tabs.length === 0 || (!multiple && tabs.length !== 1)) return null;
-  const body = lines.slice(headerIndex + 1);
-  const review = body.find((line) => line.trim().length > 0)?.trim() === 'Review your answers';
+  if (tabs && (tabs.length === 0 || (!multiple && tabs.length !== 1))) return null;
+  const body = lines.slice(bodyStart);
   const first = body.findIndex((line) => (
     review ? new RegExp(`^\\s*${FOCUS}?\\s*1\\. Submit answers$`, 'u').test(line) : ROW.test(line)
   ));
@@ -132,7 +136,7 @@ export function parseClaudeNativeQuestionScreen(rawText: string): ClaudeNativeQu
   if (options.filter((option) => option.focused).length + Number(nextFocused) !== 1) return null;
   const reviewAnswers: { question: string; answer: string }[] = [];
   if (review) {
-    if (!multiple || options.length !== 2 || options[0]?.label !== 'Submit answers' || options[1]?.label !== 'Cancel') return null;
+    if ((tabs && !multiple) || options.length !== 2 || options[0]?.label !== 'Submit answers' || options[1]?.label !== 'Cancel') return null;
     if (body.slice(optionsEnd).some((line) => line.trim().length > 0)) return null;
     const entries = heading.slice(1);
     if (entries.pop()?.trim() !== 'Ready to submit your answers?') return null;
@@ -157,8 +161,10 @@ export function parseClaudeNativeQuestionScreen(rawText: string): ClaudeNativeQu
       }
       reviewAnswers.push({ question: questionLines.join('\n'), answer: [answer[1] ?? '', ...continuation].join('\n') });
     }
-    if (reviewAnswers.length !== tabs.filter((tab) => tab.answered).length) return null;
-    if (incomplete !== (reviewAnswers.length < tabs.length)) return null;
+    if (tabs) {
+      if (reviewAnswers.length !== tabs.filter((tab) => tab.answered).length) return null;
+      if (incomplete !== (reviewAnswers.length < tabs.length)) return null;
+    } else if (incomplete) return null;
   } else {
     if (heading.length === 0 || options.length === 0) return null;
     const footer = body.slice(optionsEnd).filter((line) => line.trim().length > 0);
@@ -177,17 +183,18 @@ export function matchesClaudeNativeQuestionScreen(
   questions: readonly StructuredQuestionLike[],
 ): boolean {
   const result = normalizeStructuredQuestionDescriptors(questions);
-  if (!result.ok || result.questions.length !== presentation.tabs.length) return false;
-  if (!result.questions.every((question, index) => {
-    const caption = presentation.tabs[index]!.header;
+  if (!result.ok) return false;
+  const tabs = presentation.tabs;
+  if (tabs && (result.questions.length !== tabs.length || !result.questions.every((question, index) => {
+    const caption = tabs[index]!.header;
     const header = question.header ?? '';
     // Claude abbreviates inactive tabs at narrow widths. The full question and
     // options below remain the authority for identifying the current native page.
     return matchesClaudeNativeQuestionText(caption, header)
       || caption.endsWith('…') && normalized(header).startsWith(normalized(caption.slice(0, -1)));
-  })) return false;
+  }))) return false;
   if (presentation.kind === 'review') {
-    const answered = result.questions.filter((_, index) => presentation.tabs[index]!.answered);
+    const answered = tabs ? result.questions.filter((_, index) => tabs[index]!.answered) : result.questions;
     return answered.length === presentation.reviewAnswers.length
       && answered.every((question, index) => matchesClaudeNativeQuestionText(presentation.reviewAnswers[index]?.question ?? '', question.question ?? ''));
   }
