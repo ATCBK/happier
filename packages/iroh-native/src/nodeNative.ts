@@ -37,7 +37,7 @@ export {
 export type { IrohRelayEnvConfig } from './relayConfig.js';
 export type { IrohRelayPolicy } from './types.js';
 export type { NativeIrohModule } from './HappierIrohNative.types.js';
-export type { IrohNodeMachineHttpHandshakeRefusal } from './nodeNative.types.js';
+export type { IrohNodeMachineHttpHandshakeRefusal, IrohNodeStartMachineHttpTunnelRequest } from './nodeNative.types.js';
 export { createNodeIrohHomeTunnelSession } from './nodeHomeTunnelSession.js';
 export type {
   NodeIrohHomeTunnelLease,
