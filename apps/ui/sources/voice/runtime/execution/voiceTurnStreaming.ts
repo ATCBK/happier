@@ -166,6 +166,9 @@ export function createVoiceTurnStreaming(args: Readonly<{
                     ...(options?.onUserTranscriptAccepted
                         ? { onUserTranscriptAccepted: options.onUserTranscriptAccepted }
                         : {}),
+                    ...(options?.onPreparedInstructionsFor
+                        ? { onPreparedInstructionsFor: options.onPreparedInstructionsFor }
+                        : {}),
                 });
             const normalizedResponse = {
                 assistantText: response.assistantText,

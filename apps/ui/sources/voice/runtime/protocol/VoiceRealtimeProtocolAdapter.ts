@@ -15,11 +15,12 @@ import type {
 import type { VoiceConnectionCloseReason } from '@/voice/runtime/connection/VoiceRealtimeConnection';
 import type { VoiceTurnControlCapabilities } from './VoiceTurnControlCapabilities';
 import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 /** Host application facts stay local, separate from provider wire/session configuration. */
 export type VoiceRealtimePreparation = ProviderVoiceRealtimePreparation extends infer T
   ? T extends Readonly<{ kind: 'prepared' }>
-    ? T & Readonly<{ inUseVoice?: VoiceConversationInUseVoice }>
+    ? T & Readonly<{ inUseVoice?: VoiceConversationInUseVoice; preparedInstructionsFor?: SessionAddress }>
     : T
   : never;
 

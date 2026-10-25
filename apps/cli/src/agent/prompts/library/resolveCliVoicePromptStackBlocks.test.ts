@@ -3,7 +3,7 @@ import axios from 'axios';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
-import { resolveCliVoicePromptStackBlocks } from './resolveCliVoicePromptStackBlocks';
+import { resolveCliVoicePromptStackBlocks, resolveCliVoicePromptPreparation } from './resolveCliVoicePromptStackBlocks';
 import { configuration } from '@/configuration';
 import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -38,6 +38,17 @@ function doc(id: string, markdown: string): PromptLibraryStoredArtifact {
   };
 }
 describe('resolveCliVoicePromptStackBlocks', () => {
+  it.each(['Instructions', ''])('receipts only the admitted reserved Session instruction entry (%j)', async markdown => {
+    const args = { sessionId: 'target', serverId: 'home', accountEntries: [], profileEntries: [],
+      sessionMetadata: { work: { promptStack: [{ ...entry('session.instructions'), required: true }] } },
+      readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
+      readArtifact: async () => doc('session.instructions', markdown) };
+    expect(await resolveCliVoicePromptPreparation(args)).toHaveProperty('preparedInstructionsFor', { serverId: 'home', sessionId: 'target' });
+    expect(await resolveCliVoicePromptPreparation({ ...args, sessionMetadata: { work: { promptStack: [entry('other')] } } }))
+      .not.toHaveProperty('preparedInstructionsFor');
+    expect(await resolveCliVoicePromptPreparation({ ...args, sessionId: null, sessionMetadata: undefined }))
+      .not.toHaveProperty('preparedInstructionsFor');
+  });
   afterEach(() => { clearActiveAccountSettingsSnapshot(); withdrawActiveProjectAccountRowsSnapshot(); vi.restoreAllMocks(); });
   it('refuses a real hidden Voice control Session whose target binding is missing or malformed', async () => {
     const hidden = buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true });
@@ -62,7 +73,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
       sessionReads.push(id);
       const metadata = id === 'history-session' ? { ...hidden, voiceConversationBindingV1: { v: 1, adapterId: 'local',
         controlSessionId: 'voice-global', transcriptMode: 'synthetic', targetSessionId: retired ? null : 'exact-target', updatedAt: 1 } }
-        : id === 'exact-target' ? { profileId: 'target-profile', work: { promptStack: [entry('target-doc')] } }
+        : id === 'exact-target' ? { profileId: 'target-profile', work: { promptStack: [{ ...entry('session.instructions'), ref: { kind: 'doc', artifactId: 'target-doc' }, required: true }] } }
           : (() => { throw new Error(`Unexpected exact Session read: ${path}`); })();
       return { status: 200, data: { session: { id, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1, archivedAt: null,
         encryptionMode: 'plain', metadataVersion: 0, agentState: null, agentStateVersion: 0, pendingCount: 0,
@@ -75,6 +86,9 @@ describe('resolveCliVoicePromptStackBlocks', () => {
         return doc(ref.artifactId, markdown);
       } };
     expect(await resolveCliVoicePromptStackBlocks(args)).toEqual(['FIRST_TARGET']);
+    expect(await resolveCliVoicePromptPreparation(args)).toHaveProperty('preparedInstructionsFor', {
+      serverId: configuration.activeServerId, sessionId: 'exact-target',
+    });
     markdown = 'EDITED_TARGET';
     expect(await resolveCliVoicePromptStackBlocks(args)).toEqual(['EDITED_TARGET']);
     expect([...new Set(sessionReads)]).toEqual(['history-session', 'exact-target']);

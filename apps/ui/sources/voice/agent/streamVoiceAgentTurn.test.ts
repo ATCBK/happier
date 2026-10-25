@@ -52,6 +52,47 @@ beforeEach(async () => {
 afterAll(() => network.dispose());
 
 describe('streamVoiceAgentTurn', () => {
+    it('carries a delivered instruction receipt through the daemon strict reader once per stream', async () => {
+        const receipt = { serverId: home.id, sessionId: 'target' };
+        const receipts: unknown[] = [];
+        let reads = 0;
+        const client = serveVoiceStream({ start: async () => ({ streamId: 'receipt-stream' }),
+            read: async () => ({ streamId: 'receipt-stream', preparedInstructionsFor: receipt,
+                events: ++reads === 1 ? [{ t: 'delta', textDelta: 'ready' }] : [{ t: 'done', assistantText: 'ready' }],
+                nextCursor: reads, done: reads === 2 }), cancel: async () => ({ ok: true }) });
+        await streamVoiceAgentTurn({ sessionId: 'sys_voice', handle: { client, voiceAgentId: 'run', rpcSessionId: 'sys_voice' },
+            userText: 'hello', displayUserText: 'hello', options: { onPreparedInstructionsFor: fact => { receipts.push(fact); } } });
+        expect(receipts).toEqual([receipt]);
+    });
+    it.each(['identity', 'stream'] as const)('refuses an invalid receipt %s before publishing instructions', async invalid => {
+        const receipts: unknown[] = [];
+        const client = serveVoiceStream({ start: async () => ({ streamId: 'receipt-stream' }),
+            read: async () => ({ streamId: invalid === 'stream' ? 'superseded-stream' : 'receipt-stream',
+                preparedInstructionsFor: { serverId: home.id, sessionId: 'target', ...(invalid === 'identity' ? { extra: true } : {}) },
+                events: [], nextCursor: 0, done: true }), cancel: async () => ({ ok: true }) });
+        await expect(streamVoiceAgentTurn({ sessionId: 'sys_voice', handle: { client, voiceAgentId: 'run', rpcSessionId: 'sys_voice' },
+            userText: 'hello', displayUserText: 'hello', options: { onPreparedInstructionsFor: fact => { receipts.push(fact); } } }))
+            .rejects.toThrow('invalid_rpc_response');
+        expect(receipts).toEqual([]);
+    });
+    it('does not publish a late delivered receipt after its stream observer is cancelled', async () => {
+        const response = createDeferred<unknown>();
+        const entered = createDeferred<void>();
+        const caller = new AbortController();
+        const receipts: unknown[] = [];
+        const client = serveVoiceStream({ start: async () => ({ streamId: 'receipt-stream' }),
+            read: async () => { entered.resolve(); return await response.promise; }, cancel: async () => ({ ok: true }) });
+        const pending = streamVoiceAgentTurn({ sessionId: 'sys_voice', handle: { client, voiceAgentId: 'run', rpcSessionId: 'sys_voice' },
+            userText: 'hello', displayUserText: 'hello', options: { signal: caller.signal,
+                onPreparedInstructionsFor: fact => { receipts.push(fact); } } });
+        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await entered.promise;
+        caller.abort();
+        response.resolve({ streamId: 'receipt-stream', preparedInstructionsFor: { serverId: home.id, sessionId: 'target' },
+            events: [], nextCursor: 0, done: true });
+        await cancelled;
+        expect(receipts).toEqual([]);
+    });
     it('cancels an unanswered stream admission and permits a fresh turn', async () => {
         const caller = new AbortController();
         let entered!: () => void;

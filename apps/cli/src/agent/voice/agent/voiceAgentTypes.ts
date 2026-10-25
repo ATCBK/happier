@@ -83,6 +83,7 @@ export type VoiceAgentTurnStreamReadResult = Readonly<{
   events: VoiceAgentTurnStreamEvent[];
   nextCursor: number;
   done: boolean;
+  preparedInstructionsFor?: VoicePromptPreparation['preparedInstructionsFor'];
   /** Canonical terminal record, independent of the caller's pagination page. */
   terminalEvent?: VoiceAgentTurnStreamEvent;
 }>;
@@ -124,6 +125,8 @@ export type VoicePromptPreparation = Readonly<{
   systemAppendBlocks: readonly string[];
   memoryRecallGuidanceEnabled: boolean;
   disabledActionIds: readonly string[];
+  /** Admitted reserved entry; carriers publish this only after successful delivery. */
+  preparedInstructionsFor?: Readonly<{ serverId: string; sessionId: string }>;
 }>;
 
 export type VoiceAgentTurn = { role: 'user' | 'assistant' | 'context'; text: string };
@@ -136,6 +139,7 @@ export type VoiceAgentTurnStreamState = {
   run: Promise<void>;
   completedHistory: boolean;
   cancelled: boolean;
+  preparedInstructionsFor?: VoicePromptPreparation['preparedInstructionsFor'];
   preparationAbortController: AbortController;
   deltaHold: string;
   outputSpeechBuffer: string;

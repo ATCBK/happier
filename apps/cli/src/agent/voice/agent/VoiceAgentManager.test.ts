@@ -34,6 +34,8 @@ import { resolveCliVoicePromptStackBlocks, resolveCliVoicePromptPreparation } fr
 import { ArtifactEncryptionMaterialUnavailableError } from '@/api/artifacts/accountArtifactStore';
 import { buildMemoryRecallGuidanceBlockV1 } from '@happier-dev/protocol/prompts/memoryRecallGuidanceV1';
 import { applyExecutionRunAction } from '@/agent/runtime/bridges/executionRun/executionRunApplyAction';
+import { startVoiceAgentTurnStream, readVoiceAgentTurnStream, cancelVoiceAgentTurnStream } from '@/agent/runtime/bridges/executionRun/voiceAgentTurnStreams';
+import { ExecutionRunTurnStreamReadResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { readSettings, updateSettings, writeSettings } from '@/persistence';
@@ -505,6 +507,59 @@ function createPromptCaptureBackend(
 }
 
 describe('VoiceAgentManager', () => {
+  it.each(['delivered', 'refused', 'cancelled'] as const)('publishes instruction receipts through the real stream reader only after %s delivery', async outcome => {
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const sending = new Promise<void>(resolve => { entered = resolve; });
+    const backend = createDeterministicBackend('receipt', { onSend: async (request, publish) => {
+      entered();
+      await pending;
+      if (outcome === 'refused') return { status: 'rejected', diagnostic: { code: 'provider_busy', severity: 'error' }, retryable: false };
+      publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'ready' });
+      publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+    } });
+    const manager = new VoiceAgentManager({ createRuntime: () => backend,
+      resolvePromptPreparation: async args => resolveCliVoicePromptPreparation({ ...args, serverId: 'home',
+        accountEntries: [], profileEntries: [], sessionMetadata: { work: { promptStack: [{ id: 'session.instructions',
+          ref: { kind: 'doc', artifactId: 'instructions' }, enabled: true, required: true, placement: 'system_append' }] } },
+        readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
+        readArtifact: async () => ({ id: 'instructions', header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' },
+          revision: { headerVersion: 1, bodyVersion: 1 }, body: JSON.stringify({ v: 1, markdown: 'PERSONA', createdAtMs: 1, updatedAtMs: 1 }) }),
+      }) });
+    try {
+      const { voiceAgentId } = await manager.start({ backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        contextSessionId: 'target', chatModelId: 'chat', commitModelId: 'chat', permissionIntent: 'read-only', idleTtlSeconds: 60, initialContext: '' });
+      const run: ExecutionRunState = { runId: voiceAgentId, callId: 'call', sidechainId: 'sidechain', sessionId: 'control', depth: 0,
+        intent: 'voice_agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, backendId: 'claude', instructions: '',
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 0 };
+      const controller: ExecutionRunController = { kind: 'voice_agent', controllerOccurrenceId: 'receipt-controller', voiceAgentId,
+        cancelled: false, lastMarkerWriteAtMs: 0, terminalPromise: Promise.resolve(), resolveTerminal: () => {},
+        transcript: { persistenceMode: 'ephemeral', epoch: 1 }, externalStreamIdByInternal: new Map(), internalStreamIdByExternal: new Map(),
+        pendingTranscriptTurnByExternalStreamId: new Map(), terminalReadByExternalStreamId: new Map(), readInFlightByExternalStreamId: new Map() };
+      const base = { runId: voiceAgentId, runs: new Map([[voiceAgentId, run]]), controllers: new Map([[voiceAgentId, controller]]),
+        voiceAgentManager: manager, transcriptWriter: null };
+      const started = await startVoiceAgentTurnStream({ ...base, params: { message: 'hello' } });
+      if (!started.ok) throw new Error(started.error);
+      const { streamId } = started;
+      const readStream = async (cursor: number, waitForEvents = false) => {
+        const read = await readVoiceAgentTurnStream({ ...base, params: { streamId, cursor, waitForEvents },
+          writeActivityMarker: async () => {}, getNowMs: () => 1 });
+        if (!read.ok) throw new Error(read.error);
+        return ExecutionRunTurnStreamReadResponseSchema.parse(read);
+      };
+      await sending;
+      expect(await readStream(0)).not.toHaveProperty('preparedInstructionsFor');
+      const cancellation = outcome === 'cancelled' ? cancelVoiceAgentTurnStream({ ...base, params: { streamId } }) : null;
+      const cancelledRead = cancellation ? await readStream(0) : null;
+      release();
+      await cancellation;
+      let read = cancelledRead ?? await readStream(0, true);
+      while (!read.done) read = await readStream(read.nextCursor, true);
+      if (outcome === 'delivered') expect(read).toHaveProperty('preparedInstructionsFor', { serverId: 'home', sessionId: 'target' });
+      else expect(read).not.toHaveProperty('preparedInstructionsFor');
+    } finally { release(); await manager.dispose(); }
+  });
   it.each(['welcome', 'turn', 'commit', 'isolated commit'] as const)(
     'reports actual work activity for %s and becomes idle after completion',
     async (operation) => {

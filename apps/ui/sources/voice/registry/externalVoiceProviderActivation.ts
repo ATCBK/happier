@@ -12,7 +12,7 @@ import type { RecipientContractV1 } from '@happier-dev/protocol/plugins/recipien
 import { listVoiceToolActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { buildVoiceRealtimeAttemptPolicy } from '@happier-dev/agents/voice';
 import { resolveSelectedVoiceWelcomeText } from '@/voice/agent/voiceWelcomeText';
-import { resolveUiVoicePromptStackBlocks } from '@/voice/agent/resolveUiVoicePromptStackBlocks';
+import { resolveUiVoicePromptStackPreparation } from '@/voice/agent/resolveUiVoicePromptStackBlocks';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { readSessionMemoryEnabledV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
@@ -545,6 +545,7 @@ export function createDeclaredVoiceClientRawCredentialAccess(input: Readonly<{
 type StandaloneAttemptPreparation = Readonly<{
   policy: VoiceRealtimeAttemptPolicy;
   tools: readonly VoiceClientToolDefinition[];
+  preparedInstructionsFor?: SessionAddress;
 }>;
 
 export function createExternalProtocol(
@@ -690,7 +691,7 @@ export function createExternalProtocol(
             if (!serverId || !snapshot.voiceHomeServerId) return { kind: 'declined' as const, code: 'voice_account_operation_unavailable' };
             const accountContext = await captureLazyActionAccountContext(serverId, signal);
             try {
-              const extraSystemAppendBlocks = await resolveUiVoicePromptStackBlocks({
+              const promptPreparation = await resolveUiVoicePromptStackPreparation({
                 serverId, targetSessionAddress: snapshot.targetSessionAddress, accountContext, signal,
               });
               const welcomeText = await resolveSelectedVoiceWelcomeText({ assistantLanguage: voice.assistantLanguage,
@@ -706,9 +707,10 @@ export function createExternalProtocol(
                 welcome: voice.welcome,
                 welcomeText,
                 memoryRecallGuidanceEnabled: snapshot.sessionMetadata ? readSessionMemoryEnabledV1(snapshot.sessionMetadata) : false,
-                extraSystemAppendBlocks,
+                extraSystemAppendBlocks: promptPreparation.blocks,
               });
-              attemptPreparationByAttemptId.set(prepareInput.attemptId, Object.freeze({ policy: attemptPolicy, tools }));
+              attemptPreparationByAttemptId.set(prepareInput.attemptId, Object.freeze({ policy: attemptPolicy, tools,
+                ...(promptPreparation.preparedInstructionsFor ? { preparedInstructionsFor: promptPreparation.preparedInstructionsFor } : {}) }));
             } finally { accountContext.dispose(); }
           }
           const conversationSessionId = host.resolveConversationSessionId(
@@ -750,8 +752,11 @@ export function createExternalProtocol(
           }));
           signal.throwIfAborted();
           if (!snapshot.isCurrent()) return { kind: 'declined' as const, code: 'voice_account_operation_cancelled' };
+          const preparedInstructionsFor = declaration.execution?.kind !== 'experimental_agent_session_realtime'
+            ? attemptPreparationByAttemptId.get(prepareInput.attemptId)?.preparedInstructionsFor : undefined;
           return prepared.kind === 'prepared'
             ? { kind: 'prepared' as const, session: prepared.session,
+              ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}),
               ...(snapshot.inUseVoice ? { inUseVoice: snapshot.inUseVoice } : {}) }
             : prepared;
         },

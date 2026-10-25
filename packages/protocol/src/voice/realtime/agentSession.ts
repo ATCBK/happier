@@ -113,6 +113,10 @@ export const AgentSessionRealtimeStartResultV1Schema = lazyZodSchema(() => z.uni
   z.strictObject({
     ok: z.literal(true),
     status: z.literal('started'),
+    preparedInstructionsFor: z.optional(z.strictObject({
+      serverId: z.string().check(z.minLength(1)),
+      sessionId: z.string().check(z.trim(), z.minLength(1)),
+    })),
     transport: z.strictObject({
       kind: z.literal('webrtc'),
       answerSdp: boundedUtf8String(AGENT_SESSION_REALTIME_SDP_MAX_BYTES),

@@ -59,6 +59,7 @@ export async function streamVoiceAgentTurn(params: Readonly<{
         let doneActions: NonNullable<Awaited<ReturnType<VoiceAgentHandle['client']['sendTurn']>>['actions']> = [];
         let outputTurn = createVoiceAgentOutputTurnV1(started.streamId);
         const startedAtMs = Date.now();
+        let preparedInstructionsPublished = false;
 
         while (true) {
             abort.throwIfAborted();
@@ -75,6 +76,13 @@ export async function streamVoiceAgentTurn(params: Readonly<{
                     signal: params.options?.signal,
                 }),
             );
+
+            abort.throwIfAborted();
+            if (read.streamId !== started.streamId) throw new Error('invalid_rpc_response');
+            if (!preparedInstructionsPublished && read.preparedInstructionsFor) {
+                preparedInstructionsPublished = true;
+                await abort.race(Promise.resolve(params.options?.onPreparedInstructionsFor?.(read.preparedInstructionsFor)));
+            }
 
             const sourceCursorStart = cursor;
             cursor = read.nextCursor;

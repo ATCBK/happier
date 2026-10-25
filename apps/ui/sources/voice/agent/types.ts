@@ -1,5 +1,6 @@
 import type {
   ExecutionRunUserTranscriptDirective,
+  ExecutionRunTurnStreamReadResponse,
   ExecutionRunReplaySeedRequest,
   ExecutionRunResumeHandle,
   ExecutionRunVoiceAgentIntentInputV1,
@@ -27,6 +28,7 @@ export type VoiceAgentSendTurnOptions = Readonly<{
   onOutputEvent?: (output: VoiceAgentAcceptedOutputV1) => void | Promise<void>;
   /** Called after the daemon has accepted the user transcript, before response streaming. */
   onUserTranscriptAccepted?: () => void | Promise<void>;
+  onPreparedInstructionsFor?: (target: NonNullable<ExecutionRunTurnStreamReadResponse['preparedInstructionsFor']>) => void | Promise<void>;
   signal?: AbortSignal;
   userTranscript?: ExecutionRunUserTranscriptDirective;
 }>;
@@ -176,6 +178,7 @@ export interface VoiceAgentClient {
       signal?: AbortSignal;
       userTranscript?: ExecutionRunUserTranscriptDirective;
       onUserTranscriptAccepted?: () => void | Promise<void>;
+      onPreparedInstructionsFor?: VoiceAgentSendTurnOptions['onPreparedInstructionsFor'];
     }>,
   ): Promise<{ assistantText: string; actions?: VoiceAssistantAction[] }>;
   welcome(
@@ -195,7 +198,7 @@ export interface VoiceAgentClient {
   ): Promise<{ streamId: string }>;
   readTurnStream(
     params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number; signal?: AbortSignal }>,
-  ): Promise<{ streamId: string; events: VoiceAgentTurnStreamEvent[]; nextCursor: number; done: boolean }>;
+  ): Promise<ExecutionRunTurnStreamReadResponse>;
   cancelTurnStream(params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string }>): Promise<{ ok: true }>;
   commitUserTranscript?(params: Readonly<{
     sessionId: string;

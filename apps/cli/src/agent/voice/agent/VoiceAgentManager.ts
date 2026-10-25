@@ -295,7 +295,7 @@ export class VoiceAgentManager {
   private async prepareSystemAppendBlocks(
     voiceAgent: VoiceAgentInstance,
     stream?: VoiceAgentTurnStreamState,
-  ): Promise<() => void> {
+  ): Promise<Readonly<{ ensureCurrent: () => void; preparedInstructionsFor: VoicePromptPreparation['preparedInstructionsFor'] }>> {
     const backend = voiceAgent.chatBackend;
     const generation = voiceAgent.chatGeneration;
     const ensureCurrent = (): void => {
@@ -306,6 +306,7 @@ export class VoiceAgentManager {
         || voiceAgent.chatGeneration !== generation
         || backend.getRuntimeLifetimeSignal().aborted
         || stream?.cancelled
+        || (stream !== undefined && voiceAgent.activeTurnStream !== stream)
       ) {
         throw new VoiceAgentError('VOICE_AGENT_NOT_FOUND', 'Voice prompt preparation is no longer current');
       }
@@ -336,7 +337,7 @@ export class VoiceAgentManager {
       voiceAgent.disabledActionIds = disabledActionIds;
       voiceAgent.chatSessionSeeded = false;
     }
-    return ensureCurrent;
+    return { ensureCurrent, preparedInstructionsFor: preparation.preparedInstructionsFor };
   }
 
   private async prepareFollowContextForPrompt(
@@ -1038,7 +1039,7 @@ export class VoiceAgentManager {
 
     voiceAgent.lastUsedAt = this.getNowMs();
 		    const run = (async () => {
-		      const ensureCurrent = await this.prepareSystemAppendBlocks(voiceAgent);
+		      const { ensureCurrent } = await this.prepareSystemAppendBlocks(voiceAgent);
 		      voiceAgent.clearChatBuffer();
           const prompt = voiceAgent.chatSessionSeeded
             ? buildVoiceAgentUserTurnPrompt({ userText: params.userText })
@@ -1095,7 +1096,7 @@ export class VoiceAgentManager {
 
     voiceAgent.lastUsedAt = this.getNowMs();
     const run = (async () => {
-      const ensureCurrent = await this.prepareSystemAppendBlocks(voiceAgent);
+      const { ensureCurrent } = await this.prepareSystemAppendBlocks(voiceAgent);
       voiceAgent.clearChatBuffer();
       const prompt = buildVoiceAgentBootstrapPrompt({
         verbosity: voiceAgent.verbosity,
@@ -1193,7 +1194,7 @@ export class VoiceAgentManager {
 
     const run = (async () => {
       try {
-        const ensureCurrent = await this.prepareSystemAppendBlocks(voiceAgent, stream);
+        const { ensureCurrent, preparedInstructionsFor } = await this.prepareSystemAppendBlocks(voiceAgent, stream);
         const prompt = voiceAgent.chatSessionSeeded
           ? buildVoiceAgentUserTurnPrompt({ userText: params.userText })
           : buildVoiceAgentSeededUserTurnPrompt({
@@ -1233,6 +1234,11 @@ export class VoiceAgentManager {
           params.durableUserTranscriptLocalId,
         );
         if (settleCancelled()) return;
+        ensureCurrent();
+        if (preparedInstructionsFor) {
+          stream.preparedInstructionsFor = preparedInstructionsFor;
+          stream.onEventsChanged();
+        }
         if (voiceAgent.chatBackend.waitForTurnCompletion) {
           await voiceAgent.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs());
         }
@@ -1323,6 +1329,7 @@ export class VoiceAgentManager {
         });
         stream.outputSeq += 1;
       } catch (error: unknown) {
+        stream.preparedInstructionsFor = undefined;
         if (settleCancelled()) return;
         const message = error instanceof Error ? error.message : 'stream_failed';
         const code =
@@ -1356,9 +1363,10 @@ export class VoiceAgentManager {
       throw new VoiceAgentError('VOICE_AGENT_INVALID_CURSOR', 'Turn stream cursor is ahead of produced events');
     }
     if (params.waitForEvents && cursor === stream.events.length && !stream.done) {
+      const preparedInstructionsFor = stream.preparedInstructionsFor;
       await waitForChange({
         subscribe: (wake) => { stream.eventWaiters.add(wake); return () => { stream.eventWaiters.delete(wake); }; },
-        hasChanged: () => cursor < stream.events.length || stream.done,
+        hasChanged: () => cursor < stream.events.length || stream.done || stream.preparedInstructionsFor !== preparedInstructionsFor,
         signal: params.signal,
       });
     }
@@ -1391,6 +1399,7 @@ export class VoiceAgentManager {
       events,
       nextCursor: end,
       done,
+      ...(stream.preparedInstructionsFor && !stream.cancelled ? { preparedInstructionsFor: stream.preparedInstructionsFor } : {}),
       ...(terminalEvent ? { terminalEvent } : {}),
     };
   }
@@ -1576,6 +1585,7 @@ export class VoiceAgentManager {
     }
 
     stream.cancelled = true;
+    stream.preparedInstructionsFor = undefined;
     // Prompt and Follow reads belong to this turn, not the retained native
     // Session. Cancel must release them before joining the turn's settlement.
     stream.preparationAbortController.abort();

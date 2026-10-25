@@ -90,6 +90,31 @@ async function exerciseProviderFacingOperation(input: Readonly<{
 }
 
 describe('bound Agent-session realtime service', () => {
+  it.each([
+    { serverId: 'server-a', sessionId: 'session-1' },
+    { serverId: 'server-a', sessionId: 'other-session' },
+    { serverId: 'other-home', sessionId: 'session-1' },
+  ])('keeps native instruction receipts host-private and bound to the exact Session: %j', async (preparedInstructionsFor) => {
+      const onStarted = vi.fn();
+      const service = createAgentSessionRealtimeService({
+        provider, conversationSessionId: 'session-1', applicationAttemptId: 'voice:receipt',
+        signal: new AbortController().signal, onStarted,
+        sessionRpc: async ({ method }) => method.endsWith('.start')
+          ? { ...successfulStart, preparedInstructionsFor }
+          : method.endsWith('.watch') ? await new Promise<never>(() => undefined)
+            : { ok: true, status: 'stopped' },
+      });
+      const result = await service.start({ transport: { kind: 'webrtc', offerSdp: 'offer' } });
+      expect(result.status).toBe('started');
+      if (result.status !== 'started') return;
+      expect(result).not.toHaveProperty('preparedInstructionsFor');
+      if (preparedInstructionsFor.serverId === 'server-a' && preparedInstructionsFor.sessionId === 'session-1') {
+        expect(onStarted).toHaveBeenCalledWith(result.handle, preparedInstructionsFor);
+      }
+      else expect(onStarted).toHaveBeenCalledWith(result.handle);
+      await cleanupBoundAgentSessionRealtimeService(service);
+    },
+  );
   it('forwards an exactly-at-limit UTF-8 offer through the public attempt facade', async () => {
     const exactOfferSdp = 'é'.repeat(AGENT_SESSION_REALTIME_SDP_MAX_BYTES / 2);
     const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => {
@@ -409,7 +434,7 @@ describe('bound Agent-session realtime service', () => {
     ]);
 
     rejectInspect(new Error('late_inspect_rejection'));
-    resolveStart(successfulStart);
+    resolveStart({ ...successfulStart, preparedInstructionsFor: { serverId: 'server-a', sessionId: 'session-pending-start' } });
     await Promise.all([inspecting, starting]);
 
     expect(inspectOutcome).toMatchObject({

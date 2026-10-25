@@ -151,6 +151,8 @@ export type VoiceAttemptControlProjection = VoiceAttemptControl & Readonly<{
     pendingRequestSessionAddress?: SessionAddress | null;
     /** Applied voice from the current admitted attempt; never the next saved preference. */
     inUseVoice?: import('@happier-dev/protocol/actions/voiceConversationActionFamily').VoiceConversationInUseVoice | null;
+    /** Render Speaks from only for this admitted carrier fact, using its exact Session's display name. */
+    preparedInstructionsFor?: SessionAddress | null;
     onPrimaryAction: () => void | Promise<boolean>;
     /** Starts the caller's idle target when idle; ends the running attempt otherwise. Never re-targets. */
     onToggle: () => void;
@@ -769,6 +771,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             onPrimaryAction,
             serviceTitle,
             inUseVoice: snap.status === 'connected' ? snap.inUseVoice ?? null : null,
+            preparedInstructionsFor: snap.status === 'connected' ? snap.preparedInstructionsFor ?? null : null,
             targetSessionAddress,
             pendingRequestSessionAddress,
             openConversationSessionId,
@@ -783,6 +786,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             serviceTitle,
             snap.status,
             snap.inUseVoice,
+            snap.preparedInstructionsFor,
             targetSessionAddress,
             pendingRequestSessionAddress,
             statusLabel,

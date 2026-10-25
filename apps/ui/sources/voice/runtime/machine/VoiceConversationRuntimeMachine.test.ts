@@ -16,6 +16,20 @@ function createDeferred<T>() {
 }
 
 describe('VoiceConversationRuntimeMachine', () => {
+    it('projects delivered instructions only for their current attempt and retires them on End', () => {
+        const machine = createVoiceConversationRuntimeMachine();
+        const receipt = { serverId: 'home', sessionId: 'target' };
+        machine.transitionToConnecting({ controlSessionId: 'a', attemptId: 1 });
+        machine.transitionToSpeaking({ controlSessionId: 'a', attemptId: 1 });
+        machine.setPreparedInstructionsFor({ controlSessionId: 'a', attemptId: 1, preparedInstructionsFor: receipt });
+        expect(deriveLocalVoiceSessionSnapshot('local_conversation', 'local', machine.getSnapshot()).preparedInstructionsFor).toEqual(receipt);
+        machine.transitionToEnding({ controlSessionId: 'a', attemptId: 1 });
+        expect(machine.getSnapshot().preparedInstructionsFor).toBeUndefined();
+        machine.transitionToDisconnected({ controlSessionId: 'a', attemptId: 1 });
+        machine.transitionToConnecting({ controlSessionId: 'a', attemptId: 2 });
+        machine.setPreparedInstructionsFor({ controlSessionId: 'a', attemptId: 1, preparedInstructionsFor: receipt });
+        expect(machine.getSnapshot().preparedInstructionsFor).toBeUndefined();
+    });
     beforeEach(() => {
         createVoiceConversationRuntimeMachine().reset();
     });

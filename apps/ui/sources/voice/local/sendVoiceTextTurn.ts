@@ -442,6 +442,10 @@ export async function sendVoiceTextTurn(params: {
         signal: params.signal,
         onUserTranscriptAccepted: params.onUserTranscriptAccepted,
         onOutputEvent: consumeCanonicalOutputEvent,
+        onPreparedInstructionsFor: preparedInstructionsFor => {
+          if (params.signal?.aborted || !params.playbackController.isEpochCurrent(playbackEpoch)) return;
+          voiceConversationRuntimeMachine.setPreparedInstructionsFor({ controlSessionId: sessionId, preparedInstructionsFor });
+        },
         onAssistantTurn: async ({ assistantText, turnIndex }) => {
           throwIfAborted();
           let assistantEntryId: string | null = null;

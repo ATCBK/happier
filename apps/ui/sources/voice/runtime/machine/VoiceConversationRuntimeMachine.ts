@@ -1,6 +1,7 @@
 import { createAttemptGuard } from '@/utils/timing/attemptGuard';
 import type { VoiceAdapterId } from '@/voice/session/types';
 import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import {
     DEFAULT_VOICE_CONVERSATION_RUNTIME_SNAPSHOT,
@@ -68,6 +69,7 @@ export type VoiceConversationRuntimeMachine = Readonly<{
     }) => void;
     setMuted: (args: MuteArgs) => void;
     setInUseVoice: (args: TransitionArgs & { inUseVoice: VoiceConversationInUseVoice | null }) => void;
+    setPreparedInstructionsFor: (args: TransitionArgs & { preparedInstructionsFor: SessionAddress | null }) => void;
     setError: (args: TransitionArgs & { error: VoiceMachineError }) => void;
     reset: () => void;
 }>;
@@ -284,6 +286,7 @@ export function createVoiceConversationRuntimeMachine(): VoiceConversationRuntim
                     ? false
                     : current.micMuted,
                 inUseVoice: terminalState || (isEntryTransition && !sameOwner) ? undefined : current.inUseVoice,
+                preparedInstructionsFor: terminalState || (isEntryTransition && !sameOwner) ? undefined : current.preparedInstructionsFor,
                 endingBeforeConnect: transition.toState === 'ending'
                     // Stop preserves an existing connected edge; teardown from
                     // startup or failure must never manufacture one.
@@ -466,6 +469,17 @@ export function createVoiceConversationRuntimeMachine(): VoiceConversationRuntim
                     || current.state === 'disconnected' || current.state === 'ending'
                     || current.state === 'error' || current.state === 'mic_error') return current;
                 return { ...current, inUseVoice: inUseVoice ?? undefined };
+            });
+        },
+        setPreparedInstructionsFor: ({ controlSessionId, adapterId, attemptId, preparedInstructionsFor }) => {
+            patchSnapshot(current => {
+                if (current.controlSessionId !== controlSessionId || current.adapterId !== (adapterId ?? null)
+                    || (attemptId !== undefined && activeAttemptId !== attemptId)
+                    || current.state === 'disconnected' || current.state === 'ending'
+                    || current.state === 'error' || current.state === 'mic_error') return current;
+                if (current.preparedInstructionsFor?.serverId === preparedInstructionsFor?.serverId
+                    && current.preparedInstructionsFor?.sessionId === preparedInstructionsFor?.sessionId) return current;
+                return { ...current, preparedInstructionsFor: preparedInstructionsFor ?? undefined };
             });
         },
         setError: ({ controlSessionId, adapterId, attemptId, error }) => {

@@ -1,5 +1,6 @@
 import type { VoiceAdapterId } from '@/voice/session/types';
 import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 export type VoiceMachineErrorKind = import('@happier-dev/protocol/voice/attemptPresentation').VoiceAttemptFailureKind;
 
@@ -61,5 +62,6 @@ export type VoiceConversationRuntimeSnapshot = Readonly<{
     endingBeforeConnect?: boolean;
     /** Speech application accepted by this attempt; pending preferences never write it. */
     inUseVoice?: VoiceConversationInUseVoice;
+    preparedInstructionsFor?: SessionAddress;
     error: VoiceMachineError | null;
 }>;

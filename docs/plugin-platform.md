@@ -4015,6 +4015,20 @@ required content or a retired target refuses native admission; a later start
 can reread current content. Omitting the optional input preserves existing
 plugin callers.
 
+The development Voice status/glance model carries optional
+`preparedInstructionsFor` for the exact Session whose required Instructions entry
+the supported carrier accepted. Standalone realtime retains the shared
+resolver's admitted entry with its attempt policy and publishes it only after
+provider preparation succeeds and that attempt connects. Attached Agent realtime
+carries the host's preparation fact in its successful native-start response and
+passes it through a host-private callback; a plugin's arbitrary metadata cannot
+assert it. Local/daemon Voice carries the fact through its existing stream read
+only after native prompt delivery succeeds. The current-attempt owners retire
+the fact on replacement, failure or End; global mode, absent Instructions and
+unknown or unsupported delivery omit it. Resolving prompt text alone does not
+establish carrier success. The UI may render “Speaks from” from this fact using
+the exact Session's admitted display name, without another Voice lifecycle state.
+
 Standalone Local Agents admit the same reply-language and greeting preference
 through `intentInput.voicePolicy`. The existing Voice launch config retains it
 for recovery, and the shared Agents prompt owner consumes it on READY bootstrap,

@@ -287,6 +287,19 @@ describe('Agent-session realtime Voice control contracts', () => {
     });
   });
 
+  it('accepts a closed prepared-instructions receipt only on a successful native start', () => {
+    const started = { ok: true, status: 'started', transport: { kind: 'webrtc', answerSdp: 'answer' } };
+    const preparedInstructionsFor = { serverId: 'home-a', sessionId: 'session-a' };
+    expect(AgentSessionRealtimeStartResultV1Schema.parse({ ...started, preparedInstructionsFor }))
+      .toEqual({ ...started, preparedInstructionsFor });
+    expect(AgentSessionRealtimeStartResultV1Schema.safeParse({
+      ...started, preparedInstructionsFor: { ...preparedInstructionsFor, markdown: 'private' },
+    }).success).toBe(false);
+    expect(AgentSessionRealtimeStartResultV1Schema.safeParse({
+      ok: true, status: 'aborted', preparedInstructionsFor,
+    }).success).toBe(false);
+  });
+
   it('returns bounded WebRTC answer and retained terminal lifecycle facts without media authority', () => {
     expect(AgentSessionRealtimeStartResultV1Schema.parse({
       ok: true,

@@ -201,7 +201,7 @@ export type BundledRealtimeProviderRuntimeHost = Readonly<{
     controlSessionId: string;
     applicationAttemptId: string;
     signal: AbortSignal;
-    onStarted(handle: AgentSessionRealtimeHandle): void;
+    onStarted(handle: AgentSessionRealtimeHandle, preparedInstructionsFor?: SessionAddress): void;
   }>): Promise<PluginVoiceAgentSessionRealtimeService | null>;
   createWebSocketPcmMedia(input: Readonly<{
     mic: BundledVoiceMicSession;

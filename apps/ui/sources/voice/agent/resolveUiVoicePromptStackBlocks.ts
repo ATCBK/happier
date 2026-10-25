@@ -28,7 +28,17 @@ export type UiVoicePromptStackInput = Omit<PromptStackSystemAppendInputV1, 'surf
   targetSessionAddress?: SessionAddress | null;
 }>;
 
+export type UiVoicePromptStackPreparation = Readonly<{
+  blocks: string[];
+  /** Qualified required entry admitted by the shared resolver; installation is still the carrier's job. */
+  preparedInstructionsFor?: SessionAddress;
+}>;
+
 export async function resolveUiVoicePromptStackBlocks(args?: UiVoicePromptStackInput): Promise<string[]> {
+  return (await resolveUiVoicePromptStackPreparation(args)).blocks;
+}
+
+export async function resolveUiVoicePromptStackPreparation(args?: UiVoicePromptStackInput): Promise<UiVoicePromptStackPreparation> {
   const explicitSources = args?.accountEntries !== undefined || args?.profileEntries !== undefined
     || args?.promptStacksV1 !== undefined;
   const resolve = async (input: UiVoicePromptStackInput, accountContext?: LazyActionAccountContext,
@@ -50,11 +60,11 @@ export async function resolveUiVoicePromptStackBlocks(args?: UiVoicePromptStackI
       throw error;
     }
   };
-  if (args && explicitSources && !args.targetSessionAddress) return (await resolve(args, args.accountContext)).blocks;
+  if (args && explicitSources && !args.targetSessionAddress) return { blocks: (await resolve(args, args.accountContext)).blocks };
   // A global unbound Voice call does not borrow the focused Account or Session.
   const target = args?.targetSessionAddress;
   const serverId = target?.serverId || args?.serverId?.trim() || args?.accountContext?.serverId;
-  if (!serverId) return [];
+  if (!serverId) return { blocks: [] };
   let owned: LazyActionAccountContext | undefined;
   try {
     const borrowed = args?.accountContext;
@@ -130,7 +140,9 @@ export async function resolveUiVoicePromptStackBlocks(args?: UiVoicePromptStackI
       if (block) result.blocks.push(block);
     }
     assertCurrent();
-    return result.blocks;
+    return { blocks: result.blocks, ...(target && result.admittedEntries.some(entry => entry.layer === 'session'
+      && entry.entryId === 'session.instructions' && (entry.outcome === 'ready' || entry.outcome === 'valid-empty'))
+      ? { preparedInstructionsFor: target } : {}) };
   } catch (error) {
     args?.signal?.throwIfAborted();
     if (error instanceof PromptStackPreparationError) throw error;

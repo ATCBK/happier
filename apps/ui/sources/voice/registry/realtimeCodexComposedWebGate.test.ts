@@ -408,6 +408,7 @@ describe('realtime_codex normal web composed gate', () => {
           ok: true,
           status: 'started',
           transport: { kind: 'webrtc', answerSdp: 'v=0\r\na=test-answer\r\n' },
+          preparedInstructionsFor: { serverId: activeServerId, sessionId: 'codex-direct-session' },
         };
       }
       if (input.method.endsWith('.watch')) {
@@ -475,6 +476,7 @@ describe('realtime_codex normal web composed gate', () => {
       requestedTargetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
     });
     await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot().status).toBe('connecting'));
+    expect(runtime.adapter.getSnapshot().preparedInstructionsFor).toBeUndefined();
     await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
     browser.peer.channel.open();
     await starting;
@@ -483,6 +485,7 @@ describe('realtime_codex normal web composed gate', () => {
       adapterId: 'happier.agent.codex/realtime-codex',
       sessionId: 'codex-direct-session',
       status: 'connected',
+      preparedInstructionsFor: { serverId: activeServerId, sessionId: 'codex-direct-session' },
     });
     expect(browser.peer.setRemoteDescription).toHaveBeenCalledWith({
       type: 'answer',

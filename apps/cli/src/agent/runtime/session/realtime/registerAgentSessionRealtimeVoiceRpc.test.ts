@@ -17,7 +17,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
 import { registerAgentSessionRealtimeVoiceRpc } from './registerAgentSessionRealtimeVoiceRpc';
-import { resolveCliVoicePromptStackBlocks } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
+import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
+import type { VoicePromptPreparation } from '@/agent/voice/agent/voiceAgentTypes';
 
 const agentRef = { pluginId: 'happier.agent.codex', localId: 'codex' } as const;
 const providerRef = { pluginId: 'happier.agent.codex', localId: 'realtime-codex' } as const;
@@ -153,7 +154,7 @@ function register(
     isOccurrenceCurrent?: () => boolean;
     retirementSignal?: AbortSignal;
     resolveRetirementSignal?: () => AbortSignal | null;
-    resolveSystemAppendBlocks?: (input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<readonly string[]>;
+    resolvePromptPreparation?: (input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<VoicePromptPreparation>;
   }>,
 ) {
   const handlers = new Map<string, Handler>();
@@ -172,7 +173,7 @@ function register(
     agentGeneration: 'daemon-generation-1',
     isOccurrenceCurrent: options?.isOccurrenceCurrent ?? (() => true),
     resolveProviderOccurrenceId: () => 'provider-generation-1',
-    ...(options?.resolveSystemAppendBlocks ? { resolveSystemAppendBlocks: options.resolveSystemAppendBlocks } : {}),
+    ...(options?.resolvePromptPreparation ? { resolvePromptPreparation: options.resolvePromptPreparation } : {}),
     resolveRetirementSignal: options?.resolveRetirementSignal
       ?? (() => options?.retirementSignal ?? null),
     resolveConversation: ({ runtime: candidate, provider }) => (
@@ -196,10 +197,55 @@ describe('Agent-session realtime Voice session RPC', () => {
   const canonicalSdpMaxBytes = resolveCanonicalSdpMaxBytes();
   const exactSdp = 'é'.repeat(canonicalSdpMaxBytes / 2);
   const oversizedSdp = `${exactSdp}x`;
+  it.each(['started', 'failed', 'superseded', 'no_instructions'] as const)(
+    'acknowledges prepared instructions only after a current native start: %s', async (outcome) => {
+      const fixture = runtimeFixture();
+      let sessionId = 'session-1';
+      let release!: () => void;
+      let entered!: () => void;
+      const starting = new Promise<void>(resolve => { entered = resolve; });
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      fixture.start.mockImplementationOnce(async () => {
+        entered();
+        await pending;
+        return outcome === 'failed'
+          ? { status: 'failed', diagnostic: { code: 'native_start_failed', severity: 'error' } }
+          : { status: 'started', transport: { kind: 'webrtc', answerSdp: 'answer' }, handle: fixture.handle };
+      });
+      const preparedInstructionsFor = { serverId: 'server-a', sessionId };
+      const handlers = register(fixture.runtime, undefined, {
+        getHappierSessionId: () => sessionId,
+        resolvePromptPreparation: ({ signal }) => resolveCliVoicePromptPreparation({
+          serverId: 'server-a', sessionId, scope: { serverId: 'server-a', accountId: 'account-a', sessionId },
+          accountEntries: [], profileEntries: [], signal,
+          sessionMetadata: { work: { memoryEnabled: false, promptStack: [
+            { id: outcome === 'no_instructions' ? 'ordinary' : 'session.instructions',
+              ref: { kind: 'doc', artifactId: 'persona' }, required: true, enabled: true, placement: 'system_append' },
+          ] } },
+          readArtifact: async () => ({ id: 'persona', header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' },
+            revision: { headerVersion: 1, bodyVersion: 1 },
+            body: JSON.stringify({ v: 1, markdown: 'Accepted persona', createdAtMs: 1, updatedAtMs: 1 }) }),
+        }),
+      });
+      const response = handlers.get(SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START)!({
+        v: 1, provider: providerRef, applicationAttemptId: `receipt-${outcome}`,
+        transport: { kind: 'webrtc', offerSdp: 'offer' },
+      });
+      await starting;
+      expect(fixture.start.mock.calls[0]?.[0]).toMatchObject({ systemAppendBlocks: ['Accepted persona'] });
+      if (outcome === 'superseded') sessionId = 'session-2';
+      release();
+      const result = await response;
+      expect(result).toMatchObject({ status: outcome === 'superseded' ? 'aborted' : outcome === 'no_instructions' ? 'started' : outcome });
+      if (outcome === 'started') expect(result).toHaveProperty('preparedInstructionsFor', preparedInstructionsFor);
+      else expect(result).not.toHaveProperty('preparedInstructionsFor');
+      handlers.dispose();
+    },
+  );
   it('refuses native start when the admitted required document cannot be read', async () => {
     const fixture = runtimeFixture();
     const handlers = register(fixture.runtime, undefined, {
-      resolveSystemAppendBlocks: ({ signal }) => resolveCliVoicePromptStackBlocks({
+      resolvePromptPreparation: ({ signal }) => resolveCliVoicePromptPreparation({
         sessionEntries: [{ id: 'required', ref: { kind: 'doc', artifactId: 'missing' }, required: true,
           enabled: true, placement: 'system_append' }],
         signal, readArtifact: async () => null,
@@ -219,9 +265,9 @@ describe('Agent-session realtime Voice session RPC', () => {
     const seen: string[] = [];
     const handlers = register(fixture.runtime, undefined, {
       getHappierSessionId: () => sessionId,
-      resolveSystemAppendBlocks: async ({ sessionId: target, signal }) => {
+      resolvePromptPreparation: async ({ sessionId: target, signal }) => {
         seen.push(target);
-        return resolveCliVoicePromptStackBlocks({
+        return resolveCliVoicePromptPreparation({
           sessionEntries: [{ id: 'persona', ref: { kind: 'doc', artifactId: target }, enabled: true, required: true, placement: 'system_append' }],
           signal,
           readArtifact: async ({ artifactId }) => {

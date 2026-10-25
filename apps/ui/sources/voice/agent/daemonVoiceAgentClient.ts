@@ -5,10 +5,10 @@ import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunActionResponseSchema, ExecutionRunEnsureOrStartResponseSchema } from '@happier-dev/protocol/execution/runs/index';
 import { ExecutionRunStopResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamStartResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
+import { ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamStartResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema, type ExecutionRunTurnStreamReadResponse } from '@happier-dev/protocol/execution/runs/streaming';
 import type { ExecutionRunUserTranscriptDirective, VoiceAssistantAction } from '@happier-dev/protocol';
 
-import type { VoiceAgentClient, VoiceAgentStartParams, VoiceAgentStartResult, VoiceAgentTurnStreamEvent } from './types';
+import type { VoiceAgentClient, VoiceAgentStartParams, VoiceAgentStartResult, VoiceAgentSendTurnOptions } from './types';
 import { streamVoiceAgentTurn } from './streamVoiceAgentTurn';
 import { requiresProviderSafeModelSelectionRpc } from '@/sync/ops/providerDaemonSessionCompatibility';
 import { requiresProviderSafeExecutionRunStartRpc } from '@happier-dev/protocol/execution/runs/startRequest';
@@ -182,6 +182,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       signal?: AbortSignal;
       userTranscript?: ExecutionRunUserTranscriptDirective;
       onUserTranscriptAccepted?: () => void | Promise<void>;
+      onPreparedInstructionsFor?: VoiceAgentSendTurnOptions['onPreparedInstructionsFor'];
     }>,
   ): Promise<{ assistantText: string; actions?: VoiceAssistantAction[] }> {
     // The non-streaming daemon turn shares the single canonical turn read-loop. We omit
@@ -200,13 +201,14 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       handle,
       userText: params.userText,
       displayUserText: typeof params.displayUserText === 'string' ? params.displayUserText : params.userText,
-      ...((params.signal || params.userTranscript || params.onUserTranscriptAccepted) ? {
+      ...((params.signal || params.userTranscript || params.onUserTranscriptAccepted || params.onPreparedInstructionsFor) ? {
         options: {
           ...(params.signal ? { signal: params.signal } : {}),
           ...(params.userTranscript ? { userTranscript: params.userTranscript } : {}),
           ...(params.onUserTranscriptAccepted
             ? { onUserTranscriptAccepted: params.onUserTranscriptAccepted }
             : {}),
+          ...(params.onPreparedInstructionsFor ? { onPreparedInstructionsFor: params.onPreparedInstructionsFor } : {}),
         },
       } : {}),
     });
@@ -291,7 +293,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
 
   async readTurnStream(
     params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number; signal?: AbortSignal }>,
-  ): Promise<{ streamId: string; events: VoiceAgentTurnStreamEvent[]; nextCursor: number; done: boolean }> {
+  ): Promise<ExecutionRunTurnStreamReadResponse> {
     const res: any = await this.sessionRpc({
       sessionId: params.sessionId,
       method: SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ,
@@ -304,7 +306,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       },
     });
     throwIfRpcError(res);
-    return ensureOk(res, ExecutionRunTurnStreamReadResponseSchema) as any;
+    return ensureOk(res, ExecutionRunTurnStreamReadResponseSchema);
   }
 
   async cancelTurnStream(params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string }>): Promise<{ ok: true }> {

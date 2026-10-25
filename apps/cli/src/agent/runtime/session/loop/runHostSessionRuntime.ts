@@ -3670,20 +3670,21 @@ export async function runHostSessionRuntime(
           rpc: currentControlRpcRegistrar.registrar,
           runtime: nativeRuntime,
           getHappierSessionId: () => session.sessionId,
-          resolveSystemAppendBlocks: async ({ sessionId, signal }) => {
+          resolvePromptPreparation: async ({ sessionId, signal }) => {
             if (currentLifecycleSession.sessionId !== sessionId) throw new Error('Voice Session changed');
             const credentials = runtimeAuthority.scope === 'account' ? runtimeAuthority.accountCredentials : runtimeAuthority.sessionCredentials;
             const accountId = credentials ? readAccountIdFromToken(credentials.token) : null;
             const serverId = credentials?.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
             const prepared = await resolveCliVoicePromptPreparation({
               credentials,
+              sessionId,
               sessionMetadata: currentLifecycleSession.getMetadataSnapshot?.() ?? runtimeMetadata,
               roleContext: await sessionRoleContext.resolvePromptContext(signal, { modality: 'voice' }),
               machineId, directory: runtimeDirectory, signal,
               serverId, scope: accountId ? { serverId, accountId, sessionId } : null,
             });
             if (currentLifecycleSession.sessionId !== sessionId) throw new Error('Voice Session changed');
-            return prepared.systemAppendBlocks;
+            return prepared;
           },
           ownerId: sessionTag,
           agentGeneration: voiceAuthority.occurrenceId,

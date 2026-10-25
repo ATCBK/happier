@@ -49,6 +49,8 @@ function areVoiceConversationRuntimeSnapshotsEqual(
         && a.reconnecting === b.reconnecting
         && a.reconnectRetryAvailable === b.reconnectRetryAvailable
         && a.micMuted === b.micMuted
+        && a.preparedInstructionsFor?.serverId === b.preparedInstructionsFor?.serverId
+        && a.preparedInstructionsFor?.sessionId === b.preparedInstructionsFor?.sessionId
         && (a.inUseVoice === b.inUseVoice || (a.inUseVoice !== undefined && b.inUseVoice !== undefined
             && a.inUseVoice.providerContributionId === b.inUseVoice.providerContributionId
             && a.inUseVoice.settingFieldPath === b.inUseVoice.settingFieldPath

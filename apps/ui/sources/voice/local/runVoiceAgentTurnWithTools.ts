@@ -140,6 +140,7 @@ export async function runVoiceAgentTurnWithTools(params: Readonly<{
   voiceAgentSessions: VoiceAgentSessionsLike;
   signal?: AbortSignal;
   onOutputEvent?: (output: VoiceAgentAcceptedOutputV1) => void | Promise<void>;
+  onPreparedInstructionsFor?: VoiceAgentSendTurnOptions['onPreparedInstructionsFor'];
   onUserTranscriptAccepted?: () => void | Promise<void>;
   onAssistantTurn?: (params: Readonly<{
     assistantText: string;
@@ -321,6 +322,7 @@ export async function runVoiceAgentTurnWithTools(params: Readonly<{
       nextPrompt,
       {
         ...(params.onOutputEvent && turnIndex < maxToolRounds ? { onOutputEvent: params.onOutputEvent } : {}),
+        ...(params.onPreparedInstructionsFor ? { onPreparedInstructionsFor: params.onPreparedInstructionsFor } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
         ...(turnIndex === 0
           ? { onUserTranscriptAccepted: noteUserTranscriptAccepted }

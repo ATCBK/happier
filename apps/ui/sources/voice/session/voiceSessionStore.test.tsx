@@ -94,11 +94,14 @@ describe('voiceSessionStore', () => {
     store.setVoiceSessionSnapshot(snapshot);
     const first = store.getVoiceSessionSnapshot();
     const inUseVoice = { providerContributionId: 'happier.openai/realtime', settingFieldPath: 'voice', value: 'coral', displayName: 'Coral' };
-    store.setVoiceSessionSnapshot({ ...snapshot, inUseVoice });
+    const preparedInstructionsFor = { serverId: 'home', sessionId: 'bound' };
+    store.setVoiceSessionSnapshot({ ...snapshot, inUseVoice, preparedInstructionsFor });
     expect(store.getVoiceSessionSnapshot()).not.toBe(first);
     expect(store.getVoiceSessionSnapshot()).toHaveProperty('inUseVoice', inUseVoice);
-    store.setVoiceSessionSnapshot({ ...snapshot, inUseVoice, status: 'disconnected', canStop: false });
+    expect(store.getVoiceSessionSnapshot()).toHaveProperty('preparedInstructionsFor', preparedInstructionsFor);
+    store.setVoiceSessionSnapshot({ ...snapshot, inUseVoice, preparedInstructionsFor, status: 'disconnected', canStop: false });
     expect(store.getVoiceSessionSnapshot().inUseVoice).toBeUndefined();
+    expect(store.getVoiceSessionSnapshot().preparedInstructionsFor).toBeUndefined();
   });
   it('retains the last ended exact conversation independently of later binding removal or route changes', async () => {
     const store = await import('./voiceSessionStore');

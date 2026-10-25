@@ -147,7 +147,7 @@ async function prepareTarget(input?: CliVoicePromptStackInput) {
   } };
 }
 
-async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]> {
+async function resolveBlocks(input?: CliVoicePromptStackInput) {
   let preparedInput = input;
   if (input?.sessionMetadata && isVoiceConversationSystemSessionMetadata(input.sessionMetadata)) {
     const binding = createStoredReadSchema(SessionOwnerCompatibilityViewV1Schema.shape.voiceConversationBindingV1)
@@ -181,16 +181,16 @@ async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]
       memoryEnabled: readSessionMemoryEnabledV1(metadata) };
   }
   const args = preparedInput;
-  const withRole = (blocks: string[]) => {
+  const withRole = (result: Awaited<ReturnType<typeof resolveCliPromptStackSystemAppendBlocks>>) => {
     const role = args?.roleContext ? renderSessionRoleBlockV1({ ...args.roleContext, modality: 'voice' }) : '';
-    return role ? [...blocks, role] : blocks;
+    return { ...result, blocks: role ? [...result.blocks, role] : result.blocks };
   };
   const explicitSources = args?.accountEntries !== undefined || args?.profileEntries !== undefined
     || args?.promptStacksV1 !== undefined;
   // An unbound global Voice call has no Account authority to demand.
   if (explicitSources || !args?.credentials) return withRole((await resolveCliPromptStackSystemAppendBlocks({
     ...args, settings: undefined, surface: 'voice', profileId: args?.profileId ?? null,
-  })).blocks);
+  })));
   const credentials = args.credentials;
   const activeServerId = configuration.activeServerId;
   const scopeKey = resolveAccountSettingsScopeKey(credentials);
@@ -235,7 +235,7 @@ async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]
     const result = await resolveCliPromptStackSystemAppendBlocks({ ...args, settings: undefined,
       surface: 'voice', accountEntries: source.accountEntries, profileEntries: source.profileEntries });
     assertCurrent();
-    return withRole(result.blocks);
+    return withRole(result);
   } catch (error) {
     assertCurrent();
     if (error instanceof PromptStackPreparationError) throw error;
@@ -246,7 +246,7 @@ async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]
 export async function resolveCliVoicePromptStackBlocks(input?: CliVoicePromptStackInput): Promise<string[]> {
   const target = await prepareTarget(input);
   const run = async () => {
-    const blocks = await resolveBlocks(target.input);
+    const { blocks } = await resolveBlocks(target.input);
     await target.assertCurrent();
     return blocks;
   };
@@ -258,12 +258,17 @@ export async function resolveCliVoicePromptPreparation(args?: CliVoicePromptStac
   const target = await prepareTarget(args);
   const input = target.input;
   const run = async () => {
-    const systemAppendBlocks = await resolveBlocks(input);
+    const { blocks: systemAppendBlocks, admittedEntries } = await resolveBlocks(input);
     const hasSession = input?.sessionMetadata !== undefined && !isVoiceConversationSystemSessionMetadata(input.sessionMetadata);
     const memoryEnabled = !hasSession || readSessionMemoryEnabledV1(input?.sessionMetadata);
     const memoryRecallGuidanceEnabled = memoryEnabled && await resolveCliMemoryRecallGuidanceEnabled({ surfaces: ['voice'] });
     await target.assertCurrent();
+    const preparedInstructionsFor = hasSession && input?.sessionId
+      && admittedEntries.some(entry => entry.layer === 'session' && entry.entryId === 'session.instructions'
+        && (entry.outcome === 'ready' || entry.outcome === 'valid-empty'))
+      ? { serverId: input.serverId ?? configuration.activeServerId, sessionId: input.sessionId } : undefined;
     return { systemAppendBlocks, memoryRecallGuidanceEnabled,
+      ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}),
       disabledActionIds: hasSession ? MEMORY_WRITE_ACTION_IDS_V1.filter(id => !isActionEnabledWithSessionMemory(id, memoryEnabled)) : [] };
   };
   return input?.serverUrl ? await runWithServerHttpBaseUrl(input.serverUrl, run) : await run();

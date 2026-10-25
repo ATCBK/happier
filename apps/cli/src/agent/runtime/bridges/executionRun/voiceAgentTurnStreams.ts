@@ -311,7 +311,7 @@ export async function readVoiceAgentTurnStream(args: Readonly<{
   writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
   getNowMs: () => number;
 }>): Promise<
-  | { ok: true; streamId: string; events: any[]; nextCursor: number; done: boolean }
+  | ({ ok: true } & Omit<VoiceAgentTurnStreamReadResult, 'terminalEvent'>)
   | { ok: false; errorCode: string; error: string }
 > {
   const run = args.runs.get(args.runId) ?? null;
@@ -389,6 +389,7 @@ export async function readVoiceAgentTurnStream(args: Readonly<{
       events: projectedEvents,
       nextCursor: read.nextCursor,
       done: read.done,
+      ...(read.preparedInstructionsFor ? { preparedInstructionsFor: read.preparedInstructionsFor } : {}),
     };
   } catch (e) {
     if (e instanceof VoiceAgentError) {

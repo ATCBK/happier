@@ -880,6 +880,7 @@ export function createBundledRealtimeProviderRuntime(
         const { provider, agent } = config.execution;
         execution = await (async () => {
           const lifetime = new AbortController();
+          const resourceAttempt = resourceAttempts.get(attemptId);
           executionLifetime = lifetime;
           const abortLifetime = (): void => lifetime.abort();
           signal.addEventListener('abort', abortLifetime, { once: true });
@@ -890,7 +891,12 @@ export function createBundledRealtimeProviderRuntime(
             controlSessionId,
             applicationAttemptId: `voice:${attemptId}`,
             signal: lifetime.signal,
-            onStarted(handle) {
+            onStarted(handle, preparedInstructionsFor) {
+              if (resourceAttempt && !signal.aborted && !lifetime.signal.aborted && !disposed && isCurrentGeneration()
+                && resourceAttempts.get(attemptId) === resourceAttempt && resourceAttempt.releasePromise === null
+                && runtime?.getOwnedAttemptId() === attemptId) {
+                resourceAttempt.preparedInstructionsFor = preparedInstructionsFor;
+              }
               handle.watch((event) => {
                 if (signal.aborted || lifetime.signal.aborted) return;
                 fireAndForget(runtime?.fail(

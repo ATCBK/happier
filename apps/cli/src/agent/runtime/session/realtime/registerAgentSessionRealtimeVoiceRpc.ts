@@ -10,6 +10,7 @@ import type { PluginContributionIdentityV1, VoiceProviderContribution } from '@h
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { VoicePromptPreparation } from '@/agent/voice/agent/voiceAgentTypes';
 
 type ConversationDeclaration = Extract<
   VoiceProviderContribution,
@@ -219,7 +220,7 @@ export function registerAgentSessionRealtimeVoiceRpc(input: Readonly<{
   rpc: RpcHandlerRegistrar;
   runtime: unknown;
   getHappierSessionId: () => string;
-  resolveSystemAppendBlocks?: (input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<readonly string[]>;
+  resolvePromptPreparation?: (input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<VoicePromptPreparation>;
   ownerId: string;
   agentGeneration: string;
   isOccurrenceCurrent: (provider: PluginContributionIdentityV1) => boolean;
@@ -449,10 +450,10 @@ export function registerAgentSessionRealtimeVoiceRpc(input: Readonly<{
         : pendingAttempt.abortController.signal;
       const startOptions = optionsFor(context, startSignal);
       try {
-        let systemAppendBlocks: readonly string[] | undefined;
+        let preparation: VoicePromptPreparation | undefined;
         try {
-          if (input.resolveSystemAppendBlocks) {
-            systemAppendBlocks = await input.resolveSystemAppendBlocks({ sessionId: happierSessionId, signal: startOptions.signal });
+          if (input.resolvePromptPreparation) {
+            preparation = await input.resolvePromptPreparation({ sessionId: happierSessionId, signal: startOptions.signal });
           }
         } catch {
           if (pendingAttempt.stopRequested || startOptions.signal?.aborted || input.getHappierSessionId() !== happierSessionId) {
@@ -467,7 +468,7 @@ export function registerAgentSessionRealtimeVoiceRpc(input: Readonly<{
         let started;
         try {
           started = await resolved.conversation.start(
-            { transport: parsed.data.transport, ...(systemAppendBlocks ? { systemAppendBlocks } : {}) },
+            { transport: parsed.data.transport, ...(preparation ? { systemAppendBlocks: preparation.systemAppendBlocks } : {}) },
             startOptions,
           );
         } catch (error) {
@@ -518,6 +519,7 @@ export function registerAgentSessionRealtimeVoiceRpc(input: Readonly<{
           ok: true,
           status: 'started',
           transport: started.transport,
+          ...(preparation?.preparedInstructionsFor ? { preparedInstructionsFor: preparation.preparedInstructionsFor } : {}),
         });
         if (!startResponse.success) {
           await retireHandleBestEffort(started.handle);

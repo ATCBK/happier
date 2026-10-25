@@ -826,10 +826,16 @@ describe('external Voice provider host composition', () => {
     if (!entry || entry.declaration.kind !== 'conversation') throw new Error('Missing OpenAI declaration');
     const settings = createExternalVoiceProviderSettingsDescriptor(entry.declaration.settings);
     const preference = { providerContributionId: entry.providerId, settingFieldPath: 'voice', value: 'my-custom-voice' };
+    const account = await captureLazyActionAccountContext(preparationHome.home.id);
+    try {
+      await account.createArtifactDocument({ artifactId: 'bound-instructions', header: { v: 1, kind: 'prompt_doc.v2', title: 'Bound instructions' },
+        body: JSON.stringify({ v: 1, markdown: 'Speak from the bound Session', createdAtMs: 1, updatedAtMs: 1 }) });
+    } finally { account.dispose(); }
     const previousSessions = storage.getState().sessions;
     onTestFinished(() => storage.setState({ sessions: previousSessions }));
     storage.setState({ sessions: { ...previousSessions,
-      bound: createSessionFixture({ id: 'bound', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, summary: { text: 'Bound Session', updatedAt: 1 }, work: { voicePreference: preference } } }),
+      bound: createSessionFixture({ id: 'bound', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, summary: { text: 'Bound Session', updatedAt: 1 }, work: { voicePreference: preference,
+        promptStack: [{ id: 'session.instructions', ref: { kind: 'doc', artifactId: 'bound-instructions' }, enabled: true, placement: 'system_append' }] } } }),
       visible: createSessionFixture({ id: 'visible', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, summary: { text: 'Wrong visible Session', updatedAt: 1 }, work: { voicePreference: { ...preference, value: 'wrong-visible-voice' } } } }),
     } });
     const configs: unknown[] = [];
@@ -849,6 +855,7 @@ describe('external Voice provider host composition', () => {
     expect(configs[0]).toEqual({ ...settings.defaultConfig, voice: 'my-custom-voice' });
     expect(configs[1]).toBe(configs[0]);
     expect(prepared).toMatchObject({ kind: 'prepared', inUseVoice: { ...preference, displayName: expect.any(String) } });
+    expect(prepared).toHaveProperty('preparedInstructionsFor', { serverId: preparationHome.home.id, sessionId: 'bound' });
     expect(attemptPolicy).toMatchObject({ welcome: { text: expect.stringContaining('Bound Session') } });
   });
 
@@ -901,6 +908,7 @@ describe('external Voice provider host composition', () => {
 
   it('does not publish a raw plugin in-use voice claim when no host selection was admitted', async () => {
     const rawPrepared = { kind: 'prepared' as const, session: { config: {}, safeMetadata: null },
+      preparedInstructionsFor: { serverId: 'untrusted', sessionId: 'plugin-claim' },
       inUseVoice: { providerContributionId: providerId, settingFieldPath: 'voice', value: 'plugin-invented', displayName: 'Plugin claim' },
     };
     const protocol = createExternalProtocol(createHostFixture({ transcriptEvents: [], lifecycleEvents: [] }), providerId, 'web', declaration, {
@@ -909,6 +917,7 @@ describe('external Voice provider host composition', () => {
     const prepared = await protocol.prepare({ controlSessionId: 'control', attemptId: 83, reason: 'initial', request: null, signal: new AbortController().signal });
     expect(prepared).toMatchObject({ kind: 'prepared' });
     expect(prepared).not.toHaveProperty('inUseVoice');
+    expect(prepared).not.toHaveProperty('preparedInstructionsFor');
   });
 
   it('refuses a prepared carrier when the exact target is revoked during the provider preparation boundary', async () => {
