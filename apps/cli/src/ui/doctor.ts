@@ -6,6 +6,7 @@
  */
 
 import chalk from 'chalk'
+import { banner, createStepPrinter, sectionTitle } from '@happier-dev/cli-common/output'
 import { configuration } from '@/configuration'
 import { readSettings, readStoredCredentials } from '@/persistence'
 import { inspectDaemonRunningStateAndCleanupStaleState } from '@/daemon/controlClient'
@@ -120,19 +121,20 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         filter = 'all';
     }
     
-    console.log(chalk.bold.cyan('\n🩺 Happier CLI Doctor\n'));
+    console.log(`\n${banner(filter === 'daemon' ? 'Happier daemon' : 'Happier CLI doctor')}\n`);
 
     // For 'all' filter, show everything. For 'daemon', only show daemon-related info
     if (filter === 'all') {
         let snapshot: DoctorSnapshot | null = null;
         try {
-            snapshot = await buildDoctorSnapshot();
+            snapshot = await createStepPrinter().run('Inspecting this computer', buildDoctorSnapshot, () => 'Inspected this computer');
         } catch {
             snapshot = null;
         }
+        console.log('');
 
         // Version and basic info
-        console.log(chalk.bold('📋 Basic Information'));
+        console.log(sectionTitle('Basic information'));
         console.log(`Happier CLI Version: ${chalk.green(packageJson.version)}`);
         console.log(`Platform: ${chalk.green(process.platform)} ${process.arch}`);
         const runtimeDiagnostics = buildDoctorRuntimeDiagnostics();

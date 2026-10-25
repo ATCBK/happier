@@ -106,7 +106,16 @@ import { isDaemonStartupSourceServiceManaged } from '../ownership/daemonOwnershi
 import type { TrackedSession } from '../types';
 import { createResolveHostedSessionWorkingDirectory } from '../sessions/createLoadLocalSessionMetadataForHandoff';
 import { startPublicProfileRefresh } from '../account/publicProfileRefresh';
+import { sanitizeConnectedServiceDiagnosticError } from '../connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 import type { SingleFlightIntervalLoopHandle } from '../lifecycle/singleFlightIntervalLoop';
+
+/** Retained daemon logs carry redacted summaries, never the raw tick error (its message and response can hold credentials and local paths). */
+function summarizeConnectedServiceTickError(error: unknown): Readonly<{ error: string; causes?: readonly string[] }> {
+  return {
+    error: sanitizeConnectedServiceDiagnosticError(error),
+    ...(error instanceof AggregateError ? { causes: error.errors.map(cause => sanitizeConnectedServiceDiagnosticError(cause)) } : {}),
+  };
+}
 
 type LoggerLike = Readonly<{
   debug: (message: string, details?: unknown) => void;
@@ -620,7 +629,7 @@ export async function startDaemonConnectedServiceRuntime(
       } },
       runImmediately: true,
       onTickError: (error) => {
-        params.logger.debug('[DAEMON RUN] Connected services refresh tick failed (non-fatal)', error);
+        params.logger.debug('[DAEMON RUN] Connected services refresh tick failed (non-fatal)', summarizeConnectedServiceTickError(error));
       },
     }); };
   }
@@ -951,7 +960,7 @@ export async function startDaemonConnectedServiceRuntime(
           return await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
         } },
         onTickError: (error) => {
-          params.logger.debug('[DAEMON RUN] Connected services quotas tick failed (non-fatal)', error);
+          params.logger.debug('[DAEMON RUN] Connected services quotas tick failed (non-fatal)', summarizeConnectedServiceTickError(error));
         },
       }),
       onActivationError: (error) => {

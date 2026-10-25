@@ -4017,7 +4017,7 @@ export class ApiMachineClient {
             const updated = parseMachinePublishedMetadataV1(candidate);
 
             // No-op: don't write if nothing changed.
-            if (this.machine.metadata && JSON.stringify(updated) === JSON.stringify(this.machine.metadata)) {
+            if (this.machine.metadata && isDeepStrictEqual(updated, this.machine.metadata)) {
                 return 'unchanged';
             }
 
