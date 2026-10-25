@@ -13,7 +13,7 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { useOpenApprovalArtifactsForSession } from '@/sync/domains/state/storage';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
-import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactChanges, fetchAndApplyArtifactsList, handleNewArtifactSocketUpdate, type ArtifactDataKeyCache } from './syncArtifacts';
+import { decryptArtifactWithBody, fetchAndApplyArtifactBodies, fetchAndApplyArtifactChanges, fetchAndApplyArtifactsList, handleNewArtifactSocketUpdate, type ArtifactDataKeyCache } from './syncArtifacts';
 
 afterEach(() => { standardCleanup(); vi.useRealTimers(); });
 
@@ -43,7 +43,9 @@ function createHarness() {
 describe('Artifact body hydration publications', () => {
     it('applies and deletes exact Account-change rows through one batched read', async () => {
         const { store, artifacts, params } = createHarness();
-        store.getState().applyArtifacts([artifacts[1]!]);
+        const prior = await decryptArtifactWithBody({ artifact: artifacts[1]!, encryption: null, artifactDataKeys: new Map() });
+        if (!prior) throw new Error('Expected readable prior Artifact');
+        store.getState().applyArtifacts([prior]);
         const request = vi.fn(async (_path: string, init?: RequestInit) => {
             const { artifactIds } = ArtifactReadBatchInputV1Schema.parse(JSON.parse(String(init?.body)));
             expect(artifactIds).toEqual([artifacts[0]!.id, artifacts[1]!.id]);
