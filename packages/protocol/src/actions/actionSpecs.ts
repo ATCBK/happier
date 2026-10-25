@@ -5462,7 +5462,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
   })),
   ...SETTINGS_DECLARATION_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => ({
     id, approval: { result: 'required' }, originalExecution: { accountRoot: 'allowed', terminalRoot: 'host' },
-    ...(id === 'settings.get' || id === 'settings.set' || id === 'settings.reset'
+    ...(id === 'settings.list' || id === 'settings.get' || id === 'settings.set' || id === 'settings.reset'
       ? { toolExposure: { agent: 'direct' as const } }
       : {}),
     // A present user's own Settings change applies directly; agent and automation callers keep the danger default.

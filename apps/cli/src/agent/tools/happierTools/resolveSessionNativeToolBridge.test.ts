@@ -162,6 +162,7 @@ describe('resolveSessionNativeToolDescriptors', () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      'settings_list',
       'settings_get',
       'settings_set',
       'settings_reset',

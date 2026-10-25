@@ -40,6 +40,7 @@ import {
 describe('actionToolExposure', () => {
   it('publishes settings parity and mounted tab opening as direct Session Agent tools', () => {
     for (const actionId of [
+      'settings.list',
       'settings.get',
       'settings.set',
       'settings.reset',
