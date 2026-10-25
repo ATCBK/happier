@@ -340,6 +340,7 @@ curl --fail-with-body --request POST \
 
 A request id is correlation unless that Action documents stronger idempotency.
 Happier does not automatically replay an uncertain mutation.
+Do not reuse a request id after the daemon restarts to mean “the same request.”
 
 ## Follow output and stop cleanly
 

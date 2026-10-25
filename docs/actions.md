@@ -6690,6 +6690,20 @@ an unsupported explicit constraint rather than silently running it elsewhere.
 The public operation Actions adapt the existing Account-scoped Machine operation
 authority; they do not add an operation store or execution controller. Get may
 wait for the admitted operation's terminal result without replaying its launch.
+
+In current 0.3 development source, request-id deduplication holds only while the
+daemon still holds the Account/Machine-scoped Action receipt; changed input is
+rejected with `action_request_input_conflict` while that receipt is retained.
+Receipts are process-local, with settled history limited to 50 entries / 24 h.
+After a daemon restart or receipt eviction, Project commands and prepared
+transfers may run again under the same request id. Finite `projects.prepare`,
+`projects.script.run`, `projects.compute.exec` and prepared filesystem
+copy/upload/download lack a durable request-to-run or request-to-transfer
+settlement record. Re-admitting the same request id after receipt loss can start
+another effect. Project setup completion records describe current readiness,
+and transfer staging files hold bytes; neither recovers the original request's
+result. Durable effect-owner replay for these families remains unimplemented.
+
 Qualified operation observation, Stop and output retain their original Machine;
 an unavailable original does not redirect them to a replacement Machine. This
 also applies to retained Workflow observation and recovery.

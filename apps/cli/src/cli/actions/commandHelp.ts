@@ -79,7 +79,7 @@ export function buildActionCliInvokeHelpModel(options: ActionCliInvokeHelpOption
     options: buildFieldOptionRows(options.fields),
     cliOptions: Object.freeze([
       { label: `${ACTION_CLI_WHOLE_INPUT_FLAG} <json>`, description: 'Whole Action input as JSON' },
-      { label: `${ACTION_CLI_REQUEST_ID_FLAG} <id>`, description: 'Request correlation identifier' },
+      { label: `${ACTION_CLI_REQUEST_ID_FLAG} <id>`, description: 'Request correlation identifier; do not reuse after a daemon restart to mean "the same request"' },
       { label: `${ACTION_CLI_SERVER_ID_FLAG} <serverId>`, description: 'Use credentials and endpoint for an exact saved Home' },
       { label: `${ACTION_CLI_MACHINE_ID_FLAG} <machineId>`, description: 'Route this invocation to an exact machine' },
       { label: ACTION_CLI_JSON_OUTPUT_FLAG, description: 'Stable JSON envelope on stdout' },

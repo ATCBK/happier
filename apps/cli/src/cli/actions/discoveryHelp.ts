@@ -27,7 +27,7 @@ export function showHelp(): void {
         { label: '--<field> <value>', description: 'Ordinary Action input field for invoke' },
         { label: '--<field>-json <json>', description: 'One nested Action input field for invoke' },
         { label: '--input-json <json>', description: 'Whole Action input for invoke' },
-        { label: '--request-id <id>', description: 'Request correlation identifier' },
+        { label: '--request-id <id>', description: 'Request correlation identifier; do not reuse after a daemon restart to mean "the same request"' },
         { label: '--limit <n>', description: 'Bound search results' },
         { label: ACTION_CLI_JSON_OUTPUT_FLAG, description: 'Stable JSON envelope' },
       ] },

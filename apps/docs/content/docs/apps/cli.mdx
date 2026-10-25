@@ -337,6 +337,7 @@ For mutation workflows, `--request-id <id>` supplies the Action request
 identifier. Reusing an identifier is safe only where that Action's own contract
 documents idempotent handling; the CLI does not automatically replay a failed
 mutation.
+Do not reuse a request id after the daemon restarts to mean “the same request.”
 
 ### Friendly command families derived from Actions
 
