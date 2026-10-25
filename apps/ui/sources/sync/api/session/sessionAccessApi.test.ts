@@ -27,7 +27,10 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
     const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     const active = await upsertAndActivateServer({ serverUrl: 'https://active.example', name: 'Active' });
-    const target = await upsertServerProfile({ serverUrl: 'https://target.example', name: 'Target' });
+    // Each case is its own Home: the per-Home Account encryption owner (3b75c5855f) is shared by every reader of
+    // one Home credential, so a reused Home would carry earlier cases' opened Session readers into this one.
+    const targetUrl = `https://target-${crypto.randomUUID()}.example`;
+    const target = await upsertServerProfile({ serverUrl: targetUrl, name: 'Target' });
     const { storage } = await import('@/sync/domains/state/storageStore');
     storage.getState().activateProfileScope({ serverId: active.id, accountId: 'active-account' });
     storage.setState({ settingsScope: { serverId: target.id, accountId: 'target-account' } });
@@ -36,7 +39,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
     const { encodeBase64 } = await import('@/encryption/base64');
     // Persistent credentials and the network are the only replaced boundaries.
     const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => ({
-        token: token(url === 'https://target.example' ? 'target-account' : 'active-account'),
+        token: token(url === targetUrl ? 'target-account' : 'active-account'),
         ...(options?.accountEncryption === 'e2ee' ? {
             encryption: {
                 publicKey: encodeBase64(MANAGER_CONTENT_KEYS.publicKey, 'base64'),
@@ -73,7 +76,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
     const [encryptedShared] = options?.accountEncryption === 'e2ee'
         ? await new AES256Encryption(new Uint8Array(32).fill(11)).encrypt([{ v: 1 }]) : [];
     const sharedMetadata = encryptedShared ? encodeBase64(encryptedShared, 'base64') : currentSession.metadata;
-    return { target, request, credentials, token, storage, active, TokenStorage, ownerMetadata, sharedMetadata };
+    return { target, targetUrl, request, credentials, token, storage, active, TokenStorage, ownerMetadata, sharedMetadata };
 }
 
 describe('Session access exact Account transport', () => {
@@ -229,7 +232,7 @@ describe('Session access exact Account transport', () => {
             input: { sessionId: 'same/id', primaryTeamId: 'team-1' },
         })).resolves.toEqual(result);
         const call = env.request.mock.calls.find(([url]) => url.includes('/access-context/'));
-        expect(call?.[0]).toBe('https://target.example/v2/sessions/access-context/set');
+        expect(call?.[0]).toBe(`${env.targetUrl}/v2/sessions/access-context/set`);
         expect(JSON.parse(String(call?.[1]?.body))).toEqual({ sessionId: 'same/id', primaryTeamId: 'team-1' });
     });
 
@@ -258,7 +261,7 @@ describe('Session access exact Account transport', () => {
             input: { sessionId: 'same/id', ...grant },
         })).resolves.toEqual({ changed: true, grant });
         const call = env.request.mock.calls.find(([url]) => url.includes('/access-grants/'));
-        expect(call?.[0]).toBe('https://target.example/v2/sessions/access-grants/set');
+        expect(call?.[0]).toBe(`${env.targetUrl}/v2/sessions/access-grants/set`);
         expect(JSON.parse(String(call?.[1]?.body))).toEqual({ sessionId: 'same/id', ...grant });
         expect(new Headers(call?.[1]?.headers).get('Authorization')).toBe(`Bearer ${env.token('target-account')}`);
         expect(env.request.mock.calls.map(([url]) => new URL(url).pathname)).not.toContain('/v1/account/encryption');
@@ -641,10 +644,10 @@ describe('Session access exact Account transport', () => {
             { sessionId: 'same', ...grant },
             { sessionId: 'same', ...grant },
         ]);
-        expect(new Set(requestOrigins)).toEqual(new Set(['https://target.example']));
+        expect(new Set(requestOrigins)).toEqual(new Set([env.targetUrl]));
         expect(env.request.mock.calls
             .filter(([url]) => new URL(url).pathname === '/v2/sessions/access-grants/set')
-            .every(([url]) => new URL(url).origin === 'https://target.example')).toBe(true);
+            .every(([url]) => new URL(url).origin === env.targetUrl)).toBe(true);
     });
 
     it('trusts Plain, setup-pending, and inconsistent recipient readiness for an E2EE direct grant', async () => {
@@ -821,7 +824,7 @@ describe('Session access exact Account transport', () => {
         expect(bodies[0]).not.toHaveProperty('token');
         expect(bodies[0]).not.toHaveProperty('encryptedDataKey');
         expect(bodies[0]).not.toHaveProperty('networkOff');
-        expect(env.request.mock.calls.every(([url]) => new URL(url).origin === 'https://target.example')).toBe(true);
+        expect(env.request.mock.calls.every(([url]) => new URL(url).origin === env.targetUrl)).toBe(true);
         // A loose older writer may accept and discard the new setting. Its 2xx
         // response must not claim that the requested privacy policy was applied.
         await expect(client.createPublicLink({ maxUses: 4, isConsentRequired: true, networkOff: true }))
@@ -971,7 +974,7 @@ describe('Session access exact Account transport', () => {
         env.request.mockImplementation(async () => new Response(JSON.stringify({ changed: true, subject: args.input.subject, encryptedDataKey: 'private' })));
         await expect(executeSessionAccessHttpAction(args)).rejects.toThrow();
         env.request.mockImplementation(async () => {
-            await env.TokenStorage.setCredentialsForServerUrl('https://target.example', { serverId: env.target.id }, { token: env.token('next-account') });
+            await env.TokenStorage.setCredentialsForServerUrl(env.targetUrl, { serverId: env.target.id }, { token: env.token('next-account') });
             return new Response(JSON.stringify({ changed: true, subject: args.input.subject }));
         });
         await expect(executeSessionAccessHttpAction(args)).rejects.toMatchObject({ code: 'session_access_stale_scope' });

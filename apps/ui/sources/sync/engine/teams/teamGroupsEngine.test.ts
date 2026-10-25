@@ -5,48 +5,32 @@ import {
     type TeamGroupV1,
 } from '@happier-dev/protocol/teams';
 
-const runtimeFetchMock = vi.hoisted(() => vi.fn());
-const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
+import { createDeferred, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal: importOriginal as <T = typeof import('@/auth/storage/tokenStorage')>() => Promise<T>,
-        tokenStorage: { getCredentialsForServerUrl: getCredentialsForServerUrlMock },
-    });
-});
-
-import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { createDeferred } from '@/dev/testkit';
-import { createTeamAddress } from '@/sync/domains/teams/teamAddress';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import {
+// Team Group reads run through the Team Action client (dc1d18ccd1); only the
+// Team HTTP response varies by case, while Action/account/settings admission stays real.
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const runtimeFetchMock = vi.fn<(request: { url: string; init: RequestInit | undefined }) => Promise<Response>>();
+const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
+const { createTeamAddress } = await import('@/sync/domains/teams/teamAddress');
+const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const {
     clearTeamsSnapshotsForServer,
     getTeamGroupSnapshot,
     getTeamGroupsSnapshot,
     resetTeamsSnapshotsForTests,
-} from '@/sync/store/teams/teamsSnapshots';
+} = await import('@/sync/store/teams/teamsSnapshots');
 
-import {
+const {
     loadMoreTeamGroups,
     observeTeamGroup,
     observeTeamGroups,
     refreshTeamGroups,
     resetTeamsDirectoryEngineForTests,
-} from './teamsDirectoryEngine';
-
-function tokenForSub(sub: string): string {
-    const payload = globalThis.btoa(JSON.stringify({ sub }))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    return `e30.${payload}.signature`;
-}
+} = await import('./teamsDirectoryEngine');
 
 function group(id: string, name = `Group ${id}`): TeamGroupV1 {
     return {
@@ -67,7 +51,14 @@ function page(items: TeamGroupV1[], nextCursor: string | null): Response {
 }
 
 async function addHome(name: string, serverUrl: string): Promise<string> {
-    return (await upsertServerProfile({ serverUrl, name })).id;
+    const serverId = await home.addHome({ serverUrl, name, accountId: 'account', teamsEnabled: true });
+    for (const path of ['/v1/teams/groups/list', '/v1/teams/groups/get']) home.answer(serverId, path, {
+        select: async (_input, request) => {
+            const response = await runtimeFetchMock(request);
+            return { status: response.status, body: await response.json() };
+        },
+    });
+    return serverId;
 }
 
 const ACTIVE = 'active' as const;
@@ -76,18 +67,19 @@ function groupsQueryKey(teamId: string): string {
     return teamGroupsQueryKeyV1({ v: 1, teamId, archived: ACTIVE });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+    await home.reset();
     runtimeFetchMock.mockReset();
-    getCredentialsForServerUrlMock.mockReset();
-    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    standardCleanup();
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
     vi.clearAllMocks();
+    await home.reset();
 });
 
 describe('Team Group projections', () => {
@@ -109,7 +101,7 @@ describe('Team Group projections', () => {
 
         const releaseA = observeTeamGroups(scopeA, addressA, ACTIVE);
         const releaseB = observeTeamGroups(scopeB, addressB, ACTIVE);
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(getTeamGroupsSnapshot(scopeA, addressA, groupsQueryKey('team-1'))?.data).toBeTruthy();
             expect(getTeamGroupsSnapshot(scopeB, addressB, groupsQueryKey('team-1'))?.data).toBeTruthy();
         });
@@ -136,7 +128,7 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockImplementation(async () => page([group('g1'), group('g2')], null));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.data).toHaveLength(2));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.data).toHaveLength(2));
         const before = getTeamGroupsSnapshot(scope, address, key)!.data!;
 
         runtimeFetchMock.mockImplementation(async () => page([group('g1', 'Renamed'), group('g2')], null));
@@ -160,11 +152,11 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockImplementation(async () => page([group('g1')], null));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
 
         const requestsBefore = runtimeFetchMock.mock.calls.length;
         publishHomeAccountChange(homeA);
-        await vi.waitFor(() => expect(runtimeFetchMock.mock.calls.length).toBeGreaterThan(requestsBefore));
+        await waitForHomeGovernance(() => expect(runtimeFetchMock.mock.calls.length).toBeGreaterThan(requestsBefore));
         // The wake re-reads the one Groups sequence, not one request per Group.
         expect(runtimeFetchMock.mock.calls.length).toBe(requestsBefore + 1);
         release();
@@ -179,7 +171,7 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockImplementation(async () => page([group('g1')], null));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.data).toBeTruthy());
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.data).toBeTruthy());
 
         clearTeamsSnapshotsForServer(homeA);
         expect(getTeamGroupsSnapshot(scope, address, key)).toBeNull();
@@ -196,7 +188,7 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockResolvedValueOnce(page([group('g1'), group('removed')], 'cursor-1'));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.nextCursor).toBe('cursor-1'));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.nextCursor).toBe('cursor-1'));
 
         runtimeFetchMock.mockResolvedValueOnce(page([group('g2')], 'cursor-2'));
         await loadMoreTeamGroups(scope, address, ACTIVE);
@@ -209,7 +201,7 @@ describe('Team Group projections', () => {
             .mockResolvedValueOnce(page([group('g1', 'Renamed')], 'fresh-1'))
             .mockReturnValueOnce(continuation.promise);
         const refresh = refreshTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(runtimeFetchMock).toHaveBeenCalledTimes(4));
+        await waitForHomeGovernance(() => expect(runtimeFetchMock).toHaveBeenCalledTimes(4));
         expect(getTeamGroupsSnapshot(scope, address, key)?.data).toBe(lastGood);
         expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('refreshing');
         continuation.resolve(page([group('g2'), group('g3')], 'fresh-2'));
@@ -239,14 +231,14 @@ describe('Team Group projections', () => {
         const key = groupsQueryKey('team-1');
         runtimeFetchMock.mockResolvedValueOnce(page([group('g1')], 'cursor-1'));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
         runtimeFetchMock.mockResolvedValueOnce(page([group('g2')], 'cursor-2'));
         await loadMoreTeamGroups(scope, address, ACTIVE);
 
         const continuation = createDeferred<Response>();
         runtimeFetchMock.mockReturnValueOnce(continuation.promise);
         const more = loadMoreTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(runtimeFetchMock).toHaveBeenCalledTimes(3));
+        await waitForHomeGovernance(() => expect(runtimeFetchMock).toHaveBeenCalledTimes(3));
         runtimeFetchMock
             .mockResolvedValueOnce(page([group('g1')], 'fresh-1'))
             .mockResolvedValueOnce(page([group('g2')], 'fresh-2'));
@@ -270,7 +262,7 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockResolvedValueOnce(page([group('g1')], 'cursor-1'));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
         runtimeFetchMock.mockResolvedValueOnce(page([group('g2')], 'cursor-2'));
         await loadMoreTeamGroups(scope, address, ACTIVE);
         const lastGood = getTeamGroupsSnapshot(scope, address, key)!;
@@ -297,7 +289,7 @@ describe('Team Group projections', () => {
 
         runtimeFetchMock.mockImplementation(async () => page([group('g1')], null));
         const release = observeTeamGroups(scope, address, ACTIVE);
-        await vi.waitFor(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(getTeamGroupsSnapshot(scope, address, key)?.status).toBe('ready'));
 
         runtimeFetchMock.mockRejectedValue(new Error('network down'));
         await refreshTeamGroups(scope, address, ACTIVE);
@@ -319,7 +311,7 @@ describe('Team Group projections', () => {
             { status: 200 },
         ));
         const release = observeTeamGroup(scope, address, 'g1');
-        await vi.waitFor(() => expect(getTeamGroupSnapshot(scope, address, 'g1')?.data?.name).toBe('Detail'));
+        await waitForHomeGovernance(() => expect(getTeamGroupSnapshot(scope, address, 'g1')?.data?.name).toBe('Detail'));
 
         const otherHome = await addHome('Home B', 'https://home-b.example');
         const otherAddress = createTeamAddress(otherHome, 'team-1')!;

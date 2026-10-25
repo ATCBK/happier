@@ -227,7 +227,8 @@ it('retains the quote and separate create identity through an uncertain people-o
     expect(controller.updateDraft({ title: 'Changed', question: 'Changed', reviewers: [] })).toBe(false);
     await controller.retry();
     expect(controller.getSnapshot()).toMatchObject({ retry, draft: { title: 'Review', question: 'What changes?' },
-        discussionHref: expect.stringContaining('/discussions/committed-thread?') });
+        // The committed Discussion message is opened through useOpenDiscussion, not a route href (d6484a119d).
+        discussionMessage: { kind: 'discussion', discussion: { discussionId: 'committed-thread' }, messageId: 'committed-root' } });
     const requests = homes.requestsFor('/v1/discussions').filter(row => row.input !== null)
         .map(row => DiscussionCreateRequestV1Schema.parse(row.input));
     expect(requests).toHaveLength(2);

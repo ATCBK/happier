@@ -150,6 +150,7 @@ describe('deriveTurnChangeSetsFromMessages', () => {
                     provider: 'scm:git',
                 }],
             },
+            repoRootPath: '/repo',
             scopeId: 'session-composed:/repo',
             startRef: 'refs/happier/checkpoints/start',
             finalRef: 'refs/happier/checkpoints/final',

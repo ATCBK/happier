@@ -9,6 +9,7 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import * as machineRpc from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { ServerScopedMachineRpcParams } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
@@ -85,7 +86,8 @@ it.each(['current', 'retired'] as const)('opens provider billing locally only fo
       method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, payload: { v: 1, machineId: input.machineId,
         command: { operation: 'describeService', service } } });
     request.onIssued?.();
-    if (lifetime === 'retired') storage.setState({ profileScope: { ...scope, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+    // The captured Action Account retires with its Home credential, not the focused profile scope (af4706f44d).
+    if (lifetime === 'retired') await TokenStorage.removeCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id });
     return { status: 'described', service, occurrenceId: 'runtime',
       sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
       descriptor: { id: service.localId, title: 'Claude', billingUrl: destination, authentication: { defaultModeId: 'oauth', modes: [
@@ -161,7 +163,8 @@ it.each(['current', 'retired', 'cancelled'] as const)('returns selection evidenc
     expect(request).toMatchObject({ serverId: scope.serverId, accountId, machineId: input.machineId,
       method: CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD, payload: input, signal: controller.signal });
     request.onIssued?.();
-    if (lifetime === 'retired') storage.setState({ profileScope: { ...scope, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+    // The captured Action Account retires with its Home credential, not the focused profile scope (af4706f44d).
+    if (lifetime === 'retired') await TokenStorage.removeCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id });
     if (lifetime === 'cancelled') controller.abort();
     // The external transport's generic reply is validated by the real Action schema.
     return response as R;

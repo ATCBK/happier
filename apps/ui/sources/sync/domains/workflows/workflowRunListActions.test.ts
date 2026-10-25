@@ -9,6 +9,7 @@ import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture, creat
 import { WorkflowRunListRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { HAPPIER_COLLECTION_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -72,7 +73,7 @@ describe('workflow Run list Action client through the Account storage transport'
             const { Dimensions } = await import('react-native');
             const { vi } = await import('vitest');
             const { refreshRunWindow, loadMoreRunWindow } = await import('@/components/workflows/library/workflowLibraryReads');
-            const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1200, height: 68, scale: 1, fontScale: 1 });
+            const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1200, height: 2 * HAPPIER_COLLECTION_ROW_METRICS.height.compact, scale: 1, fontScale: 1 });
             storage.setState({ workflowRunsById: {}, workflowRunListWindows: {} });
             const windowId = scenario === 'active removal' ? 'active' : 'all';
             try {
@@ -125,9 +126,11 @@ describe('workflow Run list Action client through the Account storage transport'
         });
 
     it.each([
-        { height: 340, expectedPages: [10, 10, 10, 7] },
-        { height: 680, expectedPages: [20, 17] },
-    ])('requests one visible full-row page and reaches the complete large corpus on demand ($height px)', async ({ height, expectedPages }) => {
+        // The page is one window height of the shared compact collection row (ad1375872f).
+        { rows: 10, expectedPages: [10, 10, 10, 7] },
+        { rows: 20, expectedPages: [20, 17] },
+    ])('requests one visible full-row page and reaches the complete large corpus on demand ($rows rows)', async ({ rows, expectedPages }) => {
+        const height = rows * HAPPIER_COLLECTION_ROW_METRICS.height.compact;
         const { Dimensions } = await import('react-native');
         const { vi } = await import('vitest');
         const { readRunWindowPage } = await import('@/components/workflows/library/workflowLibraryReads');

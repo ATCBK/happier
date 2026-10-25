@@ -66,6 +66,9 @@ const requestMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
 const createEncryptionFromAuthCredentialsMock = vi.hoisted(() => vi.fn());
+// The scoped Account encryption owner (3b75c5855f) configures and binds the Encryption it is handed,
+// so cases that never open content through it still receive a real owner rather than an empty object.
+const createUnusedScopedEncryption = () => Encryption.create(new Uint8Array(32).fill(5));
 const machineExternalSessionTranscriptPageMock = vi.hoisted(() => vi.fn());
 const machineExternalSessionTranscriptReadAfterMock = vi.hoisted(() => vi.fn());
 const machineExternalSessionTranscriptRefreshReadAfterMock = vi.hoisted(() => vi.fn());
@@ -3083,7 +3086,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const ownerToken = buildTokenWithSub('owner-account');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock.mockResolvedValue(
             new Response(
                 JSON.stringify({
@@ -3144,7 +3147,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const ownerToken = buildTokenWithSub('owner-account');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock
             .mockResolvedValueOnce(
                 new Response(
@@ -3296,7 +3299,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const ownerToken = buildTokenWithSub('owner-account');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock.mockImplementation(async (input) =>
             String(input).endsWith('/v1/features')
                 ? currentPendingInputFeaturesResponse(recipient ? 3 : 1)
@@ -3436,7 +3439,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const mountedScope = createServerAccountScope(mountedServer.id, 'account-b')!;
         const mountedToken = buildTokenWithSub('account-b');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: mountedToken, secret: 'home-b-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
 
         let current = true;
         const lifetime = {
@@ -3628,7 +3631,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: buildTokenWithSub('account-b'),
             secret: 'home-b-secret',
         });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         let current = true;
         const lifetime = {
             scope: mountedScope,
@@ -3695,7 +3698,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         const mountedToken = buildTokenWithSub('account-b');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: mountedToken, secret: 'home-b-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);
             if (url.endsWith('/v1/features')) return currentPendingInputFeaturesResponse();
@@ -3780,7 +3783,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: appliedToken,
             secret: 'applied-secret',
         });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);
             if (url.endsWith('/v1/features')) return currentPendingInputFeaturesResponse();
@@ -4062,7 +4065,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
         const ownerToken = buildTokenWithSub('owner-account');
         getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         runtimeFetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 
         const { sync } = await import('./sync');
@@ -4885,7 +4888,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             token: buildTokenWithSub('account-b'),
             secret: 'home-b-secret',
         });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        createEncryptionFromAuthCredentialsMock.mockImplementation(createUnusedScopedEncryption);
         let current = true;
         const lifetime = {
             scope: { serverId: mountedServer.id, accountId: 'account-b' },

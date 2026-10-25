@@ -85,6 +85,8 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
         generation: 1,
     }),
     getActiveServerHomeCarrier: () => null,
+    // The fixed active server never changes here; module-level readers still subscribe (192e2b47e5).
+    subscribeActiveServer: () => () => {},
 }));
 
 type SessionRow = V2SessionRecord;
