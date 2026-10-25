@@ -9,6 +9,34 @@ import type { ExpoRouterParams } from './router';
 import { createTokenStorageModuleMock } from './tokenStorage';
 
 describe('UI testkit mock factories', () => {
+    it('shares one window override between React Native dimension readers', async () => {
+        const { createReactNativeWebMock } = await import('./reactNative');
+        const window = { width: 390, height: 844, scale: 3, fontScale: 1.2 };
+        const screen = { width: 1920, height: 1080, scale: 2, fontScale: 1 };
+        const get = (name: 'window' | 'screen') => name === 'window' ? window : screen;
+        const boundary = await createReactNativeWebMock({ Dimensions: { get } });
+        const dimensions = boundary.Dimensions as { get: typeof get };
+
+        expect(dimensions.get('window')).toBe(window);
+        expect(boundary.useWindowDimensions()).toBe(window);
+        expect(dimensions.get('screen')).toBe(screen);
+        window.width = 844;
+        expect(boundary.useWindowDimensions().width).toBe(844);
+        expect(dimensions.get('window').width).toBe(844);
+    });
+
+    it('reports a useWindowDimensions override through Dimensions.get', async () => {
+        const { createReactNativeWebMock } = await import('./reactNative');
+        const phone = { width: 390, height: 844, scale: 3, fontScale: 1 };
+        const boundary = await createReactNativeWebMock({ useWindowDimensions: () => phone });
+        const dimensions = boundary.Dimensions as { get: (name: 'window' | 'screen') => typeof phone };
+
+        expect(boundary.useWindowDimensions()).toBe(phone);
+        expect(dimensions.get('window')).toMatchObject({ width: 390, height: 844 });
+        phone.width = 844;
+        expect(dimensions.get('window').width).toBe(844);
+    });
+
     it('keeps the real portal target owner above the scoped Test Renderer paint port', async () => {
         const { installBrowserRuntimeForTests } = await import('../harness/browserRuntimeHarness');
         const browser = await installBrowserRuntimeForTests({ url: 'https://portal-boundary.test/' });
@@ -543,12 +571,16 @@ describe('UI testkit mock factories', () => {
 
     it('creates a react-navigation native mock with focus hooks and CommonActions', async () => {
         const { createReactNavigationNativeMock } = await import('./reactNavigation');
+        const { renderHook } = await import('../hooks/renderHook');
 
         const moduleMock = createReactNavigationNativeMock({
             isFocused: false,
         });
 
-        expect(moduleMock.useIsFocused()).toBe(false);
+        const focus = await renderHook(() => moduleMock.useIsFocused());
+        try {
+            expect(focus.getCurrent()).toBe(false);
+        } finally { await focus.unmount(); }
         expect(moduleMock.CommonActions.setParams({ id: 'abc' })).toEqual({
             type: 'SET_PARAMS',
             payload: { params: { id: 'abc' } },

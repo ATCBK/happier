@@ -19,6 +19,32 @@ type DeepMutable<T> = T extends (...args: infer TArgs) => infer TResult
         ? { -readonly [TKey in keyof T]: DeepMutable<T[TKey]> }
         : T;
 
+/**
+ * React Native's `useWindowDimensions` reads the `Dimensions` window authority, so a fixture sees
+ * one viewport whichever side it overrides: a `useWindowDimensions` override is what
+ * `Dimensions.get` reports, and an overridden `Dimensions` is what the hook reports.
+ */
+function windowDimensionsAuthority(
+    stub: ReactNativeStubModule,
+    mergedModule: PlainObject,
+    overrides: TestReactNativeRuntimeOverrides,
+): PlainObject {
+    const readWindow = overrides.useWindowDimensions;
+    if (typeof readWindow === 'function' && overrides.Dimensions === undefined) {
+        return {
+            Dimensions: {
+                ...stub.Dimensions,
+                get: () => ({ ...stub.Dimensions.get(), ...(readWindow as () => PlainObject)() }),
+            },
+        };
+    }
+    if (readWindow !== undefined) return {};
+    const dimensions = mergedModule.Dimensions as {
+        get: (name: 'window' | 'screen') => ReturnType<ReactNativeStubModule['useWindowDimensions']>;
+    };
+    return { useWindowDimensions: () => dimensions.get('window') };
+}
+
 export async function createReactNativeWebRuntime(
     overrides?: TestReactNativeRuntimeOverrides,
     loadStub: TestReactNativeStubLoader = loadReactNativeStub,
@@ -35,6 +61,7 @@ export async function createReactNativeWebRuntime(
 
     return {
         ...mergedModule,
+        ...windowDimensionsAuthority(stub, mergedModule, restOverrides),
         Platform: mergeObjectsPreservingDescriptors(
             basePlatform as PlainObject,
             (platformOverrides as PlainObject | undefined) ?? undefined,
@@ -102,6 +129,7 @@ export async function createReactNativeNativeRuntime(
 
     return {
         ...mergedModule,
+        ...windowDimensionsAuthority(stub, mergedModule, restOverrides),
         AppState: mergeObjectsPreservingDescriptors(
             stub.AppState as PlainObject,
             appStateOverrides as PlainObject | undefined,
