@@ -1,4 +1,4 @@
-import { SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
+import { getOrCreateSessionPermissionRpcRouter, type SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { AgentState } from '@/api/types';
 import type { PermissionResponse } from '@/agent/permissions/BasePermissionHandler';
@@ -25,10 +25,8 @@ export class FakePermissionRpcHandlerManager {
 export class FakePermissionSession {
   readonly sessionId = 'session-test';
   readonly rpcHandlerManager = new FakePermissionRpcHandlerManager();
-  private permissionRpcRouter: SessionPermissionRpcRouter | null = null;
-
   getOrCreatePermissionRpcRouter(): SessionPermissionRpcRouter {
-    return this.permissionRpcRouter ??= new SessionPermissionRpcRouter(this.rpcHandlerManager);
+    return getOrCreateSessionPermissionRpcRouter(this.rpcHandlerManager);
   }
 
   private agentState: AgentState = { requests: {}, completedRequests: {} };

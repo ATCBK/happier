@@ -58,7 +58,7 @@ import {
 import { createExecutionRunBackend } from '@/agent/executionRuns/runtime/createExecutionRunBackend';
 import { CodexLikePermissionHandler } from '@/agent/permissions/CodexLikePermissionHandler';
 import type { PermissionRequestPushSender } from '@/agent/permissions/BasePermissionHandler';
-import { SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
+import { getOrCreateSessionPermissionRpcRouter, type SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { readCredentials, readAccountChangesCursor } from '@/persistence';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -604,7 +604,6 @@ export class ApiSessionClient extends EventEmitter {
     private readonly bufferedPendingMessageDeliveryInfoByLocalId = new Map<string, SessionUserMessageDeliveryInfo>();
     private pendingMessageCallback: ((message: UserMessage, info?: SessionUserMessageDeliveryInfo) => unknown | Promise<unknown>) | null = null;
     readonly rpcHandlerManager: RpcHandlerManager;
-    private sessionPermissionRpcRouter: SessionPermissionRpcRouter | null = null;
     private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
     private executionRunLifecycleRegistration: RpcLifecycleRegistration | null = null;
@@ -6039,10 +6038,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     getOrCreatePermissionRpcRouter(): SessionPermissionRpcRouter {
-        if (!this.sessionPermissionRpcRouter) {
-            this.sessionPermissionRpcRouter = new SessionPermissionRpcRouter(this.rpcHandlerManager);
-        }
-        return this.sessionPermissionRpcRouter;
+        return getOrCreateSessionPermissionRpcRouter(this.rpcHandlerManager);
     }
 
     getLastObservedUserMessageSeq(): number {

@@ -45,6 +45,7 @@ import {
 } from './permissionRequestCoordinator';
 import type { PermissionResult } from './permissionResult';
 import type { SessionPermissionRpcPayload } from './sessionPermissionRpc';
+import { getOrCreateSessionPermissionRpcRouter } from './sessionPermissionRpcRouter';
 
 export type { PermissionResult } from './permissionResult';
 
@@ -306,7 +307,11 @@ export abstract class BasePermissionHandler {
     protected setupRpcHandler(): void {
         this.unregisterPermissionRpcConsumer?.();
         this.unregisterPermissionRpcConsumer = null;
-        this.unregisterPermissionRpcConsumer = this.session.getOrCreatePermissionRpcRouter().registerConsumer({
+        // The session's accessor is optional (the offline stub a provider starts on has none); the
+        // fallback is the same manager-keyed router the live session client returns.
+        const router = this.session.getOrCreatePermissionRpcRouter?.()
+            ?? getOrCreateSessionPermissionRpcRouter(this.session.rpcHandlerManager);
+        this.unregisterPermissionRpcConsumer = router.registerConsumer({
             name: this.permissionRpcConsumerName,
             tryHandlePermissionRpc: (response) => this.tryHandlePermissionRpc(response),
         });
