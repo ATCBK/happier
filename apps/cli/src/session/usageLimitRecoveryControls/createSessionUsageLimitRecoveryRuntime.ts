@@ -1,6 +1,9 @@
-import { accountSettingsParse, buildUsageLimitIssueFingerprint, SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema,
-  type AccountSettings, type SessionRuntimeIssueV1,
-  type SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
+import { accountSettingsParse, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import {
+  buildUsageLimitIssueFingerprint, SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema,
+  type SessionUsageLimitRecoveryV1,
+} from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import type { Metadata } from '@/api/types';

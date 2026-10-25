@@ -11,7 +11,7 @@ import {
     type InteractionTransientAuthorQuestionV1,
     type InteractionTransientAuthorRequestV1,
     type InteractionTransientQuestionAnswerV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/plugins/interactions/transientV1';
 
 type McpElicitationChoice = Readonly<{
     id: string;

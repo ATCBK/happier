@@ -11,7 +11,7 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod/mini';
-import { StructuredQuestionAnswersV1Schema } from '@happier-dev/protocol';
+import { StructuredQuestionAnswersV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 
 import type { StoredCredentials } from '@/persistence';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';

@@ -1,5 +1,5 @@
 import { buildHappierToolsShellBridgeCommand } from '@/agent/tools/happierTools/runtime/buildHappierToolsShellBridgeCommand';
-import { DEFAULT_CODING_PROMPT_BEHAVIOR_V1, type CodingPromptSessionTitleUpdatesModeV1 } from '@happier-dev/protocol';
+import { DEFAULT_CODING_PROMPT_BEHAVIOR_V1, type CodingPromptSessionTitleUpdatesModeV1 } from '@happier-dev/protocol/prompts/codingPromptBehaviorV1';
 import { buildHappierSessionTitleGuidanceV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 

@@ -2,7 +2,7 @@ import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionUsageLimitRecoveryV1Schema,
   type SessionUsageLimitRecoveryV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 

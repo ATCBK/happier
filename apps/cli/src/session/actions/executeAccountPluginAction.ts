@@ -1,4 +1,5 @@
-import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps, type ActionId } from '@happier-dev/protocol';
+import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import type { ActionId } from '@happier-dev/protocol';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';

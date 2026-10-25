@@ -1,4 +1,5 @@
-import { normalizeRepositoryFilePath, type TurnChangeSet } from '@happier-dev/protocol';
+import { normalizeRepositoryFilePath } from '@happier-dev/protocol/sessions/changes/reconcileWithScmSnapshot';
+import type { TurnChangeSet } from '@happier-dev/protocol';
 
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 

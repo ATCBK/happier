@@ -68,17 +68,19 @@ const AutomationPluginEventRunCauseSchema = lazyZodSchema(() => z.strictObject({
   }),
 }));
 
-const AUTOMATION_SESSION_LIFECYCLE_RUN_CAUSE_SHAPE = {
+// Read lazily: Workflow progress reaches this module while the occurrence owner is still
+// initializing, so its schemas cannot be captured at module load.
+const automationSessionLifecycleRunCauseShape = () => ({
   kind: z.literal('trigger'),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
   triggerKind: z.literal('sessionLifecycle'),
   occurrenceKey: AutomationOccurrenceKeyV1Schema,
   occurredAt: AutomationOccurredAtV1Schema,
-} as const;
+}) as const;
 
 const AutomationSessionLifecycleRunCauseSchema = lazyZodSchema(() => z.strictObject({
-  ...AUTOMATION_SESSION_LIFECYCLE_RUN_CAUSE_SHAPE,
+  ...automationSessionLifecycleRunCauseShape(),
   evidence: z.discriminatedUnion('event', [
     (<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(z.strictObject({
       event: zMini.enum(AutomationSessionLifecycleEventSchema.options.filter((value): value is Exclude<(typeof AutomationSessionLifecycleEventSchema.options)[number], 'userActionRequired' | 'sessionStarted' | 'sessionArchived'> => !(['userActionRequired', 'sessionStarted', 'sessionArchived'] as readonly string[]).includes(value))),
