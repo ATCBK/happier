@@ -6,6 +6,17 @@ import { API_TOKEN_FULL_GRANT_V1, ExternalActionExecutionAuthorizationV1Schema }
 afterEach(() => vi.restoreAllMocks());
 
 describe('headless settings conditional writes', () => {
+    it('omits the mounted Voice edit from discovery without hiding present-user scalar settings', async () => {
+        const action = createCliSettingsDeclarationAction({});
+        const discovery = await action({ actionId: 'settings.list', input: { pageId: 'voiceConversations' }, context: { surface: 'cli' } });
+        expect(discovery).toMatchObject({ items: expect.not.arrayContaining([
+            expect.objectContaining({ anchor: 'voiceConversations.edit' }),
+        ]) });
+        const transcript = await action({ actionId: 'settings.list', input: { pageId: 'transcript' }, context: { surface: 'cli' } });
+        expect(transcript).toMatchObject({ items: expect.arrayContaining([
+            expect.objectContaining({ anchor: 'transcript.showToolCalls', readable: true, writable: true }),
+        ]) });
+    });
     it('refuses a captured App draft target before reading or mutating Home settings', async () => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'post');
