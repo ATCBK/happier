@@ -2,8 +2,9 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedAccountPurposeDeclarationV1, ConnectedAccountServiceKey, ConnectedServiceBindingsV2, ConnectedServiceCredentialRecordV1, ConnectedServiceCredentialRevisionV1, ConnectedServiceId, PluginContributionIdentityV1, QualifiedConnectedAccountRef, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountPurposeV1, QualifiedConnectedAccountRequestAuthUseV1 } from '@happier-dev/protocol';
-import type {
-    ConnectedAccountRequestAuthResolvedBinding,
+import {
+    ConnectedAccountRequestAuthError,
+    type ConnectedAccountRequestAuthResolvedBinding,
 } from './ConnectedAccountRequestAuthService';
 import {
     resolveFirstPartyLegacyAgentConnectedAccountServiceId,
@@ -230,7 +231,7 @@ export async function materializeFirstPartyConnectedAccountBearer(input: Readonl
     input.signal?.throwIfAborted();
     if (input.transport.kind === 'v4') {
         if (!input.establishedRuntimeOwner) {
-            throw new Error('request_auth_established_runtime_unavailable');
+            throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_established_runtime_unavailable' });
         }
         const invocation = await input.establishedRuntimeOwner.invokeWithReceipt({
             account: input.resolved.account,
@@ -246,7 +247,7 @@ export async function materializeFirstPartyConnectedAccountBearer(input: Readonl
                 !== input.resolved.credentialRevision
             || !invocation.basis.isCurrent()
         ) {
-            throw new Error('request_auth_credential_superseded');
+            throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_credential_superseded' });
         }
         return parseHttpHeadersRequestAuthBearer(
             input.materialization,
@@ -254,12 +255,12 @@ export async function materializeFirstPartyConnectedAccountBearer(input: Readonl
         );
     }
     if (input.transport.peerClass !== 'revisioned_v2_v3') {
-        throw new Error('request_auth_revision_fence_required');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_revision_fence_required' });
     }
 
     const serviceId = resolveFirstPartyLegacyRequestAuthServiceId(input.resolved.account.service);
     if (!serviceId || serviceId !== input.transport.serviceId) {
-        throw new Error('request_auth_service_unsupported');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_service_unsupported' });
     }
     const resolution = await input.resolveCredential({
         serviceId,
@@ -267,12 +268,12 @@ export async function materializeFirstPartyConnectedAccountBearer(input: Readonl
         ...(input.signal ? { signal: input.signal } : {}),
     });
     input.signal?.throwIfAborted();
-    if (!resolution) throw new Error('request_auth_credential_unavailable');
+    if (!resolution) throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable');
     if (resolution.credentialRevision !== input.resolved.credentialRevision) {
-        throw new Error('request_auth_credential_superseded');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_credential_superseded' });
     }
     if (resolution.record.kind !== 'oauth') {
-        throw new Error('request_auth_oauth_bearer_required');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_oauth_bearer_required' });
     }
 
     const providerAccountId = resolution.record.oauth.providerAccountId?.trim() || null;

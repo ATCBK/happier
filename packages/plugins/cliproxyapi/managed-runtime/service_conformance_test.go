@@ -8,10 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -20,6 +22,73 @@ import (
 	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
+
+func TestPinnedSDKRequestAuthRefusalKeepsTypedStatusWithoutUpstreamOrReplay(t *testing.T) {
+	vectors := readRequestAuthHTTPVectors(t)
+	for _, scenario := range []struct {
+		name                               string
+		provider                           Provider
+		protocol                           ProviderProtocol
+		path, body, vectorName, brokerCode string
+		brokerStatus                       int
+	}{
+		{"codex", ProviderCodex, ProtocolOpenAIResponses, "/v1/responses", `{"model":"gpt-5.5","input":"hello"}`, "unavailable", "broker_unavailable", 503},
+		{"codex-stream", ProviderCodex, ProtocolOpenAIResponses, "/v1/responses", `{"model":"gpt-5.5","input":"hello","stream":true}`, "unavailable", "broker_unavailable", 503},
+		{"claude", ProviderClaude, ProtocolAnthropic, "/v1/messages", `{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`, "unavailable", "broker_unavailable", 503},
+		{"retired", ProviderCodex, ProtocolOpenAIResponses, "/v1/responses", `{"model":"gpt-5.5","input":"hello"}`, "not-active", "source_unavailable", 403},
+		{"invalid-daemon-response", ProviderCodex, ProtocolOpenAIResponses, "/v1/responses", `{"model":"gpt-5.5","input":"hello"}`, "unknown-error-code", "broker_unavailable", 503},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var vector *requestAuthHTTPVector
+			for _, candidate := range append(vectors.Responses, vectors.InvalidResponses...) {
+				if candidate.Name == scenario.vectorName {
+					vector = &candidate
+					break
+				}
+			}
+			if vector == nil {
+				t.Fatalf("missing canonical Protocol vector: %s", scenario.vectorName)
+			}
+			var lookups atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				lookups.Add(1)
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(vector.Status)
+				_, _ = writer.Write(vector.Body)
+			}))
+			defer server.Close()
+			runtimeDir := t.TempDir()
+			capabilityPath := filepath.Join(runtimeDir, "capability.json")
+			writeCapabilityV2(t, capabilityPath, testCapability(3), server.Listener.Addr().(*net.TCPAddr).Port)
+			broker, err := NewHTTPBroker(HTTPBrokerConfig{CapabilityPath: capabilityPath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{Host: "127.0.0.1", Port: reserveLoopbackPort(t), DownstreamBearer: "fixture-downstream",
+				RuntimeDir: runtimeDir, AuthEntries: []AuthEntry{testAuthEntry(string(scenario.provider), scenario.provider, "upstream")},
+				Protocols: []ProviderProtocol{scenario.protocol}}
+			upstream := &protocolFixtureRoundTripper{}
+			gateway, err := NewGateway(cfg, testRuntimeIdentity(), broker, upstream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, result := runGateway(t, gateway)
+			defer stopGateway(t, cancel, result)
+			_ = awaitManagedHealthIdentity(t, cfg)
+			response := postJSON(t, cfg, scenario.path, scenario.body)
+			body := readResponse(t, response)
+			if response.StatusCode != scenario.brokerStatus {
+				t.Fatalf("request-auth refusal status = %d, want %d; body=%s", response.StatusCode, scenario.brokerStatus, body)
+			}
+			if response.Header.Get("x-happier-provider-broker-error-code") != scenario.brokerCode || !strings.Contains(body, `"type":"permission_error"`) {
+				t.Fatalf("request-auth refusal lost canonical broker body: %s", body)
+			}
+			if len(upstream.requests()) != 0 || lookups.Load() != 1 {
+				t.Fatalf("request-auth refusal upstream=%d lookups=%d, want 0/1", len(upstream.requests()), lookups.Load())
+			}
+		})
+	}
+}
 
 func TestPinnedSDKMixedServingUsesFinalLeaseAfterExecutorShaping(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "ambient-management-secret-must-stay-unreachable")

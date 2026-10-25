@@ -58,6 +58,16 @@ export class QualifiedConnectedAccountCompatibilityError extends Error {
     }
 }
 
+/** A malformed Home projection is a contract refusal, never payload-bearing diagnostic text. */
+function parseQualifiedConnectedAccountReadResponse<T>(
+    schema: Readonly<{ safeParse(value: unknown): { success: true; data: T } | { success: false } }>,
+    value: unknown,
+): T {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) throw new QualifiedConnectedAccountCompatibilityError('connected_account_v4_contract_violation');
+    return parsed.data;
+}
+
 /**
  * The exact cause the server named for a refused credential mutation.
  *
@@ -408,7 +418,7 @@ export async function listQualifiedConnectedAccountsV4(params: Readonly<{
             `Qualified Connected Account list returned ${response.status}`,
         );
     }
-    return QualifiedConnectedAccountListResponseV4Schema.parse(response.data);
+    return parseQualifiedConnectedAccountReadResponse(QualifiedConnectedAccountListResponseV4Schema, response.data);
 }
 
 export async function listQualifiedConnectedAccountGroupsV4(
@@ -439,7 +449,7 @@ export async function listQualifiedConnectedAccountGroupsV4(
             `Qualified Connected Account group list returned ${response.status}`,
         );
     }
-    return QualifiedConnectedAccountGroupListResponseV4Schema.parse(
+    return parseQualifiedConnectedAccountReadResponse(QualifiedConnectedAccountGroupListResponseV4Schema,
         response.data,
     );
 }
@@ -475,7 +485,7 @@ export async function readQualifiedConnectedAccountGroupV4(
             `Qualified Connected Account group read returned ${response.status}`,
         );
     }
-    const resolvedGroup = QualifiedConnectedAccountGroupResponseV4Schema.parse(
+    const resolvedGroup = parseQualifiedConnectedAccountReadResponse(QualifiedConnectedAccountGroupResponseV4Schema,
         response.data,
     ).group;
     if (!sameQualifiedConnectedAccountGroupRef(resolvedGroup.ref, group)) {
@@ -640,7 +650,7 @@ export async function readQualifiedConnectedAccountCredentialV4(
             `Qualified Connected Account credential read returned ${response.status}`,
         );
     }
-    return QualifiedConnectedAccountCredentialSnapshotV4Schema.parse(
+    return parseQualifiedConnectedAccountReadResponse(QualifiedConnectedAccountCredentialSnapshotV4Schema,
         response.data,
     );
 }
@@ -677,7 +687,7 @@ export async function readQualifiedConnectedAccountConfigurationV4(
             `Qualified Connected Account configuration read returned ${response.status}`,
         );
     }
-    return QualifiedConnectedAccountConfigurationSnapshotV4Schema.parse(
+    return parseQualifiedConnectedAccountReadResponse(QualifiedConnectedAccountConfigurationSnapshotV4Schema,
         response.data,
     );
 }

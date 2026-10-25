@@ -77,6 +77,17 @@ function mockAxiosPostOnce(response: Readonly<{ status: number; data: unknown }>
 }
 
 describe("qualified Connected Account V4 API", () => {
+    it.each(['accounts', 'groups', 'group', 'credential', 'configuration'] as const)(
+        'classifies malformed %s responses without retaining their payload', async kind => {
+            vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { private: 'secret-payload' } });
+            const ref = { service, accountId: 'work' };
+            const request = kind === 'accounts' ? listQualifiedConnectedAccountsV4({ token: 'fixture', service })
+                : kind === 'groups' ? listQualifiedConnectedAccountGroupsV4({ token: 'fixture', service })
+                : kind === 'group' ? readQualifiedConnectedAccountGroupV4({ token: 'fixture', group: { service, groupId: 'work' } })
+                : kind === 'credential' ? readQualifiedConnectedAccountCredentialV4({ token: 'fixture', ref })
+                : readQualifiedConnectedAccountConfigurationV4({ token: 'fixture', target: { kind: 'account', ref } });
+            await expect(request).rejects.toMatchObject({ code: 'connected_account_v4_contract_violation' });
+        });
     beforeEach(() => {
         vi.mocked(axios.get).mockReset();
         vi.mocked(axios.patch).mockReset();

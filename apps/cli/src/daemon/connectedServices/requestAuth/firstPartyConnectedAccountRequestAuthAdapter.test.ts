@@ -470,7 +470,7 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
                 credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
                 revisionSemantics: 'revisioned',
             }),
-        })).rejects.toThrow('request_auth_credential_superseded');
+        })).rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'request_auth_credential_superseded' } });
         await expect(materializeFirstPartyConnectedAccountBearer({
             resolved,
             materialization: {
@@ -488,7 +488,7 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
                 credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
                 revisionSemantics: 'revisioned',
             }),
-        })).rejects.toThrow('request_auth_oauth_bearer_required');
+        })).rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'request_auth_oauth_bearer_required' } });
     });
 
     it('refuses the unfenced exact v0.2.1 compatibility peer', async () => {
@@ -509,7 +509,7 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
                 serviceId: 'openai-codex',
             },
             resolveCredential,
-        })).rejects.toThrow('request_auth_revision_fence_required');
+        })).rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'request_auth_revision_fence_required' } });
         expect(resolveCredential).not.toHaveBeenCalled();
     });
 
@@ -579,7 +579,7 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
             },
         });
         await expect(materializeFirstPartyConnectedAccountBearer(base))
-            .rejects.toThrow('request_auth_credential_superseded');
+            .rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'request_auth_credential_superseded' } });
         invokeWithReceipt.mockResolvedValueOnce({
             result: {
                 kind: 'httpHeaders',
@@ -593,7 +593,7 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
             },
         });
         await expect(materializeFirstPartyConnectedAccountBearer(base))
-            .rejects.toThrow('request_auth_credential_superseded');
+            .rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'request_auth_credential_superseded' } });
         expect(resolveCredential).not.toHaveBeenCalled();
 
         invokeWithReceipt.mockResolvedValueOnce({
@@ -610,7 +610,8 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
             },
         });
         await expect(materializeFirstPartyConnectedAccountBearer(base))
-            .rejects.toThrow('request_auth_materialization_invalid');
+            .rejects.toMatchObject({ code: 'request_auth_credential_unavailable',
+                diagnostic: { causeCode: 'request_auth_materialization_invalid' } });
         expect(resolveCredential).not.toHaveBeenCalled();
 
         invokeWithReceipt.mockResolvedValueOnce({
@@ -734,6 +735,6 @@ describe('first-party Connected Account request-auth compatibility adapter', () 
                 })),
             },
             resolveCredential: vi.fn(),
-        })).rejects.toThrow(error);
+        })).rejects.toMatchObject({ code: 'request_auth_credential_unavailable', diagnostic: { causeCode: error } });
     });
 });

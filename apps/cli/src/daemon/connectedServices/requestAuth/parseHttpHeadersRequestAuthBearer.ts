@@ -1,5 +1,6 @@
 import { RequestAuthRequiredHeadersV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import type { QualifiedConnectedAccountRequestAuthUseV1 } from '@happier-dev/protocol';
+import { ConnectedAccountRequestAuthError } from './ConnectedAccountRequestAuthService';
 
 /**
  * Validates the only request-auth materialization shape that can be projected into the daemon
@@ -14,7 +15,7 @@ export function parseHttpHeadersRequestAuthBearer(
     requiredHeaders?: Readonly<Record<string, string>>;
 }> {
     if (!result || typeof result !== 'object' || Array.isArray(result)) {
-        throw new Error('request_auth_materialization_invalid');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_materialization_invalid' });
     }
     const resultRecord = result as Readonly<Record<string, unknown>>;
     if (
@@ -29,14 +30,14 @@ export function parseHttpHeadersRequestAuthBearer(
         || typeof resultRecord.headers !== 'object'
         || Array.isArray(resultRecord.headers)
     ) {
-        throw new Error('request_auth_materialization_invalid');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_materialization_invalid' });
     }
     const headersRecord = resultRecord.headers as Readonly<Record<string, unknown>>;
     const requestedNames = new Set(materialization.headerNames);
     const returnedByName = new Map<string, string>();
     for (const rawName of Reflect.ownKeys(headersRecord)) {
         if (typeof rawName !== 'string') {
-            throw new Error('request_auth_materialization_invalid');
+            throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_materialization_invalid' });
         }
         const name = rawName.toLowerCase();
         const rawValue = headersRecord[rawName];
@@ -47,14 +48,14 @@ export function parseHttpHeadersRequestAuthBearer(
             || rawValue.length === 0
             || /[\r\n]/u.test(rawValue)
         ) {
-            throw new Error('request_auth_materialization_invalid');
+            throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_materialization_invalid' });
         }
         returnedByName.set(name, rawValue);
     }
     const authorization = returnedByName.get('authorization');
     const bearer = authorization?.match(/^Bearer ([^\s\r\n]+)$/u);
     if (!bearer) {
-        throw new Error('request_auth_oauth_bearer_required');
+        throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable', { causeCode: 'request_auth_oauth_bearer_required' });
     }
     const requiredHeaders = RequestAuthRequiredHeadersV1Schema.parse(
         Object.fromEntries(

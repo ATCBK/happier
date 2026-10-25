@@ -1090,7 +1090,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     });
 
     await expect(owner.readCredentialRevision({ account })).rejects
-      .toThrow('credential snapshot is unfenced');
+      .toMatchObject({ code: 'credential_snapshot_unfenced' });
     expect(readCredential).toHaveBeenCalledWith({ token: 'token-1', ref: account });
     expect(acquireRuntimeRegistry).not.toHaveBeenCalled();
   });

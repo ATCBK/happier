@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -57,6 +59,26 @@ type BrokerHTTPError struct {
 
 func (e *BrokerHTTPError) Error() string {
 	return fmt.Sprintf("connected-account request-auth broker rejected the operation (status %d, code %s)", e.StatusCode, e.Code)
+}
+
+// The pinned SDK turns net/http transport errors into generic 500s. A request-auth
+// refusal is an HTTP result, so carry its public broker projection through the
+// SDK's normal status/body path. Private daemon causes remain in the daemon log.
+func (e *BrokerHTTPError) providerResponse(request *http.Request) *http.Response {
+	status, code := http.StatusServiceUnavailable, "broker_unavailable"
+	if e.Code == "request_auth_unauthorized" || e.Code == "request_auth_purpose_forbidden" || e.Code == "request_auth_not_active" {
+		status, code = http.StatusForbidden, "source_unavailable"
+	}
+	// v7.2.95 carries the serving Gin context under this key into executor
+	// requests. Stamp the existing private refusal header before its Claude
+	// codec drops error.code; Happier's application owns the final body.
+	if serving, ok := request.Context().Value("gin").(*gin.Context); ok && serving != nil {
+		serving.Header("x-happier-provider-broker-error-code", code)
+	}
+	body := `{"type":"error","error":{"type":"permission_error","code":"` + code + `","message":"Happier refused this request: ` + code + `."}}`
+	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body:   io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Request: request}
 }
 
 func NewHTTPBroker(config HTTPBrokerConfig) (*HTTPBroker, error) {

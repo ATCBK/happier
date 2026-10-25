@@ -884,9 +884,14 @@ binding and materialization ports. Recovering a Session's requester Account
 runtime can create another purpose owner; that recovery verifies current
 requester custody but cannot replace the issuer's process-local lease map.
 Capability authentication preserves these host-only ports without serializing
-them. Lookup refusal file logs distinguish requester currentness, missing or
-mismatched binding, and HTTP refusal using closed cause codes and HTTP status
-only. Public errors retain their existing redacted envelope.
+them. In development source, lookup refusal file logs preserve owner-issued
+causes for malformed Home projections, missing or unfenced credential snapshots,
+identity/revision mismatches, unavailable content or encryption material, and
+purpose authorization failures. Binding and bearer callbacks share the same
+cause projection. Unclassified failures add only the canonical content-free
+error class and recognized exception code to the existing single lookup refusal
+record; exception messages, payloads and arbitrary name/code fields are excluded.
+Public request-auth errors retain their existing redacted envelope.
 
 Plugin-declared MCP servers in 0.3 development source enter
 [`resolveSessionCapabilitiesV1`](../packages/protocol/src/reach/resolveSessionCapabilitiesV1.ts)

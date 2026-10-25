@@ -31,6 +31,7 @@ describe('parseHttpHeadersRequestAuthBearer', () => {
             kind: 'httpHeaders',
             headers: { authorization: 'Bearer fixture-access' },
             ...metadata,
-        })).toThrow('request_auth_materialization_invalid');
+        })).toThrow(expect.objectContaining({ code: 'request_auth_credential_unavailable',
+            diagnostic: { causeCode: 'request_auth_materialization_invalid' } }));
     });
 });

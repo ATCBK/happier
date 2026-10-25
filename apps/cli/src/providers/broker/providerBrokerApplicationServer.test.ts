@@ -158,6 +158,35 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it('rewrites a gateway request-auth refusal through the canonical broker body writer', async () => {
+    const server = await startProviderBrokerApplicationServer({
+      handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+      localConsumer: { authorize: () => true, request: async () => ({ ok: true,
+        response: { ok: false, status: 503, statusText: 'Service Unavailable',
+          headers: { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'broker_unavailable' },
+          body: new Response('vendor-specific refusal body').body } }) },
+    });
+    try {
+      const response = await server.app.inject({ method: 'GET', url: '/v1/models' });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ type: 'error', error: { type: 'permission_error', code: 'broker_unavailable' } });
+      expect(response.body).not.toContain('vendor-specific');
+    } finally { await server.close(); }
+  });
+  it('preserves a typed refusal thrown by local managed access at the HTTP writer', async () => {
+    const server = await startProviderBrokerApplicationServer({
+      handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+      localConsumer: { authorize: () => true, request: async () => {
+        throw new ProviderBrokerApplicationFailureError({ ok: false, reasonCode: 'source_unavailable' });
+      } },
+    });
+    try {
+      const response = await server.app.inject({ method: 'GET', url: '/v1/models' });
+      expect(response.statusCode).toBe(403);
+      expect(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]).toBe('source_unavailable');
+      expect(response.json().error).toMatchObject({ type: 'permission_error', code: 'source_unavailable' });
+    } finally { await server.close(); }
+  });
   it('writes a typed source refusal from managed access through the handler and HTTP failure owner', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});

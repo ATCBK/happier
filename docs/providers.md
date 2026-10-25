@@ -824,6 +824,14 @@ native request's deadline and cancellation. It adds no shorter transport-phase
 deadline around Home admission or OAuth materialization. Failure reports retain
 their existing recovery and quota-report lifetimes.
 
+In development source, a refused request-auth lookup reaches the pinned gateway
+SDK as an HTTP refusal rather than an untyped transport error. Its existing
+private broker-reason header survives vendor error formatting, and the Happier
+application writes the canonical Provider-compatible refusal body. Unavailable
+request-auth returns `broker_unavailable` (503); unauthorized, forbidden or
+retired request-auth returns `source_unavailable` (403), with no upstream request
+or gateway replay. The detailed credential cause stays in the daemon file log.
+
 The side-effect-free connection description reads Running/Idle from this same
 process-custody owner, using the current exact Home, Account, connection and
 execution machine. The detail page addresses the saved hub, not a different

@@ -48,6 +48,7 @@ import type { TeamCredentialDirectMaterialPayloadV1 } from '@happier-dev/protoco
 
 import type { ConnectedAccountDaemonPersistence } from './ConnectedAccountDaemonRuntime';
 import { observeCurrentConnectedServiceMaterializationPhase as observeMaterializationPhase } from './materialize/materializationPhase';
+import { QualifiedConnectedAccountMaterialError } from './qualifiedConnectedAccountMaterialError';
 
 type MaybePromise<T> = T | Promise<T>;
 type ConnectedAccountCredentialReader =
@@ -296,7 +297,8 @@ function openEnvelope(input: Readonly<{
         envelope: input.envelope,
       });
   if (opened === null) {
-    throw new Error(`Connected-account ${input.kind} content is unavailable for the current account mode`);
+    throw new QualifiedConnectedAccountMaterialError(input.kind === 'credential' ? 'credential_content_unavailable' : 'configuration_content_unavailable',
+      `Connected-account ${input.kind} content is unavailable for the current account mode`);
   }
   return opened;
 }
@@ -306,7 +308,7 @@ function assertCredentialSnapshotIdentity(
   account: QualifiedConnectedAccountRef,
 ): void {
   if (!sameQualifiedConnectedAccountRef(snapshot.ref, account)) {
-    throw new Error('Connected-account credential snapshot does not match the exact qualified account');
+    throw new QualifiedConnectedAccountMaterialError('credential_snapshot_identity_mismatch', 'Connected-account credential snapshot does not match the exact qualified account');
   }
 }
 
@@ -318,7 +320,7 @@ function assertConfigurationSnapshotIdentity(
     snapshot.target.kind !== 'account'
     || !sameQualifiedConnectedAccountRef(snapshot.target.ref, account)
   ) {
-    throw new Error('Connected-account configuration snapshot does not match the exact qualified account');
+    throw new QualifiedConnectedAccountMaterialError('configuration_snapshot_identity_mismatch', 'Connected-account configuration snapshot does not match the exact qualified account');
   }
 }
 
@@ -326,7 +328,7 @@ function requireRevisionedCredentialSnapshot(
   snapshot: QualifiedConnectedAccountCredentialSnapshotV4,
 ): asserts snapshot is RevisionedQualifiedConnectedAccountCredentialSnapshotV4 {
   if (snapshot.revisionSemantics !== 'revisioned') {
-    throw new Error('Connected-account credential snapshot is unfenced');
+    throw new QualifiedConnectedAccountMaterialError('credential_snapshot_unfenced', 'Connected-account credential snapshot is unfenced');
   }
 }
 
@@ -334,7 +336,7 @@ function requireCredentialAuthenticationMode(
   snapshot: RevisionedQualifiedConnectedAccountCredentialSnapshotV4,
 ): asserts snapshot is CredentialMaterialSnapshotV4 {
   if (!snapshot.authenticationModeId) {
-    throw new Error('Connected-account authentication mode is unavailable in the current descriptor');
+    throw new QualifiedConnectedAccountMaterialError('credential_authentication_mode_unavailable', 'Connected-account authentication mode is unavailable in the current descriptor');
   }
 }
 
@@ -354,7 +356,7 @@ export async function readQualifiedConnectedAccountCredentialMaterial(input: Rea
   assertNotAborted(input.signal);
   const accountMode = await input.getAccountEncryptionMode(input.signal);
   if (accountMode === 'unknown') {
-    throw new Error('Connected-account account mode is unavailable');
+    throw new QualifiedConnectedAccountMaterialError('account_encryption_mode_unavailable', 'Connected-account account mode is unavailable');
   }
   const snapshot = await (input.readCredential ?? readQualifiedConnectedAccountCredentialV4)({
     token: input.credentials.token,
@@ -396,7 +398,7 @@ function requireRevisionedConfigurationSnapshot(
   snapshot: QualifiedConnectedAccountConfigurationSnapshotV4,
 ): asserts snapshot is RevisionedQualifiedConnectedAccountConfigurationSnapshotV4 {
   if (snapshot.revisionSemantics !== 'revisioned') {
-    throw new Error('Connected-account configuration snapshot is unfenced');
+    throw new QualifiedConnectedAccountMaterialError('configuration_snapshot_unfenced', 'Connected-account configuration snapshot is unfenced');
   }
 }
 
@@ -407,7 +409,7 @@ function assertSnapshotPair(input: Readonly<{
   const { credential, configuration } = input;
   if (credential.configurationRevision === null) {
     if (configuration !== null) {
-      throw new Error('Connected-account snapshot revisions do not describe one exact account state');
+      throw new QualifiedConnectedAccountMaterialError('credential_snapshot_revision_mismatch', 'Connected-account snapshot revisions do not describe one exact account state');
     }
     return;
   }
@@ -417,7 +419,7 @@ function assertSnapshotPair(input: Readonly<{
     || configuration.configurationRevision !== credential.configurationRevision
     || configuration.authenticationModeId !== credential.authenticationModeId
   ) {
-    throw new Error('Connected-account snapshot revisions do not describe one exact account state');
+    throw new QualifiedConnectedAccountMaterialError('credential_snapshot_revision_mismatch', 'Connected-account snapshot revisions do not describe one exact account state');
   }
 }
 
@@ -436,7 +438,7 @@ async function resolveDirectMaterialConfiguration(
     assertNotAborted(signal);
     const resolved = await secrets.readMaterial?.(secretId, signal ? { signal } : undefined);
     if (!resolved) {
-      throw new Error('Connected-account configuration secret is unavailable');
+      throw new QualifiedConnectedAccountMaterialError('configuration_secret_unavailable', 'Connected-account configuration secret is unavailable');
     }
     secretValues[fieldId] = resolved.value;
     fingerprints.push(fieldId, resolved.fingerprint);
@@ -486,12 +488,12 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   }
   async function assertAccountRuntimeCurrent(): Promise<void> {
     if (!await isAccountRuntimeCurrent()) {
-      throw new Error('connected_account_runtime_not_current');
+      throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
     }
   }
   async function runMaterialization<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     assertNotAborted(signal);
-    if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
+    if (!await verifyAccountRuntimeCurrent(signal)) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
     const cycle = { open: true, signal };
     try {
       const result = await materialization.run(cycle, () => runCurrentAccountRead(read));
@@ -499,7 +501,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       // Home/Machine/Session authority before publishing any prepared result.
       cycle.open = false;
       assertNotAborted(signal);
-      if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
+      if (!await verifyAccountRuntimeCurrent(signal)) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
       return result;
     } finally {
       cycle.open = false;
@@ -546,7 +548,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     });
     assertNotAborted(signal);
     if (!credential) {
-      throw new Error('Connected-account credential snapshot is unavailable');
+      throw new QualifiedConnectedAccountMaterialError('credential_snapshot_unavailable', 'Connected-account credential snapshot is unavailable');
     }
     assertCredentialSnapshotIdentity(credential, account);
     requireRevisionedCredentialSnapshot(credential);
@@ -578,7 +580,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     });
     assertNotAborted(input.signal);
     if (!credential) {
-      throw new Error('Connected-account credential snapshot is unavailable');
+      throw new QualifiedConnectedAccountMaterialError('credential_snapshot_unavailable', 'Connected-account credential snapshot is unavailable');
     }
     assertCredentialSnapshotIdentity(credential, input.account);
     requireRevisionedCredentialSnapshot(credential);
@@ -600,7 +602,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     assertNotAborted(input.signal);
     const accountMode = await runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal));
     if (accountMode === 'unknown') {
-      throw new Error('Connected-account account encryption mode is unavailable');
+      throw new QualifiedConnectedAccountMaterialError('account_encryption_mode_unavailable', 'Connected-account account encryption mode is unavailable');
     }
     const resolvedAccountMode: Exclude<ConnectedServiceAccountEncryptionMode, 'unknown'> = accountMode;
     const snapshots = await readExactSnapshots(input.account, input.signal);
@@ -773,7 +775,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       const accountMode = await observeMaterializationPhase('established_account_mode',
         () => runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal)));
       if (accountMode === 'unknown') {
-        throw new Error('Connected-account account encryption mode is unavailable');
+        throw new QualifiedConnectedAccountMaterialError('account_encryption_mode_unavailable', 'Connected-account account encryption mode is unavailable');
       }
       const initial = await (scheduledInitial
         ?? observeMaterializationPhase('established_snapshots', () => readExactSnapshots(input.account, input.signal)));
@@ -1167,7 +1169,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   }>): Promise<ConnectedAccountRuntimeEstablishedResult<TOperation>> {
     assertNotAborted(input.signal);
     await assertAccountRuntimeCurrent();
-    if (!await input.isCurrent()) throw new Error('connected_account_runtime_not_current');
+    if (!await input.isCurrent()) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
     const lease = await params.reloadController.acquireRuntimeRegistry();
     try {
       if (!params.reloadController.isRuntimeRegistryCurrent(lease.registry)) {
@@ -1196,19 +1198,19 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
         values: Object.freeze({ ...(input.material.configuration?.values ?? {}) }),
         async getSecret(fieldId) {
           await assertAccountRuntimeCurrent();
-          if (!await input.isCurrent()) throw new Error('connected_account_runtime_not_current');
+          if (!await input.isCurrent()) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
           return input.material.configuration?.secretValues[fieldId] ?? null;
         },
       });
       const credentials: ConnectedAccountCredentialReader = Object.freeze({
         async get(key) {
           await assertAccountRuntimeCurrent();
-          if (!await input.isCurrent()) throw new Error('connected_account_runtime_not_current');
+          if (!await input.isCurrent()) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
           return input.material.credential.values[key] ?? null;
         },
       });
       return await runCurrentAccountRead(async () => {
-        if (!await input.isCurrent()) throw new Error('connected_account_runtime_not_current');
+        if (!await input.isCurrent()) throw new QualifiedConnectedAccountMaterialError('connected_account_runtime_not_current', 'connected_account_runtime_not_current');
         return await invoker.invokeEstablished({
           target: Object.freeze({
             account: input.account,
@@ -1236,7 +1238,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     assertNotAborted(input.signal);
     const accountMode = await runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal));
     if (accountMode === 'unknown') {
-      throw new Error('Connected-account account encryption mode is unavailable');
+      throw new QualifiedConnectedAccountMaterialError('account_encryption_mode_unavailable', 'Connected-account account encryption mode is unavailable');
     }
     const initial = await readExactSnapshots(input.account, input.signal);
     const authenticationModeId = initial.credential.authenticationModeId;

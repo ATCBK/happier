@@ -18,7 +18,7 @@ import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_PRIVATE_
     PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER } from './providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
 import { ProviderBrokerApplicationPhaseError } from './providerBrokerApplicationFailureContext';
-import { providerBrokerApplicationFailureBody, type ProviderBrokerApplicationFailure } from './providerBrokerApplicationFailure';
+import { ProviderBrokerApplicationFailureError, providerBrokerApplicationFailureBody, type ProviderBrokerApplicationFailure } from './providerBrokerApplicationFailure';
 import { PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER, PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER,
     PROVIDER_BROKER_APPLICATION_LIMIT_RESETS_AT_HEADER } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 export { PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER, PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER,
@@ -139,6 +139,8 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         });
     });
     app.setErrorHandler((error: FastifyError, _request, reply) => {
+        const original = error instanceof ProviderBrokerApplicationPhaseError ? error.cause : error;
+        if (original instanceof ProviderBrokerApplicationFailureError) return writeProviderBrokerApplicationFailure(reply, original.failure);
         // Preserve Fastify's parser/size refusals. Unexpected application
         // failures use the same closed refusal as other broker unavailability,
         // so neither its default 500 body nor Provider exception text escapes.
@@ -153,6 +155,13 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         applicationRequestId: string,
         context?: ProviderBrokerAuthenticatedStreamContext,
     ) => {
+        if (response.ok && response.response.status >= 400) {
+            const reasonCode = response.response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER];
+            if (reasonCode === 'broker_unavailable' || reasonCode === 'source_unavailable') {
+                await response.response.body?.cancel().catch(() => undefined);
+                response = { ok: false, reasonCode };
+            }
+        }
         if (!response.ok) {
             logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', applicationRequestId, code: response.reasonCode,
                 ...(response.sourceOpenFailureReason ? { sourceOpenFailureReason: response.sourceOpenFailureReason } : {}) });

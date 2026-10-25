@@ -28,6 +28,7 @@ import { createDaemonConnectedAccountPurposeBindingRuntime } from '../purposeBin
 import { scopeConnectedAccountPurposeBindingLease } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createConnectedAccountRequestAuthService } from './ConnectedAccountRequestAuthService';
 import { createDaemonQualifiedRequestAuthCallbacks } from './createDaemonQualifiedRequestAuthCallbacks';
+import { logger } from '@/ui/logger';
 
 describe('daemon requester request-auth Account callbacks', () => {
     afterEach(() => vi.restoreAllMocks());
@@ -68,6 +69,7 @@ describe('daemon requester request-auth Account callbacks', () => {
                 runtime.registry.connectedAccountContributions?.registerHostConnectedAccountRuntime(createMcpSignInConnectedAccountRegistration());
             }
             let current = true;
+            let credentialFailure: 'missing' | 'schema' | 'unexpected' | null = null;
             let grantResource = 'https://mcp.example.test/path';
             const credentialAccounts: string[] = [];
             // Account HTTP transport is the only substituted boundary; actual catalog,
@@ -80,6 +82,9 @@ describe('daemon requester request-auth Account callbacks', () => {
                         status: 'connected', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: revision,
                         configurationReady: true, configurationRevision: host ? 'configuration-host-1' : null, scopes: [] }] }) };
                 if (path === '/v4/connect/qualified/credential') {
+                    if (credentialFailure === 'missing') return { status: 404, data: null };
+                    if (credentialFailure === 'schema') return { status: 200, data: { private: 'secret-payload' } };
+                    if (credentialFailure === 'unexpected') throw Object.assign(new TypeError('secret-message'), { code: 'secret-code' });
                     credentialAccounts.push(accountId);
                     return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({ ref: { service, accountId: 'work' },
                         authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: revision,
@@ -137,6 +142,30 @@ describe('daemon requester request-auth Account callbacks', () => {
                 await expect(owner.lookupRequestAuth({ subject, purpose })).resolves.toMatchObject({ accessToken: 'bob-subscription' });
                 expect(credentialAccounts).toContain('bob');
                 expect(credentialAccounts).not.toContain('alice');
+                const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+                for (const [failure, causeCode] of [
+                    ['missing', 'credential_snapshot_unavailable'],
+                    ['schema', 'connected_account_v4_contract_violation'],
+                    ['unexpected', 'binding_resolution_failed'],
+                ] as const) {
+                    credentialFailure = failure;
+                    diagnostics.mockClear();
+                    await expect(owner.lookupRequestAuth({ subject, purpose })).rejects.toMatchObject({
+                        code: 'request_auth_binding_unavailable', diagnostic: { causeCode },
+                    });
+                    const records = diagnostics.mock.calls.filter(([marker]) => marker === '[CONNECTED ACCOUNT] Request-auth lookup refused');
+                    expect(records).toHaveLength(1);
+                    if (failure === 'unexpected') expect(records[0]?.[1]).toMatchObject({ errorClass: 'TypeError', exceptionCode: null });
+                    expect(JSON.stringify(records)).not.toContain('secret-');
+                }
+                credentialFailure = 'unexpected';
+                await expect(callbacks.materializeBearer({ subject, binding, resolved: resolved!, materialization,
+                    signal: new AbortController().signal })).rejects.toMatchObject({
+                    code: 'request_auth_credential_unavailable', diagnostic: { causeCode: 'materialization_failed',
+                        errorClass: 'TypeError', exceptionCode: null },
+                });
+                credentialFailure = null;
+                diagnostics.mockRestore();
                 if (host) {
                     const registry = createConnectedAccountRequestAuthSubjectRegistry();
                     const app = createDaemonControlApp({ getChildren: () => [], machineId: 'requester-machine',

@@ -879,9 +879,25 @@ func TestBrokerFailureEnvelopeIsStrictAndStatusBounded(t *testing.T) {
 	}
 }
 
-func TestHTTPBrokerMatchesProtocolRequestAuthHTTPV1Vectors(t *testing.T) {
-	t.Parallel()
+type requestAuthHTTPVector struct {
+	Name   string          `json:"name"`
+	Status int             `json:"status"`
+	Body   json.RawMessage `json:"body"`
+}
 
+type requestAuthHTTPVectors struct {
+	V     int `json:"v"`
+	Paths struct {
+		Lookup       string `json:"lookup"`
+		AuthFailure  string `json:"authFailure"`
+		QuotaFailure string `json:"quotaFailure"`
+	} `json:"paths"`
+	Responses        []requestAuthHTTPVector `json:"responses"`
+	InvalidResponses []requestAuthHTTPVector `json:"invalidResponses"`
+}
+
+func readRequestAuthHTTPVectors(t *testing.T) requestAuthHTTPVectors {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(
 		"..", "..", "..", "protocol", "src", "connect",
 		"connectedAccountRequestAuthHttpV1.vectors.json",
@@ -889,24 +905,7 @@ func TestHTTPBrokerMatchesProtocolRequestAuthHTTPV1Vectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Protocol request-auth HTTP vectors: %v", err)
 	}
-	var vectors struct {
-		V     int `json:"v"`
-		Paths struct {
-			Lookup       string `json:"lookup"`
-			AuthFailure  string `json:"authFailure"`
-			QuotaFailure string `json:"quotaFailure"`
-		} `json:"paths"`
-		Responses []struct {
-			Name   string          `json:"name"`
-			Status int             `json:"status"`
-			Body   json.RawMessage `json:"body"`
-		} `json:"responses"`
-		InvalidResponses []struct {
-			Name   string          `json:"name"`
-			Status int             `json:"status"`
-			Body   json.RawMessage `json:"body"`
-		} `json:"invalidResponses"`
-	}
+	var vectors requestAuthHTTPVectors
 	if err := json.Unmarshal(data, &vectors); err != nil {
 		t.Fatalf("decode Protocol request-auth HTTP vectors: %v", err)
 	}
@@ -918,6 +917,12 @@ func TestHTTPBrokerMatchesProtocolRequestAuthHTTPV1Vectors(t *testing.T) {
 		vectors.Paths.QuotaFailure != ConnectedAccountRequestAuthQuotaFailurePath {
 		t.Fatalf("broker paths do not match Protocol vectors: %#v", vectors.Paths)
 	}
+	return vectors
+}
+
+func TestHTTPBrokerMatchesProtocolRequestAuthHTTPV1Vectors(t *testing.T) {
+	t.Parallel()
+	vectors := readRequestAuthHTTPVectors(t)
 
 	for _, vector := range vectors.Responses {
 		vector := vector
@@ -1219,9 +1224,11 @@ func TestLeaseTransportUsesCompletedBrokerLeaseAsTheOnlyUpstreamLinearizationBou
 			nil,
 		)
 	}
-	if _, err := transport.RoundTrip(newRequest()); err == nil {
-		t.Fatal("attempt whose lease was rejected reached the upstream boundary")
+	refused, err := transport.RoundTrip(newRequest())
+	if err != nil || refused == nil || refused.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("rejected lease response = %#v, error = %v; want typed 503", refused, err)
 	}
+	_ = refused.Body.Close()
 	if upstreamCalls.Load() != 0 {
 		t.Fatalf("pre-lease failure caused %d upstream effects", upstreamCalls.Load())
 	}
@@ -1244,9 +1251,11 @@ func TestLeaseTransportUsesCompletedBrokerLeaseAsTheOnlyUpstreamLinearizationBou
 		t.Fatalf("upstream Authorization = %q", upstreamAuthorization)
 	}
 
-	if _, err := transport.RoundTrip(newRequest()); err == nil {
-		t.Fatal("post-crash attempt without current authority reached upstream")
+	refusedAfterCrash, err := transport.RoundTrip(newRequest())
+	if err != nil || refusedAfterCrash == nil || refusedAfterCrash.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("post-crash response = %#v, error = %v; want typed 503", refusedAfterCrash, err)
 	}
+	_ = refusedAfterCrash.Body.Close()
 	if upstreamCalls.Load() != 1 {
 		t.Fatalf("post-crash failure replayed upstream; effects = %d", upstreamCalls.Load())
 	}

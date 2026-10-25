@@ -2,6 +2,7 @@ package managedruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -154,7 +155,14 @@ func (t *leaseRoundTripper) roundTrip(request *http.Request, allowAuthRetry bool
 	}
 	lease, err := t.broker.LookupRequestAuth(request.Context(), t.entry.Purpose)
 	if err != nil {
-		return nil, fmt.Errorf("request-auth lookup failed for managed purpose: %w", err)
+		if request.Context().Err() != nil {
+			return nil, request.Context().Err()
+		}
+		var refusal *BrokerHTTPError
+		if !errors.As(err, &refusal) {
+			refusal = &BrokerHTTPError{StatusCode: http.StatusServiceUnavailable, Code: "request_auth_unavailable"}
+		}
+		return refusal.providerResponse(request), nil
 	}
 	if err := validateLease(lease, time.Now()); err != nil {
 		return nil, err

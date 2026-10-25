@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { logger } from '@/ui/logger';
+import type { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { QualifiedConnectedAccountMaterialFailureCode } from '../qualifiedConnectedAccountMaterialError';
 
 import { ConnectedAccountAuthFailureRequestV1Schema, ConnectedAccountQuotaFailureRequestV1Schema, OAuthBearerLeaseV1Schema, RequestAuthFailureOutcomeV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import { QualifiedConnectedAccountPurposeV1Schema } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
@@ -18,8 +20,21 @@ export type ConnectedAccountRequestAuthErrorCode =
 export type ConnectedAccountRequestAuthDiagnostic = Readonly<{
     causeCode: 'requester_context_unavailable' | 'requester_session_not_current' | 'requester_http_refused'
         | 'binding_resolver_unavailable' | 'binding_resolution_failed' | 'binding_http_refused'
-        | 'binding_not_resolved' | 'binding_mismatch';
+        | 'binding_not_resolved' | 'binding_mismatch' | 'materialization_failed' | 'materialization_http_refused'
+        | 'request_auth_materialization_invalid' | 'request_auth_oauth_bearer_required'
+        | 'request_auth_established_runtime_unavailable' | 'request_auth_credential_superseded'
+        | 'request_auth_revision_fence_required' | 'request_auth_service_unsupported'
+        | 'encryption_material_unavailable'
+        | 'connected_account_v4_contract_violation'
+        | 'plugin_connected_account_binding_out_of_scope' | 'plugin_connected_account_settings_unavailable'
+        | 'plugin_connected_account_binding_unavailable' | 'plugin_host_access_resource_not_selected'
+        | 'plugin_host_access_operation_denied' | 'plugin_final_generation_retired'
+        | 'plugin_connected_account_purpose_undeclared' | 'plugin_services_turn_authority_unavailable'
+        | 'account_encryption_currentness_unavailable' | 'account_storage_currentness_unavailable'
+        | QualifiedConnectedAccountMaterialFailureCode;
     httpStatus?: number;
+    errorClass?: ReturnType<typeof readUnexpectedActionErrorDiagnosticV1>['errorClass'];
+    exceptionCode?: string | null;
 }>;
 
 export class ConnectedAccountRequestAuthError extends Error {
