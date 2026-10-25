@@ -443,7 +443,8 @@ export const fr: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Confirmer l’interruption',
             composerFocus: 'Placer le focus sur le composer',
-            composerSendImmediate: 'Envoyer immédiatement',
+            composerSendImmediate: 'Envoi alternatif (file / orienter)',
+            composerSendInterrupt: 'Interrompre et envoyer',
             composerSendPending: 'Envoyer dans la file d’attente',
             commandPaletteOpen: 'Ouvrir la palette de commandes',
             modeCycle: 'Changer de mode',
@@ -6434,6 +6435,11 @@ export const fr: TranslationStructure = {
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Options d’envoi",
+            queue: "Mettre en attente",
+            hint: "Maintiens pour choisir comment envoyer",
+        },
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Sélectionné.`,
         },

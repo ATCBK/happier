@@ -642,7 +642,8 @@ export const ru: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Подтвердить остановку',
             composerFocus: 'Перейти к вводу',
-            composerSendImmediate: 'Отправить сразу',
+            composerSendImmediate: 'Альтернативная отправка (очередь / направление)',
+            composerSendInterrupt: 'Прервать и отправить',
             composerSendPending: 'Отправить в очередь ожидания',
             commandPaletteOpen: 'Открыть палитру команд',
             modeCycle: 'Переключить режим',
@@ -6821,6 +6822,11 @@ export const ru: TranslationStructure = {
       },
 
     agentInput: {
+        sendOptions: {
+            title: "Варианты отправки",
+            queue: "В очередь",
+            hint: "Удерживайте, чтобы выбрать способ отправки",
+        },
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Выбрано.`,
         },

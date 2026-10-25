@@ -625,7 +625,8 @@ export const it: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Conferma interruzione',
             composerFocus: 'Metti a fuoco il compositore',
-            composerSendImmediate: 'Invia subito',
+            composerSendImmediate: 'Invio alternativo (coda / indirizza)',
+            composerSendInterrupt: 'Interrompi e invia',
             composerSendPending: 'Invia alla coda in sospeso',
             commandPaletteOpen: 'Apri palette comandi',
             modeCycle: 'Cambia modalità',
@@ -7162,6 +7163,11 @@ export const it: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opzioni di invio",
+          queue: "Accoda",
+          hint: "Tieni premuto per scegliere come inviare",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Selezionato.`,
       },

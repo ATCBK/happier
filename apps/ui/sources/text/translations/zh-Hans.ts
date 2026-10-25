@@ -625,7 +625,8 @@ export const zhHans: TranslationStructure = {
         commands: {
             composerAbortConfirm: '确认中止',
             composerFocus: '聚焦输入框',
-            composerSendImmediate: '立即发送',
+            composerSendImmediate: '切换发送方式（排队 / 引导）',
+            composerSendInterrupt: '中断并发送',
             composerSendPending: '发送到待处理队列',
             commandPaletteOpen: '打开命令面板',
             modeCycle: '切换模式',
@@ -6612,6 +6613,11 @@ export const zhHans: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "发送选项",
+          queue: "加入队列",
+          hint: "长按选择发送方式",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}。已选择。`,
       },

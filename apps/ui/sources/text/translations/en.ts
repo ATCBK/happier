@@ -441,7 +441,8 @@ export const en = {
         commands: {
             composerAbortConfirm: 'Confirm abort',
             composerFocus: 'Focus composer',
-            composerSendImmediate: 'Send immediately',
+            composerSendImmediate: 'Alternate send (queue / steer)',
+            composerSendInterrupt: 'Interrupt and send',
             composerSendPending: 'Send to pending queue',
             commandPaletteOpen: 'Open command palette',
             modeCycle: 'Cycle mode',
@@ -6479,6 +6480,11 @@ export const en = {
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Send options",
+            queue: "Queue",
+            hint: "Hold to choose how to send",
+        },
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Selected.`,
         },

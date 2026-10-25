@@ -617,7 +617,8 @@ export const ca: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Confirma la interrupció',
             composerFocus: 'Enfoca el compositor',
-            composerSendImmediate: 'Envia immediatament',
+            composerSendImmediate: 'Enviament alternatiu (cua / orientar)',
+            composerSendInterrupt: 'Interromp i envia',
             composerSendPending: 'Envia a la cua pendent',
             commandPaletteOpen: 'Obre la paleta d’ordres',
             modeCycle: 'Canvia de mode',
@@ -6448,6 +6449,11 @@ deps: {
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Opcions d’enviament",
+            queue: "Posa a la cua",
+            hint: "Mantén premut per triar com enviar",
+        },
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Seleccionat.`,
         },

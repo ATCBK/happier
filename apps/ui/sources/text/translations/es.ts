@@ -627,7 +627,8 @@ export const es: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Confirmar cancelación',
             composerFocus: 'Enfocar el compositor',
-            composerSendImmediate: 'Enviar de inmediato',
+            composerSendImmediate: 'Envío alternativo (cola / dirigir)',
+            composerSendInterrupt: 'Interrumpir y enviar',
             composerSendPending: 'Enviar a la cola pendiente',
             commandPaletteOpen: 'Abrir paleta de comandos',
             modeCycle: 'Cambiar modo',
@@ -6820,6 +6821,11 @@ export const es: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opciones de envío",
+          queue: "Poner en cola",
+          hint: "Mantén pulsado para elegir cómo enviar",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Seleccionado.`,
       },

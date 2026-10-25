@@ -676,7 +676,8 @@ export const pt: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Confirmar interrupção',
             composerFocus: 'Focar compositor',
-            composerSendImmediate: 'Enviar imediatamente',
+            composerSendImmediate: 'Envio alternativo (fila / orientar)',
+            composerSendInterrupt: 'Interromper e enviar',
             composerSendPending: 'Enviar para a fila pendente',
             commandPaletteOpen: 'Abrir paleta de comandos',
             modeCycle: 'Alternar modo',
@@ -6950,6 +6951,11 @@ export const pt: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opções de envio",
+          queue: "Enfileirar",
+          hint: "Mantenha pressionado para escolher como enviar",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Selecionado.`,
       },

@@ -638,7 +638,8 @@ export const pl: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Potwierdź przerwanie',
             composerFocus: 'Ustaw fokus na edytorze',
-            composerSendImmediate: 'Wyślij natychmiast',
+            composerSendImmediate: 'Alternatywne wysyłanie (kolejka / sterowanie)',
+            composerSendInterrupt: 'Przerwij i wyślij',
             composerSendPending: 'Wyślij do kolejki oczekujących',
             commandPaletteOpen: 'Otwórz paletę poleceń',
             modeCycle: 'Przełącz tryb',
@@ -6838,6 +6839,11 @@ export const pl: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opcje wysyłania",
+          queue: "Dodaj do kolejki",
+          hint: "Przytrzymaj, aby wybrać sposób wysłania",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Wybrano.`,
       },

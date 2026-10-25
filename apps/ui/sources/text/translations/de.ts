@@ -443,7 +443,8 @@ export const de: TranslationStructure = {
         commands: {
             composerAbortConfirm: 'Abbruch bestätigen',
             composerFocus: 'Composer fokussieren',
-            composerSendImmediate: 'Sofort senden',
+            composerSendImmediate: 'Alternativ senden (Warteschlange / steuern)',
+            composerSendInterrupt: 'Unterbrechen und senden',
             composerSendPending: 'An die Warteschlange senden',
             commandPaletteOpen: 'Befehlspalette öffnen',
             modeCycle: 'Modus wechseln',
@@ -6447,6 +6448,11 @@ export const de: TranslationStructure = {
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Sendeoptionen",
+            queue: "Einreihen",
+            hint: "Gedrückt halten, um die Sendeart zu wählen",
+        },
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Ausgewählt.`,
         },

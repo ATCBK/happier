@@ -1,3 +1,5 @@
+import { canUseDirectPendingDeliveryActions } from '@/components/sessions/pending/pendingMessageVisualState';
+import { sendPendingMessageWithIntent } from '@/components/sessions/pending/pendingMessageSendActions';
 import { resolveNewSessionCapabilityProbeContext } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import type { SessionModelDiscoveryContext } from '@/components/sessions/agentInput/components/AgentInputModelDiscoveryDetail';
 import Color from 'color';
@@ -209,7 +211,7 @@ import {
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import { confirmNonSteerableSend } from '@/components/sessions/agentInput/confirmNonSteerableSend';
-import { canApplySteerConfigInFlight, decideSessionMessageDelivery, type MessageSendMode } from '@/sync/domains/session/control/submitMode';
+import { canApplySteerConfigInFlight, resolveSessionComposerSendActions, decideSessionMessageDelivery, type MessageSendMode } from '@/sync/domains/session/control/submitMode';
 import {
     buildArmedAgentContinuationTransitionInput,
     continueSessionWithArmedAgent,
@@ -5320,6 +5322,14 @@ function SessionViewLoaded({
             `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
         );
     }, [composerProfileId]);
+    const queuedSendInFlight = React.useRef(false);
+    const composerSendActions = resolveSessionComposerSendActions({
+        configuredMode: settings.sessionMessageSendMode,
+        busySteerSendPolicy: settings.sessionBusySteerSendPolicy,
+        session: sessionRuntimeStatusSource,
+    });
+    const canChooseComposerSendActions = !pendingMessageEdit && !recipientState.recipient && !armedContinuationTarget
+        && persistedVoiceComposerRouting?.kind !== 'adapter_text';
     const handleAgentInputSend = useStableAgentInputOnSend((sendOptions) => {
         if (!hasWriteAccess) {
             Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
@@ -5327,6 +5337,20 @@ function SessionViewLoaded({
         }
 
         const composerMessage = sendOptions?.inputTextOverride ?? composerTextStore.getPrompt();
+        if (sendOptions?.sendNextQueued) {
+            const message = pendingMessages[0];
+            if (!canChooseComposerSendActions || composerMessage.trim() || attachmentDrafts.length > 0 || hasIncludedReviewCommentDrafts
+                || pendingMessageEditRef.current
+                || queuedSendInFlight.current || isReadOnly || !shouldShowInput || isResuming || isUploadingAttachments
+                || !message || !canUseDirectPendingDeliveryActions(message)
+                || (sendOptions.deliveryIntent !== 'agent_queue' && sendOptions.deliveryIntent !== 'interrupt')) return;
+            queuedSendInFlight.current = true;
+            setIsComposerSendPending(true);
+            fireAndForget(sendPendingMessageWithIntent({ sessionId, session: sessionRuntimeStatusSource, message,
+                deliveryIntent: sendOptions.deliveryIntent === 'interrupt' ? 'interrupt_and_send' : 'steer_now',
+            }).finally(() => { queuedSendInFlight.current = false; setIsComposerSendPending(false); }), { tag: 'SessionView.pendingMessageShortcut' });
+            return;
+        }
         const activePendingEdit = pendingMessageEditRef.current;
         if (activePendingEdit) {
             const nextText = composerMessage;
@@ -5361,6 +5385,7 @@ function SessionViewLoaded({
             const nonSteerableSendPrompt = storage.getState().settings.sessionNonSteerableSendPrompt;
             const sessionInactiveResumePolicy = storage.getState().settings.sessionInactiveResumePolicy;
             const forceImmediateSend = sendIntent?.forceImmediate === true;
+            const explicitSendMode = !forceImmediateSend ? sendIntent?.deliveryIntent : undefined;
             const armedContinuationTargetLabel = armedContinuationTarget?.label ?? '';
             const resolveSendDestination = (
                 route: SessionComposerSendRoute,
@@ -5395,9 +5420,11 @@ function SessionViewLoaded({
                 && nonSteerableSendPrompt === 'ask'
                 && !forceImmediateSend
                 && sendIntent?.deliveryIntent !== 'server_pending'
+                && sendIntent?.deliveryIntent !== 'interrupt'
             ) {
                 const preflight = decideSessionMessageDelivery({
                     configuredMode,
+                    explicitMode: explicitSendMode,
                     busySteerSendPolicy,
                     session: sessionRuntimeStatusSource,
                     text: trimmedText,
@@ -5822,10 +5849,7 @@ function SessionViewLoaded({
                             providerNonSteerablePayloadReason,
                             ...(nonSteerableApplyConfigAndSteer ? { applyConfigAndSteer: true } : {}),
                             ...(nonSteerableSteerWithoutConfig ? { steerWithoutConfig: true } : {}),
-                            explicitMode: nonSteerableExplicitMode
-                                ?? (!forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                                    ? 'server_pending'
-                                    : undefined),
+                            explicitMode: nonSteerableExplicitMode ?? explicitSendMode,
                             forceImmediate: forceImmediateSend,
                             profileId: liveComposerState.profileId,
                             resumeCapabilityOptions,
@@ -6059,10 +6083,7 @@ function SessionViewLoaded({
                         providerNonSteerablePayloadReason,
                         ...(nonSteerableApplyConfigAndSteer ? { applyConfigAndSteer: true } : {}),
                         ...(nonSteerableSteerWithoutConfig ? { steerWithoutConfig: true } : {}),
-                        explicitMode: nonSteerableExplicitMode
-                            ?? (!forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                                ? 'server_pending'
-                                : undefined),
+                        explicitMode: nonSteerableExplicitMode ?? explicitSendMode,
                         forceImmediate: forceImmediateSend,
                         profileId: liveComposerState.profileId,
                         resumeCapabilityOptions,
@@ -6416,6 +6437,9 @@ function SessionViewLoaded({
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
                 connectedServicesRestartState={sessionConnectedServicesAuthSwitch.restartState}
                 onSend={handleAgentInputSend}
+                sendMenuModes={canChooseComposerSendActions ? composerSendActions.modes : undefined}
+                alternateSendMode={composerSendActions.alternateMode}
+                canSendNextQueued={canChooseComposerSendActions}
                 isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
                 isSending={isComposerSendPending}
                 onMicPress={micButtonState.onMicPress}

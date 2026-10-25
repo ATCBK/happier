@@ -610,7 +610,8 @@ export const ja: TranslationStructure = {
         commands: {
             composerAbortConfirm: '中断を確認',
             composerFocus: 'コンポーザーにフォーカス',
-            composerSendImmediate: 'すぐに送信',
+            composerSendImmediate: '別の方法で送信（キュー / 方向修正）',
+            composerSendInterrupt: '中断して送信',
             composerSendPending: '保留キューに送信',
             commandPaletteOpen: 'コマンドパレットを開く',
             modeCycle: 'モードを切り替え',
@@ -7092,6 +7093,11 @@ localTailscale: {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "送信オプション",
+          queue: "キューに追加",
+          hint: "長押しして送信方法を選択",
+      },
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}。選択中。`,
       },
