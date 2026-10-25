@@ -744,6 +744,8 @@ const CLAUDE_PREDECESSOR_MESSAGE_META_DEFAULTS = {
   "claudeRemoteVerboseEnabled": false,
   "claudeUnifiedTerminalEnabled": false,
   "claudeUnifiedTerminalHost": "auto",
+  "claudeUnifiedTerminalPermissionResponseLocation": "app_and_terminal",
+  "claudeUnifiedTerminalQuestionResponseLocation": "app_and_terminal",
   "claudeUnifiedTerminalResumeChoice": "ask_every_time",
   "claudeUnifiedTerminalWorkspaceTrust": "ask_every_time"
 } as const;

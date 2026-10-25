@@ -180,6 +180,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           ],
           "tools": {
             "delivery": "native_mcp",
+            "mcpToolCallIdMetaKey": "callId",
             "mcpToolControl": {
               "approval": "host",
               "off": "hidden"
@@ -364,7 +365,8 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "streaming": true,
             "toolRoundTrips": true
           },
-          "supportsFreeformModelIds": true
+          "supportsFreeformModelIds": true,
+          "supportsReasoningEffort": true
         },
         "runtime": {
           "kind": "custom"
