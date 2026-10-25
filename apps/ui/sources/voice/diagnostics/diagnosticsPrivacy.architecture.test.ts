@@ -29,6 +29,8 @@ describe('local speech diagnostics privacy boundary', () => {
       const imports = readFileSync(file, 'utf8')
         .split('\n')
         .filter((line) => /^\s*import\b/.test(line))
+        // A type-only import is erased at build time, so it cannot reach an upload or report owner.
+        .filter((line) => !/^\s*import\s+type\b/.test(line))
         .filter((line) => !allowedEncryptedDownloadOwners.some((owner) => line.includes(owner)))
         .join('\n');
       for (const token of forbidden) expect(imports, `${file} must not import ${token}`).not.toContain(token);

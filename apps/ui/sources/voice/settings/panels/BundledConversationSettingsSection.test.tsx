@@ -308,9 +308,8 @@ describe('BundledConversationSettingsSection', () => {
     await waitForAlert(t('settingsVoice.local.voiceCredential.plainStorageTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     await waitForAlert(t('settingsVoice.externalCredentials.recipientApprovalTitle'));
-    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
-    await waitForAlert(getActionSpec('secrets.shared.promote').title);
+    // The present user's reversible Action is direct by default. The real
+    // recipient-consent tap is the final prerequisite for this credential.
     expect(account.resources).toHaveLength(0);
     expect(account.promotions).toHaveLength(0);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());

@@ -264,11 +264,8 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     await waitForNativeAlert(t('settingsVoice.local.voiceCredential.plainStorageTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     await waitForNativeAlert(t('settingsVoice.externalCredentials.recipientApprovalTitle'));
-    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    // Plain-storage and recipient consent precede the shared resource Action's
-    // own present-user confirmation. It must still have no effect before that tap.
-    const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
-    await waitForNativeAlert(getActionSpec('secrets.shared.promote').title);
+    // The present user's reversible Action is direct by default. No resource
+    // may be created before the actual recipient-consent tap.
     expect(account.resources).toHaveLength(0);
     expect(account.promotions).toHaveLength(0);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());

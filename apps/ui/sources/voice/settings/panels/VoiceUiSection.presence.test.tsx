@@ -11,7 +11,6 @@ const device = vi.hoisted(() => ({ width: 1440 }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
-        useWindowDimensions: () => ({ width: device.width, height: 844, scale: 1, fontScale: 1 }),
         Dimensions: { get: () => ({ width: device.width, height: 844, scale: 1, fontScale: 1 }) },
     });
 });
