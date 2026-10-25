@@ -3,6 +3,7 @@ import {
     isAppliedActiveServerRuntimeAvailable,
 } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { invalidateHomeAccountReadJoins } from '@/sync/runtime/orchestration/homeAccountChange';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 
 import {
@@ -100,6 +101,10 @@ export function captureActiveServerAccountScopeLifetime(): ActiveServerAccountSc
             // Mark stale before invoking a consumer, so cancellation can never
             // race a newly started Account-A operation.
             retired = true;
+            // A replacement lifetime of the same Home and Account must not join
+            // a raw read the retired lifetime is still waiting on. Advance the
+            // fence before any consumer can synchronously start its refresh.
+            invalidateHomeAccountReadJoins(scope.serverId);
             const pending = [...cancellations];
             cancellations.clear();
             for (const cancel of pending) {
