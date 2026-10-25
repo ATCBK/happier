@@ -605,6 +605,12 @@ describe.skipIf(!shouldRunTmuxIntegration())('tmux (real) integration tests (opt
                 expect(runTmux(['new-session', '-d', '-s', 'ambient-sentinel'], {
                     env: { TMUX_TMPDIR: ambientRoot },
                 }).status).toBe(0);
+                const ambientIdentity = runTmux(['display-message', '-p', '#{socket_path},#{pid},0'], {
+                    env: { TMUX_TMPDIR: ambientRoot },
+                });
+                expect(ambientIdentity.status).toBe(0);
+                process.env.TMUX = ambientIdentity.stdout.trim();
+                process.env.TMUX_PANE = '%0';
                 const outFile = join(dir, 'native.json');
                 const handle = await adapter.createOrAttachHost({
                     sessionName, label: 'native-client', workingDirectory: dir,
