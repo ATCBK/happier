@@ -1,7 +1,8 @@
 import { SessionTeamCredentialBindingIntentsV1Schema, encodeSessionTeamCredentialSlotKeyV1, type SessionTeamCredentialBindingIntentListV1, type SessionTeamCredentialSlotV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { type TeamCredentialRouteV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import type { RequiredSessionTeamCredentialV1, SessionTeamCredentialBindingConsequenceV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import type { Tx } from "@/storage/inTx";
 import { portableQueryChunks } from "@/storage/portableQueryChunks";
@@ -391,13 +392,7 @@ async function validateSessionTeamCredentialResourceForContextInTx(
         default:
             return { ok: false, reason: "resource_corrupt" };
     }
-    let sourceValue: unknown;
-    try {
-        sourceValue = JSON.parse(resource.sourceBindingJson);
-    } catch {
-        return { ok: false, reason: "resource_corrupt" };
-    }
-    const parsedSourceBinding = TeamCredentialSourceBindingV1Schema.safeParse(sourceValue);
+    const parsedSourceBinding = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     if (!parsedSourceBinding.success) return { ok: false, reason: "resource_corrupt" };
     const source = await resolveTeamCredentialResourceSourceInTx(tx, {
         custodianAccountId: resource.custodianAccountId,

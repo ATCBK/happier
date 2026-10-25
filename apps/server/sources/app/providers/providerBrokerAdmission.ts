@@ -9,7 +9,7 @@ import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/m
 import { readMachineIrohEndpointAuthorityV1, MachineOperationProtocolCapabilitiesV1StoredReadSchema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { auth } from '@/app/auth/auth';
-import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
+import { readEligibleBrokerMachineInTx } from '@/app/teams/credentials/brokerMachineEligibility';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { inTx, type Tx } from '@/storage/inTx';
 import { signRouteGrantPayload } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
@@ -28,14 +28,12 @@ type Common = Readonly<{
 }>;
 
 async function readOwnedTargetInTx(tx: Tx, accountId: string, machineId: string) {
-    const machine = await tx.machine.findFirst({ where: { id: machineId, accountId }, select: {
-        id: true, kind: true, revokedAt: true, replacedByMachineId: true,
-        operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true,
-    } });
-    if (!machine || classifyMachineAvailabilityState(machine) !== 'available') return null;
+    const eligible = await readEligibleBrokerMachineInTx(tx, { custodianAccountId: accountId, brokerMachineId: machineId });
+    if (!eligible.ok) return eligible;
+    const { machine } = eligible;
     const endpoint = readMachineIrohEndpointAuthorityV1({ capabilities: machine.operationProtocolCapabilities,
         revision: machine.operationProtocolCapabilitiesRevision });
-    return endpoint ? { machine, endpoint } : null;
+    return endpoint ? { ok: true, machine, endpoint } as const : { ok: false, error: 'broker_unavailable' } as const;
 }
 
 function supportsAccountConnectionIngress(capabilities: unknown): boolean {
@@ -64,7 +62,8 @@ async function authorizeMachinesInTx(tx: Tx, input: MachineAdmissionInput, execu
             machineId: input.initiatorMachineId, sessionId }),
         readOwnedTargetInTx(tx, input.actorAccountId, input.targetMachineId),
     ]);
-    if (!initiator || !target || target.machine.kind !== 'persistent') return { ok: false, reasonCode: 'broker_unavailable' } as const;
+    if (!initiator) return { ok: false, reasonCode: 'broker_unavailable' } as const;
+    if (!target.ok) return { ok: false, reasonCode: target.error } as const;
     const topology = admitProviderBrokerTopology(
         { machineId: input.initiatorMachineId, endpointId: initiator.endpointId },
         { machineId: input.targetMachineId, endpointId: target.endpoint.endpointId },

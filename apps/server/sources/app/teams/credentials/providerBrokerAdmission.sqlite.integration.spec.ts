@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
 import {
@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/protocol';
 import { computeTeamCredentialSourceMemberKeyV1 } from '@happier-dev/protocol/teams';
 import { db } from '@/storage/db';
+import { logger } from '@/utils/logging/log';
 import { readSessionDetail } from '@/app/api/routes/session/registerSessionListingRoutes';
 import { evaluateAccountStoredContentCompatibility } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { inTx } from '@/storage/inTx';
@@ -286,6 +287,9 @@ async function createBrokerFixture(
             modelId?: string;
             refreshAuthority?: SignedProviderBrokerRouteGrantV1;
             resolveExecutionRunCurrentness?: OpenInput['resolveExecutionRunCurrentness'];
+            readCurrentPresence?: OpenInput['readCurrentPresence'];
+            readPoolSourceEligibility?: OpenInput['readPoolSourceEligibility'];
+            signal?: AbortSignal;
         }>) => await openTeamCredentialProviderBroker({
             actorAccountId: requester.id,
             authentication: input.authentication,
@@ -307,6 +311,9 @@ async function createBrokerFixture(
             signingKey: { keyId: 'fixture-home', secretKey: signingKey.secretKey },
             readProviderProjection: async () => fixtureProviderProjection(connectionIdOf(input.resource), ['model-1', 'model-2']),
             readPoolSourceEligibility: async () => ({ eligibleMachineIds: new Set([broker.id]), reasons: new Map() }),
+            ...(input.readCurrentPresence ? { readCurrentPresence: input.readCurrentPresence } : {}),
+            ...(input.readPoolSourceEligibility ? { readPoolSourceEligibility: input.readPoolSourceEligibility } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
             ...(input.refreshAuthority
                 ? { verifyRefreshAuthority: (candidate: SignedProviderBrokerRouteGrantV1) => candidate.payload.grantId === input.refreshAuthority!.payload.grantId }
                 : {}),
@@ -388,6 +395,144 @@ describe('Team credential Provider broker admission', () => {
         });
     }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('preserves the consumer refusal when the Session loses its Machine access', async () => {
+        const fixture = await createBrokerFixture('consumer-machine-refusal');
+        const resource = await fixture.createResource('consumer-machine-connection');
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const opened = await fixture.open({ resource, sessionId: session.id, authentication: TEST_AUTHENTICATION });
+        if (!opened.ok) throw new Error(`broker open failed: ${opened.reasonCode}`);
+        await db.accessKey.deleteMany({ where: { accountId: fixture.requester.id,
+            machineId: fixture.worker.id, sessionId: session.id } });
+        await expect(fixture.admit({ authority: opened.authority, resource, requestId: 'access-removed' }))
+            .resolves.toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        expect(await db.usageEvent.count({ where: { teamCredentialResourceId: resource.id } })).toBe(0);
+    });
+
+    it('records one content-free deciding check per refusal and lets a transient presence failure recover', async () => {
+        const fixture = await createBrokerFixture('refusal-reasons');
+        const connectionId = 'private-connection-never-logged';
+        const resource = await fixture.createResource(connectionId);
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        // Pino is the external diagnostic sink; admission and storage remain real.
+        const sink = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const open = (extra: Partial<Parameters<typeof fixture.open>[0]> = {}) => fixture.open({
+            resource, sessionId: session.id, authentication: TEST_AUTHENTICATION, ...extra,
+        });
+        const expectRecord = (refusalReason: string, operation = 'open') => {
+            expect(sink.mock.calls).toEqual([[{
+                module: 'provider-broker-admission', operation,
+                reasonCode: 'broker_unavailable', refusalReason,
+            }]]);
+            sink.mockClear();
+        };
+        try {
+            let presenceReads = 0;
+            await expect(open({ readCurrentPresence: async () => {
+                presenceReads += 1;
+                throw new Error('private transport failure never logged');
+            } })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expect(presenceReads).toBe(1); // A refused request settles without re-polling.
+            expectRecord('presence_read_failed');
+            const opened = await open();
+            if (!opened.ok) throw new Error(`expected recovery: ${opened.reasonCode}`);
+            expect(sink).not.toHaveBeenCalled();
+
+            const authorityInput = {
+                authenticatedBrokerAccountId: fixture.custodian.id,
+                authority: opened.authority,
+                expectedResourceRevision: resource.revision,
+                brokerPresence: { state: 'known', machineIds: new Set([fixture.broker.id]) } as const,
+                verifyAuthority: (candidate: SignedProviderBrokerRouteGrantV1) => candidate.payload.grantId === opened.authority.payload.grantId,
+                readCurrentBrokerPresence: async (): Promise<never> => { throw new Error('private presence error never logged'); },
+            };
+            await expect(authorizeTeamCredentialProviderModelCatalog(authorityInput))
+                .resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expectRecord('presence_read_failed', 'catalog');
+            await expect(admitTeamCredentialProviderBrokerRequest({
+                ...authorityInput,
+                observedAt: new Date(1),
+                request: {
+                    v: 1, authority: opened.authority, expectedResourceRevision: resource.revision,
+                    sourceMemberKey: providerSourceMemberKey(connectionId, 'apiKey'),
+                    requestId: 'refused-request-never-logged',
+                    requestFacts: { generation: false, routeKind: 'openai_responses', modelId: 'model-1', reasoningEffort: null },
+                },
+            })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expectRecord('presence_read_failed', 'request');
+
+            await expect(open({ readCurrentPresence: async () => ({
+                initiatorPresence: { state: 'known', machineIds: new Set([fixture.worker.id]) },
+                brokerPresence: { state: 'known', machineIds: new Set<string>() },
+            }) })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expectRecord('broker_offline');
+
+            await expect(open({ readCurrentPresence: async () => ({
+                initiatorPresence: { state: 'known', machineIds: new Set([fixture.worker.id]) },
+                brokerPresence: { state: 'unavailable' },
+            }) })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expectRecord('broker_presence_unknown');
+
+            await db.machine.update({ where: { id: fixture.worker.id }, data: { operationProtocolCapabilities: {} } });
+            await expect(open()).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expectRecord('initiator_endpoint_missing');
+            sink.mockImplementationOnce(() => { throw new Error('diagnostic sink unavailable'); });
+            await expect(open()).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+        } finally {
+            sink.mockRestore();
+        }
+    });
+
+    it('distinguishes failed and aborted Pool eligibility without retiring the binding', async () => {
+        const fixture = await createBrokerFixture('refusal-pool');
+        const resource = await fixture.createResource('pool-refusal-connection');
+        const pool = await db.machinePool.create({ data: {
+            id: crypto.randomUUID(), accountId: fixture.custodian.id, name: 'Refusal pool',
+            members: { create: [{ machineId: fixture.broker.id, priorityTier: 0, enabled: true }] },
+        } });
+        await db.teamCredentialResource.update({ where: { id: resource.id }, data: { brokerMachineId: null, brokerPoolId: pool.id } });
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const sink = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        try {
+            const open = (extra: Partial<Parameters<typeof fixture.open>[0]> = {}) => fixture.open({
+                resource, sessionId: session.id, authentication: TEST_AUTHENTICATION, ...extra,
+            });
+            let eligibilityReads = 0;
+            await expect(open({ readPoolSourceEligibility: async () => {
+                eligibilityReads += 1;
+                throw new Error('private eligibility failure never logged');
+            } })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expect(eligibilityReads).toBe(1);
+            expect(sink.mock.calls).toEqual([[{
+                module: 'provider-broker-admission', operation: 'open',
+                reasonCode: 'broker_unavailable', refusalReason: 'eligibility_read_failed',
+            }]]);
+            sink.mockClear();
+            const abort = new AbortController();
+            abort.abort();
+            await expect(open({ signal: abort.signal })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expect(sink.mock.calls).toEqual([[{
+                module: 'provider-broker-admission', operation: 'open',
+                reasonCode: 'broker_unavailable', refusalReason: 'eligibility_aborted',
+            }]]);
+            sink.mockClear();
+            await expect(open({ readPoolSourceEligibility: async () => ({
+                eligibleMachineIds: new Set<string>(), reasons: new Map(),
+            }) })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+            expect(sink.mock.calls).toEqual([[{
+                module: 'provider-broker-admission', operation: 'open',
+                reasonCode: 'broker_unavailable', refusalReason: 'no_pool_candidates',
+            }]]);
+            sink.mockClear();
+            await expect(open()).resolves.toMatchObject({ ok: true });
+            expect(sink).not.toHaveBeenCalled();
+        } finally {
+            sink.mockRestore();
+        }
+    });
 
     it.each(['Team', 'personal'] as const)('retires %s broker authority when the canonical archive owner archives an active Session', async source => {
         const fixture = await createBrokerFixture(`archive-consumer-${source}`);
@@ -913,6 +1058,83 @@ describe('Team credential Provider broker admission', () => {
         } finally {
             await app.close();
         }
+    });
+
+    it.each(['machine', 'endpoint'] as const)('selects a distinct Pool peer before source eligibility when hashing would pick the initiator %s', async topology => {
+        const fixture = await createBrokerFixture(`pool-peer-${topology}`);
+        const capabilities = {
+            providerBrokerIngress: { protocolVersions: [1] },
+            irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) },
+        };
+        const coinciding = topology === 'machine'
+            ? await db.machine.update({ where: { id: fixture.worker.id }, data: {
+                accountId: fixture.custodian.id, installationId: crypto.randomUUID(),
+                metadata: encodePlainMachineStoredContent({ host: 'worker', platform: 'linux', happyCliVersion: 'test',
+                    homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+                dataEncryptionKey: new Uint8Array(Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+                operationProtocolCapabilities: capabilities,
+            } })
+            : await db.machine.create({ data: {
+                id: `same-endpoint-${fixture.custodian.id}`, accountId: fixture.custodian.id,
+                metadata: '{}', kind: 'persistent', operationProtocolCapabilities: capabilities,
+                operationProtocolCapabilitiesRevision: 1,
+            } });
+        if (topology === 'machine') {
+            await expect(inTx(tx => setMachineAccessGrantInTx(tx, {
+                actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+            }))).resolves.toMatchObject({ kind: 'saved', readiness: 'ready' });
+        }
+        const members = [coinciding.id, fixture.broker.id].map(machineId => ({ machineId, priorityTier: 0, enabled: true }));
+        const pool = await db.machinePool.create({ data: {
+            id: crypto.randomUUID(), accountId: fixture.custodian.id, name: 'Distinct peers',
+            members: { create: members },
+        } });
+        const resource = await fixture.createResource(`connection-pool-peer-${topology}`);
+        await db.teamCredentialResource.update({ where: { id: resource.id }, data: { brokerMachineId: null, brokerPoolId: pool.id } });
+        // Pin a consumer whose ordinary Pool hash chooses the unusable peer.
+        let sequence = 0;
+        let sessionId: string;
+        do {
+            sessionId = `pool-peer-${topology}-${fixture.requester.id}-${sequence++}`;
+        } while (selectMachinePoolCandidate({ purpose: 'session', members,
+            availableMachineIds: new Set(members.map(member => member.machineId)),
+            requestKey: [resource.id, 'session', sessionId].join('\u0000'),
+        })?.machineId !== coinciding.id);
+        const session = await db.session.create({ data: {
+            id: sessionId, tag: sessionId, accountId: fixture.requester.id, metadata: '{}', active: true,
+        } });
+        await db.accessKey.create({ data: {
+            accountId: fixture.requester.id, machineId: fixture.worker.id, sessionId: session.id, data: '{}',
+        } });
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const eligibilityDemand: string[][] = [];
+        const projectionDemand: string[] = [];
+        const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
+        const opened = await openTeamCredentialProviderBroker({
+            actorAccountId: fixture.requester.id, authentication: TEST_AUTHENTICATION,
+            request: {
+                v: 1, resourceId: resource.id, expectedResourceRevision: resource.revision,
+                modelId: 'model-1', sourceRevision: 'source-revision-1', initiatorMachineId: fixture.worker.id,
+                consumer: { kind: 'session', sessionId: session.id }, application: FIXTURE_APPLICATION,
+            },
+            initiatorPresence: { state: 'partial', machineIds: new Set([fixture.worker.id]) },
+            brokerPresence: { state: 'partial', machineIds: new Set(members.map(member => member.machineId)) },
+            nowMs: 1, grantId: crypto.randomUUID(),
+            signingKey: { keyId: 'fixture-home', secretKey: signingKey.secretKey },
+            readPoolSourceEligibility: async ({ machineIds }) => {
+                eligibilityDemand.push([...machineIds]);
+                return { eligibleMachineIds: new Set(machineIds), reasons: new Map() };
+            },
+            readProviderProjection: async ({ brokerMachineId }) => {
+                projectionDemand.push(brokerMachineId);
+                return fixtureProviderProjection(`connection-pool-peer-${topology}`);
+            },
+        });
+        expect(opened).toMatchObject({ ok: true, target: { brokerMachineId: fixture.broker.id } });
+        // The unusable peer must receive no source-eligibility or catalog RPC.
+        expect(eligibilityDemand).toEqual([[fixture.broker.id]]);
+        expect(projectionDemand).toEqual([fixture.broker.id]);
     });
 
     it.each(['machine', 'pool', 'endpoint'] as const)('refuses coinciding Team broker %s identities before projection or signing', async topology => {

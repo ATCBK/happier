@@ -1,6 +1,7 @@
 import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceAudienceGrantV1Schema, TeamCredentialResourceMemberGrantV1Schema, TeamCredentialResourceSummaryV1Schema, TeamCredentialSessionUsePolicyV1Schema, decodeTeamCredentialResourcesCursorV1, encodeTeamCredentialResourcesCursorV1, teamCredentialResourcesQueryKeyV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { TeamCredentialSourceResourceAdministrationV1Schema, teamCredentialSourceLocatorKeyV1, teamCredentialSourceLocatorV1, type TeamCredentialSourceLocatorV1 } from '@happier-dev/protocol/teams';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
@@ -394,18 +395,19 @@ async function projectSummary(
     authority: ResourceAdministrationAuthority,
     listFacts: ResourceListFacts = {},
 ) {
-    let sourceValue: unknown;
+    const parsedSource = readTeamCredentialSourceBinding(row.sourceBindingJson);
+    let source = parsedSource.success ? parsedSource.data : null;
     let requestPolicyValue: unknown = null;
     let corrupt = false;
     try {
-        sourceValue = JSON.parse(row.sourceBindingJson);
-        requestPolicyValue = row.requestPolicyJson === null ? null : JSON.parse(row.requestPolicyJson);
+        if (parsedSource.success || parsedSource.reason !== 'invalid_json') {
+            requestPolicyValue = row.requestPolicyJson === null ? null : JSON.parse(row.requestPolicyJson);
+        }
     } catch {
         corrupt = true;
-        sourceValue = null;
+        source = null;
         requestPolicyValue = null;
     }
-    const parsedSource = TeamCredentialSourceBindingV1Schema.safeParse(sourceValue);
     const parsedRequestPolicy = TeamCredentialResourceSummaryV1Schema.shape.requestPolicy.safeParse(requestPolicyValue);
     const parsedCeiling = TeamCredentialDisclosureCeilingV1Schema.safeParse(row.disclosureCeiling);
     const parsedSessionPolicy = TeamCredentialSessionUsePolicyV1Schema.safeParse(row.sessionUsePolicy);
@@ -433,7 +435,6 @@ async function projectSummary(
         || !parsedCeiling.success
         || !parsedSessionPolicy.success
         || !parsedAllMembersMode.success;
-    const source = parsedSource.success ? parsedSource.data : null;
     // The strict administration wire shape predates row-corruption projection.
     // Its closed policy fields therefore need conservative carrier values for a
     // corrupt row. `readiness: resource_corrupt` is the deciding fact: none of
@@ -983,10 +984,8 @@ async function readAdmittedTeamCredentialCatalogInTx(tx: Tx, input: Omit<Credent
     if (candidates.length > 0) {
         const audiences = await readAudiencesInTx(tx, candidates.map(row => row.id));
         const candidateSources = candidates.map(row => {
-            try {
-                const parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-                return parsed.success ? parsed.data : null;
-            } catch { return null; }
+            const parsed = readTeamCredentialSourceBinding(row.sourceBindingJson);
+            return parsed.success ? parsed.data : null;
         });
         const sourceResolutions = await resolveTeamCredentialResourceSourcesInTx(tx, candidates.map((row, index) => ({
             custodianAccountId: row.custodianAccountId, source: candidateSources[index],
@@ -1272,12 +1271,7 @@ export async function readTeamCredentialResourcePageInTx(tx: Tx, input: Credenti
         source: ReturnType<typeof TeamCredentialSourceBindingV1Schema.parse>;
     }>> = [];
     for (const row of administrationRows) {
-        let parsed: ReturnType<typeof TeamCredentialSourceBindingV1Schema.safeParse>;
-        try {
-            parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-        } catch {
-            parsed = TeamCredentialSourceBindingV1Schema.safeParse(null);
-        }
+        const parsed = readTeamCredentialSourceBinding(row.sourceBindingJson);
         const source = parsed.success ? parsed.data : null;
         parsedSources.set(row.id, source);
         if (source === null) continue;
@@ -1427,13 +1421,9 @@ export async function readTeamCredentialSourceResourceAdministrationInTx(tx: Tx,
             ? `\"groupId\":${JSON.stringify(input.source.target.groupId)}`
             : `\"accountId\":${JSON.stringify(input.source.target.account.accountId)}`;
     const matchesSource = (row: ResourceRow) => {
-        try {
-            const source = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-            return source.success
-                && teamCredentialSourceLocatorKeyV1(teamCredentialSourceLocatorV1(source.data)) === locatorKey;
-        } catch {
-            return false;
-        }
+        const source = readTeamCredentialSourceBinding(row.sourceBindingJson);
+        return source.success
+            && teamCredentialSourceLocatorKeyV1(teamCredentialSourceLocatorV1(source.data)) === locatorKey;
     };
     const candidateWindow = await tx.teamCredentialResource.findMany({
             where: {
@@ -1465,10 +1455,8 @@ export async function readTeamCredentialSourceResourceAdministrationInTx(tx: Tx,
         }] as const;
     }));
     const parsedSources = pageRows.map(row => {
-        try {
-            const parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-            return parsed.success ? parsed.data : null;
-        } catch { return null; }
+        const parsed = readTeamCredentialSourceBinding(row.sourceBindingJson);
+        return parsed.success ? parsed.data : null;
     });
     const sourceResolutions = await resolveTeamCredentialResourceSourcesInTx(tx, pageRows.map((row, index) => ({
         custodianAccountId: row.custodianAccountId, source: parsedSources[index],

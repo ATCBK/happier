@@ -1,5 +1,5 @@
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { z } from 'zod/mini';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
@@ -203,13 +203,7 @@ export async function setTeamCredentialAudienceInTx(
         ...input.memberGrants.map(grant => grant.deliveryMode),
     ];
     if (modes.some(mode => mode === "direct" || mode === "both")) {
-        let sourceValue: unknown;
-        try {
-            sourceValue = JSON.parse(resource.sourceBindingJson);
-        } catch {
-            return { ok: false, error: "resource_corrupt" };
-        }
-        const source = TeamCredentialSourceBindingV1Schema.safeParse(sourceValue);
+        const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
         if (!source.success) return { ok: false, error: "resource_corrupt" };
         const currentSource = await resolveTeamCredentialResourceSourceInTx(tx, {
             custodianAccountId: resource.custodianAccountId,

@@ -1,4 +1,5 @@
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { TeamCredentialSourceCandidateV1Schema, teamCredentialSourceCandidateIdV1, type TeamCredentialSourceCandidateV1 } from '@happier-dev/protocol/teams';
 
 import type { Tx } from "@/storage/inTx";
@@ -102,13 +103,7 @@ export async function listTeamCredentialSourceCandidatesInTx(
     // Team two policies over one credential with no rule for which wins.
     const offeredByCandidateId = new Map<string, string>();
     for (const resource of existing) {
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(resource.sourceBindingJson);
-        } catch {
-            continue;
-        }
-        const source = TeamCredentialSourceBindingV1Schema.safeParse(parsed);
+        const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
         if (!source.success) continue;
         const candidateId = teamCredentialSourceCandidateIdV1(source.data);
         if (!offeredByCandidateId.has(candidateId)) offeredByCandidateId.set(candidateId, resource.id);

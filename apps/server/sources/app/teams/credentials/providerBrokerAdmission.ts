@@ -6,19 +6,21 @@ import { IrohEndpointDescriptorV1Schema } from '@happier-dev/protocol/connectivi
 import { type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import { TeamCredentialRequestPolicyV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { type SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { type TeamCredentialUsageLimitDenialV1 } from '@happier-dev/protocol/teams';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/protocol/ephemeralRunner/principal';
 
 import { auth } from '@/app/auth/auth';
+import { logger } from '@/utils/logging/log';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { resolveTeamCredentialBrokerMachineForOpenInTx } from './brokerMachineEligibility';
-import { readTeamCredentialBrokerPresenceDemand, resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
+import { readTeamCredentialBrokerPresenceDemand, resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint, type TeamCredentialBrokerPlacementResolution } from './brokerPlacementResolver';
 import { resolveTeamCredentialEntitlementInTx } from './resourceAccess';
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
 import { admitTeamCredentialOperationBindingInTx, type TeamCredentialOperationConsumer } from './sessionBinding';
@@ -74,11 +76,19 @@ type BrokerOpenPresenceReader = (input: Readonly<{
 export const PROVIDER_BROKER_ROUTE_GRANT_TTL_MS =
     DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel;
 
+type BrokerRefusalReason = Extract<TeamCredentialBrokerPlacementResolution, { error: 'broker_unavailable' }>['refusalReason']
+    | 'binding_broker_unavailable' | 'broker_endpoint_changed' | 'preparation_endpoint_changed'
+    | 'initiator_endpoint_missing' | 'initiator_offline' | 'initiator_presence_unknown'
+    | 'placement_endpoint_missing' | 'presence_read_failed' | 'eligibility_read_failed' | 'eligibility_aborted';
+
 type Failure = Readonly<{
     ok: false;
     reasonCode: ProviderBrokerAdmissionFailureCodeV1 | 'token_limit_unavailable';
     usageLimit?: TeamCredentialUsageLimitDenialV1;
+    refusalReason?: BrokerRefusalReason;
 }>;
+
+type PublicFailure = Omit<Failure, 'refusalReason'>;
 
 export type TeamCredentialProviderBrokerOpenResult =
     | Readonly<{
@@ -86,7 +96,7 @@ export type TeamCredentialProviderBrokerOpenResult =
         authority: SignedProviderBrokerRouteGrantV1;
         target: Extract<ProviderBrokerOpenResponseV1, { ok: true }>['target'];
     }>
-    | Failure;
+    | PublicFailure;
 
 export type TeamCredentialProviderBrokerOpenInput = Readonly<{
     actorAccountId: string;
@@ -131,7 +141,7 @@ type TeamCredentialProviderBrokerRequestAdmissionSuccess<
 
 export type TeamCredentialProviderBrokerRequestAdmissionResult =
     | TeamCredentialProviderBrokerRequestAdmissionSuccess
-    | Failure;
+    | PublicFailure;
 
 export type TeamCredentialExecutionRunCurrentnessResolver = (input: Readonly<{
     executionRunId: string;
@@ -178,7 +188,28 @@ type AuthorizedBrokerOperation = Readonly<{
 }>;
 
 function failure(reasonCode: Failure['reasonCode'], usageLimit?: TeamCredentialUsageLimitDenialV1): Failure {
-    return { ok: false, reasonCode, ...(usageLimit ? { usageLimit } : {}) };
+    return {
+        ok: false, reasonCode, ...(usageLimit ? { usageLimit } : {}),
+        ...(reasonCode === 'broker_unavailable' ? { refusalReason: 'binding_broker_unavailable' as const } : {}),
+    };
+}
+
+function brokerUnavailable(refusalReason: BrokerRefusalReason): Failure {
+    return { ok: false, reasonCode: 'broker_unavailable', refusalReason };
+}
+
+/** Emit only the settled refusal, outside replayable transactions, and keep diagnostics off the wire. */
+function reportBrokerAdmissionFailure(operation: 'open' | 'catalog' | 'request', result: Failure): PublicFailure {
+    const { refusalReason, ...response } = result;
+    try {
+        logger.warn({
+            module: 'provider-broker-admission', operation,
+            reasonCode: result.reasonCode, refusalReason: refusalReason ?? result.reasonCode,
+        });
+    } catch {
+        // A diagnostic sink failure cannot replace the admission decision.
+    }
+    return response;
 }
 
 /**
@@ -269,9 +300,7 @@ async function authorizeCurrentBrokerOperationInTx(
         consumer: grant.consumer, executionRun: input.executionRun ?? null,
     });
     if (!consumerAdmission.ok) {
-        // Preserve this established route's Machine-binding refusal code; the
-        // shared consumer owner decides currentness for both source arms.
-        return failure(consumerAdmission.reasonCode === 'resource_forbidden' ? 'operation_not_current' : consumerAdmission.reasonCode);
+        return failure(consumerAdmission.reasonCode);
     }
     const session = consumerAdmission.session;
     // The Team qualification of this request is always re-evaluated now, for
@@ -363,9 +392,11 @@ async function authorizeCurrentBrokerOperationInTx(
         brokerMachineId: grant.target.machineId,
         presence: input.brokerPresence,
     });
-    if (!broker.ok) return failure(broker.error);
+    if (!broker.ok) return broker.error === 'broker_unavailable'
+        ? brokerUnavailable(broker.refusalReason)
+        : failure(broker.error);
     if (broker.machineId !== grant.target.machineId || broker.endpointAuthority.endpointId !== grant.target.endpointId) {
-        return failure('broker_unavailable');
+        return brokerUnavailable('broker_endpoint_changed');
     }
     return {
         ok: true,
@@ -391,6 +422,13 @@ async function authorizeCurrentBrokerOperationInTx(
  * commit request usage.
  */
 export async function authorizeTeamCredentialProviderModelCatalog(
+    input: Parameters<typeof authorizeTeamCredentialProviderModelCatalogUnreported>[0],
+): Promise<Readonly<{ ok: true }> | PublicFailure> {
+    const result = await authorizeTeamCredentialProviderModelCatalogUnreported(input);
+    return result.ok ? result : reportBrokerAdmissionFailure('catalog', result);
+}
+
+async function authorizeTeamCredentialProviderModelCatalogUnreported(
     input: Readonly<{
         authenticatedBrokerAccountId: string;
         authority: SignedProviderBrokerRouteGrantV1;
@@ -422,7 +460,7 @@ export async function authorizeTeamCredentialProviderModelCatalog(
     try {
         brokerPresence = await input.readCurrentBrokerPresence();
     } catch {
-        return failure('broker_unavailable');
+        return brokerUnavailable('presence_read_failed');
     }
     return await inTx(async tx => {
         const authorized = await authorizeCurrentBrokerOperationInTx(tx, {
@@ -535,7 +573,7 @@ function preparationChangeFailure(
         || left.initiatorEndpoint.endpointId !== right.initiatorEndpoint.endpointId
         || left.initiatorEndpoint.revision !== right.initiatorEndpoint.revision
         || exactBrokerChanged) {
-        return failure('broker_unavailable');
+        return brokerUnavailable('preparation_endpoint_changed');
     }
     return null;
 }
@@ -723,15 +761,13 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
     // presence/projection work or strict route signing; co-hosted daemons with
     // distinct Account/Machine/endpoint identities still use the normal path.
     if (resource.custodianAccountId === input.actorAccountId) return failure('resource_unavailable');
-    let rawSource: unknown;
     let rawPolicy: unknown = null;
     try {
-        rawSource = JSON.parse(resource.sourceBindingJson);
         rawPolicy = resource.requestPolicyJson === null ? null : JSON.parse(resource.requestPolicyJson);
     } catch {
         return failure('resource_unavailable');
     }
-    const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
+    const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     const policy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(rawPolicy);
     if (!source.success || !policy.success) return failure('resource_unavailable');
     // The Runner's reviewed selection remains bound to its original request.
@@ -748,7 +784,7 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         machineId: request.initiatorMachineId,
         sessionId,
     });
-    if (!initiatorEndpoint) return failure('broker_unavailable');
+    if (!initiatorEndpoint) return brokerUnavailable('initiator_endpoint_missing');
     return {
         request,
         sessionId,
@@ -787,8 +823,9 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
     if (isFailure(authorized)) return authorized;
     const { request: parsedRequest, resource, pinnedMachineId } = authorized;
     const initiatorEndpoint = authorized.initiatorEndpoint;
-    if (classifyMachineDaemonPresence(input.initiatorPresence, parsedRequest.initiatorMachineId) !== 'connected') {
-        return failure('broker_unavailable');
+    const initiatorPresence = classifyMachineDaemonPresence(input.initiatorPresence, parsedRequest.initiatorMachineId);
+    if (initiatorPresence !== 'connected') {
+        return brokerUnavailable(initiatorPresence === 'unknown' ? 'initiator_presence_unknown' : 'initiator_offline');
     }
     const placement = await resolveTeamCredentialBrokerPlacementInTx(tx, {
         resource: {
@@ -809,13 +846,15 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
         ...(selectedPoolMachineId === null ? {} : { expectedPoolMachineId: selectedPoolMachineId }),
     });
     if (!placement.ok) {
-        return failure(placement.error === 'resource_unavailable' ? 'resource_unavailable' : placement.error);
+        return placement.error === 'broker_unavailable'
+            ? brokerUnavailable(placement.refusalReason)
+            : failure(placement.error);
     }
     // The private broker open is an Iroh peer tunnel, so this consumer — unlike
     // the relay-reached resource test and external API key — cannot proceed
     // without the Machine's own endpoint authority.
     const endpointAuthority = placement.broker?.endpointAuthority ?? null;
-    if (placement.broker !== null && endpointAuthority === null) return failure('broker_unavailable');
+    if (placement.broker !== null && endpointAuthority === null) return brokerUnavailable('placement_endpoint_missing');
     const broker = placement.broker === null || endpointAuthority === null
         ? null
         : { machineId: placement.broker.machineId, endpointAuthority };
@@ -847,7 +886,7 @@ function finalizePreparedBrokerOpen(
     prepared: BrokerOpenPreparation,
     projectionResponse: unknown,
 ): TeamCredentialProviderBrokerOpenResult {
-    if (prepared.broker === null) return failure('broker_unavailable');
+    if (prepared.broker === null) return brokerUnavailable('broker_selection_missing');
     const selection = projectTeamCredentialProviderModels({
         response: projectionResponse,
         resourceId: prepared.request.resourceId,
@@ -992,7 +1031,7 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
             brokerMachineIds,
         });
     } catch {
-        return failure('broker_unavailable');
+        return brokerUnavailable('presence_read_failed');
     }
     const preparedInput: TeamCredentialProviderBrokerPreparedInput & Readonly<{
         runnerPrincipal?: VerifiedEphemeralSessionRunnerPrincipal;
@@ -1018,7 +1057,7 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
         if (!input.readPoolSourceEligibility || initial.poolSnapshot === null) return failure('resource_unavailable');
         const signal = input.signal ?? new AbortController().signal;
         const genericCandidateIds = initial.poolCandidateMachineIds;
-        if (genericCandidateIds.length === 0) return failure('broker_unavailable');
+        if (genericCandidateIds.length === 0) return brokerUnavailable('no_pool_candidates');
         const eligibility = await input.readPoolSourceEligibility({
             custodianAccountId: initial.resource.custodianAccountId,
             machineIds: genericCandidateIds,
@@ -1031,7 +1070,8 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
             sourceRevision: initial.request.sourceRevision,
             signal,
         }).catch(() => null);
-        if (!eligibility || signal.aborted) return failure('broker_unavailable');
+        if (signal.aborted) return brokerUnavailable('eligibility_aborted');
+        if (!eligibility) return brokerUnavailable('eligibility_read_failed');
         poolEligibleMachineIds = eligibility.eligibleMachineIds;
         const selected = await inTx(tx => prepareTeamCredentialProviderBrokerOpenInTx(
             tx,
@@ -1045,11 +1085,11 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
         const changed = preparationChangeFailure(initial, selected);
         if (changed) return changed;
         selectedPoolMachineId = selected.broker?.machineId ?? null;
-        if (selectedPoolMachineId === null) return failure('broker_unavailable');
+        if (selectedPoolMachineId === null) return brokerUnavailable('broker_selection_missing');
         preProjection = selected;
     }
 
-    if (selectedPoolMachineId === null) return failure('broker_unavailable');
+    if (selectedPoolMachineId === null) return brokerUnavailable('broker_selection_missing');
     let projectionResponse: unknown;
     try {
         projectionResponse = await input.readProviderProjection({
@@ -1074,7 +1114,7 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
             brokerMachineIds: selectedPoolMachineId ? [selectedPoolMachineId] : [],
         });
     } catch {
-        return failure('broker_unavailable');
+        return brokerUnavailable('presence_read_failed');
     }
     return await inTx(async tx => {
         const current = await prepareTeamCredentialProviderBrokerOpenInTx(
@@ -1103,7 +1143,8 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
 export async function openTeamCredentialProviderBroker(
     input: TeamCredentialProviderBrokerOpenInput,
 ): Promise<TeamCredentialProviderBrokerOpenResult> {
-    return await openTeamCredentialProviderBrokerWithPrincipal(input);
+    const result = await openTeamCredentialProviderBrokerWithPrincipal(input);
+    return result.ok ? result : reportBrokerAdmissionFailure('open', result);
 }
 
 /** Restricted Runner opens consume their exact pre-review frozen selection. */
@@ -1112,10 +1153,11 @@ export async function openRunnerTeamCredentialProviderBroker(
         principal: VerifiedEphemeralSessionRunnerPrincipal;
     }>,
 ): Promise<TeamCredentialProviderBrokerOpenResult> {
-    return await openTeamCredentialProviderBrokerWithPrincipal({
+    const result = await openTeamCredentialProviderBrokerWithPrincipal({
         ...input,
         runnerPrincipal: input.principal,
     });
+    return result.ok ? result : reportBrokerAdmissionFailure('open', result);
 }
 
 /**
@@ -1134,6 +1176,13 @@ type TeamCredentialProviderBrokerRequestAdmissionInput = Readonly<{
 }>;
 
 export async function admitTeamCredentialProviderBrokerRequest(
+    input: TeamCredentialProviderBrokerRequestAdmissionInput,
+): Promise<TeamCredentialProviderBrokerRequestAdmissionResult> {
+    const result = await admitTeamCredentialProviderBrokerRequestUnreported(input);
+    return result.ok ? result : reportBrokerAdmissionFailure('request', result);
+}
+
+async function admitTeamCredentialProviderBrokerRequestUnreported(
     input: TeamCredentialProviderBrokerRequestAdmissionInput,
 ): Promise<TeamCredentialProviderBrokerRequestAdmissionResult> {
     const parsed = ProviderBrokerRequestAdmissionV1Schema.safeParse(input.request);
@@ -1155,7 +1204,7 @@ export async function admitTeamCredentialProviderBrokerRequest(
     try {
         brokerPresence = await input.readCurrentBrokerPresence();
     } catch {
-        return failure('broker_unavailable');
+        return brokerUnavailable('presence_read_failed');
     }
     return await inTx(tx => admitTeamCredentialProviderBrokerRequestInTx(
         tx,

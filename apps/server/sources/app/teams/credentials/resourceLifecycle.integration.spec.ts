@@ -222,6 +222,15 @@ describe("Team credential resource lifecycle", () => {
             sourceBindingJson: JSON.stringify(input.source),
         });
         await expect(create()).resolves.toEqual({ ok: true, resourceId: input.resourceId, revision: 0 });
+        const stored = await db.teamCredentialResource.findUniqueOrThrow({ where: { id: input.resourceId } });
+        const annotatedSource = { ...TeamCredentialSourceBindingV1Schema.parse(JSON.parse(stored.sourceBindingJson)),
+            retiredDisplay: { label: 'retained source annotation' } };
+        await db.teamCredentialResource.update({ where: { id: input.resourceId },
+            data: { sourceBindingJson: JSON.stringify(annotatedSource) } });
+        await expect(create()).resolves.toEqual({ ok: true, resourceId: input.resourceId, revision: 0 });
+        await expect(inTx(tx => createTeamCredentialResourceInTx(tx, {
+            ...input, resourceId: 'strict-source-create-input', source: annotatedSource,
+        }))).resolves.toEqual({ ok: false, error: 'invalid_resource_input' });
         expect(await db.teamCredentialResource.count({ where: { id: input.resourceId } })).toBe(1);
         expect(await db.teamCredentialActivityEvent.count({
             where: { resourceId: input.resourceId, kind: "resource_created" },

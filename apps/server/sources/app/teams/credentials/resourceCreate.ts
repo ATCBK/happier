@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { TeamCredentialResourceCreateInputV1Schema, type TeamCredentialResourceCreateInputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { Tx } from "@/storage/inTx";
 import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
@@ -30,8 +31,9 @@ export type CreateTeamCredentialResourceResult =
     | Readonly<{ ok: false; error: "forbidden" | "resource_changed" | "not_found_or_not_visible" | "invalid_resource_input" | "invalid_audience" | "disclosure_not_allowed" | "broker_unavailable" | "update_required" | "invalid_limit" | "subject_not_in_team" | "token_limit_unavailable" | "cost_limit_unavailable" | "source_owner_required" | "source_replaced_or_missing" | "team_authentication_required" | "team_authentication_policy_unavailable" }>;
 
 async function existingMatchesDraft(tx: Tx, existing: NonNullable<Awaited<ReturnType<Tx['teamCredentialResource']['findUnique']>>>, body: TeamCredentialResourceCreateInputV1) {
-    let storedSource: unknown;
-    try { storedSource = JSON.parse(existing.sourceBindingJson); } catch { return false; }
+    const storedSourceRead = readTeamCredentialSourceBinding(existing.sourceBindingJson);
+    if (!storedSourceRead.success) return false;
+    const storedSource = storedSourceRead.data;
     const [groups, members, limits] = await Promise.all([
         tx.teamCredentialGroupGrant.findMany({ where: { resourceId: existing.id }, select: { teamGroupId: true, deliveryMode: true } }),
         tx.teamCredentialMemberGrant.findMany({ where: { resourceId: existing.id }, select: { teamMembershipId: true, deliveryMode: true } }),

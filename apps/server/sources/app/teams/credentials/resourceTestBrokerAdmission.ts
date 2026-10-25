@@ -2,7 +2,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 import { verifyPeerTcpTunnelRelayAuthorizationV2 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorization';
 import { type PeerTcpTunnelRelayAuthorizationTrustRootV1 } from '@happier-dev/protocol/machines/peer/mediation/tunnel/authorizationSchemas';
 import { TeamCredentialResourceTestAdmissionResponseV1Schema, TeamCredentialResourceTestAdmissionV1Schema, type TeamCredentialResourceTestAdmissionResponseV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 
 import type { Tx } from '@/storage/inTx';
 import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
@@ -103,13 +103,7 @@ export async function admitTeamCredentialResourceTestRequestInTx(
         selection: 'established',
     });
     if (!broker.ok) return failure(broker.error === 'update_required' ? 'broker_unavailable' : broker.error);
-    let sourceValue: unknown;
-    try {
-        sourceValue = JSON.parse(resource.sourceBindingJson);
-    } catch {
-        return failure('resource_unavailable');
-    }
-    const source = TeamCredentialSourceBindingV1Schema.safeParse(sourceValue);
+    const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     if (!source.success || !pluginJsonValuesEqual(source.data, binding.source)) return failure('resource_unavailable');
     const current = await resolveTeamCredentialResourceSourceInTx(tx, {
         custodianAccountId: resource.custodianAccountId,

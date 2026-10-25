@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from 'zod/mini';
 import { TeamCredentialBrokerPlacementV1Schema, TeamCredentialRequestPolicySupportOutputV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialRequestPolicyModelSupportV1, type TeamCredentialRequestPolicyV1, type TeamCredentialRequestPolicySupportOutputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 
@@ -147,13 +148,7 @@ export async function prepareTeamCredentialRequestPolicySupportInTx(
             },
         });
         if (!resource) return { ok: false, error: "resource_not_found" };
-        const parsedSource = (() => {
-            try {
-                return TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(resource.sourceBindingJson));
-            } catch {
-                return TeamCredentialSourceBindingV1Schema.safeParse(null);
-            }
-        })();
+        const parsedSource = readTeamCredentialSourceBinding(resource.sourceBindingJson);
         const parsedPlacement = z.nullable(TeamCredentialBrokerPlacementV1Schema).safeParse(
             resource.brokerMachineId !== null && resource.brokerPoolId === null
                 ? { kind: "machine", machineId: resource.brokerMachineId }

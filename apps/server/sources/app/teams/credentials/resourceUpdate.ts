@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from 'zod/mini';
 import { TeamCredentialDisclosureCeilingV1Schema, TeamCredentialSessionUsePolicyV1Schema, TeamCredentialRequestPolicyV1Schema, TeamCredentialBrokerPlacementV1Schema, TeamCredentialResourceReplacementV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialDeliveryModeV1Schema, narrowTeamCredentialDeliveryModeToBrokeredOnlyV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1, type TeamCredentialSessionUsePolicyV1, type TeamCredentialRequestPolicyV1, type TeamCredentialBrokerPlacementV1, type TeamCredentialResourceReplacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import { AccountStatus } from "@/storage/enums.generated";
@@ -85,7 +85,7 @@ async function applyResourceReplacementInTx(
     const resource = input.resource;
     if (resource.revision !== input.expectedRevision) return { ok: false, error: "resource_changed" };
 
-    const storedSource = TeamCredentialSourceBindingV1Schema.safeParse(parseJson(resource.sourceBindingJson));
+    const storedSource = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     const storedPolicy = parseJson(resource.requestPolicyJson);
     const storedCeiling = TeamCredentialDisclosureCeilingV1Schema.safeParse(resource.disclosureCeiling);
     const storedSessionPolicy = TeamCredentialSessionUsePolicyV1Schema.safeParse(resource.sessionUsePolicy);
@@ -516,7 +516,7 @@ export async function updateTeamCredentialResourceInTx(
     const requestPolicyChanged = !isDeepStrictEqual(storedRequestPolicy, requestPolicy.data);
     let nextRequestPolicy = requestPolicy.data;
     if (requestPolicyChanged && requestPolicy.data !== null) {
-        const storedSource = TeamCredentialSourceBindingV1Schema.safeParse(parseJson(resource.sourceBindingJson));
+        const storedSource = readTeamCredentialSourceBinding(resource.sourceBindingJson);
         if (!storedSource.success) return { ok: false, error: "resource_corrupt" };
         const currentSource = await resolveTeamCredentialResourceSourceInTx(tx, {
             custodianAccountId: resource.custodianAccountId,
@@ -548,7 +548,7 @@ export async function updateTeamCredentialResourceInTx(
         // Widening is the active source custodian's own consent; the source
         // must still be current and able to export direct material.
         if (!isActiveCustodian) return { ok: false, error: "resource_forbidden" };
-        const storedSource = TeamCredentialSourceBindingV1Schema.safeParse(parseJson(resource.sourceBindingJson));
+        const storedSource = readTeamCredentialSourceBinding(resource.sourceBindingJson);
         if (!storedSource.success) return { ok: false, error: "resource_corrupt" };
         const currentSource = await resolveTeamCredentialResourceSourceInTx(tx, {
             custodianAccountId: resource.custodianAccountId,

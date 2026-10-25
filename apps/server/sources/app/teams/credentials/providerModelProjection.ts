@@ -78,20 +78,21 @@ export function projectTeamCredentialRequestPolicySupportModels(
     });
 }
 
-/** Uses the same canonical per-row Pool choice as the provider-model catalog. */
-export function selectPoolBackedTeamCredentialRequestPolicySupportModels(input: Readonly<{
+type PoolBackedModelsInput<T> = Readonly<{
     members: readonly Readonly<MachinePoolSelectableMemberV1>[];
     availableMachineIds: ReadonlySet<string>;
     candidates: readonly Readonly<{
         machineId: string;
-        model: TeamCredentialRequestPolicyModelSupportV1;
+        model: T;
     }>[];
     requestKey: string;
-}>): readonly TeamCredentialRequestPolicyModelSupportV1[] {
+}>;
+
+function selectPoolBackedModels<T>(input: PoolBackedModelsInput<T>, candidateKey: (model: T) => string): readonly T[] {
     const byModel = new Map<string, typeof input.candidates[number][]>();
     for (const candidate of input.candidates) {
         if (!input.availableMachineIds.has(candidate.machineId)) continue;
-        const key = requestPolicySupportCandidateKey(candidate.model);
+        const key = candidateKey(candidate.model);
         const entries = byModel.get(key) ?? [];
         entries.push(candidate);
         byModel.set(key, entries);
@@ -109,39 +110,22 @@ export function selectPoolBackedTeamCredentialRequestPolicySupportModels(input: 
     });
 }
 
+/** Uses the same canonical per-row Pool choice as the provider-model catalog. */
+export function selectPoolBackedTeamCredentialRequestPolicySupportModels(
+    input: PoolBackedModelsInput<TeamCredentialRequestPolicyModelSupportV1>,
+): readonly TeamCredentialRequestPolicyModelSupportV1[] {
+    return selectPoolBackedModels(input, requestPolicySupportCandidateKey);
+}
+
 /**
  * Chooses the canonical Pool member independently for each recipient-safe
  * model row. Machine identity remains Home-local and never crosses the catalog
  * projection; a later broker open revalidates and pins its own exact target.
  */
-export function selectPoolBackedTeamCredentialProviderModels(input: Readonly<{
-    members: readonly Readonly<MachinePoolSelectableMemberV1>[];
-    availableMachineIds: ReadonlySet<string>;
-    candidates: readonly Readonly<{
-        machineId: string;
-        model: TeamCredentialProviderModelCatalogEntryV1;
-    }>[];
-    requestKey: string;
-}>): readonly TeamCredentialProviderModelCatalogEntryV1[] {
-    const byModel = new Map<string, typeof input.candidates[number][]>();
-    for (const candidate of input.candidates) {
-        if (!input.availableMachineIds.has(candidate.machineId)) continue;
-        const key = providerModelCandidateKey(candidate.model);
-        const entries = byModel.get(key) ?? [];
-        entries.push(candidate);
-        byModel.set(key, entries);
-    }
-    return [...byModel.entries()].flatMap(([key, candidates]) => {
-        const selected = selectMachinePoolCandidate({
-            purpose: "session",
-            members: input.members,
-            availableMachineIds: new Set(candidates.map(candidate => candidate.machineId)),
-            requestKey: `${input.requestKey}\u0000${key}`,
-        });
-        if (!selected) return [];
-        const model = candidates.find(candidate => candidate.machineId === selected.machineId)?.model;
-        return model ? [model] : [];
-    });
+export function selectPoolBackedTeamCredentialProviderModels(
+    input: PoolBackedModelsInput<TeamCredentialProviderModelCatalogEntryV1>,
+): readonly TeamCredentialProviderModelCatalogEntryV1[] {
+    return selectPoolBackedModels(input, providerModelCandidateKey);
 }
 
 /** One projection policy shared by catalog display and Runner selection review. */

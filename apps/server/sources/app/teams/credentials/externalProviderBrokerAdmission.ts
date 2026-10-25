@@ -1,5 +1,5 @@
 import { TeamCredentialExternalProviderAdmissionV1Schema, TeamCredentialExternalProviderTerminalUsageV1Schema, TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema, type TeamCredentialExternalProviderAdmissionV1, type TeamCredentialExternalProviderAdmissionResponseV1, type TeamCredentialExternalProviderTerminalUsageResponseV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 
 import type { Tx } from '@/storage/inTx';
 import { admitTeamCredentialBrokerMachineForResourceInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
@@ -58,10 +58,9 @@ async function authorizeCurrentExternalProviderKeyInTx(
             || operation.brokerPlacementFingerprint !== binding.brokerPlacementFingerprint) {
             return failure('operation_not_current');
         }
-        let source: unknown;
-        try { source = JSON.parse(resource.sourceBindingJson); } catch { return failure('resource_unavailable'); }
-        const parsedSource = TeamCredentialSourceBindingV1Schema.safeParse(source);
-        if (!parsedSource.success || JSON.stringify(parsedSource.data) !== operation.sourceBindingJson) {
+        const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
+        if (!source.success && source.reason === 'invalid_json') return failure('resource_unavailable');
+        if (!source.success || JSON.stringify(source.data) !== operation.sourceBindingJson) {
             return failure('operation_not_current');
         }
     }
@@ -158,9 +157,7 @@ export async function admitTeamCredentialExternalProviderRequestInTx(
         ? 'openai-responses'
         : requestFacts.routeKind === 'openai_chat_completions' ? 'openai-chat' : 'anthropic';
     if (application.protocol !== expectedProtocol) return failure('invalid_request');
-    let sourceValue: unknown;
-    try { sourceValue = JSON.parse(resource.sourceBindingJson); } catch { return failure('resource_unavailable'); }
-    const source = TeamCredentialSourceBindingV1Schema.safeParse(sourceValue);
+    const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     if (!source.success) return failure('resource_unavailable');
     const current = await resolveTeamCredentialResourceSourceInTx(tx, {
         custodianAccountId: resource.custodianAccountId, source: source.data,

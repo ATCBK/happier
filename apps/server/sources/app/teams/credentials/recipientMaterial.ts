@@ -1,5 +1,5 @@
 import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1, parseTeamCredentialDirectMaterialStoredV1, parseTeamCredentialSourceVersionV1, type TeamCredentialDirectMaterialUseV1, type TeamCredentialDirectMaterialStoredV1, type TeamCredentialDirectMaterialMineResponseV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { type TeamCredentialPreparationOutputV1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
@@ -272,12 +272,8 @@ function isModeCompatible(mode: RecipientMode, stored: TeamCredentialDirectMater
 }
 
 function parseResourceSource(sourceBindingJson: string) {
-    try {
-        const parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(sourceBindingJson));
-        return parsed.success ? parsed.data : null;
-    } catch {
-        return null;
-    }
+    const parsed = readTeamCredentialSourceBinding(sourceBindingJson);
+    return parsed.success ? parsed.data : null;
 }
 
 export async function prepareTeamCredentialRecipientMaterialInTx(

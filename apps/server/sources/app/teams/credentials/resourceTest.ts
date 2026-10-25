@@ -1,4 +1,5 @@
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 
 import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import type { Tx } from "@/storage/inTx";
@@ -108,13 +109,7 @@ export async function authorizeTeamCredentialResourceTestInTx(
     if (!resource.enabled) {
         return { ok: false as const, error: "resource_forbidden" as const };
     }
-    let rawSource: unknown;
-    try {
-        rawSource = JSON.parse(resource.sourceBindingJson);
-    } catch {
-        return { ok: false as const, error: "resource_corrupt" as const };
-    }
-    const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
+    const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
     if (!source.success) return { ok: false as const, error: "resource_corrupt" as const };
     const placement = readTeamCredentialBrokerPlacement(resource);
     if (!placement.ok || placement.placement === null) {

@@ -1,5 +1,5 @@
 import { z } from "zod/mini";
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 import { ProviderBrokerRouteGrantPayloadV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type { Tx } from "@/storage/inTx";
@@ -19,8 +19,9 @@ export function readExternalBrokerOperation(value: string): ExternalBrokerOperat
     try {
         const parsed = ExternalBrokerOperationSchema.safeParse(JSON.parse(value));
         if (!parsed.success) return null;
-        const source = TeamCredentialSourceBindingV1Schema.parse(JSON.parse(parsed.data.sourceBindingJson));
-        return { ...parsed.data, sourceBindingJson: JSON.stringify(source) };
+        const source = readTeamCredentialSourceBinding(parsed.data.sourceBindingJson);
+        if (!source.success) return null;
+        return { ...parsed.data, sourceBindingJson: JSON.stringify(source.data) };
     } catch {
         return null;
     }

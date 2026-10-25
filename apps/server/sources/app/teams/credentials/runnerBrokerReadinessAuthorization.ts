@@ -14,6 +14,7 @@ import { readRunnerActivationAuthentication } from "@/app/ephemeralRunner/activa
 import { readRunnerCreatorCurrentnessInTx } from "@/app/ephemeralRunner/activationCurrentness";
 import { readEligibleBrokerMachineInTx } from "./brokerMachineEligibility";
 import { isTeamCredentialBrokerPlacementBoundToMachineInTx } from "./brokerPlacementResolver";
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 
 export type RunnerBrokerReadinessAuthorization = Readonly<{
     ok: true;
@@ -66,10 +67,10 @@ export async function readRunnerBrokerReadinessProjectionInTx(
         env: activationAuthentication.env,
     });
     if (!qualification.ok) return null;
-    let source: unknown;
-    try { source = JSON.parse(resource.sourceBindingJson); } catch { return null; }
+    const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
+    if (!source.success) return null;
     if ((await resolveTeamCredentialResourceSourceInTx(tx, {
-        custodianAccountId: resource.custodianAccountId, source,
+        custodianAccountId: resource.custodianAccountId, source: source.data,
     })).status !== "current") return null;
     // The broker is the exact Machine frozen into this activation's binding, not
     // the resource's placement column: a Pool placement has no column of its own.
@@ -138,11 +139,11 @@ export async function authorizeRunnerBrokerReadiness(input: Readonly<{
         if (!entitlement.ok || !entitlement.mayBroker) {
             return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "policy_denied" } };
         }
-        let source: unknown;
-        try { source = JSON.parse(resource.sourceBindingJson); } catch { return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "resource_unavailable" } }; }
+        const source = readTeamCredentialSourceBinding(resource.sourceBindingJson);
+        if (!source.success && source.reason === 'invalid_json') return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "resource_unavailable" } };
         if ((await resolveTeamCredentialResourceSourceInTx(tx, {
             custodianAccountId: resource.custodianAccountId,
-            source,
+            source: source.success ? source.data : null,
         })).status !== "current") return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "source_unavailable" } };
         const eligibleBroker = await readEligibleBrokerMachineInTx(tx, {
             custodianAccountId: input.custodianAccountId,

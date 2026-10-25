@@ -53,7 +53,7 @@ describe("Team credential broker Machine eligibility", () => {
     it("saves offline compatibility without requiring a live transport endpoint", async () => {
         const f = await fixture({ operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] } } });
         await expect(f.save()).resolves.toEqual({ ok: true, machineId: f.machine.id });
-        await expect(f.open([f.socket])).resolves.toEqual({ ok: false, error: "broker_unavailable" });
+        await expect(f.open([f.socket])).resolves.toEqual({ ok: false, error: "broker_unavailable", refusalReason: "placement_endpoint_missing" });
     });
 
     it.each([
@@ -63,7 +63,7 @@ describe("Team credential broker Machine eligibility", () => {
     ])("rejects an ineligible saved Machine %j even when its broker capability remains", async (overrides) => {
         const f = await fixture(overrides);
         await expect(f.save()).resolves.toEqual({ ok: false, error: "broker_unavailable" });
-        await expect(f.open([f.socket])).resolves.toEqual({ ok: false, error: "broker_unavailable" });
+        await expect(f.open([f.socket])).resolves.toEqual({ ok: false, error: "broker_unavailable", refusalReason: "broker_ineligible" });
     });
 
     it("requires the exact Machine to belong to the source custodian", async () => {
@@ -103,9 +103,9 @@ describe("Team credential broker Machine eligibility", () => {
         const f = await fixture();
         await expect(f.save()).resolves.toEqual({ ok: true, machineId: f.machine.id });
         await db.machine.update({ where: { id: f.machine.id }, data: { active: true } });
-        await expect(f.open([])).resolves.toEqual({ ok: false, error: "broker_unavailable" });
+        await expect(f.open([])).resolves.toEqual({ ok: false, error: "broker_unavailable", refusalReason: "broker_offline" });
         await expect(f.open([{ ...f.socket, clientType: "user-scoped" }, { ...f.socket, userId: "other" }]))
-            .resolves.toEqual({ ok: false, error: "broker_unavailable" });
+            .resolves.toEqual({ ok: false, error: "broker_unavailable", refusalReason: "broker_offline" });
 
         await db.machine.update({ where: { id: f.machine.id }, data: { active: false } });
         await expect(f.open([f.socket])).resolves.toEqual({
@@ -138,6 +138,6 @@ describe("Team credential broker Machine eligibility", () => {
             io: { in: () => ({ fetchSockets: async () => { throw new Error("adapter unavailable"); } }) },
         });
         await expect(inTx(tx => resolveTeamCredentialBrokerMachineForOpenInTx(tx, { ...f.target, presence })))
-            .resolves.toEqual({ ok: false, error: "broker_unavailable" });
+            .resolves.toEqual({ ok: false, error: "broker_unavailable", refusalReason: "broker_presence_unknown" });
     });
 });

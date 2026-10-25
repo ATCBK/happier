@@ -39,6 +39,15 @@ export type TeamCredentialBrokerMachineEligibilityError = Readonly<{
     error: "broker_unavailable" | "update_required";
 }>;
 
+/** Server-private deciding checks, never part of a route response. */
+export type TeamCredentialBrokerMachineRefusal =
+    | Readonly<{
+        ok: false;
+        error: "broker_unavailable";
+        refusalReason: "broker_machine_missing" | "broker_ineligible" | "broker_offline" | "broker_presence_unknown" | "placement_endpoint_missing";
+    }>
+    | Readonly<{ ok: false; error: "update_required" }>;
+
 /** Current admitted Machine facts for consumers that also need its endpoint. */
 export async function readEligibleBrokerMachineInTx(
     tx: Tx,
@@ -46,8 +55,8 @@ export async function readEligibleBrokerMachineInTx(
 ): Promise<Readonly<{
     ok: true;
     machine: TeamCredentialBrokerMachineProjection & Readonly<{ id: string }>;
-}> | TeamCredentialBrokerMachineEligibilityError> {
-    if (!target.brokerMachineId) return { ok: false, error: "broker_unavailable" } as const;
+}> | TeamCredentialBrokerMachineRefusal> {
+    if (!target.brokerMachineId) return { ok: false, error: "broker_unavailable", refusalReason: "broker_machine_missing" };
     const machine = await tx.machine.findFirst({
         where: { id: target.brokerMachineId, accountId: target.custodianAccountId },
         select: {
@@ -59,10 +68,10 @@ export async function readEligibleBrokerMachineInTx(
             operationProtocolCapabilitiesRevision: true,
         },
     });
-    if (machine === null) return { ok: false, error: "broker_unavailable" } as const;
+    if (machine === null) return { ok: false, error: "broker_unavailable", refusalReason: "broker_machine_missing" };
     const eligibility = classifyTeamCredentialBrokerMachineEligibility(machine);
     if (eligibility === "ineligible") {
-        return { ok: false, error: "broker_unavailable" } as const;
+        return { ok: false, error: "broker_unavailable", refusalReason: "broker_ineligible" };
     }
     if (eligibility === "update_required") {
         return { ok: false, error: "update_required" } as const;
@@ -76,7 +85,7 @@ export async function resolveTeamCredentialBrokerMachineForSaveInTx(
     target: TeamCredentialBrokerMachineTarget,
 ): Promise<Readonly<{ ok: true; machineId: string }> | TeamCredentialBrokerMachineEligibilityError> {
     const eligible = await readEligibleBrokerMachineInTx(tx, target);
-    if (!eligible.ok) return eligible;
+    if (!eligible.ok) return { ok: false, error: eligible.error };
     return { ok: true, machineId: eligible.machine.id };
 }
 
@@ -97,11 +106,12 @@ export async function resolveTeamCredentialBrokerMachinePresentInTx(
     ok: true;
     machineId: string;
     endpointAuthority: MachineIrohEndpointAuthorityV1 | null;
-}> | TeamCredentialBrokerMachineEligibilityError> {
+}> | TeamCredentialBrokerMachineRefusal> {
     const eligible = await readEligibleBrokerMachineInTx(tx, params);
     if (!eligible.ok) return eligible;
-    if (classifyMachineDaemonPresence(params.presence, eligible.machine.id) !== 'connected') {
-        return { ok: false, error: "broker_unavailable" };
+    const presence = classifyMachineDaemonPresence(params.presence, eligible.machine.id);
+    if (presence !== 'connected') {
+        return { ok: false, error: "broker_unavailable", refusalReason: presence === 'unknown' ? "broker_presence_unknown" : "broker_offline" };
     }
     return {
         ok: true,
@@ -124,9 +134,9 @@ export async function resolveTeamCredentialBrokerMachineForOpenInTx(
     ok: true;
     machineId: string;
     endpointAuthority: MachineIrohEndpointAuthorityV1;
-}> | TeamCredentialBrokerMachineEligibilityError> {
+}> | TeamCredentialBrokerMachineRefusal> {
     const present = await resolveTeamCredentialBrokerMachinePresentInTx(tx, params);
     if (!present.ok) return present;
-    if (present.endpointAuthority === null) return { ok: false, error: "broker_unavailable" };
+    if (present.endpointAuthority === null) return { ok: false, error: "broker_unavailable", refusalReason: "placement_endpoint_missing" };
     return { ok: true, machineId: present.machineId, endpointAuthority: present.endpointAuthority };
 }

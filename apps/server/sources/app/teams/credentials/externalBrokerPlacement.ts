@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { readTeamCredentialSourceBinding } from './sourceBindingRead';
 
 import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -60,13 +61,7 @@ async function readCurrentAuthorityAndSourceInTx(
         observedAt,
     );
     if (!authority.ok) return null;
-    let rawSource: unknown;
-    try {
-        rawSource = JSON.parse(authority.sourceBindingJson);
-    } catch {
-        return null;
-    }
-    const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
+    const source = readTeamCredentialSourceBinding(authority.sourceBindingJson);
     if (!source.success) return null;
     const current = await resolveTeamCredentialResourceSourceInTx(tx, {
         custodianAccountId: authority.custodianAccountId,

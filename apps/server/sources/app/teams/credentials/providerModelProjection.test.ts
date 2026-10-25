@@ -5,6 +5,7 @@ import {
     projectTeamCredentialProviderModels,
     projectTeamCredentialRequestPolicySupportModels,
     selectPoolBackedTeamCredentialProviderModels,
+    selectPoolBackedTeamCredentialRequestPolicySupportModels,
 } from "./providerModelProjection";
 
 const application = {
@@ -194,6 +195,27 @@ describe("projectTeamCredentialProviderModels", () => {
 });
 
 describe("projectTeamCredentialRequestPolicySupportModels", () => {
+    it("keeps distinct policy revisions while excluding unavailable Pool members", () => {
+        const row = response().groups[0]!.rows[0]!;
+        const model = projectTeamCredentialRequestPolicySupportModels({
+            status: "success", models: [{ ...row.requestPolicySupport, descriptor: row.descriptor }],
+        })[0]!;
+        const newer = { ...model, sourceRevision: "source-2" };
+        expect(selectPoolBackedTeamCredentialRequestPolicySupportModels({
+            members: [
+                { machineId: "machine-a", priorityTier: 0, enabled: true },
+                { machineId: "machine-b", priorityTier: 1, enabled: true },
+            ],
+            availableMachineIds: new Set(["machine-b"]),
+            candidates: [
+                { machineId: "machine-a", model: { ...model, sourceRevision: "unavailable-source" } },
+                { machineId: "machine-b", model },
+                { machineId: "machine-b", model: newer },
+            ],
+            requestKey: "policy-resource-1",
+        })).toEqual([model, newer]);
+    });
+
     it("projects only exact enforceable protocol and reasoning facts from current model rows", () => {
         const row = response().groups[0]!.rows[0]!;
         expect(projectTeamCredentialRequestPolicySupportModels({
