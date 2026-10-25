@@ -1273,6 +1273,14 @@ does not automatically recreate a pane. Terminal supervision retires the exact
 optional attachment without treating its loss as controller death. An explicit
 switch or attach can request a local client again; this is not a claim that every
 cold host-restoration path has completed live validation.
+Tmux terminal commands retain the exact owning session together with the window
+ID. Window IDs survive window renames but are reused when the tmux server restarts;
+a bare ID cannot establish recovered ownership. The shared liveness probe resolves
+the complete target with `has-session` before reading pane fields, because
+`display-message` may succeed with a different current pane for an absent window.
+Recovery, prompt/control delivery, foreground attachment, and owned-window disposal
+retain that same target rather than dropping the session name.
+
 Detached tmux creation uses the configured session `default-size` when no client
 is attached to that session. The shared tmux command owner reconciles the exact
 created window instead of inheriting dimensions from clients of unrelated sessions
