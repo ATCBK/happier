@@ -64,6 +64,8 @@ import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runt
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { installTauriExternalLinkClicks } from '@/utils/url/installTauriExternalLinkClicks';
 import { useIsTablet } from '@/utils/platform/responsive';
+import { WindowFoldMetricsProvider } from '@/utils/platform/useWindowFoldMetrics';
+import { HorizontalSafeAreaRoot } from '@/components/navigation/safeArea/HorizontalSafeArea';
 import { ThemePreferenceTransitionHost } from '@/components/settings/appearance/ThemePreferenceTransitionHost';
 import { useTauriMainWindowBackgroundColor } from '@/desktop/window/useTauriMainWindowBackgroundColor';
 import { OnboardingShowcaseAutoShowMount } from '@/onboarding/showcase';
@@ -403,19 +405,6 @@ if (shouldCaptureRnwUnexpectedTextNodeStacks()) {
 }
 
 // Component to apply horizontal safe area padding
-function HorizontalSafeAreaWrapper({ children }: { children: React.ReactNode }) {
-    const insets = useSafeAreaInsets();
-    return (
-        <View style={{
-            flex: 1,
-            paddingLeft: insets.left,
-            paddingRight: insets.right
-        }}>
-            {children}
-        </View>
-    );
-}
-
 function ChromeSafeAreaInsetsWarmup(): null {
     useChromeSafeAreaInsets();
     return null;
@@ -720,33 +709,35 @@ function AppBoot(props: {
             <ChromeSafeAreaInsetsWarmup />
             <KeyboardProvider>
                 <GestureHandlerRootView style={{ flex: 1 }}>
-                    {/*
-                      * `authGeneration` is 0 for every normal boot, so this key never changes and the
-                      * tree never remounts. It only advances when a keychain read that missed its boot
-                      * deadline lands afterwards, which is exactly when the auth tree has to adopt the
-                      * recovered session instead of leaving the user signed out until the next launch.
-                      */}
-                    <AuthProvider key={initState.authGeneration} initialCredentials={initState.credentials}>
-                        <ThemeProvider value={props.navigationTheme}>
-                            <StatusBarProvider />
-                            <AppPaneModalProvider>
-                                <CommandPaletteProvider>
-                                    <RealtimeProvider>
-                                        <ThemePreferenceTransitionHost>
-                                            <HorizontalSafeAreaWrapper>
-                                                <RootAppShell
-                                                    isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
-                                                    isTablet={isTablet}
-                                                    isTerminalConnectRoute={isTerminalConnectRoute}
-                                                    safeArea={safeArea}
-                                                />
-                                            </HorizontalSafeAreaWrapper>
-                                        </ThemePreferenceTransitionHost>
-                                    </RealtimeProvider>
-                                </CommandPaletteProvider>
-                            </AppPaneModalProvider>
-                        </ThemeProvider>
-                    </AuthProvider>
+                    <WindowFoldMetricsProvider>
+                        {/*
+                          * `authGeneration` is 0 for every normal boot, so this key never changes and the
+                          * tree never remounts. It only advances when a keychain read that missed its boot
+                          * deadline lands afterwards, which is exactly when the auth tree has to adopt the
+                          * recovered session instead of leaving the user signed out until the next launch.
+                          */}
+                        <AuthProvider key={initState.authGeneration} initialCredentials={initState.credentials}>
+                            <ThemeProvider value={props.navigationTheme}>
+                                <StatusBarProvider />
+                                <AppPaneModalProvider>
+                                    <CommandPaletteProvider>
+                                        <RealtimeProvider>
+                                            <ThemePreferenceTransitionHost>
+                                                <HorizontalSafeAreaRoot>
+                                                    <RootAppShell
+                                                        isDesktopPetOverlayWindow={isDesktopPetOverlayWindow}
+                                                        isTablet={isTablet}
+                                                        isTerminalConnectRoute={isTerminalConnectRoute}
+                                                        safeArea={safeArea}
+                                                    />
+                                                </HorizontalSafeAreaRoot>
+                                            </ThemePreferenceTransitionHost>
+                                        </RealtimeProvider>
+                                    </CommandPaletteProvider>
+                                </AppPaneModalProvider>
+                            </ThemeProvider>
+                        </AuthProvider>
+                    </WindowFoldMetricsProvider>
                 </GestureHandlerRootView>
             </KeyboardProvider>
         </SafeAreaProvider>

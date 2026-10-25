@@ -23,6 +23,7 @@ import { FABWide } from '@/components/ui/buttons/FABWide';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { FriendsView } from '@/components/navigation/shell/FriendsView';
 import { SessionsListWrapper } from '@/components/sessions/shell/SessionsListWrapper';
+import { useScreenSafeAreaBackdrop } from '@/components/navigation/safeArea/HorizontalSafeArea';
 import { Header } from '@/components/navigation/Header';
 import { HeaderLogo } from '@/components/ui/navigation/HeaderLogo';
 import { VoiceSurface } from '@/components/voice/surface/VoiceSurface';
@@ -441,6 +442,9 @@ const PhoneTabbedMainViewContent = React.memo(function PhoneTabbedMainViewConten
         if (!friendsEnabled && normalized === 'friends') return 'sessions';
         return normalized;
     }, [effectiveActiveTab, friendsEnabled, inboxEnabled]);
+
+    // The phone home is a canvas screen: extend it under the side safe-area insets.
+    useScreenSafeAreaBackdrop(theme.colors.background.canvas);
 
     const renderTabContent = React.useCallback(() => {
         switch (effectiveActiveTab) {
