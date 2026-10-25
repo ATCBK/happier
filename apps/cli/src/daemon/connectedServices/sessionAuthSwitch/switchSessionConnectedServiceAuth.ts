@@ -12,6 +12,7 @@ import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import type { CatalogAgentId, ConnectedServiceResumeContinuityDiagnostics } from '@/agent/catalog/types';
 import { resolveTrackedSessionCatalogAgentId } from '@/daemon/sessions/resolveTrackedSessionCatalogAgentId';
 import type { TrackedSession } from '@/daemon/types';
+import type { PlannedRunnerRestartNotSignaledReason } from '@/daemon/plannedRunnerRestart/types';
 import type { ConnectedServiceAccountTransitionVerificationResult } from '../runtimeAuth/types';
 import { buildConnectedServiceUxDiagnostic } from '@/daemon/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import {
@@ -168,6 +169,7 @@ export type SessionConnectedServiceAuthSwitchDiagnostics = Readonly<{
     | 'recover'
     | 'reconciliation';
   retryable?: boolean;
+  restartRefusalReason?: PlannedRunnerRestartNotSignaledReason;
   verification?: Readonly<{
     expectedProviderAccountId?: string | null;
     actualProviderAccountId?: string | null;
@@ -255,6 +257,7 @@ function failureResult(
 	    actionRequired?: NonNullable<SessionConnectedServiceAuthSwitchDiagnostics['actionRequired']>;
 	    underlyingError?: string;
 	    retryable?: boolean;
+      restartRefusalReason?: PlannedRunnerRestartNotSignaledReason;
 	    verification?: NonNullable<SessionConnectedServiceAuthSwitchDiagnostics['verification']>;
 	    continuity?: ConnectedServiceResumeContinuityDiagnostics;
 	    diagnosticSource?: ConnectedServiceUxDiagnosticV1['source'];
@@ -292,6 +295,7 @@ function failureResult(
 	    ? {
 	      ...(options.failurePhase ? { failurePhase: options.failurePhase } : {}),
 	      ...(options.retryable !== undefined ? { retryable: options.retryable } : {}),
+        ...(options.restartRefusalReason ? { restartRefusalReason: options.restartRefusalReason } : {}),
 	      ...(sanitizedVerification ? { verification: sanitizedVerification } : {}),
 		      ...(safeContinuity ? { continuity: safeContinuity } : {}),
 	      ...(options.attemptedAction ? { attemptedAction: options.attemptedAction } : {}),
@@ -378,6 +382,35 @@ function applicationFailure(
   };
 }
 
+class ConnectedServiceRestartNotCompletedError extends Error {
+  constructor(readonly notSignaledReason?: PlannedRunnerRestartNotSignaledReason) {
+    super(notSignaledReason ?? 'restart_not_completed');
+    this.name = 'ConnectedServiceRestartNotCompletedError';
+  }
+}
+
+/** Keep admission refusals intact until the existing switch failure owner presents them. */
+export function assertConnectedServiceRestartCompleted(
+  restart: Awaited<ReturnType<SwitchSessionConnectedServiceAuthInput['restartSession']>>,
+): void {
+  if (restart && (!restart.signaled || restart.completion?.ok === false)) {
+    throw new ConnectedServiceRestartNotCompletedError(!restart.signaled ? restart.notSignaledReason : undefined);
+  }
+}
+
+export function buildConnectedServiceRestartFailureDiagnostics(
+  error: unknown,
+): Pick<SessionConnectedServiceAuthSwitchDiagnostics, 'restartRefusalReason' | 'retryable'> {
+  if (error instanceof ConnectedServiceRestartNotCompletedError && error.notSignaledReason) {
+    return {
+      restartRefusalReason: error.notSignaledReason,
+      // This attempt's captured executable is obsolete; replaying it cannot become safe.
+      ...(error.notSignaledReason === 'runner_identity_changed' ? { retryable: false } : {}),
+    };
+  }
+  return isConnectedServiceRestartSignalStaleProcessError(error) ? { retryable: true } : {};
+}
+
 function restartFailure(
   reason: ConnectedServiceSessionAuthSwitchReason,
   error: unknown,
@@ -386,7 +419,7 @@ function restartFailure(
     failurePhase: 'restart',
     application: applicationFailure(reason, 'restart'),
     underlyingError: summarizeConnectedServiceSwitchApplyError(error),
-    ...(isConnectedServiceRestartSignalStaleProcessError(error) ? { retryable: true } : {}),
+    ...buildConnectedServiceRestartFailureDiagnostics(error),
   };
 }
 
@@ -407,10 +440,13 @@ function partialAppliedPendingReconciliation(input: Readonly<{
   rollback?: SessionConnectedServiceAuthSwitchRollbackDiagnostic;
   serviceId?: string;
   serviceResultsByServiceId?: Readonly<Record<string, SessionConnectedServiceAuthSwitchServiceResult>>;
+  restartError?: unknown;
 }>): SessionConnectedServiceAuthSwitchFailure {
+  const restartDiagnostics = buildConnectedServiceRestartFailureDiagnostics(input.restartError);
   return failureResult('partial_applied_pending_reconciliation', {
     failurePhase: 'reconciliation',
     application: applicationFailure(input.reason, input.phase, 'partial_applied_pending_reconciliation'),
+    ...(restartDiagnostics.restartRefusalReason ? restartDiagnostics : {}),
     ...(input.rollback ? { rollback: input.rollback } : {}),
     ...(input.serviceId ? { serviceId: input.serviceId } : {}),
     ...(input.serviceResultsByServiceId
@@ -461,6 +497,7 @@ async function settleFailedRestartAttempt(input: Readonly<{
     return partialAppliedPendingReconciliation({
       reason: input.reason,
       phase: 'restart',
+      restartError: input.error,
       ...(input.appliedHotApplyResult.serviceId ? { serviceId: input.appliedHotApplyResult.serviceId } : {}),
       ...(input.appliedHotApplyResult.serviceResultsByServiceId
         ? { serviceResultsByServiceId: input.appliedHotApplyResult.serviceResultsByServiceId }
@@ -480,6 +517,7 @@ async function settleFailedRestartAttempt(input: Readonly<{
       reason: input.reason,
       phase: 'restart',
       rollback: rollback.diagnostic,
+      restartError: input.error,
     });
   }
   return failureResult('restart_failed', {
@@ -609,6 +647,7 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
   /** Void means the restart completed; planned restarts retain admission/completion outcomes. */
   restartSession(tracked: TrackedSession): Promise<void | Readonly<{
     signaled: boolean;
+    notSignaledReason?: PlannedRunnerRestartNotSignaledReason;
     completion?: Readonly<{ ok: boolean }>;
   }>>;
 	  hotApply(input: Readonly<{
@@ -1952,7 +1991,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
     }
 
     const restart = await input.restartSession(input.tracked);
-    if (restart && (!restart.signaled || restart.completion?.ok === false)) throw new Error('restart_not_completed');
+    assertConnectedServiceRestartCompleted(restart);
     const continuationOutcome = await runPostSwitchVerificationRecoveryAndContinuation({
       recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
       continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
@@ -2462,7 +2501,7 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
       }
       try {
         const restart = await input.restartSession(tracked);
-        if (restart && (!restart.signaled || restart.completion?.ok === false)) throw new Error('restart_not_completed');
+        assertConnectedServiceRestartCompleted(restart);
       } catch (error) {
         // Pure restart-rematerialize: no credential was ever hot-applied, so this attempt really is
         // PRE-EFFECT and the previous persisted bindings must be restored.

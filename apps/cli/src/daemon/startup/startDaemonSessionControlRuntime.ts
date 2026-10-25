@@ -870,6 +870,8 @@ import { readConnectedServiceChildSelectionsFromEnv } from '../connectedServices
 import { parseConnectedServiceBindingSelections } from '../connectedServices/parseConnectedServicesBindings';
 import {
   applyConnectedServiceAuthGenerationToTrackedSession,
+  assertConnectedServiceRestartCompleted,
+  buildConnectedServiceRestartFailureDiagnostics,
   switchSessionConnectedServiceAuth,
   type ConnectedServiceRuntimeAuthApplyReason,
   type SessionConnectedServiceAuthSwitchDiagnostics,
@@ -1464,6 +1466,7 @@ function connectedServiceAuthGroupGenerationApplyFailure(
     errorCode: string;
     serviceId: ConnectedAccountServiceKey;
     failurePhase: string;
+    diagnostics?: ReturnType<typeof buildConnectedServiceRestartFailureDiagnostics>;
   }>,
 ): ConnectedServiceAuthGroupGenerationApplyFailure {
   return {
@@ -1472,6 +1475,7 @@ function connectedServiceAuthGroupGenerationApplyFailure(
     serviceId: input.serviceId,
     diagnostics: {
       failurePhase: input.failurePhase,
+      ...input.diagnostics,
     },
   };
 }
@@ -6811,7 +6815,7 @@ export async function startDaemonSessionControlRuntime(
       restartDiagnostic: ConnectedServiceDaemonRestartDiagnosticInput;
       onSignalFailureLogMessage: string;
     }>,
-  ): Promise<Readonly<{ signaled: boolean; completion?: RestartSessionRunnerCompletion }>> => {
+  ): ReturnType<typeof requestPlannedRunnerRestart> => {
     const completionTarget = {
       sessionId: input.sessionId,
       previousPid: input.tracked.pid,
@@ -7213,12 +7217,13 @@ export async function startDaemonSessionControlRuntime(
               }
               try {
                 const restart = await signalRestart();
-                if (!restart.signaled || restart.completion?.ok === false) throw new Error('restart_not_completed');
-              } catch {
+                assertConnectedServiceRestartCompleted(restart);
+              } catch (error) {
                 return connectedServiceAuthGroupGenerationApplyFailure({
                   errorCode: 'restart_failed',
                   serviceId: restartInput.serviceId,
                   failurePhase: 'restart',
+                  diagnostics: buildConnectedServiceRestartFailureDiagnostics(error),
                 });
               }
               return connectedServiceAuthGroupGenerationApplyFailure({

@@ -23,6 +23,9 @@ import type { AgentConnectedAccountLaunchContributionV1 } from '@happier-dev/plu
 import type { TrackedSession } from '@/daemon/types';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY, readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
+import { isPidSafeHappySessionProcess } from '@/daemon/pidSafety';
+import { adoptTrackedSessionRunnerIdentity } from '@/daemon/sessions/sessionReportCorrelation';
+import { createConnectedServiceSwitchDeferralQueue } from './connectedServiceSwitchDeferralQueue';
 import { createVersionRuntimeRefreshAttemptHandoff } from '@/daemon/plannedRunnerRestart/versionRuntimeRefreshAttemptHandoff';
 import type { RestartSessionRunnerCompletion } from '@/daemon/plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 import { createSessionRunnerRespawnManager } from '@/daemon/processSupervision/sessionRunnerRespawn';
@@ -377,6 +380,88 @@ function expectMaterializationIdentity(value: unknown): ConnectedServiceMaterial
 }
 
 describe('switchSessionConnectedServiceAuth', () => {
+  it.each(['manual', 'automatic', 'rematerialize', 'rollback_failed'] as const)('retains a deferred executable replacement refusal (%s)', async mode => {
+    const tracked = trackedSession({ processStartTimeMs: 100, processCommandHash: 'launcher-hash' });
+    const runner = { pid: 124, processStartTimeMs: 200, processCommandHash: 'runner-hash', processCommand: 'runner' };
+    adoptTrackedSessionRunnerIdentity(tracked, runner);
+    const groupBindings = (profileId: string): ConnectedServiceBindingsV2 => ({ v: 2, bindingsByServiceId: {
+      'happier.agent.claude/anthropic': { source: 'connected', selection: 'group', groupId: 'work', profileId },
+    } });
+    const previousBindings = groupBindings(mode === 'rematerialize' ? 'new-profile' : 'old-profile');
+    tracked.spawnOptions = { ...tracked.spawnOptions!, connectedServices: previousBindings };
+    const previousSpawnOptions = tracked.spawnOptions;
+    const profileId = 'new-profile';
+    const restartRequestedPids = new Set<number>();
+    let deferred!: () => void;
+    const pendingBoundary = new Promise<void>(resolve => { deferred = resolve; });
+    const queue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false,
+      emitSessionEvent: (_sessionId, event) => {
+        if (typeof event === 'object' && event !== null && 'type' in event
+          && event.type === 'connected_service_account_switch_deferred') deferred();
+      },
+    });
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'prompt_or_steer' });
+    const persisted: ConnectedServiceBindingsV2[] = [];
+    // Process identity observations and signalling are the OS boundaries.
+    const signals = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const { resolveSessionConnectedServiceSwitchContinuity } = await import('@/daemon/startup/startDaemonSessionControlRuntime');
+    const selectedGroup = group({ activeProfileId: profileId, members: ['old-profile', profileId].map(id => ({
+      ...group().members[0]!, profileId: id,
+    })) });
+    const api = { listConnectedServiceProfiles: async () => ({ serviceId: 'happier.agent.claude/anthropic',
+      profiles: [{ profileId, status: 'connected' as const }] }), getConnectedServiceAuthGroup: async () => selectedGroup };
+    const input: SwitchSessionConnectedServiceAuthInput = {
+      core: createCore(), getChildren: () => [tracked], api,
+      qualifiedConnectedAccountApi: qualifiedAuthGroupApiFromLegacyTestApi(api),
+      reason: mode === 'manual' ? 'manual' : 'automatic_runtime_failure',
+      resolveContinuity: context => resolveSessionConnectedServiceSwitchContinuity({
+        sessionId: context.sessionId, agentId: context.agentId, serviceId: context.serviceId,
+        previousBinding: context.previous, nextBinding: context.next, tracked,
+        fromBindingsRaw: context.previousBindings, toBindings: context.normalizedBindings, accountSettings: null,
+      }),
+      restartSession: child => requestPlannedRunnerRestart({ sessionId: 'sess_1', tracked: child,
+        restartRequestedPids, pidToTrackedSession: new Map([[child.pid, child]]),
+        deferral: { kind: 'connected_service_switch', source: mode === 'manual' ? 'manual' : 'automatic',
+          policy: 'defer_until_turn_boundary', turnDeferralQueue: queue,
+          target: { serviceId: 'happier.agent.claude/anthropic', profileId, groupId: 'work', generation: 4 } },
+        isProcessSafeToSignal: witness => isPidSafeHappySessionProcess(witness, {
+          readProcessIdentityByPidFn: async pid => ({ pid, processStartTimeMs: pid === child.pid ? 100 : 200,
+            command: 'fixture-runner' }),
+        }),
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: child.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      }),
+      persistSessionBindings: async ({ normalizedBindings }) => {
+        if (mode === 'rollback_failed' && persisted.length > 0) throw new Error('Metadata transport unavailable');
+        persisted.push(normalizedBindings);
+      },
+      hotApply: async () => { throw new Error('Unexpected hot apply'); },
+      registerHotApplyTargets: () => {}, emitSessionEvent: () => {},
+      request: { sessionId: 'sess_1', agentId: 'claude', bindings: groupBindings(profileId),
+        ...(mode === 'rematerialize' ? { rematerializeServiceId: 'happier.agent.claude/anthropic' } : {}) },
+    };
+    try {
+      const pending = mode === 'manual' ? switchSessionConnectedServiceAuthImpl(input)
+        : applyConnectedServiceAuthGenerationToTrackedSession(input);
+      await Promise.race([pendingBoundary, pending.then(result => {
+        throw new Error(`Switch settled before restart deferral: ${JSON.stringify(result)}`);
+      })]);
+      adoptTrackedSessionRunnerIdentity(tracked, { ...runner, pid: 125, processStartTimeMs: 300 });
+      queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
+      await expect(pending).resolves.toMatchObject({ ok: false,
+        errorCode: mode === 'rollback_failed' ? 'partial_applied_pending_reconciliation' : 'restart_failed',
+        diagnostics: { failurePhase: mode === 'rollback_failed' ? 'reconciliation' : 'restart',
+          restartRefusalReason: 'runner_identity_changed', retryable: false } });
+      expect(signals).not.toHaveBeenCalled();
+      expect(restartRequestedPids.size).toBe(0);
+      expect(tracked.spawnOptions).toBe(previousSpawnOptions);
+      if (mode !== 'rematerialize' && mode !== 'rollback_failed') expect(persisted.at(-1)).toEqual(previousBindings);
+    } finally {
+      await queue.cancelAll('daemon_shutdown');
+      signals.mockRestore();
+    }
+  });
+
   it.each(['profile', 'group', 'group_activity', 'group_capture', 'group_overlap_failed', 'group_overlap_thrown', 'group_overlap_accepted'] as const)('admits one account-change restart only for a fresh credential revision (%s)', async scenario => {
     const selection = scenario === 'profile' ? 'profile' : 'group';
     const serviceId = selection === 'profile' ? 'happier.agent.codex/openai-codex' : 'happier.agent.claude/anthropic';

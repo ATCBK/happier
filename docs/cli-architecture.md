@@ -2979,6 +2979,14 @@ target still belong to its own PID and birth witness. A changed executable or
 launcher refuses the restart before signalling; source-cutover guards use the
 same executable identity. This is current 0.3 development behavior.
 
+Connected Service switching retains the planned restart's closed refusal in
+`diagnostics.restartRefusalReason` alongside the existing `restart_failed`
+error. Manual switching, automatic generation application, unchanged-binding
+rematerialization and the automatic restart fallback share this diagnostic
+owner. An executable replacement reports `runner_identity_changed` with
+`retryable: false`: the captured attempt cannot safely be replayed. The refusal
+emits no signal and preserves the existing rollback of staged bindings.
+
 `hdev daemon restart-session-runners --on-update on|off` changes the optional local
 `restartSessionRunnersOnUpdate` setting through the existing locked settings writer,
 without contacting the daemon. It defaults off. Once startup reattach and control
