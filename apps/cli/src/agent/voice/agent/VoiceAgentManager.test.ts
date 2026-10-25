@@ -526,6 +526,7 @@ describe('VoiceAgentManager', () => {
       if (outcome === 'refused') return { status: 'rejected', diagnostic: { code: 'provider_busy', severity: 'error' }, retryable: false };
       publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'ready' });
       publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+      return undefined;
     } });
     const manager = new VoiceAgentManager({ createRuntime: () => backend,
       resolvePromptPreparation: async args => resolveCliVoicePromptPreparation({ ...args, serverId: 'home',

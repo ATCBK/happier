@@ -483,7 +483,7 @@ describe('client Action reverse delivery', () => {
       },
     };
     const context = { surface, authority: 'present_user', serverId: 'home', defaultSessionId: input.sessionId,
-      ...(sessionCaller ? { actionCaller: { kind: 'session', sessionId: input.sessionId, starterDepth: 0, turnDepth: 0 } } : {}) } as const;
+      ...(sessionCaller ? { actionCaller: { kind: 'session' as const, sessionId: input.sessionId, starterDepth: 0, turnDepth: 0 } } : {}) } as const;
     await expect(executor(client).execute('session.open', input, context)).resolves.toEqual({ ok: true,
       result: { status: 'opened', sessionId: 'session', serverId: 'home' } });
     expect(deliveredMethods).toEqual([expectedMethod]);

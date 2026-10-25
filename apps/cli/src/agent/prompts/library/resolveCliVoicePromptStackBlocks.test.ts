@@ -41,7 +41,8 @@ async function installExactHomeIdentity(profileId: string, homeServerIdentityId:
   const previous = await readSettings();
   await writeSettings({ ...previous, servers: { ...previous.servers, [profileId]: {
     id: profileId, name: 'Receipt Home', serverUrl: 'https://receipt.example.test', webappUrl: 'https://receipt.example.test',
-    createdAt: 1, updatedAt: 1, lastUsedAt: 1, homeConnectionDescriptorAuthority: 'exact',
+    // A valid stored descriptor is read back with exact authority.
+    createdAt: 1, updatedAt: 1, lastUsedAt: 1,
     homeConnectionDescriptor: { v: 1, homeServerIdentityId, canonicalServerUrl: 'https://receipt.example.test', revision: 1,
       endpoints: [{ kind: 'https', url: 'https://receipt.example.test' }] },
   } } });

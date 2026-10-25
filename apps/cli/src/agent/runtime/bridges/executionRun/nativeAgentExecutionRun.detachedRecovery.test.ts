@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type {
     AgentRuntime, AgentExecutionRunOpenRequest, AgentSessionSendRequest,
     AgentExecutionRunConversationEventV1,
@@ -33,7 +34,7 @@ it.each(['public', 'narrowed', 'no_tools'] as const)('keeps detached %s native a
     let readWitness: (() => AgentInvocationTurnAdmissionWitness | null) | undefined;
     let expectedAttribution: ReturnType<typeof materializeActionRequestAttributionV1>;
     let suppliedAttribution: typeof expectedAttribution;
-    const approve = (name: string, input: Record<string, unknown> = { path: '/repo/a' }) => context.services.interactions.requestApproval({ kind: 'approval', title: 'Native tool',
+    const approve = (name: string, input: { readonly [key: string]: JsonValue } = { path: '/repo/a' }) => context.services.interactions.requestApproval({ kind: 'approval', title: 'Native tool',
         subject: { kind: 'tool', name, input } });
     const factory = {
         async open(): Promise<never> { throw new Error('Retained input must use the conversation'); },

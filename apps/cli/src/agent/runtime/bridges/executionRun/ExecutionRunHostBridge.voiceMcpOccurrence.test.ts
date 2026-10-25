@@ -158,10 +158,13 @@ describe('Voice Run MCP provisioning occurrence', () => {
       const engineRegistry = await resolveCliEngineRegistry({ runtimeRegistry: fixture.registry });
       const profileCatalog = await engineRegistry.resolveExecutionRunProfileCatalog({ resolveAgentIdentity: () => agent });
       const parent = createMutableApiSessionClientFixture({ sessionId: 'voice-parent', metadata: createTestMetadata({ path: home,
-        systemSessionV1: { v: 1, key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true },
-        voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
-        voiceConversationBindingV1: { v: 1, adapterId: 'local_conversation', controlSessionId: '__voice_agent__',
-          transcriptMode: 'native_session', targetSessionId: null, updatedAt: 1 },
+        // Voice control Session keys are protocol metadata outside the CLI Metadata projection.
+        ...{
+          systemSessionV1: { v: 1, key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true },
+          voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+          voiceConversationBindingV1: { v: 1, adapterId: 'local_conversation', controlSessionId: '__voice_agent__',
+            transcriptMode: 'native_session', targetSessionId: null, updatedAt: 1 },
+        },
       }),
         overrides: { getMcpRequestAuthPort: () => port } });
       bridge = new ExecutionRunHostBridge({ parentProvider: 'claude', cwd: home, happyHomeDir: home, sendAcp: async () => {},
