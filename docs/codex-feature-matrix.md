@@ -4,6 +4,8 @@ This document is an implementation inventory for the current low-level Codex int
 
 ## Status legend
 
+In development source, Direct discovery excludes Codex's internal Guardian approval-review sessions before paging and searching. Both rollout discovery and app-server listing use `isCodexGuardianReviewSource` to recognize the vendor source metadata; session titles do not control visibility. Ordinary review sessions and spawned coding agents retain their existing visibility. This is a discovery filter, so native session files and existing session links are preserved.
+
 - `supported`: primary or fully wired path
 - `partial`: works, but only on some transports or with notable gaps
 - `legacy`: still wired, but no longer the preferred path
