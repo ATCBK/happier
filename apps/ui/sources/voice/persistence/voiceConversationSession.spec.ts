@@ -79,6 +79,7 @@ let sessionOrganizationFailure: Error | null = null;
 const sessionRpcResponse = vi.fn();
 const operationResponse = vi.fn();
 const resumeResponse = vi.fn();
+const unarchiveResponse = vi.fn<(sessionId: string) => Promise<Response>>();
 let runnerObservedAtMs = 2000;
 let purposeBindings: ConnectedPurposeCatalogV1 = { v: 1, bindings: [] };
 let purposeCatalogUnavailable = false;
@@ -132,7 +133,7 @@ function sessionWireRecord(session: ReturnType<typeof createSessionFixture>) {
     id: session.id, seq: session.seq ?? 1, createdAt: session.createdAt ?? 1,
     updatedAt: session.updatedAt, active: session.active,
     activeAt: session.presence === 'online' ? Date.now() : session.activeAt ?? 1,
-    archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: session.metadataLayoutVersion ?? 0,
+    archivedAt: session.archivedAt ?? null, encryptionMode: 'plain', metadataLayoutVersion: session.metadataLayoutVersion ?? 0,
     metadata: JSON.stringify(owner?.ok ? projectSessionSharedMetadataV1({ metadata }) : metadata),
     ...(owner?.ok ? { ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata) } : {}),
     metadataVersion: session.metadataVersion ?? 1,
@@ -194,6 +195,8 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   }
   if (/^\/v1\/sessions\/[^/]+\/messages$/.test(path)) return json({ messages: [], hasMore: false });
   if (path === '/v2/sessions/metadata-upgrades') return json({ sessionIds: [] });
+  const unarchive = /^\/v2\/sessions\/([^/]+)\/unarchive$/.exec(path);
+  if (unarchive && init?.method === 'POST') return await unarchiveResponse(decodeURIComponent(unarchive[1]));
   if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions') {
     if (path !== '/v2/sessions/active') {
       await listResponse();
@@ -323,7 +326,7 @@ async function dispatchMachineRpc(request: { method: string; payload: unknown; m
       const owner = createSessionOwnerMetadataV1({ metadata: created.metadata });
       if (!owner.ok) throw new Error(`Synthetic daemon published invalid owner metadata: ${owner.unsupportedFields.join(',')}`);
     }
-    return { ...spawned, disposition: 'created', executionTarget: input.executionTarget,
+    return { ...spawned, disposition: spawned.disposition ?? 'created', executionTarget: input.executionTarget,
       organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
 }
 const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
@@ -337,6 +340,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 async function restoreAccount() {
+  unarchiveResponse.mockReset();
+  unarchiveResponse.mockImplementation(async () => Response.json({ success: true, archivedAt: null }));
   purposeBindings = { v: 1, bindings: [] };
   purposeCatalogUnavailable = false;
   purposeCatalogReads = 0;
@@ -638,6 +643,29 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     expect(spawnRequests).not.toHaveBeenCalled();
   });
 
+  it('R43 creates a new carrier after deletion instead of replaying the old creation Action', async () => {
+    let created = 0;
+    spawnResponse.mockImplementation(async input => {
+      const id = `r43-deleted-carrier-${++created}`;
+      state.sessions[id] = { id, active: true, updatedAt: created, metadata: {
+        machineId: input.machineId, path: input.directory, flavor: 'codex',
+      } };
+      return { type: 'success', sessionId: id };
+    });
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    const first = await ensureVoiceConversationSessionForVoiceHome();
+    const firstKey = spawnRequests.mock.calls.at(-1)![0].creationKey;
+    storage.getState().deleteSession(first, homeId);
+    delete state.sessions[first];
+    sessionRecords.delete(first);
+
+    const second = await ensureVoiceConversationSessionForVoiceHome();
+    expect(second).not.toBe(first);
+    expect(spawnRequests.mock.calls.at(-1)![0].creationKey).toBe(firstKey);
+    expect(storage.getState().sessions[first]).toBeUndefined();
+    expect(storage.getState().sessions[second]).toBeDefined();
+  });
+
   it.each(['account-1', 'other-account'])('keeps Voice preparation bound to %s while the canonical creation operation settles without a socket update', async accountId => {
     const spawn = spawnResponse.getMockImplementation()!;
     spawnResponse.mockImplementationOnce(async input => {
@@ -910,7 +938,6 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       agentId: 'acme-voice-agent',
       agentTargetKey: 'agent:acme.voice/agent',
       agentIdentity: { pluginId: 'acme.voice', localId: 'agent' },
-      agentProjectionGeneration: 7,
     };
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
 
@@ -932,7 +959,6 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       agentId: 'acme-voice-agent',
       agentTargetKey: 'agent:acme.voice/agent',
       agentIdentity: { pluginId: 'acme.voice', localId: 'agent' },
-      agentProjectionGeneration: 7,
     };
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
 
@@ -1751,6 +1777,20 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       }),
       expect.objectContaining(globalVoiceStartupInstructionsMarker),
     );
+  });
+
+  it('R43 refuses a rejoined Agent-realtime carrier when cold-resume instruction delivery is unproven', async () => {
+    enableCodexStartupInstructionsV1();
+    const create = trustedSpawnResponse.getMockImplementation()!;
+    trustedSpawnResponse.mockImplementation(async (...args) => ({ ...await create(...args), disposition: 'rejoined' }));
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForVoiceHome({
+      backendTarget: { kind: 'backend', backendId: 'codex' },
+      permissionIntent: 'read-only',
+      coldResumeStartupInstructionsEffective: false,
+      isReusableSession: async () => true,
+    })).rejects.toMatchObject({ code: 'VOICE_AGENT_STARTUP_INSTRUCTIONS_UNSUPPORTED' });
+    expect(resumeResponse).not.toHaveBeenCalled();
   });
 
   it('spawns an exact voice-home session instead of reusing a stale-account candidate', async () => {
@@ -2662,6 +2702,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
         serverId: homeId, machineId: 'machine-target', payload: expect.objectContaining({
           type: 'resume-session', sessionId: 'voice-root-session', directory: '/Users/test/workspace/rebound',
           agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+          executionAuthorization: { provenance: 'user_request', requestId: expect.any(String) },
         }),
       }));
       admitted.resolve();
@@ -2672,6 +2713,26 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
       admitted.resolve();
       await ensured.catch(() => undefined);
     }
+  });
+
+  it('refuses failed exact archive restoration without resuming or selecting a replacement', async () => {
+    state.sessions['archived-explicit-carrier'] = {
+      id: 'archived-explicit-carrier', active: false, archivedAt: 1234, updatedAt: 10,
+      metadata: { machineId: 'machine-target', path: '/Users/test/workspace/rebound',
+        voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+    };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    unarchiveResponse.mockImplementation(async () => new Response('private restoration detail', { status: 503 }));
+
+    await expect(ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: {
+      serverId: homeId, sessionId: 'archived-explicit-carrier',
+    } })).rejects.toMatchObject({ code: 'VOICE_CONVERSATION_UNARCHIVE_FAILED', message: 'voice_conversation_unarchive_failed' });
+
+    expect(unarchiveResponse).toHaveBeenCalledWith('archived-explicit-carrier');
+    expect(resumeResponse).not.toHaveBeenCalled();
+    expect(spawnResponse).not.toHaveBeenCalled();
+    expect(storage.getState().sessions['archived-explicit-carrier']?.archivedAt).toBe(1234);
   });
 
   it('refuses an unavailable retained carrier without exposing its endpoint or spawning a replacement', async () => {
@@ -2687,6 +2748,29 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
       serverId: homeId, sessionId: 'voice-offline',
     } }).then(() => null, (error: unknown) => error);
     expect(error).toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, message: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED });
+    expect(spawnResponse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['held_by_person', 'session_unavailable', 'none'],
+    ['agent_signed_out', 'authentication_required', 'connect_agent'],
+  ] as const)('preserves the retained carrier launch refusal %s through Voice recovery', async (code, kind, recoveryAction) => {
+    state.sessions['voice-refused'] = {
+      id: 'voice-refused', active: false, updatedAt: 10,
+      metadata: { machineId: 'machine-target', path: '/Users/test/workspace/rebound',
+        voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+    };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    resumeResponse.mockResolvedValue({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'private launch diagnostic', errorDetail: { kind: 'launch_error', code, message: 'private launch diagnostic' } });
+    const error = await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: {
+      serverId: homeId, sessionId: 'voice-refused',
+    } }).then(() => null, (error: unknown) => error);
+    expect(error).toMatchObject({ code, message: code });
+    const { classifyVoiceMachineError } = await import('@/voice/runtime/machine/voiceMachineError');
+    expect(classifyVoiceMachineError(error)).toMatchObject({ kind, reason: code, recoveryAction, presentation: 'error' });
+    expect(resumeResponse).toHaveBeenCalledTimes(1);
     expect(spawnResponse).not.toHaveBeenCalled();
   });
 

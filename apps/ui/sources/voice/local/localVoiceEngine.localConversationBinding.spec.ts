@@ -8,6 +8,7 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createDeferred, createMachineFixture, createSessionFixture, waitForTestEvent } from '@/dev/testkit';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
 import {
     getStorage, loadLocalVoiceEngineWithCompatState, registerLocalVoiceEngineHarnessHooks,
@@ -280,6 +281,135 @@ describe('local voice engine local conversation binding', () => {
         } finally {
             machineRpcWithServerScope.mockImplementation(incumbent);
             await lifecycle.dispose();
+        }
+    }, 60_000);
+
+    it.each([
+        { scope: 'global', fromHistory: false, unreachable: false },
+        { scope: 'scoped', fromHistory: false, unreachable: false },
+        { scope: 'global', fromHistory: true, unreachable: false },
+        { scope: 'scoped', fromHistory: true, unreachable: false },
+        { scope: 'global', fromHistory: false, unreachable: true },
+    ] as const)('R43 archived $scope Start (History: $fromHistory; unreachable: $unreachable) waits for a serviceable carrier', async ({ scope, fromHistory, unreachable }) => {
+        await configureAgentMode();
+        const storage = await getStorage();
+        const voice = storage.getState().settings.voice;
+        const config = readLocalConversationVoiceSettings(voice);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: { ...voice,
+            providers: { ...voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                agent: { ...config.agent, stayInVoiceHome: false },
+            } } },
+        } } });
+        const incumbent = machineRpcWithServerScope.getMockImplementation();
+        if (!incumbent) throw new Error('Missing canonical machine Socket boundary');
+        const { readVoiceSessionOwnerMetadataFromState } = await import('@/voice/shared/readVoiceSessionOwnerMetadata');
+        const seedArchive = (sessionId: string, archivedAt: number | null) => {
+            const session = storage.getState().sessions[sessionId]!;
+            replaceLocalVoiceSessionHttpSeed(sessionId, createPlainSessionCurrentProjectionRecordFixture({
+                id: sessionId, active: false, archivedAt, metadataVersion: session.metadataVersion,
+                metadata: readVoiceSessionOwnerMetadataFromState(storage.getState(), sessionId),
+            }));
+        };
+        const resumeReady = createDeferred<void>();
+        const resumeEntered = createDeferred<void>();
+        let holdResume = false;
+        machineRpcWithServerScope.mockImplementation(async (request: MachineRequest) => {
+            if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+                const payload = request.payload as { sessionId: string };
+                if (storage.getState().sessions[payload.sessionId]?.archivedAt != null) {
+                    return { type: 'error', errorCode: 'target_unavailable', errorMessage: 'target_unavailable' };
+                }
+                if (holdResume) {
+                    resumeEntered.resolve();
+                    await resumeReady.promise;
+                    if (unreachable) throw createRpcCallError({ error: 'transport unavailable', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
+                }
+            }
+            if (request.method !== RPC_METHODS.SESSION_SPAWN_NEW) return incumbent(request);
+            const rejoining = storage.getState().sessions['voice-home-session']?.archivedAt != null;
+            const result = SessionSpawnNewResultV1Schema.parse(await incumbent(request));
+            if (result.type !== 'success' || !rejoining) return result;
+            // The real creation service authenticates the recipe then restores
+            // the same tag-owned Session. Its process/HTTP boundary is substituted here.
+            const session = storage.getState().sessions[result.sessionId]!;
+            storage.__setState({ sessions: { ...storage.getState().sessions,
+                [session.id]: { ...session, archivedAt: null, active: false },
+            } });
+            seedArchive(session.id, null);
+            return { ...result, disposition: 'rejoined' };
+        });
+        setLocalVoiceHttpResponder(request => request.path.endsWith('/unarchive')
+            ? Response.json({ success: true, archivedAt: null })
+            : request.path.endsWith('/archive') ? Response.json({ success: true, archivedAt: 1234 }) : undefined);
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        const { sessionArchiveWithServerScope } = await import('@/sync/ops/sessions');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        const target = scope === 'global' ? null : { serverId: localVoiceHomeId, sessionId: 'session-1' };
+        try {
+            await lifecycle.toggle(target);
+            const first = voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)!;
+            const history = readVoiceSessionOwnerMetadataFromState(storage.getState(), first.conversationSessionId);
+            if (!history) throw new Error('Expected admitted Voice conversation metadata');
+            await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+            const carrier = storage.getState().sessions[first.conversationSessionId]!;
+            storage.__setState({ sessions: { ...storage.getState().sessions,
+                [carrier.id]: { ...carrier, active: false },
+            } });
+            expect(await sessionArchiveWithServerScope(carrier.id, { serverId: localVoiceHomeId })).toMatchObject({ success: true });
+            seedArchive(carrier.id, 1234);
+            if (fromHistory) {
+                // Explicit continuation must retain A even after today's recipe
+                // changes and a newer compatible B is available to idle Start.
+                const currentVoice = storage.getState().settings.voice;
+                const currentConfig = readLocalConversationVoiceSettings(currentVoice);
+                const newerMetadata = { machineId: history.machineId, path: history.path, host: 'voice.test',
+                    flavor: history.flavor, connectedServices: history.connectedServices,
+                    voiceConversationScopeV1: history.voiceConversationScopeV1,
+                    systemSessionV1: history.systemSessionV1, permissionMode: 'safe-yolo' } satisfies NonNullable<ReturnType<typeof createSessionFixture>['metadata']>;
+                const newer = createSessionFixture({ id: 'voice-current-session', serverId: localVoiceHomeId,
+                    active: true, presence: 'online', updatedAt: carrier.updatedAt + 1, metadata: newerMetadata });
+                storage.__setState({ sessions: { ...storage.getState().sessions, [newer.id]: newer },
+                    settings: { ...storage.getState().settings, voice: { ...currentVoice,
+                        providers: { ...currentVoice.providers, local_conversation: { schemaVersion: 1,
+                            config: { ...currentConfig, agent: { ...currentConfig.agent, permissionIntent: 'safe-yolo' } } } },
+                    } } });
+                replaceLocalVoiceSessionHttpSeed(newer.id, createPlainSessionCurrentProjectionRecordFixture({
+                    id: newer.id, active: true, archivedAt: null, metadata: newerMetadata,
+                }));
+            }
+            holdResume = true;
+            const restart = lifecycle.toggle(fromHistory ? { serverId: localVoiceHomeId, sessionId: carrier.id } : target);
+            const outcome = restart.then(() => null, error => error);
+            await Promise.race([outcome, resumeEntered.promise]);
+            const preparing = lifecycle.getSnapshot();
+            const leasesBeforeReady = localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount;
+            resumeReady.resolve();
+            const error = await outcome;
+            expect(preparing).toMatchObject({ status: 'connecting', canStop: true });
+            expect(leasesBeforeReady).toBe(0);
+            if (unreachable) {
+                expect(error).toMatchObject({ code: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
+                expect(lifecycle.getSnapshot()).toMatchObject({ canStop: false,
+                    errorCode: 'provider_error', errorRecoveryAction: 'retry' });
+                expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+                return;
+            }
+            expect(error).toBeNull();
+            const next = voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)!;
+            expect(next.conversationSessionId).toBe(first.conversationSessionId);
+            expect(next.conversationSessionAddress).toEqual(first.conversationSessionAddress);
+            expect(next.targetSessionAddress).toEqual(first.targetSessionAddress);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+            expect(storage.getState().sessions[carrier.id]?.archivedAt).toBeNull();
+            expect(readVoiceSessionOwnerMetadataFromState(storage.getState(), carrier.id)?.voiceConversationScopeV1)
+                .toEqual(history?.voiceConversationScopeV1);
+            expect(storage.getState().sessions[next.conversationSessionId]?.archivedAt).toBeNull();
+        } finally {
+            resumeReady.resolve();
+            await lifecycle.dispose();
+            machineRpcWithServerScope.mockImplementation(incumbent);
         }
     }, 60_000);
 

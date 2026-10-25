@@ -116,7 +116,8 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
         const existing = readPreferredVoiceConversationBindingMetadata({ conversationSessionId,
             preferredMetadata: requestedMetadata, sourceServerId: targetSessionAddress.serverId });
         const scope = readVoiceConversationScopeMetadata(requestedMetadata);
-        return { controlSessionId, conversationSessionId, conversationSessionAddress: targetSessionAddress, transcriptMode,
+        return { controlSessionId, conversationSessionId,
+            conversationSessionAddress: { serverId: targetSessionAddress.serverId, sessionId: conversationSessionId }, transcriptMode,
             targetSessionAddress: existing ? existing.targetSessionAddress
                 : (scope?.kind === 'session_root' ? normalizeSessionAddress(targetSessionAddress.serverId, scope.sessionRootId) : null) };
     }

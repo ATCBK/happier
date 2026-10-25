@@ -27,6 +27,7 @@ import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { PartialOptions } from '@elevenlabs/client';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
 
@@ -118,6 +119,7 @@ async function restorePendingHttpAccount() {
     providerMessages.length = 0;
     const metadata = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
     const promptCatalog = createPromptLibraryCatalogBoundary({ settingsVersion: 1 });
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
     const features = createRootLayoutFeaturesResponse();
     const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'composer-account' });
     features.capabilities.session.pendingInput = { protocolVersion: 1 };
@@ -129,6 +131,8 @@ async function restorePendingHttpAccount() {
         serverUrl: `https://voice-composer-${++homeSequence}.example.test`, accountId: 'composer-account', credentialScope: 'restored-home',
         request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(String(input)).pathname;
+            const purposeResponse = await purposes.handle(input, init);
+            if (purposeResponse) return purposeResponse;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }));
@@ -552,6 +556,7 @@ describe('Voice composer through Sync HTTP custody', () => {
                 agentRuntimeCapabilitiesV1: { localControl: { supported: true } } } });
         const carrier = createSessionFixture({ id: 'carrier-s1', serverId: account.home.id, active: true, activeAt: Date.now(),
             metadata: writeVoiceConversationScopeMetadata({ path: '/voice/native', host: 'tester.local', machineId: 'machine-1', flavor: 'claude',
+                permissionMode: local.agent.permissionIntent, connectedServices: { v: 2, bindingsByServiceId: {} },
                 ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) }, { kind: 'session_root', sessionRootId: root.id }) });
         getStorage().getState().applySessions([root, carrier]);
         await sync.refreshMachines();

@@ -10,10 +10,15 @@ import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } f
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { PermissionIntent } from '@happier-dev/agents';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
+import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
+import { resolveAgentConnectedServicesDefaultBindings } from '@/sync/domains/connectedServices/resolveAgentConnectedServicesDefaultBindings';
 
 const network = await installSessionOpsNetworkBoundary();
 await loadSyncSingletonForTests();
@@ -41,10 +46,11 @@ const input = () => ({ adapterId: 'local_conversation', controlSessionId: '__voi
     requestedTargetServerId: connection.home.id });
 const notes = () => selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'carrier-s1').filter(entry => entry.kind === 'note');
 
-function carrier(sessionId: string, rootId: string): Session {
+function carrier(sessionId: string, rootId: string, permissionMode: PermissionIntent,
+    connectedServices: ReturnType<typeof resolveAgentConnectedServicesDefaultBindings>): Session {
     return createSessionFixture({ id: sessionId, serverId: connection.home.id, active: true,
         metadata: writeVoiceConversationScopeMetadata({ path: '/project/' + rootId, host: 'tester.local', machineId: 'machine-1',
-            flavor: 'codex',
+            flavor: 'codex', permissionMode, connectedServices,
             ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
         }, { kind: 'session_root', sessionRootId: rootId }),
     });
@@ -65,6 +71,7 @@ beforeEach(async () => {
     clearDaemonMergedProjectionCacheForTests();
     const home = await network.addHome('https://voice-binding-publication.example.test', 'account-binding');
     metadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
     rejectNextBindingFor = null;
     const settings = settingsParse({ lastUsedAgent: 'codex', voice: {
         providers: { local_conversation: { schemaVersion: 1, config: {
@@ -108,16 +115,21 @@ beforeEach(async () => {
         if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
         if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
-        return null;
+        return await purposes.handle(url, init);
     };
     network.setHttpResponder(request);
     connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'account-binding',
         credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(request) });
     await sync.refreshMachines();
     const scope = { serverId: connection.home.id, accountId: 'account-binding' };
+    const agent = resolveAgentCatalogProjection('codex', { enabledAgentIds: [] });
+    if (!agent.identity) throw new Error('Expected the bundled Codex contribution');
+    const connectedServices = resolveAgentConnectedServicesDefaultBindings({ settings,
+        purposeBindings: purposes.value, agentId: 'codex', consumer: agent.identity,
+        declarations: agent.connectedAccounts });
     const sessions = Object.fromEntries(['s1', 's2'].flatMap(rootId => [
         createSessionFixture({ id: rootId, serverId: scope.serverId, metadata: { path: '/project/' + rootId, host: 'tester.local', machineId: 'machine-1' } }),
-        carrier('carrier-' + rootId, rootId),
+        carrier('carrier-' + rootId, rootId, readLocalConversationVoiceSettings(settings.voice).agent.permissionIntent, connectedServices),
     ]).map(session => [session.id, session]));
     storage.setState({ settings, settingsScope: scope, profileScope: scope, sessions, sessionMessages: {} });
     voiceSessionBindingStore.setState({ bindingsByConversationSessionId: {}, runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {} });

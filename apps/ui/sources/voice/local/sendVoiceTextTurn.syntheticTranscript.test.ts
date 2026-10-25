@@ -260,6 +260,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     const carrier = createSessionFixture({ id: 'carrier-s1', serverId, active: true, presence: 'online', pendingVersion: 0, pendingCount: 0,
       metadata: writeVoiceConversationScopeMetadata({ ...target.metadata!,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+        permissionMode: readLocalConversationVoiceSettings(storage.getState().settings.voice).agent.permissionIntent,
       }, { kind: 'session_root', sessionRootId: target.id }) });
     storage.setState({ sessions: { s1: target, 'carrier-s1': carrier }, machines: { [machine.id]: machine },
       machineListByServerId: { [serverId]: [machine] }, sessionMessages: {},

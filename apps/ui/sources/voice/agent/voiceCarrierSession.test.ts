@@ -22,6 +22,8 @@ import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalo
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { buildVoiceSpawnUserAttemptId } from '@/voice/shared/voiceSpawnAttempt';
 import { captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -35,6 +37,7 @@ const readSessions = vi.fn();
 const readSession = vi.fn();
 let daemonProjection: unknown = null;
 const committedSessionRecords = new Map<string, ReturnType<typeof sessionWireRecord>>();
+const purposes = createConnectedPurposeCatalogHttpBoundary();
 const voiceHomeDirectory = '/tmp/.happier/voice-agent';
 const exactConnectedServices = { v: 2 as const, bindingsByServiceId: {
   'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'codex-work' },
@@ -88,7 +91,9 @@ function captureCarrierSessionRecords() {
     const session = createSessionFixture({ active: true, ...partial as Parameters<typeof createSessionFixture>[0], id,
       serverId: account!.home.id, metadata: (partial as ReturnType<typeof createSessionFixture>).metadataLayoutVersion === 1
         ? (partial as ReturnType<typeof createSessionFixture>).metadata
-        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent, ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
+        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent,
+          permissionMode: readLocalConversationVoiceSettings(settingsParse(state.settings).voice).agent.permissionIntent,
+          ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
     committedSessionRecords.set(id, sessionWireRecord(session));
   }
 }
@@ -97,7 +102,9 @@ function publishCarrierFixture() {
     const session = createSessionFixture({ active: true, ...partial as Parameters<typeof createSessionFixture>[0], id,
       serverId: account!.home.id, metadata: (partial as ReturnType<typeof createSessionFixture>).metadataLayoutVersion === 1
         ? (partial as ReturnType<typeof createSessionFixture>).metadata
-        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent, ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
+        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent,
+          permissionMode: readLocalConversationVoiceSettings(settingsParse(state.settings).voice).agent.permissionIntent,
+          ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
     return [id, session];
   }));
   const machines = Object.fromEntries(Object.entries(state.machines).map(([id, partial]) => [id,
@@ -110,6 +117,8 @@ function publishCarrierFixture() {
   captureMachinePresenceObservation({ serverId: account!.serverId, accountId: 'voice-account' })(Object.keys(machines));
 }
 async function respondToServerRequest(input: RequestInfo | URL, init?: RequestInit) {
+  const purposeResponse = await purposes.handle(input, init);
+  if (purposeResponse) return purposeResponse;
   const path = new URL(String(input)).pathname;
   if (path === '/health') return Response.json({});
   if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
@@ -501,6 +510,8 @@ describe('voiceConversationSession', () => {
         machineId: 'm1',
         directory: 'c:/users/alice/.happier/voice-agent',
         backendTarget: { kind: 'backend', backendId: 'claude' },
+        connectedServices: { v: 2, bindingsByServiceId: {} },
+        permissionMode: 'read-only',
         requirements: null,
       }),
     }));
@@ -1028,6 +1039,7 @@ describe('voiceConversationSession', () => {
         directory: 'c:/workspace/repo',
         backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
         connectedServices: undefined,
+        permissionMode: 'read-only',
         modelSelection: null,
         sessionId: 's_user',
       }),

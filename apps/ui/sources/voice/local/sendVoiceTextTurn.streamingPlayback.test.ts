@@ -300,6 +300,8 @@ function registerStreamingPlaybackHooks(platform: 'ios' | 'web' = 'ios', ttsProv
     const carrier = createSessionFixture({ id: 'carrier-s1', serverId, active: true, presence: 'online',
       metadata: writeVoiceConversationScopeMetadata({ ...target.metadata!,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+        // A retained carrier records the permission admitted by its real creator.
+        permissionMode: readLocalConversationVoiceSettings(buildAccountSettings(ttsProvider).voice).agent.permissionIntent,
       }, { kind: 'session_root', sessionRootId: target.id }) });
     storage.setState({ settings: buildAccountSettings(ttsProvider),
       settingsScope: { serverId, accountId: 'account-a' },

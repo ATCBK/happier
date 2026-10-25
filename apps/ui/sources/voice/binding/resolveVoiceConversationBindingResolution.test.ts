@@ -13,6 +13,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { waitForTestEvent } from '@/dev/testkit';
 import type { BuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 
 const nativeAlertCalls = vi.hoisted(() => {
   const calls: Parameters<typeof import('react-native')['Alert']['alert']>[] = [];
@@ -74,6 +76,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
     return createSessionFixture({ id, serverId: connection.home.id, active: true, updatedAt,
       metadata: writeVoiceConversationScopeMetadata({ path: rootId ? `/project/${rootId}` : '/Users/tester/.happy-dev/voice-agent',
         host: 'tester.local', machineId, flavor: 'codex',
+        permissionMode: readLocalConversationVoiceSettings(localSettings().voice).agent.permissionIntent,
         ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
       }, rootId ? { kind: 'session_root', sessionRootId: rootId } : { kind: 'voice_home' }),
     });
@@ -89,6 +92,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
     const home = await network.addHome('https://voice-binding.example.test', 'account-binding');
     machineRows = [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-binding' })];
     metadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
     network.setRpcAckResponder(async request => {
       if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
         return { ok: false, error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
@@ -99,6 +103,8 @@ describe('ensureVoiceConversationBindingResolution', () => {
       throw new Error(`Unexpected daemon effect: ${request.method}`);
     });
     const request = createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
+      const purposeResponse = await purposes.handle(input, init);
+      if (purposeResponse) return purposeResponse;
       const path = new URL(String(input)).pathname;
       if (path === '/health') return Response.json({});
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
@@ -278,7 +284,11 @@ describe('ensureVoiceConversationBindingResolution', () => {
     storage.setState({ settings });
     storage.getState().applySessions(['s2', 'voice-root-s2'].map(id => {
       const session = storage.getState().sessions[id]!;
-      return { ...session, metadata: { ...session.metadata!, flavor: 'opencode' } };
+      return { ...session, metadata: { ...session.metadata!, flavor: 'opencode',
+        // Fixed-Agent carriers record the same explicit native default that
+        // R41's immutable recipe matcher receives from canonical creation.
+        ...(id === 'voice-root-s2' ? { connectedServices: { v: 2 as const, bindingsByServiceId: {} } } : {}),
+      } };
     }));
     metadata.replaceSession('s2');
     metadata.replaceSession('voice-root-s2');

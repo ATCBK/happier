@@ -64,6 +64,7 @@ function prepareLocalQaSession(options: Readonly<{ welcome?: boolean }> = {}) {
     active: true, activeAt: Date.now(), pendingVersion: 0, pendingCount: 0, metadata: writeVoiceConversationScopeMetadata({
       path: '/project', host: 'test', machineId: 'machine-1', flavor: 'claude',
       ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+      permissionMode: config.agent.permissionIntent,
     }, { kind: 'session_root', sessionRootId: 's1' }),
   })]);
   replaceLocalVoiceSessionHttpSeed('voice-hidden-s1');

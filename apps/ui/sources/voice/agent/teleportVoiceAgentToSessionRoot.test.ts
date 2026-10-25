@@ -82,6 +82,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
       existingSession: { id: 'global-carrier', active: true,
         metadata: writeVoiceConversationScopeMetadata({ path: '/voice', host: 'voice.test', machineId: 'machine-1',
           flavor: 'claude', ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+          permissionMode: 'read-only' as const, connectedServices: { v: 2, bindingsByServiceId: {} },
           agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
         }, { kind: 'voice_home' }) },
       sessions: [
@@ -90,6 +91,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
         createSessionFixture({ id: 'carrier-1', active: true,
           metadata: writeVoiceConversationScopeMetadata({ path: '/repo', host: 'voice.test', machineId: 'machine-1',
             flavor: 'claude', ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
+            permissionMode: 'read-only' as const, connectedServices: { v: 2, bindingsByServiceId: {} },
           }, { kind: 'session_root', sessionRootId: 's1' }) }),
       ],
     });
