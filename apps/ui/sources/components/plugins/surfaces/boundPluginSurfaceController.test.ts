@@ -2518,6 +2518,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             'openExternalLink',
             'openNewSession',
             'readSession',
+            'readMachineDisplayName',
+            'revealSessionInput',
             'watchSession',
             'respondToSessionPermission',
         ]);

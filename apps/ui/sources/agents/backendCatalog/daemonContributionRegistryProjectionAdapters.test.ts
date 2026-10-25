@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { PluginProjectionV2Schema, type PluginProjectedSettingsV2, type PluginProjectionV2 } from '@happier-dev/protocol';
+import { DaemonPluginUiComposerSurfaceCatalogEntryV1Schema, PluginProjectionV2Schema, type PluginProjectedSettingsV2, type PluginProjectionV2 } from '@happier-dev/protocol';
 import { createProjectedAgentLocalAuthPlugin } from '@/agents/catalog/localAuth/createProjectedAgentLocalAuthPlugin';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import * as strictJsonProjection from '@happier-dev/protocol/json/strictJsonValue';
 import { PluginUiSurfaceBindingV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
 import * as projectionNormalizer from '@/sync/domains/plugins/ui/projection';
 import * as descriptorProjection from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 
@@ -17,6 +18,44 @@ import {
 } from './daemonContributionRegistryProjectionAdapters';
 
 describe('daemon contribution registry projection adapters', () => {
+    it('publishes composer Action selections for resource-backed translation descriptors', () => {
+        const pluginId = 'acme.review';
+        const occurrenceId = 'review-current';
+        const sourceCustody = { kind: 'development', registeredRootId: 'review-root' } as const;
+        const protocol = { id: 'review', version: 1 };
+        const contributor = { pluginId, contributionId: 'review', occurrenceId, sourceCustody };
+        const row = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
+            contribution: { pluginId, localId: 'review' }, occurrenceId, projectionGeneration: 1, role: 'region',
+            rendererChain: [{ pluginId, localId: 'renderer' }],
+            selectedRenderer: { identity: { pluginId, localId: 'renderer' },
+                renderer: { kind: 'declarative', contributionId: 'renderer', model: createPluginDeclarativeModelFixture({
+                    pluginId, localId: 'renderer', occurrenceId,
+                    document: { version: 1, root: { kind: 'text', text: 'Review' } },
+                }) }, availability: { state: 'available', reason: 'available', diagnostics: [] } },
+            executionOrigin: { serverIdentityId: 'srv_review', sourceRef: { machineId: 'machine-review', pluginId, sourceCustody } },
+            resourceCapability: { readable: true, dynamic: true },
+            contributorTargetedContributions: { target: { pluginId, occurrenceId, sourceCustody },
+                points: [{ pointId: 'review', protocols: [{ protocol, contributions: [{ contributor, protocol, surfaces: [],
+                    operations: [{ point: { pointId: 'review', protocol }, contributor, role: 'setup',
+                        action: { pluginId, localId: 'configure' } }],
+                }] }] }] },
+        });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Review', enabled: true,
+                source: { kind: 'local', locator: '/plugins/review' } } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                'translations:acme.review': { id: 'translations:acme.review', pluginId, occurrenceId,
+                    contributionKind: 'translations', locales: ['en'], resourceIdsByLocale: { en: 'copy-en' } },
+            } } },
+        });
+        const published = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [row] });
+        const selection = [...published.composerSurfaceActionInputSelectionFacts.values()];
+        expect(selection).toHaveLength(1);
+        expect(selection[0]?.selected).toMatchObject([{ pluginId, plugin: { pluginId }, hasTranslations: true, bundles: null }]);
+        expect(published.pluginUiProjection.translationsByPluginId[pluginId]?.resourceIdsByLocale).toEqual({ en: 'copy-en' });
+        expect(publishDaemonMergedProjectionInputs({ projection: structuredClone(projection), composerSurfaceCatalog: [row] }, published)).toBe(published);
+    });
+
     it('reuses ready models without deriving again for equivalent newly decoded full replies', () => {
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 19 });
         const first = publishDaemonMergedProjectionInputs({ projection });

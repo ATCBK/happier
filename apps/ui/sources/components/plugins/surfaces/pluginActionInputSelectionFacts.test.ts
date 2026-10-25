@@ -1,9 +1,11 @@
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-import { createPluginActionInputSelectionFactsPublication } from './pluginActionInputSelectionFacts';
+import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
+import { createPluginActionInputSelectionFactsPublication, type PluginActionInputSelectionFactsInput } from './pluginActionInputSelectionFacts';
 
 function rawFacts() {
     const plugin: PluginProjectionEntry = {
@@ -32,6 +34,39 @@ function rawFacts() {
 }
 
 describe('mounted Action selection fact publication', () => {
+    it('publishes resource-backed translations without inline bundles and preserves unchanged selection identity', () => {
+        const raw = rawFacts();
+        const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                text: { id: 'text', pluginId: raw.plugin.pluginId, occurrenceId: 'action-1', contributionKind: 'translations',
+                    locales: ['en'], resourceIdsByLocale: { en: 'copy-en' } },
+            } } },
+        }), 'web');
+        expect(projection.translationsByPluginId[raw.plugin.pluginId]?.bundles).toBeUndefined();
+        const input: PluginActionInputSelectionFactsInput = { ...raw.input, translationsByPluginId: projection.translationsByPluginId };
+        const publication = createPluginActionInputSelectionFactsPublication();
+        const selected = publication.publish(input);
+        expect(selected.selected).toMatchObject([{ pluginId: raw.plugin.pluginId, hasTranslations: true, bundles: null }]);
+        expect(selected.selected[0]?.plugin).toEqual(raw.plugin);
+        for (let index = 0; index < 100; index += 1) {
+            expect(publication.publish({ ...input, pluginProjectionById: {
+                ...input.pluginProjectionById, unrelated: { ...raw.plugin, title: `Unrelated ${index}` },
+            } })).toBe(selected);
+        }
+        const inline = publication.publish(raw.input);
+        expect(inline.selected[0]?.bundles).toEqual(raw.bundles);
+        expect(inline).not.toBe(selected);
+        const resourceBacked = publication.publish(input);
+        expect(resourceBacked.selected[0]).toMatchObject({ hasTranslations: true, bundles: null });
+        const absent = publication.publish({ ...input, translationsByPluginId: {} });
+        expect(absent.selected[0]).toMatchObject({ hasTranslations: false, bundles: null });
+        expect(absent).not.toBe(resourceBacked);
+        expect(() => publication.publish({ ...raw.input, translationsByPluginId: {
+            [raw.plugin.pluginId]: { ...raw.input.translationsByPluginId[raw.plugin.pluginId]!,
+                bundles: Symbol('invalid translation bundles') },
+        } })).toThrow('value must contain strict JSON data');
+    });
+
     it('reuses selected immutable facts with zero deep walks across unrelated catalog publications', () => {
         const raw = rawFacts();
         const plugin = projectNativeJsonValueForTransport(raw.plugin) as unknown as PluginProjectionEntry;

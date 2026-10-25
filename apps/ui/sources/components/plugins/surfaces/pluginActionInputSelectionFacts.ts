@@ -128,7 +128,8 @@ export function createPluginActionInputSelectionFactsPublication(): Readonly<{
                 const rawPlugin = input.pluginProjectionById?.[pluginId];
                 const plugin = rawPlugin ? shareEqualInput(ownNativeInput(rawPlugin), old?.plugin) : null;
                 const translations = plugin ? input.translationsByPluginId?.[pluginId] : undefined;
-                const bundles = translations ? shareEqualInput(ownNativeInput(translations.bundles), old?.bundles) : null;
+                const rawBundles = translations?.bundles;
+                const bundles = rawBundles === undefined ? null : shareEqualInput(ownNativeInput(rawBundles), old?.bundles);
                 return Object.freeze({ pluginId, plugin, hasTranslations: Boolean(translations), bundles });
             });
             const selectionTarget = pluginIds.length > 0 ? target : null;
