@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { answerClaudeNativeQuestion, parseClaudeNativeQuestionScreen } from './nativeQuestion';
+import { answerClaudeNativeQuestion, matchesClaudeNativeQuestionScreen, parseClaudeNativeQuestionScreen } from './nativeQuestion';
 import { createFakeControlPort } from './fakeControlPort';
 import { parseClaudeScreenState, resolveClaudeScreenInFlightSteerVeto } from './screenState';
 import { wrapBracketedPaste } from '@/agent/runtime/terminal/injection/bracketedPaste';
@@ -43,7 +43,7 @@ describe('native Claude AskUserQuestion (2.1.304 captures)', () => {
   });
   it('recognizes native questions, multi-select progress, review and inline freeform without reading transcript echoes', () => {
     expect(parseClaudeNativeQuestionScreen(single)).toMatchObject({ kind: 'question', question: 'Which probe color?' });
-    expect(parseClaudeNativeQuestionScreen(multi)?.options.slice(0, 3)).toEqual([
+    expect(parseClaudeNativeQuestionScreen(multi)?.options.slice(0, 3)).toMatchObject([
       { label: 'Apple', focused: true, checked: false },
       { label: 'Pear', focused: false, checked: false },
       { label: 'Plum', focused: false, checked: false },
@@ -54,11 +54,112 @@ describe('native Claude AskUserQuestion (2.1.304 captures)', () => {
     expect(parseClaudeNativeQuestionScreen(partialReview)).toMatchObject({ kind: 'review', reviewAnswers: [{ question: 'Which probe size?', answer: 'Small' }] });
     expect(parseClaudeNativeQuestionScreen(freeform)?.options.at(-1)?.label).toBe('Otter freeform probe');
     expect(parseClaudeNativeQuestionScreen(`${single}\n${idle}`)).toBeNull();
-    expect(parseClaudeNativeQuestionScreen(single.replaceAll('Which probe color?', 'Which probe\ncolor?'))).toBeNull();
+    expect(parseClaudeNativeQuestionScreen(single.replaceAll('Which probe color?', 'Which probe\ncolor?'))).toMatchObject({ question: 'Which probe\ncolor?' });
     const state = parseClaudeScreenState(single);
     expect(state.unrecognizedConfirmationDialogVisible).toBe(false);
     expect(state.inputBoxInteractive).toBe(false);
     expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('native_question');
+  });
+
+  it('recognizes and answers wrapped decorated questions without confusing an adjacent panel with the dialog', async () => {
+    const wrapped = single.replaceAll('Which probe color?', '│ Which probe\n│ color?');
+    const width = single.split('\n').find((line) => /^─+$/u.test(line))!.length;
+    const besidePanel = wrapped.split('\n').map((line, index) => `${line.padEnd(width + 4)}${index === 0 ? 'Changed files' : 'unrelated pane text'}`).join('\n');
+    const presentation = parseClaudeNativeQuestionScreen(besidePanel);
+    expect(presentation).toMatchObject({ question: 'Which probe\ncolor?' });
+    expect(matchesClaudeNativeQuestionScreen(presentation!, questions)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(presentation!, [{ ...questions[0]!, question: 'Which other probe color?' }])).toBe(false);
+    const port = createFakeControlPort({ captures: [besidePanel, idle] });
+    await expect(answerClaudeNativeQuestion({ ...controls, port, questions, answers: { 'Which probe color?': ['Amber'] } })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter']);
+  });
+
+  it('uses the same rendered question identity while navigating between wrapped native pages and review', async () => {
+    const wrappedMulti = multi.replaceAll('Which probe fruits?', '│ Which probe\n│ fruits?');
+    const wrappedSize = size.replaceAll('Which probe size?', '│ Which probe\n│ size?');
+    const wrappedReview = review.replace('● Which probe fruits?', '● Which probe\n   fruits?').replace('● Which probe size?', '● Which probe\n   size?').replace('→ Apple, Pear', '→ Apple,\n   Pear');
+    const apple = wrappedMulti.replace('1. [ ] Apple', '1. [✓] Apple');
+    const pearFocus = focus(apple, '1. [✓] Apple', '2. [ ] Pear');
+    const pear = pearFocus.replace('2. [ ] Pear', '2. [✓] Pear');
+    const port = createFakeControlPort({ captures: [wrappedMulti, apple, pearFocus, pear, wrappedSize, focus(wrappedSize, '1. Small', '2. Large'), wrappedReview, idle] });
+    await expect(answerClaudeNativeQuestion({ ...controls, port, questions: multipleQuestions, answers: fruitAnswers })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter', 'ArrowDown', 'Enter', 'Tab', 'ArrowDown', 'Enter', 'Enter']);
+  });
+
+  it('correlates provider line breaks and wrapped option labels through the same native identity', async () => {
+    const input = [{ ...questions[0]!, question: 'Which probe\ncolor?', options: [
+      { label: 'Amber label long', description: 'Warm amber probe color.' },
+      questions[0]!.options[1]!,
+    ] }];
+    const screen = single.replace('1. Amber', '1. Amber label\n     long');
+    const presentation = parseClaudeNativeQuestionScreen(screen);
+    expect(matchesClaudeNativeQuestionScreen(presentation!, input)).toBe(true);
+    const port = createFakeControlPort({ captures: [screen, idle] });
+    await expect(answerClaudeNativeQuestion({ ...controls, port, questions: input, answers: { 'Which probe\ncolor?': ['Amber label long'] } })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter']);
+    const cropped = parseClaudeNativeQuestionScreen(screen.replace('     long\n', ''));
+    expect(matchesClaudeNativeQuestionScreen(cropped!, input)).toBe(false);
+  });
+
+  it('answers the live Claude 310 narrow form with complete wrapped labels and descriptions', async () => {
+    const screen = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-narrow.txt', import.meta.url), 'utf8');
+    const question = 'Which approach should this synthetic narrow terminal validation use when the question text and every option label naturally wrap across several display lines?';
+    const first = 'Preserve the complete wrapped question and option labels while answering through the existing app controls';
+    const second = 'Keep the complete wrapped question and option labels while answering locally in the terminal';
+    const input = [{ question, header: 'Approach', options: [first, second], multiSelect: false }];
+    const parsed = parseClaudeNativeQuestionScreen(screen);
+    expect(parsed).not.toBeNull();
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input)).toBe(true);
+    const port = createFakeControlPort({ captures: [screen, idle] });
+    await expect(answerClaudeNativeQuestion({ ...controls, port, questions: input, answers: { [question]: [first] } })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter']);
+  });
+
+  it('recognizes narrow multi-question footers and decorated review rows from real Claude 310 captures', () => {
+    const initial = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-multi-narrow.txt', import.meta.url), 'utf8');
+    const second = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-second-narrow.txt', import.meta.url), 'utf8');
+    const reviewed = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-review-narrow.txt', import.meta.url), 'utf8');
+    expect(parseClaudeNativeQuestionScreen(initial)).toMatchObject({ kind: 'question', multiSelect: true });
+    expect(parseClaudeNativeQuestionScreen(second)).toMatchObject({ kind: 'question', multiSelect: false });
+    expect(parseClaudeNativeQuestionScreen(reviewed)).toMatchObject({ kind: 'review', reviewAnswers: [
+      { question: expect.stringContaining('Which synthetic validation ingredients'), answer: expect.stringContaining('Preserve the complete wrapped question') },
+      { question: expect.stringContaining('Which synthetic confirmation size'), answer: expect.stringContaining('Use the larger confirmation scope') },
+    ] });
+    expect(parseClaudeNativeQuestionScreen(`${initial}\nUnexpected active dialog`)).toBeNull();
+  });
+
+  it('matches unspaced soft wraps and clips panes by display columns without splitting Unicode graphemes', () => {
+    const expected = 'x'.repeat(75);
+    const wrapped = single.replaceAll('Which probe color?', `│ ${expected.slice(0, 38)}\n│ ${expected.slice(38)}`);
+    const input = [{ ...questions[0]!, question: expected }];
+    const parsed = parseClaudeNativeQuestionScreen(wrapped);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input)).toBe(true);
+    const combined = 'e\u0301'.repeat(65);
+    const withCombiningMarks = single.replaceAll('Which probe color?', combined);
+    expect(parseClaudeNativeQuestionScreen(withCombiningMarks)?.question).toBe(combined);
+    const width = single.split('\n').find((line) => /^─+$/u.test(line))!.length;
+    const text = '雪'.repeat(40);
+    const rows = single.replaceAll('Which probe color?', text).split('\n');
+    const withWidePane = rows.map((line) => line === text ? `${text}${' '.repeat(width + 4 - 80)}RIGHT_PANEL_CONTENT` : `${line.padEnd(width + 4)}RIGHT_PANEL_CONTENT`).join('\n');
+    const wide = parseClaudeNativeQuestionScreen(withWidePane);
+    expect(wide?.question).toBe(text);
+    expect(matchesClaudeNativeQuestionScreen(wide!, [{ ...questions[0]!, question: text }])).toBe(true);
+  });
+
+  it('matches native abbreviated tab captions against full hook-owned questions at phone width', () => {
+    const screen = readFileSync(new URL('./__fixtures__/claude-2.1.310-question-four-narrow.txt', import.meta.url), 'utf8');
+    const input = ['Containment', 'Secrets', 'Naming', 'Root servers'].map((header) => ({
+      header, question: `${header}: Which synthetic choice?`, multiSelect: false, options: ['Alpha', 'Beta'],
+    }));
+    const parsed = parseClaudeNativeQuestionScreen(screen);
+    expect(parsed).not.toBeNull();
+    expect(matchesClaudeNativeQuestionScreen(parsed!, input)).toBe(true);
+    expect(matchesClaudeNativeQuestionScreen(parsed!, [{ ...input[0]!, question: 'A different current question?' }, ...input.slice(1)])).toBe(false);
+  });
+
+  it('preserves literal gutter characters inside a multiline review answer', () => {
+    const text = review.replace('→ Apple, Pear', '→ Apple,\n   │ preserve this answer text');
+    expect(parseClaudeNativeQuestionScreen(text)?.reviewAnswers[0]?.answer).toBe('Apple,\n│ preserve this answer text');
   });
 
   it('submits only after exact provider question and choices match and final response disappears', async () => {

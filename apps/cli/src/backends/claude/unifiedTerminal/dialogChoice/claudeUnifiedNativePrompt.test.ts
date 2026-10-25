@@ -24,12 +24,7 @@ import { createClaudeUnifiedInputArbiter } from '../createClaudeUnifiedInputArbi
 const QUESTIONS = [{ question: 'Which probe color?', header: 'Header Color', multiSelect: false,
   options: [{ label: 'Amber', description: 'Warm amber probe color.' }, { label: 'Blue', description: 'Cool blue probe color.' }],
 }];
-const SCREEN = [
-  '─────────────────────────', ' ☐ Header Color', '', 'Which probe color?', '',
-  '❯ 1. Amber', '     Warm amber probe color.', '  2. Blue', '     Cool blue probe color.',
-  '  3. Type something.', '─────────────────────────', '  4. Chat about this', '',
-  'Enter to select · ↑/↓ to navigate · Esc to cancel',
-].join('\n');
+const SCREEN = readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.304-question-single.txt', import.meta.url), 'utf8');
 
 const sessions = new Set<Session>();
 afterEach(() => {
