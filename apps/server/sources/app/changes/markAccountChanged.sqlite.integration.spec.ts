@@ -7,6 +7,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { eventRouter } from "@/app/events/connectionEventRouter";
 import { markAccountChanged, markAccountsChanged, markSessionAccountsChanged, type MarkAccountChangedParams } from "./markAccountChanged";
 import { recordConnectedServiceAccountProfileChange } from '@/app/api/routes/connect/connectedServicesAccountProfileChange';
+import { logger } from '@/utils/logging/log';
 
 describe("terminal AccountChange publication on SQLite", () => {
     let harness: LightSqliteHarness | undefined;
@@ -21,6 +22,22 @@ describe("terminal AccountChange publication on SQLite", () => {
     });
     afterEach(() => { eventRouter.clearIo(); });
     afterAll(async () => { await harness?.close(); });
+
+    it('attributes committed connected-service publications without credential or Account identifiers', async () => {
+        const account = await db.account.create({ data: { publicKey: 'connected-publication-attribution' } });
+        const diagnostic = vi.spyOn(logger, 'debug');
+        try {
+            const publish = (tx: Parameters<typeof recordConnectedServiceAccountProfileChange>[0]['tx']) =>
+                recordConnectedServiceAccountProfileChange({ tx, accountId: account.id, reason: 'credential-health',
+                    service: { pluginId: 'test.email', localId: 'email-imap-smtp' } });
+            await expect(inTx(async tx => { await publish(tx); throw new Error('fixture rollback'); }))
+                .rejects.toThrow('fixture rollback');
+            expect(diagnostic.mock.calls.filter(([, message]) => message === 'Connected service Account change committed')).toEqual([]);
+            await inTx(publish);
+            expect(diagnostic.mock.calls.filter(([, message]) => message === 'Connected service Account change committed'))
+                .toEqual([[{ reason: 'credential-health', serviceKind: 'email-imap-smtp' }, 'Connected service Account change committed']]);
+        } finally { diagnostic.mockRestore(); }
+    });
 
     it('keeps connected service entities cursor-relative and independent of self changes', async () => {
         const account = await db.account.create({ data: { publicKey: 'connected-service-entities' } });

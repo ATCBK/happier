@@ -1272,6 +1272,7 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
                     tx,
                     accountId: prepared.params.accountId,
                     service: prepared.params.ref.service,
+                    reason: 'credential-create',
                 });
             }
             return result;
@@ -1345,6 +1346,7 @@ export async function mutateQualifiedConnectedServiceCredential(
                 tx,
                 accountId: canonicalParams.accountId,
                 service: canonicalParams.ref.service,
+                reason: 'credential-replace',
             });
         }
         return result;
@@ -1593,6 +1595,7 @@ export async function mutateQualifiedConnectedAccountConfiguration(
                 tx,
                 accountId: params.accountId,
                 service: canonicalParams.target.ref.service,
+                reason: 'configuration',
             });
         }
         return result;
@@ -2169,6 +2172,7 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
             tx,
             accountId: canonical.accountId,
             service: canonical.ref.service,
+            reason: 'credential-health',
         });
         return {
             status: "written",
@@ -2798,6 +2802,7 @@ export async function deleteQualifiedConnectedServiceCredential(
                 tx,
                 accountId: params.accountId,
                 service: ref.service,
+                reason: 'credential-delete',
             });
             return { status: "deleted" };
         }, { transactionClass: "connected-account-credential-delete" });

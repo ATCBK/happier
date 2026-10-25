@@ -665,6 +665,7 @@ async function finishQualifiedGroupMutation(
             tx,
             accountId: params.accountId,
             service: params.service,
+            reason: 'group',
         });
     }
     return {
@@ -1113,6 +1114,7 @@ export async function deleteQualifiedConnectedAccountGroup(
             tx,
             accountId: params.accountId,
             service: params.service,
+            reason: 'group-delete',
         });
         return { status: "deleted" };
     });

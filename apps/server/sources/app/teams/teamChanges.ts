@@ -3,6 +3,8 @@ import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
 import { readDiscussionGrantAudienceForTeamsInTx, reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/accessService";
 import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { readTeamCredentialSourceBinding } from './credentials/sourceBindingRead';
+import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 /**
  * The stable coalescing identity for Team invalidation.
@@ -194,9 +196,9 @@ export async function readAccountTeamMembershipsChangeAudienceInTx(
  */
 export async function publishAccountCredentialSourceTeamsChangedInTx(
     tx: Tx,
-    input: Readonly<{ accountId: string }>,
+    input: Readonly<{ accountId: string; service?: QualifiedConnectedAccountServiceRef }>,
 ): Promise<number> {
-    const teamIds = await readAccountCredentialSourceTeamIdsInTx(tx, input.accountId);
+    const teamIds = await readAccountCredentialSourceTeamIdsInTx(tx, input.accountId, input.service);
     return await publishTeamsChangedInTx(tx, {
         teamIds,
         // Departed custodians retain their source administration projection.
@@ -204,12 +206,24 @@ export async function publishAccountCredentialSourceTeamsChangedInTx(
     });
 }
 
-async function readAccountCredentialSourceTeamIdsInTx(tx: Tx, accountId: string): Promise<readonly string[]> {
+async function readAccountCredentialSourceTeamIdsInTx(
+    tx: Tx, accountId: string, service?: QualifiedConnectedAccountServiceRef,
+): Promise<readonly string[]> {
     const resources = await tx.teamCredentialResource.findMany({
         where: { custodianAccountId: accountId },
-        select: { teamId: true },
+        select: { teamId: true, sourceBindingJson: service !== undefined },
     });
-    return [...new Set(resources.map(({ teamId }) => teamId))].sort();
+    const affected = service ? resources.filter(resource => {
+        const parsed = readTeamCredentialSourceBinding(resource.sourceBindingJson);
+        // A corrupt binding cannot establish irrelevance. Preserve the wake
+        // that lets current admission withdraw any previously issued material.
+        if (!parsed.success) return true;
+        const source = parsed.data;
+        if (source.kind === 'provider_connection') return false;
+        const sourceService = source.kind === 'connected_account' ? source.target.account.service : source.target.service;
+        return sourceService.pluginId === service.pluginId && sourceService.localId === service.localId;
+    }) : resources;
+    return [...new Set(affected.map(({ teamId }) => teamId))].sort();
 }
 
 /** Complete live publication recipients of credential-source changes. */

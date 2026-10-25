@@ -8,11 +8,14 @@ import { buildAccountConnectedServicesProjection } from "../account/connectedSer
 import { publishAccountCredentialSourceTeamsChangedInTx } from "@/app/teams/teamChanges";
 import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { buildConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
+import { logger } from '@/utils/logging/log';
 
 export async function recordConnectedServiceAccountProfileChange(params: Readonly<{
     tx: Tx;
     accountId: string;
     service?: QualifiedConnectedAccountServiceRef;
+    reason?: 'credential-create' | 'credential-replace' | 'credential-delete' | 'credential-health'
+        | 'legacy-credential' | 'configuration' | 'group' | 'group-delete' | 'encryption-migration';
 }>): Promise<AccountChangePublication> {
     const projection = await buildAccountConnectedServicesProjection({
         tx: params.tx,
@@ -23,8 +26,10 @@ export async function recordConnectedServiceAccountProfileChange(params: Readonl
         accountId: params.accountId,
         ...buildConnectedServicesAccountChangeV1(params.service),
     });
-    await publishAccountCredentialSourceTeamsChangedInTx(params.tx, { accountId: params.accountId });
+    await publishAccountCredentialSourceTeamsChangedInTx(params.tx, { accountId: params.accountId, service: params.service });
     afterTx(params.tx, () => {
+        logger.debug({ reason: params.reason ?? 'unspecified', serviceKind: params.service?.localId ?? null },
+            'Connected service Account change committed');
         const payload = buildUpdateAccountUpdate(
             params.accountId,
             projection,

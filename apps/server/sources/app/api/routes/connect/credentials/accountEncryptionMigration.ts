@@ -590,6 +590,7 @@ export async function migrateConnectedServicesAccountEncryptionInTx(
             ? await recordConnectedServiceAccountProfileChange({
                 tx: params.tx,
                 accountId: params.accountId,
+                reason: 'encryption-migration',
             })
             : null;
     return {

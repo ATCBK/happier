@@ -244,7 +244,7 @@ export async function mutateConnectedServiceCredential(
         if (result.status === "written") {
             const identity = resolveLegacyServiceAccountTokenIdentityFields({ serviceId: params.serviceId, profileId: params.profileId });
             await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId,
-                service: { pluginId: identity.servicePluginId, localId: identity.serviceLocalId } });
+                service: { pluginId: identity.servicePluginId, localId: identity.serviceLocalId }, reason: 'legacy-credential' });
         }
         return result;
     });

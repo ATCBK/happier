@@ -14,6 +14,7 @@ import type {
 
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { logger } from '@/utils/logger';
+import type { ApiMachineClient } from '@/api/apiMachine';
 import {
   createConnectedAccountTeamCredentialSourceSnapshot,
   createConnectedPoolMemberTeamCredentialSourceSnapshot,
@@ -100,6 +101,23 @@ export function subscribeTeamCredentialDirectMaterialSourceChanges(
 }
 
 type HomeDomainAction = NonNullable<ActionExecutorDeps['homeDomainAction']>;
+
+export function subscribeTeamCredentialDirectMaterialAccountChanges(
+  apiMachine: Pick<ApiMachineClient, 'onManagedProviderRetainedCurrentnessInvalidation'>,
+  listener: (wakeReason: TeamCredentialDirectMaterialWakeReason) => void,
+): () => void {
+  return apiMachine.onManagedProviderRetainedCurrentnessInvalidation(change => {
+    // Material authority (including read keys) already publishes through the
+    // snapshot. Credential mutations publish the affected Team audience in the
+    // same transaction; unrelated services cannot change Team material. Keep
+    // service facts for retained authorization, and census only Team changes
+    // and completeness recovery here; a live `all` is for retained checks.
+    if (change.facts.some(fact => fact === 'teams'
+      || fact === 'all' && change.source !== 'changes')) {
+      listener(`account-${change.source}`);
+    }
+  });
+}
 
 export type TeamCredentialDirectMaterialWakeReason =
   | 'request' | 'startup' | 'source-snapshot'

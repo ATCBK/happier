@@ -2132,7 +2132,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         });
         afterAll(async () => { await database?.close(); });
 
-        it.each(['one', 'two', 'broad', 'legacy'] as const)('reconciles connected services with service-proportional inventory reads (%s)', async mode => {
+        it.each(['one', 'two', 'broad', 'legacy', 'team'] as const)('reconciles connected services with service-proportional inventory reads (%s)', async mode => {
             const admitted = await createAdmittedPluginRuntimeFixture();
             let client: ApiMachineClient | undefined;
             try {
@@ -2156,8 +2156,19 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 await purposeRuntime.listCoordinatorAccounts();
                 const services = listAccounts.mock.calls.map(([service]) => service);
                 expect(services).toHaveLength(27);
-                const connectedServiceRefs = mode === 'broad' || mode === 'legacy' ? undefined : services.slice(0, mode === 'one' ? 1 : 2);
+                const connectedServiceRefs = mode === 'broad' || mode === 'legacy' ? undefined : services.slice(0, mode === 'two' ? 2 : 1);
                 const account = await db.account.create({ data: { id: `acc-scope-${mode}`, publicKey: null, encryptionMode: 'plain' } });
+                if (mode === 'team') {
+                    const team = await db.team.create({ data: { name: 'Credential source health' } });
+                    await db.teamMembership.create({ data: { teamId: team.id, accountId: account.id, role: 'owner' } });
+                    await db.teamCredentialResource.create({ data: {
+                        teamId: team.id, custodianAccountId: account.id, displayName: 'Health source',
+                        disclosureCeiling: 'direct_allowed', sessionUsePolicy: 'personal_allowed',
+                        sourceBindingJson: JSON.stringify({ v: 1, kind: 'connected_account',
+                            target: { kind: 'account', account: { service: services[0], accountId: 'scope-test' } },
+                            credentialIncarnation: 'scope-incarnation' }),
+                    } });
+                }
                 const revisions = [];
                 for (const service of connectedServiceRefs ?? services.slice(0, 1)) {
                     const ref = { service, accountId: 'scope-test' };
@@ -2216,15 +2227,32 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 client = new ApiMachineClient('token', machine);
                 client.onConnectedServicesProjection(reconcile);
                 client.onManagedProviderRetainedCurrentnessInvalidation(directMaterial);
+                // The Action transport is the boundary; feed classification,
+                // subscription and the real census owner remain composed.
+                const homeDomainAction = vi.fn(async () => ({ items: [], nextCursor: null }));
+                const materialOwner = createDaemonTeamCredentialDirectMaterialReconciler({
+                    token: 'token', accountId: account.id, homeDomainAction,
+                    establishedRuntimeOwner: { readMaterialSnapshot: async () => { throw new Error('Empty Team census must not read material'); } },
+                    listAccounts, readGroup: async () => null, resolveProviderSource: async () => null,
+                    isAccountChangesObserverCurrent: () => true,
+                });
+                const materialPasses: Promise<unknown>[] = [];
+                const detachMaterial = subscribeTeamCredentialDirectMaterialAccountChanges(client, wake => {
+                    materialPasses.push(materialOwner.reconcile(wake));
+                });
                 await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
                     .syncChangesOnConnect({ reason: 'live' });
+                await Promise.all(materialPasses);
+                expect(homeDomainAction).toHaveBeenCalledTimes(mode === 'team' ? 1 : 0);
                 expect(listAccounts.mock.calls.map(([service]) => service)).toEqual(connectedServiceRefs ?? services);
                 expect(reconcile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
                     source: 'changes', executionAuthority: 'runtime_recovery',
                     ...(connectedServiceRefs ? { connectedServiceRefs } : {}),
                 }));
-                expect(directMaterial).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ directMaterialChanged: true }));
-                if (mode === 'two') {
+                expect(directMaterial).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ facts: expect.arrayContaining(['connected-services']) }));
+                if (mode === 'two' || mode === 'team') {
+                    homeDomainAction.mockClear();
+                    materialPasses.length = 0;
                     listAccounts.mockClear();
                     reconcile.mockClear();
                     const [first] = revisions;
@@ -2234,8 +2262,23 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                         health: { v: 1, status: 'connected', reconnectRequired: false } })).status).toBe('written');
                     await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
                         .syncChangesOnConnect({ reason: 'live' });
+                    await Promise.all(materialPasses);
+                    expect(homeDomainAction).toHaveBeenCalledTimes(mode === 'team' ? 1 : 0);
                     expect(listAccounts.mock.calls.map(([service]) => service)).toEqual([services[0]]);
                     expect(reconcile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ connectedServiceRefs: [services[0]] }));
+                }
+                if (mode === 'team') {
+                    homeDomainAction.mockClear();
+                    materialPasses.length = 0;
+                    const unrelated = await mutateQualifiedConnectedServiceCredential({ accountId: account.id,
+                        ref: { service: services[1]!, accountId: 'unshared-account' }, expectedCredentialRevision: null,
+                        authenticationModeId: 'api-key', content: { t: 'plain', v: { token: 'unshared-fixture' } },
+                        metadata: { scopes: [] } });
+                    expect(unrelated.status).toBe('written');
+                    await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
+                        .syncChangesOnConnect({ reason: 'live' });
+                    await Promise.all(materialPasses);
+                    expect(homeDomainAction).not.toHaveBeenCalled();
                 }
                 listAccounts.mockClear();
                 reconcile.mockClear();
@@ -2247,6 +2290,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 expect(listAccounts).not.toHaveBeenCalled();
                 expect(reconcile).not.toHaveBeenCalled();
                 expect(directMaterial).not.toHaveBeenCalled();
+                detachMaterial();
             } finally {
                 try { await client?.shutdown(); }
                 finally { await admitted.dispose(); }

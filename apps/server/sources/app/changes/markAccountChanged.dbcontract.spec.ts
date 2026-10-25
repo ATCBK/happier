@@ -53,6 +53,45 @@ describe("AccountChange coalescing database contract", () => {
         if (dbConnected) await db.$disconnect();
     });
 
+    it(`publishes Team source changes only for the changed service on ${provider}`, async () => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const team = await db.team.create({ data: { name: 'Service publication scope' } });
+        const shared = { pluginId: 'test.connected', localId: 'shared' };
+        const unrelated = { ...shared, localId: 'unshared' };
+        try {
+            await db.teamMembership.create({ data: { teamId: team.id, accountId: account.id, role: 'owner' } });
+            const resource = await db.teamCredentialResource.create({ data: {
+                teamId: team.id, custodianAccountId: account.id, displayName: 'Source scope',
+                disclosureCeiling: 'direct_allowed', sessionUsePolicy: 'personal_allowed',
+                sourceBindingJson: JSON.stringify({ v: 1, kind: 'connected_account',
+                    target: { kind: 'account', account: { service: shared, accountId: 'source-account' } },
+                    credentialIncarnation: 'source-incarnation' }),
+            } });
+            let checkpoint = 0;
+            const teamPublications = async (service?: typeof shared) => {
+                await inTx(tx => recordConnectedServiceAccountProfileChange({ tx, accountId: account.id,
+                    ...(service ? { service } : {}) }));
+                const rows = await db.accountChange.findMany({ where: { accountId: account.id,
+                    kind: 'account', entityId: 'teams', cursor: { gt: checkpoint } } });
+                checkpoint = (await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).seq;
+                return rows.length;
+            };
+            expect(await teamPublications(unrelated)).toBe(0);
+            expect(await teamPublications(shared)).toBe(1);
+            await db.teamCredentialResource.update({ where: { id: resource.id }, data: {
+                sourceBindingJson: JSON.stringify({ v: 1, kind: 'connected_pool',
+                    target: { kind: 'group', service: shared, groupId: 'source-pool' }, poolIncarnation: 'source-pool-incarnation' }),
+            } });
+            expect(await teamPublications(unrelated)).toBe(0);
+            expect(await teamPublications(shared)).toBe(1);
+            expect(await teamPublications()).toBe(1);
+            await db.teamCredentialResource.update({ where: { id: resource.id }, data: { sourceBindingJson: '{}' } });
+            // An unreadable binding cannot prove a service irrelevant; retain
+            // the broad wake so current admission can withdraw stale material.
+            expect(await teamPublications(unrelated)).toBe(1);
+        } finally { await db.team.delete({ where: { id: team.id } }); }
+    });
+
     it(`keeps connected service entities cursor-relative and independent of self changes on ${provider}`, async () => {
         const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
         const first = { pluginId: 'test.connected', localId: 'first' };
