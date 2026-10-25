@@ -7,7 +7,7 @@ import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWriter
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { PluginAccountKvRowError, assertPluginAccountKvExpectedVersionV1, clonePluginAccountKvRowV1, commitPluginAccountKvMutationV1, createEmptyPluginAccountKvRowV1, deletePluginAccountKvEntryV1, listPluginAccountKvEntriesV1, normalizePluginAccountKvLogicalKeyV1, projectPluginAccountKvEntryV1, readPluginAccountKvEntryV1, setPluginAccountKvEntryV1, PluginAccountStorageMutationRequestV1Schema, PluginAccountStorageMutationResponseV1Schema, PluginAccountStorageReadResponseV1Schema, PluginAccountStorageRowV1Schema, PluginAccountStorageUnavailableV1Schema, assertPluginAccountStorageEnvelopeForModeV1, openPluginAccountStoragePrivatePayloadV1, sealPluginAccountStoragePrivatePayloadV1 } from '@happier-dev/protocol/plugins/data/accountKvV1';
-import type { PluginAccountStorageEntryV1, AccountEncryptionCurrentnessResponse, AccountScopedCryptoMaterial, NormalizedPluginAccountCollectionContractV1, PluginCollectionLogicalDecodeFailureReasonV1, PluginCollectionLogicalEncodeFailureReasonV1, PluginAccountCollectionContributionV1, PluginCollectionCandidatePreparationBindingV1, PluginCollectionContractRefV1, PluginDataCollectionsCapabilities, PluginCollectionMutationOperationV1, PluginCollectionMutationRequestMeasurementV1, PluginCollectionMutationRequestV1, PluginCollectionMutationResultV1, PluginCollectionRowV1, PluginCollectionLogicalValueV1, PluginAccountStorageRowV1 } from '@happier-dev/protocol';
+import type { PluginAccountStorageEntryV1, AccountEncryptionCurrentnessResponse, AccountScopedCryptoMaterial, NormalizedPluginAccountCollectionContractV1, PluginCollectionLogicalDecodeFailureReasonV1, PluginAccountCollectionContributionV1, PluginCollectionCandidatePreparationBindingV1, PluginCollectionContractRefV1, PluginDataCollectionsCapabilities, PluginCollectionMutationOperationV1, PluginCollectionMutationRequestMeasurementV1, PluginCollectionMutationRequestV1, PluginCollectionMutationResultV1, PluginCollectionRowV1, PluginCollectionLogicalValueV1, PluginAccountStorageRowV1 } from '@happier-dev/protocol';
 import { PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_GET_HTTP_PATH_V1, PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1, PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1, PluginCollectionCandidatePreparationBindingV1Schema, PluginCollectionCandidatePreparationErrorV1Schema, PluginCollectionCandidatePreparationRetireRequestV1Schema, PluginCollectionCandidatePreparationRetireResultV1Schema, PluginCollectionCandidatePreparationSourcePageRequestV1Schema, PluginCollectionCandidatePreparationSourcePageResultV1Schema, PluginCollectionCandidatePreparationStageRequestV1Schema, PluginCollectionCandidatePreparationStageResultV1Schema, PluginCollectionGetRequestV1Schema, PluginCollectionGetResultV1Schema, PLUGIN_COLLECTION_FORGET_HTTP_PATH_V1, PluginCollectionForgetRequestV1Schema, PluginCollectionForgetResultV1Schema, PluginCollectionMutationErrorV1Schema, PluginCollectionMutationResultV1Schema, PluginCollectionQueryRequestV1Schema, PluginCollectionQueryResultV1Schema, PluginCollectionReadErrorV1Schema, normalizePluginAccountCollectionContractV1, resolveEffectivePluginCollectionLimitsV1, resolvePluginCollectionIdentityTagV1, splitPluginCollectionCandidatePreparationStageRequestsForKnownLimitsV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 import { assertPluginCollectionContentEnvelopeForModeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
@@ -16,7 +16,7 @@ import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/dat
 import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter, preparePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
-import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
+import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1, type PluginCollectionLogicalEncodeOutcomeV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
 import { normalizeStrictJsonValue, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     isPluginError,
@@ -485,12 +485,13 @@ function parseCollectionError(value: unknown, kind: 'read' | 'mutation'): Plugin
 /**
  * The daemon's translation of the shared Protocol codec's encode failures into
  * this realm's `PluginError` vocabulary. Missing Account crypto material is an
- * Account-availability fact; every other reason is an invalid authored value.
+ * Account-availability fact; the envelope ceiling is a known-no-effect quota
+ * refusal. Malformed values and crypto failures remain invalid authored values.
  */
 function collectionEncodeFailureError(
-    reason: PluginCollectionLogicalEncodeFailureReasonV1,
+    failure: Extract<PluginCollectionLogicalEncodeOutcomeV1, { status: 'failed' }>,
 ): PluginError {
-    switch (reason) {
+    switch (failure.reason) {
         case 'value-schema-invalid':
             return dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection value does not satisfy its admitted schema');
         case 'row-identity-invalid':
@@ -499,6 +500,11 @@ function collectionEncodeFailureError(
             return dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection server-readable projection is invalid');
         case 'private-payload-invalid':
             return dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection private payload is invalid');
+        case 'private-payload-too-large':
+            return dataError('collection_quota_incompatible', 'Collection private envelope exceeds its encoded limit', false, {
+                dimension: failure.dimension,
+                effectiveMaximum: failure.effectiveMaximum,
+            });
         case 'encryption-material-unavailable':
             return dataError(ACCOUNT_DATA_UNAVAILABLE_CODE, 'Account encryption material is unavailable');
     }
@@ -542,7 +548,7 @@ function splitLogicalPut(input: Readonly<{
         material: input.material,
         randomBytes: input.randomBytes,
     });
-    if (encoded.status === 'failed') throw collectionEncodeFailureError(encoded.reason);
+    if (encoded.status === 'failed') throw collectionEncodeFailureError(encoded);
     return {
         kind: 'put',
         rowId: encoded.rowId,
@@ -1883,7 +1889,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     });
                     if (prepared.status === 'failed') {
                         if (prepared.reason !== 'mutation-request-invalid') {
-                            throw collectionEncodeFailureError(prepared.reason);
+                            throw collectionEncodeFailureError(prepared);
                         }
                         throw dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection mutation does not satisfy the wire contract');
                     }
