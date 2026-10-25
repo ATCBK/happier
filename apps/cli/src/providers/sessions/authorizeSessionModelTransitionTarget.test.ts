@@ -519,7 +519,7 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
     })).toThrow('session_model_transition_daemon_authority_mismatch');
   });
 
-  it('uses the daemon-authoritative Provider resolver carried by a restarted child', async () => {
+  it.each(['live', 'restart_session'] as const)('revalidates an already materialized Provider on a %s Agent through the daemon resolver', async (applyPolicy) => {
     const selection = provider('pc_restarted', 'model-a');
     const basis = {
       v: 1,
@@ -570,7 +570,7 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
           ownedEnvKeys: [],
         },
         materialization: 'spawnEnv',
-        applyPolicy: 'live',
+        applyPolicy,
         supportsFreeformModelIds: true,
       },
     } satisfies ProviderRuntimeBindingBasisV1;
@@ -591,7 +591,7 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
       activeTarget.sessionBindingMetadata!.bindingSecurityFingerprint;
     const authorizeProviderTarget = vi.fn(async () => ({
       selection,
-      policy: 'live' as const,
+      policy: applyPolicy,
       model: { id: selection.modelId, name: selection.modelId },
       sessionBindingMetadata: {
         ...activeTarget.sessionBindingMetadata!,
@@ -611,10 +611,11 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
       authorizeProviderTarget: typeof authorizeProviderTarget;
     });
 
+    await expect(authorize.bindCurrentAuthorizationProof(activeTarget).revalidateBeforeEffect()).resolves.toBe(true);
     const authorizedTarget = await authorize(selection);
     expect(authorizedTarget).toMatchObject({
       selection,
-      policy: 'live',
+      policy: applyPolicy,
       providerBinding: {
         connectionId: selection.providerConnectionId,
         materialization: activeTarget.providerBinding.materialization,
@@ -623,6 +624,15 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
       runtimeBindingBasis: basis,
     });
     await expect(authorizedTarget.revalidateBeforeEffect()).resolves.toBe(true);
+
+    authorizeProviderTarget.mockResolvedValueOnce({
+      selection,
+      policy: applyPolicy,
+      model: { id: selection.modelId, name: selection.modelId },
+      sessionBindingMetadata: activeTarget.sessionBindingMetadata!,
+      runtimeBindingBasis: { ...basis, endpoint: { ...basis.endpoint, normalizedUrl: 'https://changed.example/v1' } },
+    });
+    await expect(authorizedTarget.revalidateBeforeEffect()).resolves.toBe(false);
 
     bindingSecurityFingerprint = 'binding-security-revoked-or-changed';
     await expect(authorizedTarget.revalidateBeforeEffect()).resolves.toBe(false);

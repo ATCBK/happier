@@ -304,7 +304,7 @@ export function createSessionModelTransitionAuthorizer(params: Readonly<{
       ...target,
       revalidateBeforeEffect: async () => {
         if (
-          target.policy !== 'live'
+          (target.policy !== 'live' && target.policy !== 'restart_session')
           || target.providerBinding === null
           || metadata === null
           || target.runtimeBindingBasis === null
@@ -321,12 +321,15 @@ export function createSessionModelTransitionAuthorizer(params: Readonly<{
             ? { managedPurposeBindingSnapshot }
             : {}),
         }, params.signal);
-        return refreshed.policy === 'live'
+        // Switch policy describes applying a new target, not whether this
+        // already materialized route is still authorized for inheritance.
+        return (refreshed.policy === 'live' || refreshed.policy === 'restart_session')
           && refreshed.selection.agentTargetKey
             === target.selection.agentTargetKey
           && refreshed.selection.providerConnectionId
             === target.selection.providerConnectionId
           && refreshed.selection.modelId === target.selection.modelId
+          && sameProviderRuntimeBindingBasis(target.runtimeBindingBasis, refreshed.runtimeBindingBasis)
           && metadata.bindingSecurityFingerprint
             === refreshed.sessionBindingMetadata.bindingSecurityFingerprint;
       },

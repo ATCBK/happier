@@ -27,6 +27,13 @@ import type { RpcHandler } from '@/api/rpc/types';
 import type { WorkflowStepExecutor } from '@/daemon/workflows/coordinator';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import { startExecutionRun } from '@/agent/runtime/bridges/executionRun/startExecutionRun';
+import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/testkit';
+import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
+import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
+import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
+import type { SessionModelTransitionProviderTargetAuthorizer } from '@/providers/sessions/authorizeSessionModelTransitionTarget';
+import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
 import * as daemonControl from '@/daemon/controlClient';
 import { logger } from '@/ui/logger';
 import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
@@ -2284,9 +2291,10 @@ describe('runHostSessionRuntime', () => {
   });
 
   it.each([
-    { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-    { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-  ] satisfies BackendTargetRefV2Input[])('inherits the applied $kind parent target through the attached child reader', async (backendTarget) => {
+    { backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, viaGateway: false },
+    { backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, viaGateway: false },
+    { backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, viaGateway: true },
+  ] satisfies ReadonlyArray<{ backendTarget: BackendTargetRefV2Input; viaGateway: boolean }>)('inherits actual readback through the attached child factory (Gateway: $viaGateway, target: $backendTarget.kind)', async ({ backendTarget, viaGateway }) => {
     const harness = createHarness();
     harness.config.policyAgentId = 'codex';
     harness.opts.backendTarget = backendTarget;
@@ -2295,7 +2303,39 @@ describe('runHostSessionRuntime', () => {
       encryption: null,
     };
     harness.opts.modelSelection = { v: 1, updatedAt: 1, ref: {
-      agentTargetKey: buildBackendTargetKeyV2(backendTarget), providerConnectionId: null, modelId: 'parent-model',
+      agentTargetKey: buildBackendTargetKeyV2(backendTarget), providerConnectionId: null, modelId: 'default',
+    } };
+    if (viaGateway) {
+      if (!runtimeRegistryLease) throw new Error('Missing runtime fixture');
+      const support = readLeasedAgentProviderRequirements({ lease: runtimeRegistryLease, agentId: 'codex' });
+      if (!support) throw new Error('Missing Codex Provider support');
+      const initialHandoff = lateExternalProviderBindingHandoff({ connectionId: 'pc_gateway', modelId: 'parent-model',
+        agentTargetKey: buildBackendTargetKeyV2(backendTarget) });
+      const handoff = { ...initialHandoff, sessionBindingMetadata: { ...initialHandoff.sessionBindingMetadata,
+        runtimeBindingBasis: { ...initialHandoff.sessionBindingMetadata.runtimeBindingBasis,
+          agentSupport: support } } };
+      harness.opts.modelSelection = { v: 1, updatedAt: 1, ref: {
+        agentTargetKey: handoff.sessionBindingMetadata.runtimeBindingBasis.agentTargetKey,
+        providerConnectionId: handoff.sessionBindingMetadata.connectionId, modelId: 'parent-model',
+      } };
+      harness.config.providerBindingAdmission = 'runtime';
+      harness.config.createSessionRuntime = () => ({ operations: harness.runtime, nativeRuntime: harness.runtime,
+        admittedProviderBindingHandoff: handoff });
+      const authorizeProviderTarget: SessionModelTransitionProviderTargetAuthorizer = async input => ({
+        selection: input.selection, policy: support.applyPolicy,
+        model: { id: input.selection.modelId, name: input.selection.modelId },
+        sessionBindingMetadata: { ...handoff.sessionBindingMetadata,
+          model: { id: input.selection.modelId, name: input.selection.modelId } },
+        runtimeBindingBasis: handoff.sessionBindingMetadata.runtimeBindingBasis,
+      });
+      // This is the runner → daemon authorization boundary. Runtime coordination,
+      // metadata publication, installed Session controls and Run admission stay real.
+      harness.deps.daemonModelTransitionAuthorizer = authorizeProviderTarget;
+    }
+    let modelSnapshot = { currentModelId: 'parent-model', models: [{ id: 'parent-model', name: 'Actual parent model' }] };
+    const modelListeners = new Set<(snapshot: typeof modelSnapshot) => void>();
+    harness.runtime.models = { read: () => modelSnapshot, subscribe: listener => {
+      modelListeners.add(listener); listener(modelSnapshot); return { dispose: () => modelListeners.delete(listener) };
     } };
     // Real queue and model-transition owner; only Session/native Agent and daemon HTTP are boundaries.
     delete harness.deps.createPermissionModeQueueStateFn;
@@ -2321,15 +2361,19 @@ describe('runHostSessionRuntime', () => {
     harness.deps.runPermissionModePromptLoopFn = async () => {
       expect(registrationComplete).toBe(false);
       if (!controls?.readAppliedChildSelection) throw new Error('Attached parent reader was not installed');
-      expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
-      expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        reason: 'native_applied_selection_unavailable',
-      }));
+      if (!viaGateway) {
+        expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
+        expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          reason: 'native_applied_selection_unavailable',
+        }));
+      }
       appliedIdentityReady = true;
-      expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
-      expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        reason: 'connected_services_unavailable',
-      }));
+      if (!viaGateway) {
+        expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
+        expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          reason: 'connected_services_unavailable',
+        }));
+      }
       daemonSelectionReady = true;
       const authApply = controls.applyConnectedServiceAuthGeneration?.({
         serviceId: 'openai-codex', reason: 'manual', authGeneration: { credential: { kind: 'oauth' } },
@@ -2337,10 +2381,61 @@ describe('runHostSessionRuntime', () => {
       const parent = await controls.readAppliedChildSelection();
       await authApply;
       expect(authAppliedAfterRegistration).toBe(true);
-      expect(parent).toMatchObject({ status: 'applied', backendTarget, modelId: 'parent-model' });
-      const child = resolveExecutionRunChildSelection({ backendTarget, lifecycle: 'attached', parent });
-      expect(child).toMatchObject({ selectionSource: 'inherited', inheritedFromDifferentAgent: false,
-        modelId: 'parent-model', connectedServices: { v: 2, bindingsByServiceId: {} } });
+      if (!viaGateway) {
+        expect(parent).toMatchObject({ status: 'applied', backendTarget, modelId: 'parent-model' });
+        const child = resolveExecutionRunChildSelection({ backendTarget, lifecycle: 'attached', parent });
+        expect(child).toMatchObject({ selectionSource: 'inherited', inheritedFromDifferentAgent: false,
+          modelId: 'parent-model', connectedServices: { v: 2, bindingsByServiceId: {} } });
+      }
+      const nextSelection = { ...harness.opts.modelSelection!.ref, modelId: 'next-model' };
+      harness.runtime.updateSessionRuntimeConfig = async () => ({ status: 'applied', timing: 'before_next_prompt' });
+      await harness.handlers.get(SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION)?.({ v: 1, selection: nextSelection });
+      if (!viaGateway) await vi.waitFor(async () => expect(await controls!.readAppliedChildSelection!()).toMatchObject({ status: 'applied', modelId: 'parent-model' }));
+      const runs = new Map<string, ExecutionRunState>();
+      const controllers = new Map<string, ExecutionRunController>();
+      const createRuntime = () => createTestExecutionRunHostRuntime();
+      const voiceAgentManager = new VoiceAgentManager({ createRuntime });
+      const previousAccountSnapshot = getActiveAccountSettingsSnapshot();
+      try {
+        const accountSettings = accountSettingsParse({ ...previousAccountSnapshot?.settings, providerDefaultModelSelectionsByAgentTargetKeyV1: {
+          [buildBackendTargetKeyV2(backendTarget)]: { v: 1, updatedAt: 3, ref: {
+            ...harness.opts.modelSelection!.ref, providerConnectionId: null, modelId: 'account-default-z',
+          } },
+        } });
+        setActiveAccountSettingsSnapshot({ ...previousAccountSnapshot, source: 'network', settings: accountSettings,
+          rawSettings: accountSettings, settingsVersion: (previousAccountSnapshot?.settingsVersion ?? 0) + 1,
+          loadedAtMs: 3, settingsSecretsReadKeys: [],
+          scopeKey: previousAccountSnapshot?.scopeKey ?? resolveAccountSettingsScopeKey(harness.opts.credentials) });
+        const started = await startExecutionRun({
+          params: { sessionId: harness.session.sessionId, intent: 'delegate', backendTarget, accountSettings,
+            permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' },
+          childSelectionContext: { lifecycle: 'attached', readAppliedParentSelection: controls.readAppliedChildSelection },
+          parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+          createRuntime, getNowMs: () => 1, budgetRegistry: null, runs, controllers,
+          enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {}, finishRun: async () => {},
+          executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+        });
+        expect(started.resolvedSelection).toMatchObject({ source: 'inherited', modelId: 'parent-model',
+          modelSelection: { ...harness.opts.modelSelection!.ref, modelId: 'parent-model' } });
+        const controller = controllers.get(started.runId);
+        if (controller?.kind !== 'backend') throw new Error('Child backend was not provisioned');
+        await controller.provisioningPromise;
+        const publications = harness.session.updateMetadataAsCurrentPublisher.mock.calls.length;
+        for (let read = 0; read < 5; read++) {
+          expect(await controls.readAppliedChildSelection()).toMatchObject({ status: 'applied', modelId: 'parent-model' });
+        }
+        expect(harness.session.updateMetadataAsCurrentPublisher.mock.calls).toHaveLength(publications);
+      } finally {
+        await Promise.all([...controllers.values()].flatMap(controller => controller.kind === 'backend'
+          ? [controller.backend.dispose()] : []));
+        await voiceAgentManager.dispose();
+        if (previousAccountSnapshot) setActiveAccountSettingsSnapshot(previousAccountSnapshot);
+        else resetActiveAccountSettingsSnapshotForTests();
+      }
+      if (viaGateway) return;
+      modelSnapshot = { currentModelId: 'next-model', models: [{ id: 'next-model', name: 'Actual next model' }] };
+      for (const listener of modelListeners) listener(modelSnapshot);
+      await vi.waitFor(async () => expect(await controls!.readAppliedChildSelection!()).toMatchObject({ status: 'applied', modelId: 'next-model' }));
     };
     const home = await mkdtemp(join(tmpdir(), 'attached-parent-selection-'));
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
@@ -2388,6 +2483,16 @@ describe('runHostSessionRuntime', () => {
 
   it('cancels an attached parent selection read when its Session retires', async () => {
     const harness = createHarness();
+    harness.opts.modelSelection = { v: 1, updatedAt: 1, ref: {
+      agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'qwen' }),
+      providerConnectionId: null, modelId: 'parent-model',
+    } };
+    // Reach the pending daemon read with an actually observed parent model.
+    // Startup configuration alone must not supply applied-selection proof.
+    const modelSnapshot = { currentModelId: 'parent-model', models: [{ id: 'parent-model', name: 'Parent model' }] };
+    harness.runtime.models = { read: () => modelSnapshot, subscribe: listener => {
+      listener(modelSnapshot); return { dispose() {} };
+    } };
     harness.runtime.readAppliedTeamCredentialModel = () => null;
     harness.runtime.openedWithoutConnectedServices = () => false;
     let controls: SessionRuntimeControls | null = null;
@@ -2403,7 +2508,12 @@ describe('runHostSessionRuntime', () => {
       parentRead = controls.readAppliedChildSelection();
       // Observe later retirement rejection while retaining the original promise for the assertion.
       void parentRead.catch(() => undefined);
-      await received.promise;
+      await Promise.race([
+        received.promise,
+        parentRead.then(selection => {
+          throw new Error(`Parent read settled before reaching the daemon boundary: ${JSON.stringify(selection)}`);
+        }),
+      ]);
     };
     const server = createServer((request, response) => {
       request.resume();
