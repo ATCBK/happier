@@ -22,6 +22,9 @@ import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dro
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { ItemGroupRowPositionBoundary } from '@/components/ui/lists/ItemGroupRowPosition';
+import { Text } from '@/components/ui/text/Text';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { openActionOperationDetail } from '@/components/inbox/actionOperations/openActionOperationDetail';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -271,6 +274,11 @@ export function ProjectServicePlacementControls(
     nativeTarget?: ServiceRow['target'];
     /** Changes whenever the Services feed observes this service's lifecycle; the binding is then re-read. */
     lifecycleKey?: string;
+    /**
+     * Injected by a grouped list that hosts this control as one row: whether a hairline follows its last
+     * row. The group's own position cannot say it, because the rows inside are this control's.
+     */
+    showDivider?: boolean;
   }>,
 ) {
   const observation = useProjectServicePlacementObservation(props.serviceName);
@@ -282,6 +290,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const testID = props.testID ?? `project-service-placement:${props.serviceName}`;
   const { theme } = useUnistyles();
   const compact = useViewportClass() === 'compact';
+  const trailingDivider = props.showDivider === true;
   const placement = useProjectServicePlacement(props.source, props.serviceName, { lifecycleKey: props.lifecycleKey });
   const { refresh } = placement;
   const anchorRef = React.useRef<View>(null);
@@ -414,12 +423,14 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
 
   if (state.kind === 'refused' || state.kind === 'error') {
     return (
-      <View testID={testID}>
-        <Item testID={`${testID}.unavailable`} title={t('projectServices.runsOn')}
-          subtitle={state.reasonCode ? resolveReasonCopy({ kind: 'localServiceAction', reasonCode: state.reasonCode }).body
-            : t('projectServices.settingsUnavailable')} mode="info" showChevron={false} />
-        {operationBanner}
-      </View>
+      <ItemGroupRowPositionBoundary>
+        <View testID={testID}>
+          <Item testID={`${testID}.unavailable`} title={t('projectServices.runsOn')}
+            subtitle={state.reasonCode ? resolveReasonCopy({ kind: 'localServiceAction', reasonCode: state.reasonCode }).body
+              : t('projectServices.settingsUnavailable')} mode="info" showChevron={false} showDivider={compact && trailingDivider} />
+          {operationBanner}
+        </View>
+      </ItemGroupRowPositionBoundary>
     );
   }
 
@@ -450,6 +461,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         : observed?.status === 'absent'
           ? !portable ? t('projectServices.thisMachine', { name: sourceName }) : desiredName
           : null);
+  // Why the row cannot act, or where its next start goes: always the row's own subtitle.
   const hint = observed?.status === 'unavailable'
       ? undefined
       : observed?.status === 'ambiguous'
@@ -460,11 +472,24 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           ? moveBlockedReason
           : stoppedBeforeStart && desiredName
           ? t('projectServices.willStartOn', { name: desiredName })
-          : displayedActual || !runsOn
-            ? undefined
-            : runsOn.kind === 'primary'
-              ? t('projectServices.runsHere')
-              : label.name ? t('projectServices.runsOnWorker', { name: label.name }) : undefined;
+          : undefined;
+  // Where it runs, as a plain statement: the subtitle on a phone, the lab's helper line under the rows on a
+  // wider page (RUNSON). A live service names only the checkout's own machine; one running elsewhere has no
+  // sentence of its own here.
+  const where = hint !== undefined || observed?.status === 'unavailable' ? undefined
+    : displayedActual
+      ? displayedActual.machineId === props.source.machineId ? t('projectServices.runsHere') : undefined
+      : !runsOn ? undefined
+        : runsOn.kind === 'primary'
+          ? t('projectServices.runsHere')
+          : label.name ? t('projectServices.runsOnWorker', { name: label.name }) : undefined;
+  // Under the rows, on their text edge (the rows reserve the leading column the Services row's mark sits in).
+  const noteStyle = {
+    color: theme.colors.text.secondary,
+    paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
+    paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+    paddingBottom: theme.space.s8,
+  };
 
   const choose = (choice: ProjectExecutionChoiceV1, selectedPool?: ServerScopedMachinePoolSelection) => {
     if (!ready || !custodyKnown || !portable || placement.busy || moving) return;
@@ -576,12 +601,14 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   };
 
   return (
+    <ItemGroupRowPositionBoundary>
     <View testID={testID}>
       <View ref={anchorRef} collapsable={false}>
         <Item
           testID={`${testID}.runsOn`}
           title={t('projectServices.runsOn')}
-          subtitle={hint}
+          subtitle={hint ?? (compact ? where : undefined)}
+          showDivider={compact && (portable || trailingDivider)}
           showChevron={compact && portable}
           accessoryLayout="adaptive"
           // A primary-only service has nothing to choose: its row is a plain statement, not a dimmed control.
@@ -621,6 +648,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           title={t('projectServices.whenUnavailable')}
           accessoryLayout={compact ? 'stacked' : 'adaptive'}
           disabled={!placement.canSaveNextStart || moving}
+          showDivider={compact && trailingDivider}
           value={placement.displayPlacement?.placement.unavailable ?? 'fail'}
           options={[
             { id: 'primary', label: t('projectServices.fallbackPrimary') },
@@ -632,6 +660,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           }}
         />
       ) : null}
+      {where && !compact ? <Text testID={`${testID}.note`} variant="meta" style={noteStyle}>{where}</Text> : null}
       {notice ? <AttentionBanner testID={`${testID}.notice`} tone="neutral" title={notice} /> : null}
       {managedMove === 'confirm' && managed.draft ? <AttentionBanner testID={`${testID}.move`} tone="neutral"
         title={t('projectServices.moveConfirm', { service: props.serviceName, from: fromName, to: managed.draft.receipt.launch.name })}
@@ -718,6 +747,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         />
       ) : null}
     </View>
+    </ItemGroupRowPositionBoundary>
   );
 }
 

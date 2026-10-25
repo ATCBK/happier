@@ -31,6 +31,7 @@ import {
     usePublishedPaneHeaderContent,
 } from '@/components/appShell/panes/paneHeaderSlot';
 
+import { ProjectPageBackProvider } from '@/components/projects/detail/projectPageBack';
 import { DetectedLocalServicesPane } from './DetectedLocalServicesPane';
 import type { UserProfile } from '@happier-dev/protocol';
 import { LocalServiceLaunchTargetV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -784,7 +785,7 @@ describe('DetectedLocalServicesPane', () => {
             expect(screen.findAllByTestId(`${rowTestID}-expansion`)).toHaveLength(0);
             expect(screen.findByTestId('local-services-pane-detail')).toBeTruthy();
             expect(screen.findByTestId('placement-probe')).toBeTruthy();
-            expect(screen.findByTestId('local-services-pane-detail-row-copy-address')).toBeTruthy();
+            expect(screen.findByTestId('local-services-pane-detail-row-address')).toBeTruthy();
             expect(screen.findByTestId('local-services-pane-list')?.props.accessibilityElementsHidden).toBe(true);
 
             await pressTestInstanceAsync(screen.findByTestId('local-services-pane-detail-back'), 'back');
@@ -792,6 +793,42 @@ describe('DetectedLocalServicesPane', () => {
             expect(screen.findByTestId('local-services-pane-list')?.props.accessibilityElementsHidden).toBe(false);
             expect(screen.findByTestId(rowTestID)).toBeTruthy();
             expect(focus).toHaveBeenCalled();
+        } finally {
+            deviceState.type = 'tablet';
+        }
+    });
+
+    /**
+     * Phone detail inside a Project: the Project's own top bar is the one Back. The pane hands it the
+     * way out while the detail is open and draws no second arrow; with no such host it keeps its own.
+     */
+    it('leaves Back to the Project bar when one hosts the page, and returns to the list through it', async () => {
+        deviceState.type = 'phone';
+        const register = vi.fn();
+        try {
+            const screen = await renderScreen(
+                <ProjectPageBackProvider value={register}>
+                    <DetectedLocalServicesPane
+                        inventoryState={buildLocalServiceInventoryState({
+                            rows: [buildLocalServiceInventoryRow({ id: 'openable-row', state: 'listening' })],
+                        })}
+                        launcherState={launcherStateWith([openableTarget], 'session-a')}
+                        sessionId="session-a"
+                        onOpenServiceInBrowser={vi.fn()}
+                        renderServicePlacement={() => <PlacementProbe />}
+                        testID="local-services-pane"
+                    />
+                </ProjectPageBackProvider>,
+            );
+            expect(register).not.toHaveBeenCalled();
+            await expandRow(screen, 'local-services-pane-row:inventory:openable-row');
+            expect(screen.findByTestId('local-services-pane-detail')).toBeTruthy();
+            expect(screen.findAllByTestId('local-services-pane-detail-back')).toHaveLength(0);
+            const back = register.mock.calls.at(-1)?.[0] as (() => void) | null;
+            expect(typeof back).toBe('function');
+            await act(async () => { back?.(); });
+            expect(screen.findAllByTestId('local-services-pane-detail')).toHaveLength(0);
+            expect(register.mock.calls.at(-1)?.[0]).toBeNull();
         } finally {
             deviceState.type = 'tablet';
         }

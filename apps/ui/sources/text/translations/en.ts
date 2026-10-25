@@ -12746,6 +12746,9 @@ const enLocalServices = {
     waitingAddress: 'Started. Waiting for an address.',
     noAddress: 'No address',
     failed: 'Service could not start.',
+    reviewOutput: 'Review output',
+    address: 'Address',
+    addressOpensHere: 'Opens on this phone through Local services',
   },
   session: {
     thisSessionTitle: 'This session',

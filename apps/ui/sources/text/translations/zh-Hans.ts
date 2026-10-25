@@ -10550,6 +10550,9 @@ export const zhHans: TranslationStructure = {
       waitingAddress: '已启动，正在等待地址。',
       noAddress: '无地址',
       failed: '服务无法启动。',
+      reviewOutput: '查看输出',
+      address: '地址',
+      addressOpensHere: '通过本地服务在此手机上打开',
     },
     session: {
       thisSessionTitle: '此会话',

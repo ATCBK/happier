@@ -8,6 +8,7 @@ import { ProjectDetailScreen } from '@/components/projects/ProjectDetailScreen';
 import { buildProjectPaneScopeId } from './projectPaneScope';
 import { useProjectInitialResource } from './useProjectInitialResource';
 import { useProjectRouteActions } from './useProjectRouteActions';
+import { ProjectPageBackProvider } from './projectPageBack';
 import { useProjectRouteHeaderOptions } from './useProjectRouteHeaderOptions';
 import { PROJECT_ROUTE_ROOT_SENTINEL, readProjectAttachedDashboardSelection, readProjectRouteStringParam, readProjectRouteWorktreeSelection, readProjectSelectedRouteResource, replaceProjectRouteSelection } from './projectRouteState';
 import { useWorkspaceRefResolutionById } from './useWorkspaceRefById';
@@ -91,16 +92,20 @@ export const ProjectDestinationBody = React.memo(() => {
     }, [activeRootPath, activeWorktreeId, isFocused, page, persistPage, preferenceKeys, roots, worktreeIds, workspaceRef, workspaceRefId]);
     const setShowWorktrees = React.useCallback((value: boolean) => replaceSelection(activeRootPath, value), [activeRootPath, replaceSelection]);
     const actions = useProjectRouteActions({ workspaceRef, activeRootPath, activeWorktreeId, showWorktrees, pane });
+    // A page's pushed detail (a phone Service) takes the bar's Back while it is open; otherwise Back leaves the Project.
+    const [pageBack, setPageBack] = React.useState<(() => void) | null>(null);
+    const registerPageBack = React.useCallback((back: (() => void) | null) => setPageBack(() => back), []);
     const screenOptions = useProjectRouteHeaderOptions({
         workspaceRef,
         activeRootPath,
         testIdPrefix: 'project-header',
         showWorktreesButton: true,
+        ...(pageBack ? { onBack: pageBack } : {}),
         onToggleWorktrees: () => actions.replaceOverviewVisibility({ visible: !showWorktrees }),
         onOpenBrowser: actions.openBrowser,
         onOpenTerminal: () => actions.openTerminal({ exitOverview: true }),
     });
-    return <>
+    return <ProjectPageBackProvider value={registerPageBack}>
         <Stack.Screen options={screenOptions} />
         <ProjectDetailScreen
             workspaceRefId={workspaceRefId}
@@ -118,5 +123,5 @@ export const ProjectDestinationBody = React.memo(() => {
             onSelectRootPath={selectRootPath}
             onSetShowWorktrees={setShowWorktrees}
         />
-    </>;
+    </ProjectPageBackProvider>;
 });

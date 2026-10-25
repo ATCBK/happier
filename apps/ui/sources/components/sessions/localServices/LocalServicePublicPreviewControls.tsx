@@ -11,6 +11,7 @@ import type {
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Item } from '@/components/ui/lists/Item';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
@@ -653,6 +654,25 @@ export function LocalServiceShareLinkButton(props: Readonly<{
             testID={props.testID}
             size="small"
             display="secondary"
+            title={t('localServices.publicPreview.shareCta')}
+            accessibilityLabel={t('localServices.publicPreview.createActionA11y')}
+            loading={runner.pendingId !== null}
+            onPress={() => { void offer.request(actions, runner.run); }}
+        />
+    );
+}
+
+/** The same create control as a list row, for the phone detail's grouped list (lab RUNSONp). */
+export function LocalServiceShareLinkRow(props: Readonly<{
+    offer: Extract<LocalServicePublicLinkOffer, { kind: 'create' }>;
+    actions: LocalServicePublicPreviewActions;
+    testID: string;
+}>): React.ReactElement {
+    const runner = useLocalServiceActionRunner();
+    const { offer, actions } = props;
+    return (
+        <Item
+            testID={props.testID}
             title={t('localServices.publicPreview.shareCta')}
             accessibilityLabel={t('localServices.publicPreview.createActionA11y')}
             loading={runner.pendingId !== null}

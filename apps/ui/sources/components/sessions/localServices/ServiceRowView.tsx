@@ -1,13 +1,13 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { isLocalServiceStateRunningV1 } from '@happier-dev/protocol/local/services/launcher/v1';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SURFACE_CARD_PADDING_PX, SURFACE_CARD_RADIUS_PX } from '@/components/ui/cards/SurfaceCard';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
+import { HappierDivider, happierPageRowDividerWidth, useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -16,6 +16,7 @@ import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { StatusPill } from '@/components/ui/status/StatusPill';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { formatMachineDuration } from '@/components/machines/durationWords';
@@ -41,6 +42,7 @@ import {
     hasLocalServicePublicPreviewSurface,
     LocalServicePublicPreviewControls,
     LocalServiceShareLinkButton,
+    LocalServiceShareLinkRow,
     resolveLocalServicePublicLinkOffer,
 } from './LocalServicePublicPreviewControls';
 import type { LocalServicePublicPreviewActions } from './publicPreviewActions';
@@ -139,17 +141,42 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: SURFACE_CARD_PADDING_PX.sm.horizontal,
         // Under the open row's header on the tile: the buttons start where the row's title does.
         paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
-        paddingTop: 0,
+        // A breath under the header's facts, as the lab's action line has (RUNSON).
+        paddingTop: theme.space.s8,
         paddingBottom: SURFACE_CARD_PADDING_PX.sm.vertical,
     },
-    /** First row of the pushed page's sheet: it keeps the sheet rows' inset and clears the sheet's top edge. */
-    actionsInSheet: {
-        paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
-        paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
-        paddingTop: SURFACE_CARD_PADDING_PX.sm.vertical,
+    /** The hairline closing the action line: from the title's edge to the tile's trailing padding. */
+    actionsDivider: {
+        height: happierPageRowDividerWidth(),
+        marginLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
+        marginRight: SURFACE_CARD_PADDING_PX.sm.horizontal,
     },
     actionsSpacer: {
         flex: 1,
+    },
+    /** The header's controls when an open row has nothing else for an action line (a lone overflow). */
+    headerControls: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: ROW_ACTION_GAP_PX,
+    },
+    /** A failed start's output sits under the row's facts, on the title's edge (lab `db`'s reason line). */
+    output: {
+        alignItems: 'flex-start',
+        gap: theme.space.s6,
+    },
+    outputBlock: {
+        alignSelf: 'stretch',
+        gap: theme.space.s2,
+        padding: theme.space.s8,
+        borderRadius: theme.borderRadius.md,
+        backgroundColor: theme.colors.surface.inset,
+    },
+    outputLine: {
+        ...Typography.mono(),
+        fontSize: 12,
+        lineHeight: 17,
+        color: theme.colors.text.secondary,
     },
 }));
 
@@ -238,7 +265,8 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     if (row.addressNote === 'waiting') {
         return { lead: [t('localServices.row.waitingAddress')], tail: [], tailReason: null, reason };
     }
-    if (isNotStarted(row) || isInert(row) || hasUnsettledLocalServiceCustody(row)) {
+    // A failed start says so whether or not Start is offered again (Retry): its output is one press away.
+    if (row.status === 'failed' || isNotStarted(row) || isInert(row) || hasUnsettledLocalServiceCustody(row)) {
         const lead = [row.processLabel].filter((part): part is string => Boolean(part));
         if (row.status === 'failed') return { lead, tail: [t('localServices.row.failed')], tailReason: null, reason };
         if (reason) return { lead, tail: [reason.body], tailReason: reason, reason: null };
@@ -264,6 +292,43 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
         tailReason: null,
         reason,
     };
+}
+
+/**
+ * What the supervisor reported when a start failed, already sanitized by the launcher feed: its own
+ * sentence where it has one, else the code. Empty once the service recovers (the feed omits it).
+ */
+function resolveOutputLines(target: LocalServiceLaunchTarget): readonly string[] {
+    const lines = (target.diagnostics ?? []).map((diagnostic) => diagnostic.message?.trim() || diagnostic.code);
+    return [...new Set(lines)];
+}
+
+/** "Review output" opens the failure's output in place; closed, a failed row stays one quiet line. */
+function ServiceRowOutput(props: Readonly<{ lines: readonly string[]; testID: string }>): React.ReactElement {
+    const styles = stylesheet;
+    const [open, setOpen] = React.useState(false);
+    const toggle = React.useCallback(() => setOpen((value) => !value), []);
+    return (
+        <View testID={`${props.testID}-output`} style={styles.output}>
+            <TextLinkButton
+                testID={`${props.testID}-output-toggle`}
+                label={t('localServices.row.reviewOutput')}
+                size="meta"
+                expanded={open}
+                onPress={toggle}
+            />
+            {open ? (
+                <View testID={`${props.testID}-output-lines`} style={styles.outputBlock}>
+                    {props.lines.map((line) => <Text key={line} selectable style={styles.outputLine}>{line}</Text>)}
+                </View>
+            ) : null}
+        </View>
+    );
+}
+
+function ServiceActionDivider(): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <HappierDivider color={theme.colors.border.default} style={stylesheet.actionsDivider} />;
 }
 
 function ServiceRowFacts(props: Readonly<{
@@ -322,25 +387,34 @@ function ServiceRowFacts(props: Readonly<{
 }
 
 /**
- * Copy address, as the expansion's secondary action. One owner for "copy a local service URL": the
- * handler dispatches the audited `localServices.actions.copyUrl` where the row has a target the
- * action can address (G14), and a refused copy says so instead of failing silently.
+ * One owner for "copy a local service URL": the handler dispatches the audited
+ * `localServices.actions.copyUrl` where the row has a target the action can address (G14), and a
+ * refused copy says so instead of failing silently. The expansion's button and the phone detail's
+ * menu action both copy through it.
  */
-function CopyAddressButton(props: Readonly<{
-    addressValue: string;
-    target: LocalServiceLaunchTarget;
-    onCopyServiceUrl?: ServiceRowCopyUrlHandler;
-    testID: string;
-}>): React.ReactElement {
+function useCopyServiceAddress(
+    target: LocalServiceLaunchTarget,
+    addressValue: string | null,
+    onCopyServiceUrl: ServiceRowCopyUrlHandler | undefined,
+): Readonly<{ copy: () => void; copied: boolean }> {
     const copyFeedback = useHappierCopyFeedback();
-    const { addressValue, onCopyServiceUrl, target } = props;
-    const copyAddress = React.useCallback(() => {
+    const copy = React.useCallback(() => {
+        if (!addressValue) return;
         void (async () => {
             if (await copyLocalServiceAddress(target, addressValue, onCopyServiceUrl, setClipboardStringSafe)) {
                 copyFeedback.markCopied('address');
             }
         })();
     }, [addressValue, copyFeedback, onCopyServiceUrl, target]);
+    return { copy, copied: copyFeedback.isCopied('address') };
+}
+
+/** Copy address, as the expansion's secondary action. */
+function CopyAddressButton(props: Readonly<{
+    copy: () => void;
+    copied: boolean;
+    testID: string;
+}>): React.ReactElement {
     return (
         <>
             <RoundButton
@@ -349,10 +423,10 @@ function CopyAddressButton(props: Readonly<{
                 display="secondary"
                 title={t('localServices.pane.copyAddress')}
                 accessibilityLabel={t('localServices.actions.copyAddressA11y')}
-                onPress={copyAddress}
+                onPress={props.copy}
             />
             <CopiedPill
-                visible={copyFeedback.isCopied('address')}
+                visible={props.copied}
                 testID={`${props.testID}-copy-address-feedback`}
             />
         </>
@@ -432,6 +506,15 @@ export function ServiceRowView(props: Readonly<{
     const canStop = !operationActive && offered.stopManaged;
     const canRestart = !operationActive && offered.restartManaged;
     const addressValue = operationActive ? null : offered.address;
+    const detail = props.presentation === 'detail';
+    const addressCopy = useCopyServiceAddress(row.target, addressValue, props.onCopyServiceUrl);
+    const startPendingId = `${row.id}:start`;
+    // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
+    const startInFlight = runner.pendingId === startPendingId && row.status !== 'running';
+    // A retry in flight supersedes the previous attempt: its output returns only if this one fails too.
+    const outputLines = operationActive || startInFlight || row.status === 'starting' ? [] : resolveOutputLines(row.target);
+    // Beside the Item, never inside its press: the link is its own button on every platform.
+    const output = outputLines.length > 0 ? <ServiceRowOutput lines={outputLines} testID={props.testID} /> : null;
 
     /**
      * Two pending ids for one row, because feedback belongs where the user acted.
@@ -442,7 +525,6 @@ export function ServiceRowView(props: Readonly<{
      * put both spinners on screen for the same dispatch.
      */
     const inlinePendingId = `${row.id}:inline`;
-    const startPendingId = `${row.id}:start`;
     const menuPendingId = `${row.id}:menu`;
 
     const handleOpen = React.useCallback(async () => {
@@ -536,6 +618,15 @@ export function ServiceRowView(props: Readonly<{
      */
     const overflowActions = React.useMemo((): ItemAction[] => {
         const actions: ItemAction[] = [];
+        // The phone detail's Address row opens the service, so copying it is a menu action there.
+        if (detail && canOpen && addressValue) {
+            actions.push({
+                id: 'copy-address',
+                title: t('localServices.pane.copyAddress'),
+                icon: 'copy',
+                onPress: addressCopy.copy,
+            });
+        }
         if (canRestart) {
             actions.push({
                 id: 'restart',
@@ -544,7 +635,8 @@ export function ServiceRowView(props: Readonly<{
                 onPress: handleRestart,
             });
         }
-        if (canStop) {
+        // The detail ends with the Service's own Stop (a destructive row under its list), not a menu entry.
+        if (canStop && !detail) {
             actions.push({
                 id: 'stop',
                 title: t('localServices.actions.stopConfirmCta'),
@@ -575,7 +667,7 @@ export function ServiceRowView(props: Readonly<{
             });
         }
         return actions;
-    }, [canForget, canRestart, canStop, canTerminate, handleForget, handleRestart, handleStop, handleTerminate, row.terminateIdentityConfidence]);
+    }, [addressCopy.copy, addressValue, canForget, canOpen, canRestart, canStop, canTerminate, detail, handleForget, handleRestart, handleStop, handleTerminate, row.terminateIdentityConfidence]);
 
     const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const pending = runner.pendingId === menuPendingId;
@@ -593,8 +685,7 @@ export function ServiceRowView(props: Readonly<{
 
     const offline = props.offline === true;
     const machineName = props.machineName ?? null;
-    // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
-    const shown = runner.pendingId === startPendingId && row.status !== 'running' ? { ...row, status: 'starting' as const } : row;
+    const shown = startInFlight ? { ...row, status: 'starting' as const } : row;
     const title = <ServiceRowTitle row={shown} operationText={operationText} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
     const subtitle = operationActive ? undefined : <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null}
         unavailableMachineName={props.unavailableMachineName ?? null} testID={props.testID} />;
@@ -641,7 +732,7 @@ export function ServiceRowView(props: Readonly<{
 
     // With no address to copy and no Open or ▶ on the row, the overflow stays on the row (lab `jobs`).
     const overflowOnRow = !addressValue && !openControl && !startControl;
-    const rowControl = openControl ?? startControl ?? (overflowOnRow ? overflowControl : null);
+    const primaryControl = openControl ?? startControl ?? (overflowOnRow ? overflowControl : null);
     // "Share a link" sits in the action line beside Copy address (services lab O); an issued link and
     // the reasons a link cannot be made are the public-preview block's below it.
     const shareOffer = !operationActive && props.publicPreviewActions
@@ -658,13 +749,22 @@ export function ServiceRowView(props: Readonly<{
             actions={props.publicPreviewActions}
         />
     ) : null;
-    const actionBar = addressValue || shareControl || (overflowControl && !overflowOnRow) ? (
-        <View style={[styles.actions, props.presentation === 'detail' ? styles.actionsInSheet : null]}>
+    // An open row whose only extra is the overflow has no action line to put it on: the overflow joins
+    // the header's control, before it so the row's own control keeps its place, instead of leaving a strip with one lone ellipsis.
+    const loneOverflow = overflowControl !== null && !overflowOnRow && !addressValue && !shareControl;
+    const headerOverflow = loneOverflow && expanded ? overflowControl : null;
+    // The phone detail's header keeps the menu and Start; Open is its Address row.
+    const rowControl = detail
+        ? (overflowControl || startControl ? <View style={styles.headerControls}>{overflowControl}{startControl}</View> : null)
+        : headerOverflow
+            ? <View style={styles.headerControls}>{headerOverflow}{primaryControl}</View>
+            : primaryControl;
+    const actionBar = !detail && (addressValue || shareControl) ? (
+        <View style={styles.actions}>
             {addressValue ? (
                 <CopyAddressButton
-                    addressValue={addressValue}
-                    target={row.target}
-                    onCopyServiceUrl={props.onCopyServiceUrl}
+                    copy={addressCopy.copy}
+                    copied={addressCopy.copied}
                     testID={props.testID}
                 />
             ) : null}
@@ -677,6 +777,8 @@ export function ServiceRowView(props: Readonly<{
     const body = (
         <View testID={`${props.testID}-expansion`} style={styles.expansion}>
             {actionBar}
+            {/* The action line ends where the placement begins (lab RUNSON). */}
+            {actionBar && hasPlacement ? <ServiceActionDivider /> : null}
             {props.placement}
             <LocalServicePublicPreviewControls
                 launchTargets={operationActive ? [] : [row.target]}
@@ -689,7 +791,10 @@ export function ServiceRowView(props: Readonly<{
         </View>
     );
 
-    if (props.presentation === 'detail') {
+    if (detail) {
+        // The pushed page is a page (lab RUNSONp): one grouped list on the shared sheet (Address, Runs on,
+        // If it can't run there, Share a link), then the Service's Stop as its own destructive row.
+        const hasListRows = Boolean(addressValue) || hasPlacement || shareOffer?.kind === 'create';
         return (
             <View testID={props.testID}>
                 <Item
@@ -703,11 +808,53 @@ export function ServiceRowView(props: Readonly<{
                     showDivider={false}
                     loading={pending}
                     rightElement={rowControl}
+                    bottomElement={output}
+                    bottomElementInset="text"
                 />
                 {failureNotice}
-                {/* The pushed page is a page: its detail sits on the shared sheet (lab PAGEp), not on the
-                    selection tint that marks an open row inside a list. */}
-                <ItemGroup header="none">{body}</ItemGroup>
+                {hasListRows ? (
+                    <ItemGroup header="none">
+                        {addressValue ? (
+                            <Item
+                                testID={`${props.testID}-address`}
+                                title={t('localServices.row.address')}
+                                subtitle={canOpen ? t('localServices.row.addressOpensHere') : undefined}
+                                detail={row.portLabel ?? row.addressLabel ?? addressValue}
+                                showChevron={canOpen}
+                                onPress={canOpen ? handleOpen : addressCopy.copy}
+                                rightElement={addressCopy.copied ? <CopiedPill visible testID={`${props.testID}-copy-address-feedback`} /> : undefined}
+                            />
+                        ) : null}
+                        {props.placement}
+                        {shareOffer?.kind === 'create' && props.publicPreviewActions ? (
+                            <LocalServiceShareLinkRow
+                                testID={`${props.testID}-share`}
+                                offer={shareOffer}
+                                actions={props.publicPreviewActions}
+                            />
+                        ) : null}
+                    </ItemGroup>
+                ) : null}
+                <LocalServicePublicPreviewControls
+                    launchTargets={operationActive ? [] : [row.target]}
+                    state={operationActive ? null : props.publicPreviewState}
+                    actions={operationActive ? undefined : props.publicPreviewActions}
+                    capabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
+                    shareInActionLine
+                    testID={`${props.testID}-public-preview`}
+                />
+                {canStop ? (
+                    <ItemGroup header="none">
+                        <Item
+                            testID={`${props.testID}-stop`}
+                            title={t('localServices.actions.stopConfirmCta')}
+                            destructive
+                            showChevron={false}
+                            loading={pending}
+                            onPress={handleStop}
+                        />
+                    </ItemGroup>
+                ) : null}
             </View>
         );
     }
@@ -729,6 +876,8 @@ export function ServiceRowView(props: Readonly<{
                     rightElement={rowControl}
                     // Open, ▶ and a worker's overflow are their own buttons: never nest them in the row's press.
                     rightElementOutsidePressable={rowControl !== null}
+                    bottomElement={output}
+                    bottomElementInset="text"
                 />
                 {failureNotice}
             </View>
@@ -749,6 +898,8 @@ export function ServiceRowView(props: Readonly<{
                     showDivider={props.showDivider}
                     loading={pending}
                     rightElement={openControl ?? startControl ?? overflowControl}
+                    bottomElement={output}
+                    bottomElementInset="text"
                 />
                 {failureNotice}
             </View>
@@ -773,6 +924,8 @@ export function ServiceRowView(props: Readonly<{
                         rightElement={rowControl}
                         // Open, ▶ and a worker's overflow are their own buttons: never nest them in the row's press.
                         rightElementOutsidePressable={rowControl !== null}
+                        bottomElement={output}
+                        bottomElementInset="text"
                     />
                 )}
             >

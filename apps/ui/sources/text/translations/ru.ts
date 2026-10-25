@@ -10770,6 +10770,9 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       waitingAddress: 'Запущен. Ожидание адреса.',
       noAddress: 'Нет адреса',
       failed: 'Не удалось запустить сервис.',
+      reviewOutput: 'Посмотреть вывод',
+      address: 'Адрес',
+      addressOpensHere: 'Открывается на этом телефоне через Локальные сервисы',
     },
     session: {
       thisSessionTitle: 'Эта сессия',

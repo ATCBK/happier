@@ -108,6 +108,7 @@ async function setup(options: Readonly<{
   collapsedRow?: boolean;
   liveFeeds?: boolean;
   disablePlacementRead?: boolean;
+  showDivider?: boolean;
   /** A committed candidate cannot answer, while SOURCE still owns the native instance. */
   candidateFails?: boolean;
   beforeBindingRead?: (machineId: string) => Promise<void>;
@@ -397,6 +398,7 @@ async function setup(options: Readonly<{
         source={{ serverId, refId, machineId: source.machineId }}
         declaration={{ portable: options.portable !== false, currentnessKey: declarationBasis }}
         lifecycleKey={lifecycleKey}
+        showDivider={options.showDivider}
       />
     );
     if (!observationOwner) return control;
@@ -1192,7 +1194,9 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     await screen.unmount();
   });
   it('renders the owning reason when the front door refuses the settings read', async () => {
-    const { screen } = await setup({ running: true, disablePlacementRead: true, waitEnabled: false });
+    const { Dimensions } = await import('react-native');
+    vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+    const { screen } = await setup({ running: true, disablePlacementRead: true, waitEnabled: false, showDivider: true });
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('localServices.actions.failure.refused'));
     await screen.unmount();
   });
@@ -1689,6 +1693,12 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     expect(screen.tree.findAll(node => String(node.props.testID ?? '').startsWith('placement.fallback'))).toHaveLength(0);
     expect(runsOn().props.disabled).toBeFalsy();
     expect(runsOn().props.onPress).toBeUndefined();
+  });
+
+  it('says a live service on this checkout\'s machine runs next to it', async () => {
+    const { screen, runsOn } = await setup({ running: true, waitEnabled: false });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('projectServices.runsHere'));
+    expect(runsOn().props.disabled).toBeFalsy();
   });
 
   it('does not claim primary-only custody when the actual binding is unavailable', async () => {

@@ -11214,6 +11214,9 @@ localTailscale: {
       waitingAddress: '起動しました。アドレスを待っています。',
       noAddress: 'アドレスなし',
       failed: 'サービスを起動できませんでした。',
+      reviewOutput: '出力を確認',
+      address: 'アドレス',
+      addressOpensHere: 'ローカルサービス経由でこのスマートフォンで開きます',
     },
     session: {
       thisSessionTitle: 'このセッション',

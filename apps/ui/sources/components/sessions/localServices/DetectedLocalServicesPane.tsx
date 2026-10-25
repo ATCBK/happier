@@ -9,6 +9,7 @@ import { usePaneHeaderSlotContent, type PaneHeaderLine } from '@/components/appS
 import { useMachinePresenceSummary, type MachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { useRestoreFocusToTrigger, type FocusReturnTarget } from '@/keyboard/focusReturn';
 import { useNativeBackLayerBackHandler } from '@/components/ui/overlays/NativeBackLayerBoundary';
+import { useProjectPageBack } from '@/components/projects/detail/projectPageBack';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -412,6 +413,8 @@ export function DetectedLocalServicesPane(props: Readonly<{
         }
     }, [detailRow, restoreFocus]);
     useNativeBackLayerBackHandler(Boolean(detailRow), React.useCallback(() => { closeDetail(); return true; }, [closeDetail]));
+    // Inside a Project the phone bar's own Back closes the detail; a pane with no such host draws its own arrow.
+    const backHostedByBar = useProjectPageBack(Boolean(detailRow), closeDetail);
     const starterNames = useServiceStarterNames(rows, props.viewerAccountId ?? null);
     // Happier's own listeners: one quiet group, closed until the person asks.
     const [happierOpen, setHappierOpen] = React.useState(false);
@@ -725,18 +728,20 @@ export function DetectedLocalServicesPane(props: Readonly<{
             </View>
             {detailRow ? (
                 <ScrollView testID={`${testID}-detail`} style={styles.root} contentContainerStyle={styles.scrollContent}>
-                    <View style={styles.detailBar}>
-                        <IconButton
-                            testID={`${testID}-detail-back`}
-                            iconName="arrow-left"
-                            variant="plain"
-                            accessibilityLabel={t('localServices.pane.backToServices')}
-                            tooltip={t('localServices.pane.backToServices')}
-                            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                            animationEnabled={animationEnabled}
-                            onPress={closeDetail}
-                        />
-                    </View>
+                    {backHostedByBar ? null : (
+                        <View style={styles.detailBar}>
+                            <IconButton
+                                testID={`${testID}-detail-back`}
+                                iconName="arrow-left"
+                                variant="plain"
+                                accessibilityLabel={t('localServices.pane.backToServices')}
+                                tooltip={t('localServices.pane.backToServices')}
+                                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                animationEnabled={animationEnabled}
+                                onPress={closeDetail}
+                            />
+                        </View>
+                    )}
                     {effectReview}
                     {renderedDetailRow}
                 </ScrollView>

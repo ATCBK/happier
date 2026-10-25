@@ -8769,6 +8769,9 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             waitingAddress: '已啟動，正在等待位址。',
             noAddress: '無位址',
             failed: '服務無法啟動。',
+            reviewOutput: '查看輸出',
+            address: '位址',
+            addressOpensHere: '透過本機服務在此手機上開啟',
         },
         session: {
             thisSessionTitle: '此工作階段',
