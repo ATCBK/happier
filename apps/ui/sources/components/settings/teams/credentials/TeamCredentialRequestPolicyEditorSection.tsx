@@ -1,4 +1,9 @@
 import * as React from 'react';
+import {
+    PROVIDER_REASONING_EFFORT_LEVELS_V1,
+    formatProviderReasoningEffortLevelLabel,
+    readProviderReasoningEffortOption,
+} from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 import type {
     TeamCredentialRequestPolicyModelSupportV1,
     TeamCredentialRequestPolicySupportOutputV1,
@@ -162,7 +167,18 @@ export const TeamCredentialRequestPolicyEditorSection = React.memo(
             .filter((modelId) => !modelOptions.some((option) => option.value === modelId))
             .map((modelId) => ({ value: modelId, label: modelId, disabled: true }));
         const protocolKinds = projection.protocolKinds;
-        const effortOptions = projection.reasoningEffortValues.map((value) => ({ value, label: value }));
+        const effortNames = new Map(projection.reasoningEffortValues.length > 0 ? support.models.flatMap((row) => {
+            if (draft.allowedModelIds !== null && !draft.allowedModelIds.includes(row.descriptor.id)) return [];
+            return readProviderReasoningEffortOption(row.descriptor)?.options?.map((option) => [option.value, option.name] as const) ?? [];
+        }) : []);
+        const effortOptions = projection.reasoningEffortValues.map((value) => {
+            const level = PROVIDER_REASONING_EFFORT_LEVELS_V1.find((candidate) => candidate === value);
+            return {
+                value,
+                label: effortNames.get(value) ?? (level ? formatProviderReasoningEffortLevelLabel(level) : value),
+            };
+        });
+        const effortLabel = (value: string) => effortOptions.find((option) => option.value === value)?.label ?? value;
 
         const toggleProtocol = (kind: TeamCredentialRequestProtocolKindV1) => {
             if (busy) return;
@@ -252,7 +268,7 @@ export const TeamCredentialRequestPolicyEditorSection = React.memo(
                                 title={t('teams.credentials.requestPolicy.effortLabel')}
                                 effectiveLabel={draft.reasoningEffort === null
                                     ? t('teams.credentials.requestPolicy.effortAny')
-                                    : draft.reasoningEffort.allowedValues.join(' · ')}
+                                    : draft.reasoningEffort.allowedValues.map(effortLabel).join(' · ')}
                                 options={[
                                     { value: '__any__', label: t('teams.credentials.requestPolicy.effortAny') },
                                     ...effortOptions,
@@ -288,7 +304,7 @@ export const TeamCredentialRequestPolicyEditorSection = React.memo(
                             <ItemGroup>
                                 <OptionPickerOverlay
                                     title={t('teams.credentials.requestPolicy.effortLabel')}
-                                    effectiveLabel={draft.reasoningEffort.defaultValue}
+                                    effectiveLabel={effortLabel(draft.reasoningEffort.defaultValue)}
                                     options={effortOptions.filter((option) => draft.reasoningEffort?.allowedValues.includes(option.value))}
                                     selectedValue={draft.reasoningEffort.defaultValue}
                                     emptyText={t('teams.credentials.requestPolicy.effortAny')}

@@ -791,7 +791,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               ? { currentSelectionForRecovery: request.currentSelection }
               : {}),
             agentSupportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
-            agentSupportsReasoningEffort: adapter.support.supportsReasoningEffort === true,
           };
           const initial = assembleProviderConnectionCatalog({
             modelNameCatalog,
@@ -1062,7 +1061,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
                 : null;
               return ({
               ref: row.ref,
-              descriptor: row.descriptor,
+              descriptor: projectProviderModelReasoningForAgent(row.descriptor, adapter.support),
               ...(row.gatewaySlots ? { gatewaySlots: row.gatewaySlots } : {}),
               ...(exactApplication ? { application: exactApplication } : {}),
               ...(requestPolicySupport ? { requestPolicySupport } : {}),

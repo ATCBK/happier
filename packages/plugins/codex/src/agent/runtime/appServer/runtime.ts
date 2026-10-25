@@ -16,6 +16,7 @@ import type {
   AgentSessionModelsSnapshot,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
+import { readProviderReasoningEffortOption } from '@happier-dev/plugin-sdk/providers';
 import {
   AgentRuntimeJsonValueSchema,
   canPublishSessionResumeIdentity,
@@ -323,6 +324,7 @@ type CodexAppServerRuntimeParams = CodexAppServerRuntimeTarget & Readonly<{
   initialWorkspaceWrites?: 'allow' | 'deny';
   initialPermissionMode?: string;
   initialProviderBinding?: CodexProviderBindingEngineConfigV1 | null;
+  initialProviderModel?: NonNullable<AgentSessionOpenRequest['providerBinding']>['model'];
   connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   processEnv?: Readonly<Record<string, string | undefined>>;
   mcpServers?: unknown;
@@ -962,6 +964,11 @@ export function createCodexAppServerRuntime(
   >();
   const providerDisablesReasoning =
     params.initialProviderBinding?.config.model_reasoning_effort === 'none';
+  // Provider model changes follow restart_session, so both native factories
+  // retain these exact model facts for this runtime's lifetime.
+  const providerReasoningEffortOption = params.initialProviderModel
+    ? readProviderReasoningEffortOption(params.initialProviderModel)
+    : null;
   const requiresConfinedMcp = params.toolRestriction?.unlistedTools === 'deny'
     && mcpServerKeys.size > 0;
   let currentReasoningEffort: string | null = null;
@@ -3629,6 +3636,10 @@ export function createCodexAppServerRuntime(
       if (
         configOptionId === CODEX_APP_SERVER_REASONING_EFFORT_CONFIG_OPTION_ID
         && !providerDisablesReasoning
+        && (!params.initialProviderBinding || (
+          params.initialProviderModel?.id === currentModelId
+          && providerReasoningEffortOption?.options?.some(option => option.value === configOptionValue)
+        ))
       ) {
         currentReasoningEffort = configOptionValue ?? currentReasoningEffort;
       }

@@ -1074,6 +1074,7 @@ export async function openCodexNativeAppServerSession(
     appServerEndpoint: sharedAppServer?.endpoint,
     appServerTransport,
     initialModelId: readInitialModelId(request),
+    initialProviderModel: request.providerBinding?.model,
     connectedAccountService: request.connectedAccounts?.find(selection => selection.account.service.pluginId === 'happier.agent.codex'
       && selection.account.service.localId === 'openai-codex')?.account.service,
     initialCollaborationModeId: request.configuration?.mode.value,
@@ -1242,6 +1243,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
     initialProviderSessionId: providerSessionId,
     appServerEndpoint: sharedAppServer?.endpoint,
     initialModelId: readInitialModelId(request),
+    initialProviderModel: request.providerBinding?.model,
     initialCollaborationModeId: request.configuration?.mode.value,
     initialWorkspaceWrites: request.configuration?.workspaceWrites,
     initialPermissionMode: readPermissionMode(request),

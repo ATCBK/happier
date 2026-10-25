@@ -14,6 +14,7 @@ import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protoco
 import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { ProviderModelBindingSourceV1Schema, projectProviderModelSourceStateV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { readProviderConnectionBrokerImplementation } from '@/providers/broker/providerConnectionCpxBridge';
+import { projectProviderModelReasoningForAgent } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 
 export type ResolveManagedProviderPurposeBindingIntentSelection = ConnectedAccountPurposeBindingOwner['resolveBindingIntentSelection'];
 
@@ -115,7 +116,8 @@ export async function projectConnectedAccountCatalog(input: Readonly<{
           }) : projectProviderModelSourceStateV1(sourceFacts, descriptor);
           return {
             ref: { agentTargetKey: input.request.agentTargetKey, providerConnectionId: connectionId, modelId: descriptor.id },
-            descriptor, application, sourceFacts, confirmationSource,
+            descriptor: input.support ? projectProviderModelReasoningForAgent(descriptor, input.support) : descriptor,
+            application, sourceFacts, confirmationSource,
             gatewaySlots: [selection.binding], sources: { manual: false, static: true, probe: false },
             confidence: 'account_unverified', compatibility: { ...compatibility,
               confirmed: !input.request.sourceCatalog && compatibility.result.status === 'experimental'

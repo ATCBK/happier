@@ -7,9 +7,19 @@ import {
   isAnthropic1mAlwaysOnModelId,
   isAnthropic1mContextOptInModelId,
   normalizeAnthropicModelDisplayName,
+  resolveAnthropicDefaultEffortLevelForModelId,
 } from './catalog.js';
 
 describe('Anthropic Provider catalog', () => {
+  it('uses the catalog effort descriptor default for native model presentation', () => {
+    for (const model of ANTHROPIC_STATIC_MODELS) {
+      const effort = model.modelOptions?.find(option => option.id === 'reasoning_effort');
+      expect(resolveAnthropicDefaultEffortLevelForModelId(` ${model.id.toUpperCase()}[1m] `))
+        .toBe(effort?.currentValue ?? null);
+    }
+    expect(resolveAnthropicDefaultEffortLevelForModelId('unknown-model')).toBeNull();
+  });
+
   it('publishes low-cost model tier through the strict model descriptor consumed by model admission', () => {
     const haiku = ANTHROPIC_STATIC_MODELS.find(({ id }) => id === 'claude-haiku-4-5');
     expect(ProviderModelDescriptorV1Schema.parse(haiku)).toMatchObject({

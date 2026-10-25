@@ -11,9 +11,10 @@ export {
   type AnthropicEffortLevel,
 } from '@happier-dev/plugin-sdk/first-party/claude';
 
-import type {
-  ProviderCatalogParsedModel,
-  ProviderContribution,
+import {
+  readProviderReasoningEffortOption,
+  type ProviderCatalogParsedModel,
+  type ProviderContribution,
 } from '@happier-dev/plugin-sdk/providers';
 
 type ProviderStaticModel = Extract<
@@ -84,10 +85,14 @@ export function resolveAnthropicEffortLevelsForModelId(modelIdRaw: unknown): rea
 }
 
 export function resolveAnthropicDefaultEffortLevelForModelId(modelIdRaw: unknown): AnthropicEffortLevel | null {
-  const definition = readAnthropicModelDefinition(modelIdRaw);
-  const levels = definition?.effortLevels ?? [];
-  if (levels.length === 0) return null;
-  return definition?.defaultEffort ?? 'high';
+  const modelId = normalizeModelId(modelIdRaw);
+  const model = ANTHROPIC_STATIC_MODELS.find(candidate => candidate.id === modelId);
+  if (!model) return null;
+  const option = readProviderReasoningEffortOption({
+    capabilities: { reasoningControls: 'supported' },
+    modelOptions: model.modelOptions,
+  });
+  return ANTHROPIC_EFFORT_LEVELS.find(level => level === option?.currentValue) ?? null;
 }
 
 function projectAnthropicModelDefinition(definition: AnthropicModelDefinition): AnthropicStaticModel {

@@ -1,4 +1,4 @@
-export const CODEX_APP_SERVER_REASONING_EFFORT_CONFIG_OPTION_ID = 'reasoning_effort';
+export { PROVIDER_REASONING_EFFORT_OPTION_ID as CODEX_APP_SERVER_REASONING_EFFORT_CONFIG_OPTION_ID } from '@happier-dev/plugin-sdk/providers';
 export const CODEX_APP_SERVER_SERVICE_TIER_CONFIG_OPTION_ID = 'service_tier';
 export const CODEX_APP_SERVER_LEGACY_SPEED_CONFIG_OPTION_ID = 'speed';
 

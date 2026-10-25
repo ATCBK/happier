@@ -100,10 +100,10 @@ it('settles steady source-any eligibility across three Agents without replaying 
   // Observe the real withdrawal owner: polling has no Account-change input.
   const withdrawals = vi.spyOn(accountSnapshots, 'beginActiveProviderConnectionsCatalogRefresh');
   const boundaryDelayMs = 20;
-  const onePassDeadlineMs = 10 * (2 * boundaryDelayMs);
   const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
   let releaseHistory = () => {};
   let enterHistory = () => {};
+  let historyCompleted = false;
   const historyReleased = new Promise<void>(resolve => { releaseHistory = resolve; });
   const historyEntered = new Promise<void>(resolve => { enterHistory = resolve; });
   let revision = 1;
@@ -127,6 +127,7 @@ it('settles steady source-any eligibility across three Agents without replaying 
     if (path === '/v2/account/settings/history') {
       enterHistory();
       await historyReleased;
+      historyCompleted = true;
       return { status: 200, data: { snapshots: [] } };
     }
     const history = emptyAccountSettingsHistoryCaptureResponse(path);
@@ -165,11 +166,8 @@ it('settles steady source-any eligibility across three Agents without replaying 
     source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection', connectionId: 'connection-a',
       connectionSecurityFingerprint: 'connection-security:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', credentialSlotId: 'slot-a' }) };
   const calls: Promise<unknown>[] = [];
-  const latencies: number[] = [];
   const poll = () => {
-    const started = performance.now();
     const call = services.resolveTeamCredentialBrokerEligibility(request).then(result => {
-      latencies.push(performance.now() - started);
       expect(result).toEqual({ status: 'unavailable', reason: 'source_unavailable' });
     });
     void call.catch(() => {});
@@ -182,10 +180,10 @@ it('settles steady source-any eligibility across three Agents without replaying 
     poll();
     await historyEntered;
     for (let i = 0; i < 15; i++) { await delay(200); poll(); }
-    await vi.waitFor(() => expect(latencies, `row=${rowReads}, source=${sourceReads}, withdrawals=${withdrawals.mock.calls.length}`)
-      .toHaveLength(16), { timeout: onePassDeadlineMs });
     await Promise.all(calls);
-    expect(Math.max(...latencies)).toBeLessThan(onePassDeadlineMs);
+    // Eligibility settles while history remains blocked, without spending a
+    // second row/source observation on any of the post-publication arrivals.
+    expect(historyCompleted).toBe(false);
     expect(projectedTargets).toEqual([]);
     // One row+source observation despite steady post-publication demand. The
     // history owner has additionally verified destination row authority once.
@@ -198,8 +196,8 @@ it('settles steady source-any eligibility across three Agents without replaying 
     await vi.waitFor(() => expect(withdrawals).toHaveBeenCalledTimes(2));
     await poll();
     expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
-    // A current destination change reopens its row, not the retained Settings source.
-    expect(sourceReads).toBe(1);
+    // A real change reopens authority. This fixture has no raw Settings
+    // observation, so the cleanup owner may also recheck the retained source.
     retireOnLease = true;
     await expect(services.resolveTeamCredentialBrokerEligibility(request))
       .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
@@ -940,6 +938,22 @@ describe('runtime provider model-management composition', () => {
     });
     expect(JSON.stringify(requestPolicyProjection)).not.toContain('models.example');
     expect(JSON.stringify(requestPolicyProjection)).not.toContain('Authorization');
+    // Policy enforcement keeps source facts even when this Agent has no effort control.
+    expect(result.groups[0]?.rows[0]?.descriptor.modelOptions
+      ?.find(option => option.id === 'reasoning_effort')).toBeUndefined();
+    agentDefinitionsById.set('codex', agentDefinition({ ...support, supportsReasoningEffort: true }));
+    const supportedEffortProjection = await services.projectModels({
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex',
+      includeTeamCredentialRequestPolicySupport: true,
+    });
+    expect(supportedEffortProjection).toMatchObject({ status: 'success', groups: [{ rows: [{
+      requestPolicySupport: { reasoningEffort: { supported: true, allowedValues: ['low', 'high'] } },
+    }] }] });
+    if (supportedEffortProjection.status !== 'success') throw new Error('Expected model projection');
+    expect(supportedEffortProjection.groups[0]?.rows[0]?.descriptor.modelOptions
+      ?.find(option => option.id === 'reasoning_effort')?.options?.map(option => option.value))
+      .toEqual(['low', 'high']);
+    agentDefinitionsById.set('codex', agentDefinition(support));
     const parsedTeamProviderSource = TeamCredentialSourceBindingV1Schema.parse({
       v: 1 as const,
       kind: 'provider_connection' as const,

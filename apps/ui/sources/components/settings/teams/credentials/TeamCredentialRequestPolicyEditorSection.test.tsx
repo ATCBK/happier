@@ -41,6 +41,50 @@ async function mount(support: TeamCredentialRequestPolicySupportOutputV1) {
 }
 
 describe('TeamCredentialRequestPolicyEditorSection', () => {
+    it('presents descriptor effort names without narrowing native effort values', async () => {
+        const { OptionPickerOverlay } = await import('@/components/sessions/pickers/OptionPickerOverlay');
+        const base = AVAILABLE_SUPPORT.status === 'available' ? AVAILABLE_SUPPORT.models[0]! : null;
+        if (!base) throw new Error('available support fixture missing');
+        const { screen, draft } = await mount({
+            status: 'available',
+            models: [{
+                ...base,
+                descriptor: {
+                    ...base.descriptor,
+                    capabilities: { reasoningControls: 'supported' },
+                    modelOptions: [{
+                        id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'ultra',
+                        options: [{ value: 'low', name: 'Quick' }, { value: 'ultra', name: 'Deepest' }],
+                    }],
+                },
+                reasoningEffort: { allowedValues: ['low', 'ultra'], defaultValue: 'ultra' },
+            }],
+        });
+        const picker = () => screen.findAllByType(OptionPickerOverlay)
+            .find((node) => node.props.optionTestIDPrefix === 'team-credential-request-policy-effort')!;
+        expect(picker().props.options).toEqual(expect.arrayContaining([
+            { value: 'low', label: 'Quick' }, { value: 'ultra', label: 'Deepest' },
+        ]));
+        await screen.pressByTestIdAsync('team-credential-request-policy-effort:ultra');
+        expect(draft().reasoningEffort).toEqual({ allowedValues: ['ultra'], defaultValue: 'ultra' });
+        expect(picker().props.effectiveLabel).toBe('Deepest');
+        expect(screen.findAllByType(OptionPickerOverlay)
+            .find((node) => node.props.optionTestIDPrefix === 'team-credential-request-policy-effort-default')?.props.effectiveLabel)
+            .toBe('Deepest');
+
+        const standard = await mount(AVAILABLE_SUPPORT);
+        expect(standard.screen.findAllByType(OptionPickerOverlay)
+            .find((node) => node.props.optionTestIDPrefix === 'team-credential-request-policy-effort')?.props.options)
+            .toEqual(expect.arrayContaining([{ value: 'low', label: 'Low' }, { value: 'high', label: 'High' }]));
+        const native = await mount({
+            status: 'available',
+            models: [{ ...base, reasoningEffort: { allowedValues: ['ultra'], defaultValue: 'ultra' } }],
+        });
+        expect(native.screen.findAllByType(OptionPickerOverlay)
+            .find((node) => node.props.optionTestIDPrefix === 'team-credential-request-policy-effort')?.props.options)
+            .toEqual(expect.arrayContaining([{ value: 'ultra', label: 'ultra' }]));
+    });
+
     it('renders only fields explicitly advertised by the canonical support projection', async () => {
         const { screen } = await mount(AVAILABLE_SUPPORT);
 
