@@ -233,6 +233,14 @@ The current development server has separate session and machine presence owners:
 
 These are development-source semantics, not a claim that every published server already contains them.
 
+The development UI keeps reported background work in its configured Working placement
+while publisher presence remains active and online. Observation age does not settle that
+work or move an unread reply into Needs attention. The existing session-work observation
+owner states uncertainty separately: stale list rows pause their working indicator and
+say "working, awaiting updates…" until fresh evidence arrives. An explicit idle activity
+snapshot, offline presence, archive, or actionable request still changes presentation
+through the normal lifecycle and attention owners.
+
 The development UI can retain a hidden detailed Session while updating only its
 list projection. `sessionLifecycleProjection.ts` owns ordering of the public
 lifecycle facts shared by both shapes. Full hydration reconciles those facts
