@@ -28,6 +28,9 @@ beforeEach(async () => {
   vi.stubEnv('HAPPIER_HOME_DIR', homeDir);
   vi.stubEnv('HAPPIER_SERVER_URL', endpoint);
   vi.stubEnv('HAPPIER_WEBAPP_URL', endpoint);
+  vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({ v: 1, actions: {
+    wait: { toolExposureModes: { mcp: 'direct' } },
+  } }));
   reloadConfiguration();
   // Account plugin execution refuses a caller whose stored credential is not current.
   await writeStoredCredentialsForServerId(configuration.activeServerId, credentials);

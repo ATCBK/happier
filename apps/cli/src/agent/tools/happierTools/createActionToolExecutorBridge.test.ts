@@ -548,6 +548,9 @@ describe('createActionToolExecutorBridge', () => {
     const contexts: unknown[] = [];
     const bridge = createActionToolExecutorBridge({
       surface: 'mcp',
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+        'session.list': { toolExposureModes: { mcp: 'direct' } },
+      } }),
       resolveSessionListAccess: (sessionId) => (
         sessionId === 'sess-bound' ? 'current_session' : undefined
       ),
@@ -800,8 +803,12 @@ describe('createActionToolExecutorBridge', () => {
 
   it('uses the default session id as the fallback direct action tool input sessionId', async () => {
     const calls: unknown[] = [];
+    const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'session.terminalComposer.clear': { toolExposureModes: { mcp: 'direct' } },
+    } });
     const bridge = createActionToolExecutorBridge({
       surface: 'mcp',
+      actionsSettings,
       executor: {
         execute: async (actionId, input, ctx) => {
           calls.push({ actionId, input, ctx });
@@ -828,7 +835,7 @@ describe('createActionToolExecutorBridge', () => {
         ctx: expect.objectContaining({
           defaultSessionId: 'sess-1',
           surface: 'mcp',
-          actionsSettings: null,
+          actionsSettings,
         }),
       }),
     ]);
@@ -908,8 +915,12 @@ describe('createActionToolExecutorBridge', () => {
 
   it('preserves explicit direct action tool session ids on external mcp', async () => {
     const calls: unknown[] = [];
+    const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'session.terminalComposer.clear': { toolExposureModes: { mcp: 'direct' } },
+    } });
     const bridge = createActionToolExecutorBridge({
       surface: 'mcp',
+      actionsSettings,
       executor: {
         execute: async (actionId, input, ctx) => {
           calls.push({ actionId, input, ctx });
@@ -938,7 +949,7 @@ describe('createActionToolExecutorBridge', () => {
         ctx: expect.objectContaining({
           defaultSessionId: 'sess-1',
           surface: 'mcp',
-          actionsSettings: null,
+          actionsSettings,
         }),
       }),
     ]);

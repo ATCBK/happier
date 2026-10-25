@@ -113,7 +113,7 @@ export function getDefaultActionToolExposureMode(
 ): ActionToolExposureMode {
   const explicit = spec.toolExposure?.[surface];
   if (explicit) return explicit;
-  if (surface === 'agent') {
+  if (surface === 'agent' || surface === 'mcp') {
     return AGENT_DIRECT_ACTION_TOOL_ALLOW_SET.has(spec.id as ActionId) ? 'direct' : 'discoverable_only';
   }
   return 'direct';

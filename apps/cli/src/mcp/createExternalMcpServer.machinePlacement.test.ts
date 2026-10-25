@@ -85,7 +85,7 @@ describe('standalone MCP machine placement', () => {
     // A supported, explicit per-Action Account choice, not a test-only global bypass.
     env.patch({ HAPPIER_ACTIONS_SETTINGS_V1: JSON.stringify({ v: 1,
       approvalWaivedSurfaces: { [actionId]: ['mcp'] },
-      actions: Object.fromEntries(ACTION_IDS.map(id => [id, { enabled: id === actionId }])) }) });
+      actions: Object.fromEntries(ACTION_IDS.map(id => [id, { enabled: id === actionId, toolExposureModes: { mcp: 'direct' } }])) }) });
     const createStandaloneServer = () => runWithServerHttpBaseUrl(endpoint, () => createExternalMcpServer({
       credentials: { token: `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`, encryption: null, credentialProvenance: 'stored_session' },
       machineId: 'other-local-machine', daemonControlTarget: null,
@@ -126,7 +126,7 @@ describe('standalone MCP machine placement', () => {
         const [askFirstServerTransport, askFirstClientTransport] = InMemoryTransport.createLinkedPair();
         await askFirstMcp.connect(askFirstServerTransport); await askFirstClient.connect(askFirstClientTransport);
         try {
-          const refused = CallToolResultSchema.parse(await askFirstClient.callTool({ name: toolName, arguments: input }));
+          const refused = CallToolResultSchema.parse(await askFirstClient.callTool({ name: 'action_execute', arguments: { actionId, input } }));
           const refusal = refused.content.find(entry => entry.type === 'text');
           const publicRefusal: unknown = refusal?.type === 'text' ? JSON.parse(refusal.text) : null;
           expect(refused.isError, JSON.stringify(publicRefusal)).toBe(true);
@@ -223,6 +223,7 @@ describe('standalone MCP machine placement', () => {
       approvalWaivedSurfaces: { 'sessions.external.candidate.delete': ['mcp'] },
       actions: Object.fromEntries(ACTION_IDS.map(id => [id, {
         enabled: id === actionId || id === 'workspace.files.search',
+        toolExposureModes: { mcp: 'direct' },
       }])) }) });
     const { mcp } = runWithServerHttpBaseUrl(endpoint, () => createExternalMcpServer({
       credentials: { token: 'test-account', encryption: null, credentialProvenance: 'stored_session' },
@@ -272,6 +273,7 @@ describe('standalone MCP machine placement', () => {
     env.patch({ HAPPIER_ACTIONS_SETTINGS_V1: JSON.stringify({ v: 1,
       actions: Object.fromEntries(ACTION_IDS.map(id => [id, {
         enabled: id === 'session.presentation.apply' || id === 'sessions.external.candidates.list',
+        toolExposureModes: { mcp: 'direct' },
       }])) }) });
     const { mcp, toolNames } = createExternalMcpServer({
       credentials: { token: 'test-account', encryption: null, credentialProvenance: 'stored_session' },

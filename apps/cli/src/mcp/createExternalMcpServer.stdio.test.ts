@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
@@ -11,7 +11,12 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/f
 import { createExternalMcpServer } from './createExternalMcpServer';
 
 describe('standalone MCP stdio startup', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('initializes and discovers Local Service tools after their shared input has been parsed', async () => {
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({ v: 1, actions: {
+      'localServices.actions.openPreview': { toolExposureModes: { mcp: 'direct' } },
+    } }));
     LocalServiceActionRequestV1Schema.parse({ requestId: 'stdio-review', action: 'open_preview',
       target: { kind: 'inventory_entry', inventoryEntryId: 'detected', machineId: 'source' } });
     const { mcp } = createExternalMcpServer({

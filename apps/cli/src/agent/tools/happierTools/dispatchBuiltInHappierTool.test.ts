@@ -5,6 +5,7 @@ import {
   ActionDefinitionV1Schema,
   createActionExecutor,
   SessionSpawnNewInputV2Schema,
+  projectSessionSpawnNewActionInputV2,
 } from '@happier-dev/protocol';
 
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
@@ -16,6 +17,11 @@ import { listBuiltInHappierTools } from './listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
 import type { HappierBuiltInToolDispatchResult } from './types';
 import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+
+const directMcpExecutionSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+  'review.start': { toolExposureModes: { mcp: 'direct' } },
+  'execution.run.start': { toolExposureModes: { mcp: 'direct' } },
+} });
 
 function ok(result: unknown): HappierBuiltInToolDispatchResult {
   return { ok: true, result };
@@ -231,16 +237,16 @@ describe('built-in Happier tools', () => {
     if (!definition.inputSchema) throw new Error('Expected spawn input schema');
     // Exercise the published schema, including references, rather than requiring inline serialization.
     const validate = new Ajv({ strict: false, validateFormats: false }).compile(await readCompleteInputSchema(spawnGetResult.result));
-    const input = SessionSpawnNewInputV2Schema.parse({
+    const input = projectSessionSpawnNewActionInputV2(SessionSpawnNewInputV2Schema.parse({
       executionTarget: { serverId: 'active', machineId: 'machine-1' },
       directory: { kind: 'path', path: '/workspace/project' },
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
       organizationPlacement: { folderId: null, tagIds: [] },
       agentSessionStartupInstructionsV1: { v: 1, id: 'fixture.instructions', revision: 1, instructions: 'Inspect the workspace.' },
-    });
+    }));
     expect(validate(input), JSON.stringify(validate.errors)).toBe(true);
     expect(validate({ ...input, executionTarget: { ...input.executionTarget, serverId: 'x'.repeat(192) } })).toBe(false);
-    expect(validate({ ...input, organizationPlacement: { folderId: null, tagIds: Array.from({ length: 501 }, (_, i) => `tag-${i}`) } })).toBe(false);
+    expect(validate({ ...input, organizationPlacement: { sectionId: null, tagIds: Array.from({ length: 501 }, (_, i) => `tag-${i}`) } })).toBe(false);
     for (const revision of [0, 2_147_483_648]) {
       expect(validate({ ...input, agentSessionStartupInstructionsV1: { ...input.agentSessionStartupInstructionsV1, revision } })).toBe(false);
     }
@@ -503,6 +509,7 @@ describe('built-in Happier tools', () => {
       args: { instructions: 'Check this' },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -732,6 +739,7 @@ describe('built-in Happier tools', () => {
       },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -780,6 +788,7 @@ describe('built-in Happier tools', () => {
       },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -816,6 +825,7 @@ describe('built-in Happier tools', () => {
       },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -852,6 +862,7 @@ describe('built-in Happier tools', () => {
       },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -885,6 +896,7 @@ describe('built-in Happier tools', () => {
       },
       sessionId: 'sess-1',
       surface: 'mcp',
+      actionsSettings: directMcpExecutionSettings,
       deps: {
         changeTitle: async () => ({ success: true }),
         executeActionByToolName,
@@ -901,6 +913,7 @@ describe('built-in Happier tools', () => {
     const actionsSettings = ActionsSettingsV1Schema.parse({
       v: 1,
       actions: {
+        'execution.run.start': { toolExposureModes: { mcp: 'direct' } },
         'review.start': {
           disabledSurfaces: ['mcp'],
         },

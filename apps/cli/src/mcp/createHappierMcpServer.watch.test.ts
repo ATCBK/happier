@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createHappierMcpServer } from './createHappierMcpServer';
@@ -23,6 +23,8 @@ it('the real Session MCP factory advertises subscriptions and refuses unsupporte
   try {
     expect(client.getServerCapabilities()?.resources?.subscribe).toBe(true);
     expect(toolNames).toContain('watch');
+    expect((await client.request({ method: 'tools/list' }, ListToolsResultSchema)).tools.map(tool => tool.name).sort())
+      .toEqual([...toolNames].sort());
     const result = await client.callTool({ name: 'watch', arguments: {
       target: { kind: 'execution_run', serverId: 'home', sessionId: 'session', machineId: 'machine', runId: 'run' },
       condition: { kind: 'terminal' },

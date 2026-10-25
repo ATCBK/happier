@@ -12,6 +12,7 @@ import { listHappierMcpToolNames, registerHappierMcpResources } from '@/mcp/reso
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
+import { cacheMcpToolList } from '@/mcp/server/cacheMcpToolList';
 import type { HappierBuiltInToolDispatchResult } from '@/agent/tools/happierTools/types';
 import { normalizeExecutionRunRpcPayload } from '@/session/services/executionRuns';
 import { registerHappierMcpBuiltInTools, type HappierMcpToolInventory } from '@/mcp/server/registerHappierMcpBuiltInTools';
@@ -252,6 +253,7 @@ export function createHappierMcpServer(
     name: 'Happier MCP',
     version: '1.0.0',
   }, { capabilities: { resources: { subscribe: true } } });
+  cacheMcpToolList(mcp);
 
   // Only the host-only Action-context arm supplies options; every other method
   // keeps the plain two-argument local invocation it has always used rather than

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -10,7 +10,11 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createExternalMcpServer } from './createExternalMcpServer';
 
 describe('createExternalMcpServer with an API token', () => {
-  it('routes the advertised MCP Session Action through the real PAT executor and HTTP transport', async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([false, true])('executes a discoverable Session Action through the real PAT transport (direct override: %s)', async (direct) => {
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({ v: 1, actions: direct
+      ? { 'session.status.get': { toolExposureModes: { mcp: 'direct' } } } : {} }));
     const token = 'hap_v1_11111111-1111-4111-8111-111111111111_' + 'A'.repeat(43);
     const sessionId = 'c123456789012345678901234';
     const spec = getActionSpec('session.status.get');
@@ -43,7 +47,7 @@ describe('createExternalMcpServer with an API token', () => {
       await mcp.connect(serverTransport);
       await client.connect(clientTransport);
       const tools = await client.listTools();
-      expect(tools.tools.map(tool => tool.name)).toContain('session_status_get');
+      expect(tools.tools.some(tool => tool.name === 'session_status_get')).toBe(direct);
       expect(tools.tools.map(tool => tool.name)).not.toContain('acme_review_start');
       const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId: 'session.status.get', input: {} } }));
@@ -53,10 +57,12 @@ describe('createExternalMcpServer with an API token', () => {
       expect(requests).toHaveLength(1);
       // The generic action_execute tool has no fixed output schema. The typed
       // tool publishes this Action's declared structured output to MCP clients.
-      const direct = CallToolResultSchema.parse(await client.callTool({ name: 'session_status_get', arguments: {} }));
-      expect(direct.isError, JSON.stringify(direct)).not.toBe(true);
-      expect(direct.structuredContent).toEqual(status);
-      expect(requests).toHaveLength(2);
+      if (direct) {
+        const named = CallToolResultSchema.parse(await client.callTool({ name: 'session_status_get', arguments: {} }));
+        expect(named.isError, JSON.stringify(named)).not.toBe(true);
+        expect(named.structuredContent).toEqual(status);
+        expect(requests).toHaveLength(2);
+      }
     } finally {
       await client.close();
       await mcp.close();

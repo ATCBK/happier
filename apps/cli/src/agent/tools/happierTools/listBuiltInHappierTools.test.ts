@@ -383,7 +383,7 @@ describe('listBuiltInHappierTools', () => {
     const actionsSettings = ActionsSettingsV1Schema.parse({
       v: 1,
       actions: {
-        'execution.run.start': {
+        'execution.run.list': {
           toolExposureModes: {
             mcp: 'discoverable_only',
           },
@@ -396,8 +396,8 @@ describe('listBuiltInHappierTools', () => {
       actionsSettings,
     }).map((tool) => tool.name);
 
-    expect(names).not.toContain('execution_run_start');
-    expect(names).toContain('subagents_delegate_start');
+    expect(names).not.toContain('execution_run_list');
+    expect(names).not.toContain('subagents_delegate_start');
     expect(names).toContain('acme_review_start');
   });
 

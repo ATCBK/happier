@@ -26,6 +26,10 @@ import {
 } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
 
 const MCP_TOOL_PROGRESS_KEEPALIVE_INTERVAL_MS = 15_000;
+const ACTION_APPROVAL_REQUEST_CREATED_RESULT_JSON_SCHEMA = zodSchemaToJsonSchemaObject(
+    ActionApprovalRequestCreatedResultSchema,
+    { target: 'draft-7' },
+);
 
 type McpToolRegistrationMetadata = Pick<RegisteredTool, 'title' | 'description' | 'annotations' | '_meta'> & Readonly<{
     inputSchema: z.ZodMiniType;
@@ -163,7 +167,7 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         adapter._zod.processJSONSchema = (_ctx, json) => {
             Object.assign(json, {
                 type: 'object',
-                anyOf: [completedMcpJsonSchema, zodSchemaToJsonSchemaObject(ActionApprovalRequestCreatedResultSchema, { target: 'draft-7' })],
+                anyOf: [completedMcpJsonSchema, ACTION_APPROVAL_REQUEST_CREATED_RESULT_JSON_SCHEMA],
             });
         };
         return adapter;

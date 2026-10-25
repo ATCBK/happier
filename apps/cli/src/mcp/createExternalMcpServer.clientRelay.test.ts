@@ -132,12 +132,12 @@ describe('standalone MCP client Action admission', () => {
     await mcp.connect(serverTransport);
     await client.connect(clientTransport);
     try {
-      for (const [name, args, connectedResult, absentResult] of [
-        ['ui_find', { op: 'read' }, { status: 'idle' }, { status: 'unavailable', reason: 'noClient' }],
-        ['session_pending_next', {}, { status: 'none' }, { status: 'unavailable', reason: 'noClient' }],
-        ['workspace_tabs_list', {}, workspace, { errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
+      for (const [actionId, input, connectedResult, absentResult] of [
+        ['ui.find', { op: 'read' }, { status: 'idle' }, { status: 'unavailable', reason: 'noClient' }],
+        ['session.pending.next', {}, { status: 'none' }, { status: 'unavailable', reason: 'noClient' }],
+        ['workspace.tabs.list', {}, workspace, { errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
       ] as const) {
-        const response = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));
+        const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: { actionId, input } }));
         const text = response.content.find(entry => entry.type === 'text');
         if (!text || text.type !== 'text') throw new Error('Missing MCP text result');
         expect(JSON.parse(text.text)).toEqual(connected ? connectedResult : absentResult);
@@ -165,7 +165,7 @@ describe('standalone MCP client Action admission', () => {
       expect(admitted).toHaveLength(connected ? 4 : 0);
 
       const dismissCoach = async () => {
-        const response = CallToolResultSchema.parse(await client.callTool({ name: 'usage_coach_dismiss', arguments: coachInput }));
+        const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: { actionId: 'usage.coach.dismiss', input: coachInput } }));
         const text = response.content.find(entry => entry.type === 'text');
         if (!text || text.type !== 'text') throw new Error('Missing Coach dismissal result');
         return JSON.parse(text.text) as unknown;
@@ -199,25 +199,25 @@ describe('standalone MCP client Action admission', () => {
         expect(getUsageQueryKey(UsageCoachDismissInputSchema.parse(request.input).query)).toBe(getUsageQueryKey(coachQuery));
       }
       if (connected) {
-        const selected = CallToolResultSchema.parse(await client.callTool({ name: 'session_target_primary_set', arguments: {
+        const selected = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: { actionId: 'session.target.primary.set', input: {
           sessionId: 'requested-session', serverId: configuration.activeServerId,
-        } }));
+        } } }));
         expect(selected.isError).not.toBe(true);
         expect(admitted.at(-1)).toMatchObject({ actionId: 'session.target.primary.set', context: { defaultSessionId: 'requested-session' } });
-        await client.callTool({ name: 'ui_find', arguments: { op: 'read' } });
+        await client.callTool({ name: 'action_execute', arguments: { actionId: 'ui.find', input: { op: 'read' } } });
         expect(admitted.at(-1)).toMatchObject({ actionId: 'ui.find', context: { defaultSessionId: 'canonical-session' } });
         clientAvailable = false;
-        await client.callTool({ name: 'session_target_primary_set', arguments: {
+        await client.callTool({ name: 'action_execute', arguments: { actionId: 'session.target.primary.set', input: {
           sessionId: 'unaccepted-session', serverId: configuration.activeServerId,
-        } });
+        } } });
         clientAvailable = true;
-        await client.callTool({ name: 'ui_find', arguments: { op: 'read' } });
+        await client.callTool({ name: 'action_execute', arguments: { actionId: 'ui.find', input: { op: 'read' } } });
         expect(admitted.at(-1)).toMatchObject({ actionId: 'ui.find', context: { defaultSessionId: 'canonical-session' } });
         primarySessionId = null;
-        await client.callTool({ name: 'session_target_primary_set', arguments: { sessionId: null } });
+        await client.callTool({ name: 'action_execute', arguments: { actionId: 'session.target.primary.set', input: { sessionId: null } } });
         expect(admitted.at(-1)).toMatchObject({ actionId: 'session.target.primary.set' });
         expect(UiActionDispatchRequestV1Schema.parse(admitted.at(-1)).context).not.toHaveProperty('defaultSessionId');
-        await client.callTool({ name: 'ui_find', arguments: { op: 'read' } });
+        await client.callTool({ name: 'action_execute', arguments: { actionId: 'ui.find', input: { op: 'read' } } });
         expect(UiActionDispatchRequestV1Schema.parse(admitted.at(-1)).context).not.toHaveProperty('defaultSessionId');
       }
     } finally {
@@ -233,7 +233,7 @@ describe('standalone MCP client Action admission', () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     await mcp.connect(serverTransport); await client.connect(clientTransport);
     try {
-      const response = CallToolResultSchema.parse(await client.callTool({ name: 'ui_find', arguments: { op: 'read' } }));
+      const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: { actionId: 'ui.find', input: { op: 'read' } } }));
       const text = response.content.find(entry => entry.type === 'text');
       if (!text || text.type !== 'text') throw new Error('Missing MCP text result');
       expect(JSON.parse(text.text)).toEqual({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' });
@@ -261,7 +261,7 @@ describe('standalone MCP client Action admission', () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     await mcp.connect(serverTransport); await client.connect(clientTransport);
     try {
-      const response = CallToolResultSchema.parse(await client.callTool({ name: 'ui_find', arguments: { op: 'read' } }));
+      const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: { actionId: 'ui.find', input: { op: 'read' } } }));
       const text = response.content.find(entry => entry.type === 'text');
       if (!text || text.type !== 'text') throw new Error('Missing MCP text result');
       expect(JSON.parse(text.text)).toEqual({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' });

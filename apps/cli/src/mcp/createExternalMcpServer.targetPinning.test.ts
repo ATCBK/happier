@@ -190,7 +190,9 @@ describe('createExternalMcpServer target pinning', () => {
       await mcp.connect(serverTransport);
       await client.connect(clientTransport);
       try {
-        const result = await client.callTool({ name: 'session_list', arguments: { limit: 1 } });
+        const result = await client.callTool({ name: 'action_execute', arguments: {
+          actionId: 'session.list', input: { limit: 1 },
+        } });
         expect(result.isError, JSON.stringify(result)).not.toBe(true);
         expect(selectedRequests).toEqual(expect.arrayContaining([
           expect.objectContaining({

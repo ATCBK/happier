@@ -17,7 +17,7 @@ describe('HAPPIER_MCP_TOOL_CATALOG_NAMES', () => {
     expect(spec.inputSchema.safeParse({ query: 'not a picker input' }).success).toBe(false);
     expect(listBuiltInHappierTools({ surface: 'mcp', isActionEnabled: () => true,
       actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }),
-    }).some(entry => entry.name === 'ui_prompts_picker_open')).toBe(true);
+    }).some(entry => entry.name === 'ui_prompts_picker_open')).toBe(false);
   });
   it('exposes the landed change-explanation operations with their canonical input contracts', () => {
     const catalog = new Map(HAPPIER_MCP_TOOL_CATALOG.map((tool) => [tool.name, tool]));
@@ -78,7 +78,7 @@ describe('HAPPIER_MCP_TOOL_CATALOG_NAMES', () => {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.mcp, actionId).toBe(true);
       expect(mcpToolNames.has(spec.bindings?.mcpToolName ?? ''), actionId).toBe(true);
-      expect(directMcpToolNames.has(spec.bindings?.mcpToolName ?? ''), actionId).toBe(true);
+      expect(directMcpToolNames.has(spec.bindings?.mcpToolName ?? ''), actionId).toBe(false);
     }
     for (const actionId of ['localServices.actions.copyUrl'] as const) {
       const spec = getActionSpec(actionId);

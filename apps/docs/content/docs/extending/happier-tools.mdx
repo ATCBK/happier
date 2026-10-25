@@ -180,7 +180,14 @@ The built-in discovery flow is:
 
 This reduces prompt overload and keeps the available tool surface aligned with the real current runtime.
 
-This is the default posture for in-session agents. Happier-managed review, plan, delegate, and execution-run launch actions stay discoverable, but they are not promoted into the session agent’s direct tool list unless the default or your settings make them direct. External MCP clients and CLI workflows keep direct named tools by default where those tools are configured, so existing automations can continue to use them.
+This is the default posture for in-session agents and, in unreleased 0.3
+development, external MCP clients. Happier-managed review, plan, delegate, and
+execution-run launch actions stay discoverable, but they are not promoted into
+the direct tool list unless the Action's default or your settings make them
+direct. CLI defaults remain direct. For a named external MCP tool, choose
+**Direct tool** for that Action's MCP surface in **Settings → Actions**. Choosing
+**Discoverable only** also removes a tool that is direct by default. Restart
+`happier mcp serve` after changing these Account preferences.
 
 Discoverability is not authorization to choose Happier-managed delegation. For an ordinary request to delegate work, use the current Agent's native subagent or parallel-agent facility when it has one. Discover and start a Happier-managed run only when the user explicitly asks for a Happier run, Happier delegation run, or Happier subagent; asks for another Agent backend, model provider, model, account, or service that the native facility cannot satisfy; or has enabled a custom rule that requires Happier.
 

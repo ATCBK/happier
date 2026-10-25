@@ -21,7 +21,7 @@ describe('createExternalMcpServer', () => {
     process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
       v: 1,
       actions: {
-        'review.start': { enabled: true, disabledSurfaces: ['mcp'], disabledPlacements: [] },
+        'execution.run.list': { enabled: true, disabledSurfaces: ['mcp'], disabledPlacements: [] },
       },
     });
 
@@ -35,24 +35,13 @@ describe('createExternalMcpServer', () => {
       },
     });
 
-    expect(toolNames).not.toContain('review_start');
-  });
-
-  it('includes action-backed tools and the action_execute escape hatch', async () => {
-    const { toolNames } = createExternalMcpServerStatic({
-      credentials: {
-        token: 'token',
-        encryption: {
-          type: 'legacy',
-          secret: new Uint8Array([1, 2, 3, 4]),
-        },
-      },
-    });
-
-    expect(toolNames).toEqual(expect.arrayContaining(['action_execute', 'session_list']));
+    expect(toolNames).not.toContain('execution_run_list');
   });
 
   it('advertises server-backed Session Actions only from enabled exact-Home feature snapshots', () => {
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {
+      'discussion.list': { toolExposureModes: { mcp: 'direct' } },
+    } });
     const credentials = {
       token: 'token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array([1, 2, 3, 4]) },
@@ -242,7 +231,7 @@ describe('createExternalMcpServer', () => {
       throw new Error('expected executeActionByToolName to be callable');
     }
 
-    const res = await capturedExecuteActionByToolName('execution_run_start', {
+    const res = await capturedExecuteActionByToolName('action_execute', { actionId: 'execution.run.start', input: {
       intent: 'review',
       backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       permissionMode: 'read_only',
@@ -250,7 +239,7 @@ describe('createExternalMcpServer', () => {
       runClass: 'bounded',
       ioMode: 'request_response',
       instructions: 'Review.',
-    }, 'sess-1');
+    } }, 'sess-1');
 
     expect(res).toEqual({
       ok: true,

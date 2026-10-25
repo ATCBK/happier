@@ -49,7 +49,8 @@ describe('actionToolExposure', () => {
       expect(spec.surfaces, actionId).toMatchObject({ agent: true, mcp: true });
       expect(spec.bindings?.mcpToolName, actionId).toBe(actionId.replaceAll('.', '_'));
       expect(isActionDirectToolExposedOn(spec, 'agent'), actionId).toBe(true);
-      expect(isActionDirectToolExposedOn(spec, 'mcp'), actionId).toBe(true);
+      expect(isActionDirectToolExposedOn(spec, 'mcp'), actionId).toBe(false);
+      expect(isActionDiscoverableOnToolSurface(spec, 'mcp'), actionId).toBe(true);
     }
   });
 
@@ -154,10 +155,11 @@ describe('actionToolExposure', () => {
       expect(isActionExecutableFromStandaloneMcp(getActionSpec(id)), id).toBe(true);
     }
   });
-  it('exposes relayed Find and Next as direct MCP tools while retaining the default Agent discovery budget', () => {
+  it('keeps relayed Find and Next discoverable on MCP and Agent surfaces', () => {
     for (const id of ['ui.find', 'session.pending.next'] as const) {
       const spec = getActionSpec(id);
-      expect(isActionDirectToolExposedOn(spec, 'mcp'), id).toBe(true);
+      expect(isActionDirectToolExposedOn(spec, 'mcp'), id).toBe(false);
+      expect(isActionDiscoverableOnToolSurface(spec, 'mcp'), id).toBe(true);
       expect(isActionDiscoverableOnToolSurface(spec, 'agent'), id).toBe(true);
       expect(resolveActionToolExposureMode(spec, 'agent'), id).toBe('discoverable_only');
       expect(resolveActionSurfaceAvailability({ actionId: id, surface: 'cli' }).available, id).toBe(false);
@@ -188,7 +190,7 @@ describe('actionToolExposure', () => {
     }
   });
 
-  it('keeps agent action discovery, execution observation, and reload specs directly exposed', () => {
+  it.each(['agent', 'mcp'] as const)('keeps %s action discovery, execution observation, and reload specs directly exposed', (surface) => {
     for (const id of [
       'action.spec.search',
       'action.spec.get',
@@ -200,9 +202,9 @@ describe('actionToolExposure', () => {
     ] as const) {
       const spec = getActionSpec(id);
 
-      expect(resolveActionToolExposureMode(spec, 'agent')).toBe('direct');
-      expect(isActionDirectToolExposedOn(spec, 'agent')).toBe(true);
-      expect(isActionDiscoverableOnToolSurface(spec, 'agent')).toBe(true);
+      expect(resolveActionToolExposureMode(spec, surface)).toBe('direct');
+      expect(isActionDirectToolExposedOn(spec, surface)).toBe(true);
+      expect(isActionDiscoverableOnToolSurface(spec, surface)).toBe(true);
     }
   });
 
@@ -220,7 +222,8 @@ describe('actionToolExposure', () => {
   it('directly exposes the primary Discussion reply while retaining explicit exposure and disable policy', () => {
     const spec = getActionSpec('discussion.reply');
     expect(isActionDirectToolExposedOn(spec, 'agent')).toBe(true);
-    expect(isActionDirectToolExposedOn(spec, 'mcp')).toBe(true);
+    expect(isActionDirectToolExposedOn(spec, 'mcp')).toBe(false);
+    expect(isActionDiscoverableOnToolSurface(spec, 'mcp')).toBe(true);
     const discoverable = ActionsSettingsV1Schema.parse({ v: 1, actions: {
       'discussion.reply': { toolExposureModes: { agent: 'discoverable_only' } },
     } });
@@ -282,12 +285,13 @@ describe('actionToolExposure', () => {
     }
   });
 
-  it('keeps external mcp and cli direct by default', () => {
+  it('shares the Agent discovery default with MCP while keeping CLI direct', () => {
     const spec = getActionSpec('subagents.delegate.start');
 
-    expect(resolveActionToolExposureMode(spec, 'mcp')).toBe('direct');
+    expect(resolveActionToolExposureMode(spec, 'mcp')).toBe('discoverable_only');
     expect(resolveActionToolExposureMode(spec, 'cli')).toBe('direct');
-    expect(isActionDirectToolExposedOn(spec, 'mcp')).toBe(true);
+    expect(isActionDirectToolExposedOn(spec, 'mcp')).toBe(false);
+    expect(isActionDiscoverableOnToolSurface(spec, 'mcp')).toBe(true);
     expect(isActionDirectToolExposedOn(spec, 'cli')).toBe(true);
   });
 

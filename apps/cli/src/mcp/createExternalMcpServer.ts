@@ -21,6 +21,7 @@ import {
   createMcpActionSettingsProvider,
 } from '@/mcp/server/createMcpActionEnablement';
 import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
+import { cacheMcpToolList } from '@/mcp/server/cacheMcpToolList';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -276,6 +277,7 @@ export function createExternalMcpServer(params: Readonly<{
     name: 'Happier MCP',
     version: '1.0.0',
   }, { capabilities: { resources: { subscribe: true } } });
+  cacheMcpToolList(mcp);
 
   const actionToolBridge = createActionToolExecutorBridge({
     executor,

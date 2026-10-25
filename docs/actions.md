@@ -10,6 +10,18 @@ This page describes the platform's owners and its admission vocabulary. The publ
 contract lives in [api.md](api.md#external-action-api-developer-preview-source-contract); the CLI
 host is in [cli-architecture.md](cli-architecture.md#action-derived-command-arguments).
 
+In unreleased 0.3 source, Agent and external MCP Action tools default to
+`discoverable_only`, with the shared direct allow-list and each Action's explicit
+`toolExposure` metadata resolved by `getDefaultActionToolExposureMode` in
+`packages/protocol/src/actions/actionSurfaceAvailability.ts`. CLI defaults stay
+direct. Account `actionsSettingsV1.actions[id].toolExposureModes` overrides the
+default independently for `agent`, `mcp`, and `cli`. A `direct` override adds the
+enabled Action's named tool; `discoverable_only` removes that named tool even
+for an allow-listed Action. Discovery and `action_execute` retain the same
+availability, authority, and approval checks. Settings uses this resolver for
+its default label. `happier mcp serve` captures Account Action settings at
+startup; restart that MCP process after changing its exposure preferences.
+
 In unreleased 0.3 source, an automatic managed-Machine retention wait superseded
 before policy admission or native execution settles as `cancelled`. A successful
 manual Stop or Delete therefore does not turn that obsolete wait into a failed
