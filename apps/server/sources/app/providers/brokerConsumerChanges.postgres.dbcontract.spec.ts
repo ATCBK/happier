@@ -7,6 +7,7 @@ import { TEAM_CHANGE_ENTITY_ID, publishTeamChangedInTx } from '@/app/teams/teamC
 import { prepareSessionAccountCursorLocks } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { transitionSessionArchiveStateInTx } from '@/app/session/archive/transitionSessionArchiveStateInTx';
 import { admitProviderBrokerConsumerInTx } from './brokerConsumerAdmission';
+import { publishSessionProviderBrokerConsumersChangedInTx, readSessionProviderBrokerCustodianAccountIdsInTx } from './brokerConsumerChanges';
 
 describe('Home broker consumer PostgreSQL publication contract', () => {
     const prefix = `broker-consumer-${crypto.randomUUID()}`;
@@ -59,10 +60,27 @@ describe('Home broker consumer PostgreSQL publication contract', () => {
         const changes = await db.accountChange.findMany({ where: { accountId: { in: [owner.id, custodian.id, stranger.id] },
             kind: 'account', entityId: TEAM_CHANGE_ENTITY_ID }, orderBy: { accountId: 'asc' },
             select: { accountId: true, hint: true } });
-        expect(changes).toEqual([owner.id, custodian.id].sort().map(accountId => ({ accountId, hint: null })));
+        expect(changes).toEqual([{ accountId: custodian.id, hint: null }]);
         const before = (await db.account.findUniqueOrThrow({ where: { id: custodian.id }, select: { seq: true } })).seq;
         await inTx(tx => publishTeamChangedInTx(tx, { teamId: team.id }));
         expect((await db.account.findUniqueOrThrow({ where: { id: custodian.id }, select: { seq: true } })).seq).toBe(before + 1);
         expect(await db.accountChange.count({ where: { accountId: stranger.id } })).toBe(0);
+    });
+
+    it('publishes no teams changes for a thousand plain Session ends', async () => {
+        const owner = await db.account.create({ data: { publicKey: `${prefix}-plain`, encryptionMode: 'plain' } });
+        const sessions = Array.from({ length: 1_000 }, (_, index) => ({ id: crypto.randomUUID(),
+            accountId: owner.id, tag: `${prefix}-plain-${index}`, encryptionMode: 'plain', metadata: '{}' }));
+        await db.session.createMany({ data: sessions });
+        const ids = sessions.map(session => session.id);
+        // Exercise the real lifecycle publisher without introducing unrelated
+        // Follow/automation work into this publication cost contract.
+        for (const session of sessions) {
+            await inTx(tx => publishSessionProviderBrokerConsumersChangedInTx(tx, session.id));
+        }
+        expect(await db.accountChange.count({ where: { accountId: owner.id,
+            kind: 'account', entityId: TEAM_CHANGE_ENTITY_ID } })).toBe(0);
+        expect((await db.account.findUniqueOrThrow({ where: { id: owner.id }, select: { seq: true } })).seq).toBe(0);
+        expect(await inTx(tx => readSessionProviderBrokerCustodianAccountIdsInTx(tx, ids))).toEqual([]);
     });
 });
