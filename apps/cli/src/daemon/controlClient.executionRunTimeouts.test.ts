@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubIssuedFetch } from '@/testkit/http/stubIssuedFetch';
 
 vi.mock('@/persistence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/persistence')>(),
@@ -232,7 +233,7 @@ describe('resolveExecutionRunConnectedServiceMaterializeTimeoutMs', () => {
       setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms);
       return controller.signal;
     });
-    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+    const issued = stubIssuedFetch(vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       await new Promise<void>((resolve, reject) => {
         setTimeout(resolve, 601_000);
@@ -254,6 +255,7 @@ describe('resolveExecutionRunConnectedServiceMaterializeTimeoutMs', () => {
       cwd: '/tmp/workspace',
     });
     try {
+      await issued;
       await vi.advanceTimersByTimeAsync(601_000);
       await expect(pending).resolves.toMatchObject({ ok: true });
     } finally { vi.useRealTimers(); }

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubIssuedFetch } from '@/testkit/http/stubIssuedFetch';
 import { requestDaemonSignedRootActionExecution } from './controlClient';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -48,7 +49,7 @@ describe('signed root Action acknowledgement', () => {
       setTimeout(() => controller.abort(new DOMException('The operation timed out', 'TimeoutError')), ms);
       return controller.signal;
     });
-    vi.stubGlobal('fetch', (_url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
+    const issued = stubIssuedFetch((_url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => resolve(Response.json({ ok: true, result: actionId === 'session.spawn_new'
         ? { type: 'success', sessionId: 'created-session' } : { idle: true, observedAt: 301000 } })), 301000);
       options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal?.reason); }, { once: true });
@@ -62,6 +63,7 @@ describe('signed root Action acknowledgement', () => {
       target: { pid: process.pid, httpPort: 1 },
     });
     const observed = result.then((value) => value);
+    await issued;
     await vi.advanceTimersByTimeAsync(301000);
     expect(await observed).toMatchObject({ ok: true, result: actionId === 'session.spawn_new'
       ? { type: 'success', sessionId: 'created-session' } : { idle: true } });
@@ -98,7 +100,7 @@ describe('signed root Action acknowledgement', () => {
       prepareWorkspace: async () => { throw new Error('Unexpected workspace preparation'); },
     });
     const input = { runId: run.id, conditions: ['attention'] as const };
-    vi.stubGlobal('fetch', async (url: unknown, options: RequestInit) => {
+    const issued = stubIssuedFetch(async (url: unknown, options: RequestInit) => {
       expect(new URL(String(url)).pathname).toBe('/actions/root/execute');
       const request = SignedRootActionExecuteRequestSchema.parse(JSON.parse(String(options.body)));
       expect(request.actionId).toBe('workflow.run.wait');
@@ -109,6 +111,7 @@ describe('signed root Action acknowledgement', () => {
     const pending = requestDaemonSignedRootActionExecution({ actionId: 'workflow.run.wait', input }, {
       target: { pid: process.pid, httpPort: 1 },
     });
+    await issued;
     await vi.advanceTimersByTimeAsync(301_000);
     const result = await pending;
     expect(result.ok).toBe(true);
@@ -125,13 +128,14 @@ describe('signed root Action acknowledgement', () => {
       setTimeout(() => controller.abort(new DOMException('The operation timed out', 'TimeoutError')), ms);
       return controller.signal;
     });
-    vi.stubGlobal('fetch', (_url: unknown, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const issued = stubIssuedFetch((_url: unknown, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
       options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
     }));
     const pending = requestDaemonSignedRootActionExecution({ actionId: 'action.operations.get',
       input: { operationId: 'operation-1', ...(waitForTerminal === undefined ? {} : { waitForTerminal }) } }, {
       target: { pid: process.pid, httpPort: 1 },
     });
+    await issued;
     await vi.advanceTimersByTimeAsync(300_000);
     await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'timeout' });
   });
@@ -195,12 +199,13 @@ describe('signed root Action acknowledgement', () => {
       setTimeout(() => controller.abort(new DOMException('The operation timed out', 'TimeoutError')), ms);
       return controller.signal;
     });
-    vi.stubGlobal('fetch', (_url: unknown, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const issued = stubIssuedFetch((_url: unknown, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
       options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
     }));
     const pending = requestDaemonSignedRootActionExecution({ actionId: 'session.goal.get', input: { sessionId: 'created-session' } }, {
       target: { pid: process.pid, httpPort: 1 },
     });
+    await issued;
     await vi.advanceTimersByTimeAsync(300_000);
     await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'timeout' });
   });

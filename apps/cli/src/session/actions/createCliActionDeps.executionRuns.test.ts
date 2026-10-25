@@ -14,6 +14,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { artifactListResponse } from '@/testkit/http/artifactHome';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
@@ -99,7 +100,7 @@ async function withLocalScmMachine<T>(run: () => Promise<T>): Promise<T> {
 beforeEach(() => {
   vi.spyOn(axios, 'get').mockImplementation(async (url) => {
     const path = new URL(String(url)).pathname;
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: artifactListResponse(String(url), []) };
     if (path === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
     if (!String(url).endsWith('/v1/account/encryption/currentness')) throw new Error(`Unexpected HTTP read: ${url}`);
@@ -181,17 +182,27 @@ describe('detached exact Run output observation transport', () => {
       sessionId: 'cli-global', mode: 'plain', ctx: null,
       machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async () =>
         ({ ok: true, status: 'running', disposition: 'snapshot', result: snapshot }) } });
+    // The wait lazily imports its service. Load it first so the deadline timer is armed on the fake
+    // clock before the clock advances, instead of racing a cold module transform.
+    await Promise.all([import('@/session/services/executionRuns'), import('@/session/services/executionRunWaitTiming')]);
+    const observation = new AbortController();
     vi.useFakeTimers();
     try {
       const waiting = deps.executionRunWait(null, { runId: 'run-watch', timeoutSeconds: 1 },
-        { exactMachineId: 'machine-1', workDepth: 3, onSnapshot: async () => blocked });
+        { exactMachineId: 'machine-1', workDepth: 3, signal: observation.signal, onSnapshot: async () => blocked });
       let completed: unknown;
       void waiting.then(result => { completed = result; });
       await vi.advanceTimersByTimeAsync(1000);
       expect(completed).toMatchObject({ ok: false, code: 'observation_timeout' });
       release();
       await waiting;
-    } finally { release(); vi.useRealTimers(); }
+    } finally {
+      // The fake transport answers instantly, so an observation that outlives a failed assertion
+      // would spin the worker's microtask queue and hang the whole file past every test timeout.
+      observation.abort();
+      release();
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a causally admitted local wait on its native direct target', async () => {

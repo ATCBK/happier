@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubIssuedFetch } from '@/testkit/http/stubIssuedFetch';
 
 import {
   controlDaemonPluginDevelopment, decideDaemonPluginChange, listDaemonPluginChanges,
@@ -31,15 +32,16 @@ describe('plugin control operation lifetime', () => {
 
   it.each([undefined, null, 600_000])('accepts late settlement with timeout %s', async (timeoutMs) => {
     installClock();
-    vi.stubGlobal('fetch', (url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
+    const issued = stubIssuedFetch((url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
       const body = String(url).endsWith('/status') ? { kind: 'applying', pendingChangeId: 'change-1' }
         : String(url).endsWith('/list') ? { changes: [{ kind: 'applying', pendingChangeId: 'change-1' }] }
         : String(url).endsWith('/request') || String(url).endsWith('/decide') ? { kind: 'cancelled' }
         : { kind: 'status', status: { roots: [], plugins: [] }, matched: true, result: { ok: true } };
       const timer = setTimeout(() => resolve(Response.json(body)), 301_000);
       options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal?.reason); }, { once: true });
-    }));
+    }), calls.length);
     const pending = calls.map((call) => call({ target, ...(timeoutMs === undefined ? {} : { timeoutMs }) }));
+    await issued;
     await vi.advanceTimersByTimeAsync(301_000);
     const results = await Promise.all(pending);
     expect(results[0]).toMatchObject({ kind: 'cancelled' });
@@ -93,12 +95,13 @@ describe('plugin control operation lifetime', () => {
 
   it('keeps an explicit caller deadline and cancels only that request', async () => {
     installClock();
-    vi.stubGlobal('fetch', (_url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
+    const issued = stubIssuedFetch((_url: unknown, options: RequestInit) => new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => resolve(Response.json({ changes: [{ kind: 'applying', pendingChangeId: 'change-1' }] })), 2000);
       options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal?.reason); }, { once: true });
-    }));
+    }), 2);
     const deadline = listDaemonPluginChanges({ target, timeoutMs: 1000 });
     const retained = listDaemonPluginChanges({ target });
+    await issued;
     await vi.advanceTimersByTimeAsync(2000);
     await expect(deadline).resolves.toEqual({ kind: 'unavailable', code: 'timeout' });
     await expect(retained).resolves.toEqual({
