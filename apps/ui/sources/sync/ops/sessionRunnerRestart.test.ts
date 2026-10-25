@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import type { SessionRunnerRuntimeStateV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
@@ -337,11 +338,24 @@ describe('session runner restart op', () => {
 
     it('confirms the exact provider security change through V2', async () => {
         await restartCases[1][1]();
+        expect(RestartSessionRunnerRequestV2Schema.safeParse(decodedRequests[0]?.payload).success).toBe(true);
         expect(decodedRequests[0]).toMatchObject({ method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, payload: {
             v: 2, mode: 'force_current_cli', reason: 'provider_binding_change_recovery', expectedRunnerProcessIdentity: processIdentity,
             providerBindingSecurityChangeConfirmationV1: { v: 1, sessionId: 's1', connectionId: 'pc_gateway',
                 previousBindingSecurityFingerprint: 'binding-security:v1:a', nextBindingSecurityFingerprint: 'binding-security:v1:b' },
         } });
+    });
+
+    it('returns the typed stale outcome without effects when the runtime PID and process witness disagree', async () => {
+        await expect(ops.restartSessionRunnerForProviderBindingChange({
+            runtimeState: replacedState,
+            runnerProcessIdentity: processIdentity,
+            serverId: home.id,
+            launchBinding,
+            nextBindingSecurityFingerprint: 'binding-security:v1:b',
+        })).resolves.toEqual({ ok: false, status: 'runner_identity_changed', sessionId: 's1' });
+        expect(boundary.requests).toEqual([]);
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
 
     it.each(['partial_failure', 'stop_failed', 'spawn_failed', 'runner_identity_changed', 'not_found'] as const)('reconciles ambiguous %s with daemon-owned current runtime', async status => {

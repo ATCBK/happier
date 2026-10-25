@@ -2753,7 +2753,7 @@ describe('SessionView (direct sessions)', () => {
     if (!accepted) expect(screen.findByTestId('session-staleRunner-restart')).not.toBeNull();
   });
 
-  it('preserves the armed model and draft when background-work restart consent is cancelled', async () => {
+  it.each(['cancelled consent', 'changed runner identity'] as const)('preserves the armed model and draft after %s', async outcome => {
     requireModelRestartAtSocketBoundary();
     featureEnabledState.providers = true;
     storageState.sessions.s1 = { ...storageState.sessions.s1,
@@ -2764,8 +2764,9 @@ describe('SessionView (direct sessions)', () => {
     restartProviderBindingSessionRunnerSpy.mockImplementation(request => real.restartSessionRunnerForProviderBindingChange(
       request as Parameters<typeof real.restartSessionRunnerForProviderBindingChange>[0],
     ));
+    const state = buildSessionRunnerRuntimeStatus({ sessionId: 's1', machineId: 'machine-1', versionState: 'stale' });
     getSessionRunnerRuntimeStatusSpy.mockResolvedValue({
-      state: buildSessionRunnerRuntimeStatus({ sessionId: 's1', machineId: 'machine-1', versionState: 'stale' }),
+      state: outcome === 'changed runner identity' ? { ...state, runner: { ...state.runner, pid: 456 } } : state,
       runnerProcessIdentity: { pid: 123, processStartTimeMs: 1_000 },
     });
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
@@ -2776,11 +2777,17 @@ describe('SessionView (direct sessions)', () => {
     await act(async () => { findAgentInput(screen).props.onChangeText('Keep this draft'); });
     modalConfirmSpy.mockResolvedValue(false);
     await act(async () => { await findAgentInput(screen).props.onSend(); });
-    expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+    expect(modalConfirmSpy).toHaveBeenCalledTimes(outcome === 'cancelled consent' ? 1 : 0);
     expect(externalRpcRequests.filter(request => request.method.startsWith('daemon.sessionRunner.restart'))).toEqual([]);
     expect(findAgentInput(screen).props.armedRouteContinuation).toBeTruthy();
     expect(findAgentInput(screen).props.value).toBe('Keep this draft');
-    expect(modalAlertSpy).not.toHaveBeenCalled();
+    if (outcome === 'cancelled consent') expect(modalAlertSpy).not.toHaveBeenCalled();
+    else {
+      await expect(restartProviderBindingSessionRunnerSpy.mock.results.at(-1)?.value).resolves.toEqual({
+        ok: false, status: 'runner_identity_changed', sessionId: 's1',
+      });
+      expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+    }
   });
 
   it.each(['stale runner', 'provider binding'] as const)('retires a deferred %s restart observation when leaving the screen', async (kind) => {

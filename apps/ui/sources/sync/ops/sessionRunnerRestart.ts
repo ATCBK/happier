@@ -254,6 +254,10 @@ export async function restartSessionRunnerForProviderBindingChange(
     }
     const identityGuard = readSessionRunnerRestartIdentityGuardV1(input.runtimeState);
     if ('ok' in identityGuard) return identityGuard;
+    // Never combine a runtime guard with another process's birth witness.
+    if (identityGuard.expectedRunnerPid !== input.runnerProcessIdentity.pid) {
+        return buildResult({ sessionId: input.runtimeState.sessionId, status: 'runner_identity_changed' });
+    }
     const nextFingerprint = readNonEmptyString(input.nextBindingSecurityFingerprint);
     const confirmation = input.launchBinding && nextFingerprint
         ? SessionProviderBindingSecurityChangeConfirmationV1Schema.parse({
