@@ -153,7 +153,7 @@ test.describe('ui e2e: Updates surface screens (R13 e)', () => {
       await waitForInitialAppUi({ page, timeoutMs: 180_000 });
       for (const width of [1280, 390] as const) {
         await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
-        for (const state of ['available', 'downloading', 'ready', 'failed'] as const) {
+        for (const state of ['available', 'downloading', 'ready', 'failed', 'checking'] as const) {
           const size = width === 390 ? 'phone' : 'desktop';
           for (const section of ['pills', 'popover', 'screen'] as const) {
             if (section === 'pills' && state !== 'available') continue;
@@ -165,6 +165,11 @@ test.describe('ui e2e: Updates surface screens (R13 e)', () => {
               await expect(cachedCli).not.toContainText('Up to date');
               await expect(cachedCli.getByTestId('updates.row.windows:happier-cli.action')).toHaveCount(0);
             }
+            if (section === 'screen' && state === 'checking') {
+              await expect(page.getByTestId('updates.checkNow.spinner')).toBeVisible();
+              await expect(page.getByTestId('updates.checkNow')).toBeDisabled();
+            }
+            if (section !== 'pills') await expect(page.getByTestId('updates.updateAll.spinner')).toBeVisible();
             await page.waitForTimeout(300);
             const name = section === 'pills' ? `demo-${theme}-${size}-pills` : `demo-${theme}-${size}-${section}-${state}`;
             await page.getByTestId(`updates-demo.${section}`).screenshot({ path: join(screensDir, `${name}.png`) });

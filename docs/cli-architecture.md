@@ -567,6 +567,8 @@ The popover keeps unknown and unchecked rows visible instead of counting them as
 Remote completion still follows the changed update outcome and running target version; a cached
 release answer no longer doubles as the completion proof.
 
+An explicit Updates check stays busy until the app check and every requested machine fact refresh settle. Agent/helper update runs and the local desktop CLI action keep their running state through the canonical post-update capability refresh or desktop inspection, so stale versions cannot briefly restore Update before the refreshed facts arrive. Remote CLI admission remains distinct from completion: its row stays reconnecting until daemon-owned metadata reports the result and running version.
+
 **Remote.** The daemon's `tool.systemTasks` capability lists `cli.update.v1` only when
 `canUpdateRemotely` (presence = capability; older daemons never list it). The kind starts
 `self update` detached from the daemon's own binary (output to `logs/cli-update-<ms>.log`) and
