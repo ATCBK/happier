@@ -1533,6 +1533,7 @@ export {
   resolveHappierWorkStatusGlyphColor,
   resolveHappierWorkStatusSurfaceStyle,
   resolveHappierWorkStatusWordColor,
+  type CollectionGroupRollup,
   type HappierWorkStateColors,
   type HappierWorkStatusBucket,
   type HappierWorkStatusColors,
