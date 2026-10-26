@@ -41,6 +41,7 @@ const activeServerSnapshotMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => activeServerSnapshotMock.current,
 }));
 

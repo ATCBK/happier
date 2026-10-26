@@ -15,6 +15,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return createServerScopedMachineRpcBoundaryMock(directoryRpc);
 });
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({ serverId: 'reload-home', serverUrl: 'https://example.com', generation: 1 }),
 }));
 

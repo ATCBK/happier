@@ -95,6 +95,7 @@ vi.mock('@/utils/ui/clipboard', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => runtime.activeServerSnapshot,
 }));
 

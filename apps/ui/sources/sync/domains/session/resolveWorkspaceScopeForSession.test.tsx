@@ -10,6 +10,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({ serverId: 'server-1', serverUrl: 'https://example.com', generation: 1 }),
 }));
 

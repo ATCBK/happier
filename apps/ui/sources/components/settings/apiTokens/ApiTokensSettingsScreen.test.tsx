@@ -86,6 +86,7 @@ vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => runtime.activeServerSnapshot,
 }));
 

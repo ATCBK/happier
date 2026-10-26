@@ -30,6 +30,7 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => ({
     isLegacyAuthCredentials: (credentials: unknown) => Boolean(credentials),
 }));
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => serverRuntimeMock.getActiveServerSnapshot(),
     getActiveServerHomeCarrier: () => null,
 }));

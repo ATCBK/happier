@@ -6,6 +6,7 @@ import { storage } from '@/sync/domains/state/storage';
 const getActiveServerSnapshotMock = vi.hoisted(() => vi.fn(() => ({ serverId: 'active-server' })));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => getActiveServerSnapshotMock(),
 }));
 

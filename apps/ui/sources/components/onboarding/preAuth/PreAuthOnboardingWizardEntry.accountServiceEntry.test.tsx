@@ -160,6 +160,7 @@ vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: runtimeFetchMock }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => getActiveServerSnapshotMock(),
 }));
 vi.mock('@/sync/domains/server/readConfiguredServerUrlEnv', () => ({

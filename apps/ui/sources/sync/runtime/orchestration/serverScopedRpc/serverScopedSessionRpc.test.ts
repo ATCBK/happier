@@ -85,6 +85,7 @@ vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
 });
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+  subscribeActiveServer: () => () => {},
   getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
 }));
 

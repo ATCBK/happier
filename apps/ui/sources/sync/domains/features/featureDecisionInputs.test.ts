@@ -13,6 +13,7 @@ import {
 } from './featureDecisionInputs';
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({
         serverId: 'server-1',
         serverUrl: 'https://api.example.test',

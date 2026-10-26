@@ -27,6 +27,7 @@ const storageMock = createStorageModuleStub({
 vi.mock('@/sync/domains/state/storage', () => storageMock);
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({
         serverId: state.activeServerId,
     }),

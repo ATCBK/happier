@@ -35,6 +35,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({ serverId: 'server', serverUrl: 'https://example.com', generation: 1 }),
 }));
 

@@ -235,6 +235,7 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({
         serverId: 'server-a',
         serverUrl: serverRuntimeState.serverUrl,

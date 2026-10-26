@@ -189,6 +189,7 @@ installSettingsViewCommonModuleMocks({
 
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({ serverId: 'srv_1', generation: 1 }),
 }));
 

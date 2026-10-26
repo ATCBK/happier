@@ -122,6 +122,7 @@ vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({
         serverId: 'relay-profile',
         serverUrl: 'https://relay.example.test',

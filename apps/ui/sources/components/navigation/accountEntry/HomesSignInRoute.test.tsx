@@ -46,6 +46,7 @@ vi.mock('@/sync/store/settingsWriters', () => ({ useApplyLocalSettings: () => vi
 vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({ clearPendingSetupIntent: vi.fn() }));
 vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({ serverId: 'home-l2', serverUrl: 'https://home-l2.example.test', runtimeOrigin: null }),
 }));
 vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({

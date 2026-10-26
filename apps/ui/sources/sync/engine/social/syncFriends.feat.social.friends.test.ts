@@ -7,6 +7,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => ({
         serverId: 'server-1',
         serverUrl: 'https://api.example.test',

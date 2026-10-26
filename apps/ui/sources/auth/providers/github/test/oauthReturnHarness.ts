@@ -268,6 +268,7 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    subscribeActiveServer: () => () => {},
     getActiveServerSnapshot: () => activeServerSnapshotState,
     getActiveServerHomeCarrier: () => null,
     upsertAndActivateServer: upsertAndActivateServerSpy,
