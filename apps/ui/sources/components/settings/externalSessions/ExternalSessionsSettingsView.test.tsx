@@ -1041,7 +1041,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
     it('renders every linked session with its canonical follow status and scopes notifications to explicit background policies', async () => {
         effectBoundary.sessions = [
             createExternalSession({
-                id: 'active',
+                // Not `active`: `/v2/sessions/active` is the active-Session listing route, never this Session's detail.
+                id: 'active-follow',
                 policy: 'background_follow',
                 status: 'active',
                 reason: 'background_follow',
@@ -1094,7 +1095,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
         const screen = await renderSettingsView(<ExternalSessionsSettingsView />);
 
-        expect(screen.findRow('settings-external-sessions-follow-item-active')).toBeTruthy();
+        expect(screen.findRow('settings-external-sessions-follow-item-active-follow')).toBeTruthy();
         expect(screen.findRow('settings-external-sessions-follow-item-paused')).toBeTruthy();
         expect(screen.findRow('settings-external-sessions-follow-item-unknown')).toBeTruthy();
         expect(screen.findRow('settings-external-sessions-follow-item-disabled')).toBeTruthy();
@@ -1110,7 +1111,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         expect(screen.findRowByTitle('externalSessions.settingsNotificationsTitle')?.props.subtitle)
             .toBe('externalSessions.settingsNotificationsActiveSubtitle');
 
-        const activeToggle = screen.findRow('settings-external-sessions-follow-item-active')
+        const activeToggle = screen.findRow('settings-external-sessions-follow-item-active-follow')
             ?.props.rightElement as React.ReactElement<Record<string, unknown>> | undefined;
         const pausedToggle = screen.findRow('settings-external-sessions-follow-item-paused')
             ?.props.rightElement as React.ReactElement<Record<string, unknown>> | undefined;

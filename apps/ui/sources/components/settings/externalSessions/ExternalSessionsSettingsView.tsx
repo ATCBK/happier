@@ -293,9 +293,13 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
         }:${executionTarget?.machine.daemonStateVersion ?? 0}`,
         agent: null,
         knownAgents: projectedExternalSessionAgents,
+        // The inventory is read per projection generation. Reading it before the target's projection
+        // settles would read once as `unavailable` and again when the projection arrives.
         enabled: props.integrationInventoryEnabled === true
             && props.integrations === undefined
-            && executionTarget !== null,
+            && executionTarget !== null
+            && daemonMergedProjection.phase !== 'idle'
+            && daemonMergedProjection.phase !== 'loading',
         isExecutionTargetCurrent,
     });
     const hasActiveFollowPolicy = rows.some((row) => row.enabled);
@@ -330,6 +334,8 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
                 await sync.mutateAccountSettingsOnce({
                     expectedSettingsScope,
                     expectedSettingsVersion: settingsVersion,
+                    // One field's explicit value: it applies over whichever settings version won meanwhile.
+                    rebaseOnConflict: true,
                     mutate: (raw) => ({
                         settings: {
                             ...raw,
