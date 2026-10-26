@@ -747,14 +747,16 @@ function UserTextBlock(props: {
   // An answer another session returned here is quoted as information, not drawn as the person's bubble.
   const returnedAnswer = props.returnedAnswer;
 
-  const structuredNode = renderStructuredMessage({
+  // Row-local hover/focus state must not re-admit the message's structured content.
+  const structuredNode = React.useMemo(() => renderStructuredMessage({
 	    message: props.message,
 	    sessionId: props.sessionId,
         serverId: props.serverId,
         interaction: props.interaction,
 	    onJumpToAnchor: handleJumpToAnchor,
 	    debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
-	  });
+	  }), [props.message, props.sessionId, props.serverId, props.interaction, handleJumpToAnchor,
+    props.messageDisplayCommon.debugInformationEnabled]);
   const sessionMediaMeta = React.useMemo(() => {
     const primaryEnvelope = parseHappierMetaEnvelope(props.message.meta);
     const envelope = primaryEnvelope?.kind === 'session_media.v1'
@@ -1143,14 +1145,15 @@ function AgentTextBlock(props: {
     motion?.config.preset !== 'off' &&
     motion?.config.animateThinkingEnabled === true;
 
-  const structuredNode = renderStructuredMessage({
+  const structuredNode = React.useMemo(() => renderStructuredMessage({
 	    message: props.message,
 	    sessionId: props.sessionId,
         serverId: props.serverId,
         interaction: props.interaction,
 	    onJumpToAnchor: handleJumpToAnchor,
 	    debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
-	  });
+	  }), [props.message, props.sessionId, props.serverId, props.interaction, handleJumpToAnchor,
+    props.messageDisplayCommon.debugInformationEnabled]);
   const isStructuredOnly = structuredNode != null;
   const agentUnsupportedContentMeta = readUnsupportedContentMeta(props.message.meta);
   const agentUnsupportedContentText = messageDisplay.unsupportedContentText;
@@ -1574,14 +1577,15 @@ function ToolCallBlock(props: {
   if (!message.tool) {
     return null;
   }
-  const structuredNode = renderStructuredMessage({
+  const structuredNode = React.useMemo(() => renderStructuredMessage({
 	    message,
 	    sessionId: props.sessionId,
         serverId: props.toolChromeCommon.serverId,
         interaction: props.interaction,
 	    onJumpToAnchor: handleJumpToAnchor,
 	    debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
-	  });
+	  }), [message, props.sessionId, props.toolChromeCommon.serverId, props.interaction, handleJumpToAnchor,
+    props.messageDisplayCommon.debugInformationEnabled]);
   const hasStructuredNode = structuredNode != null;
   const { turnChanges, shouldRenderToolChrome } = React.useMemo(() => deriveToolMessageDisplay({
     tool: message.tool,
