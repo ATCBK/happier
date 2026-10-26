@@ -6,8 +6,8 @@ import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessi
 import { SpawnCapabilitiesPreviewOutputV1Schema, SessionCapabilitiesGetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import type { ActionExecutorDeps, ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { resolveSessionCapabilityItemIdentityV1, resolveSessionCapabilitiesGetFailureV1, type SessionCapabilitiesActionPortV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createRpcCallError, isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -151,6 +151,10 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
             const response = record(await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope({ machineId: input.machineId, serverId: account.serverId, accountId: account.accountId,
                 method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: input, operationTimeoutMs: null, signal })));
             assertCurrent(context);
+            if (isRpcMethodNotFoundResult(response) || isRpcMethodNotAvailableError({ rpcErrorCode: response?.errorCode })) {
+                const errorCode = typeof response?.errorCode === 'string' ? response.errorCode : RPC_ERROR_CODES.METHOD_NOT_FOUND;
+                throw createRpcCallError({ error: typeof response?.error === 'string' ? response.error : errorCode, errorCode });
+            }
             if (response?.ok !== true) return { ok: false, reason: isMachineRequestReachabilityFailure(response)
                 || isMachineRequestReachabilityFailure({ code: response?.errorCode }) ? 'machine_unreachable' : 'invalid_input' };
             const parsed = SpawnCapabilitiesPreviewOutputV1Schema.safeParse({ ok: true, machinePlatform: response.machinePlatform,
@@ -159,7 +163,6 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
         } catch (failure) {
             assertCurrent(context);
             if (isMachineRequestReachabilityFailure(failure)) return { ok: false, reason: 'machine_unreachable' };
-            if (isRpcMethodNotAvailableError(failure) || isRpcMethodNotFoundError(failure)) return { ok: false, reason: 'invalid_input' };
             throw failure;
         }
     };
