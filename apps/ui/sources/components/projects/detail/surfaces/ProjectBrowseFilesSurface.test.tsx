@@ -91,7 +91,7 @@ it('keeps the shared visibility choice reachable on a Code folder page', async (
 it('keeps root creation, upload and View controls usable without a second search field', async () => {
     const rootPath = '/code-root-controls';
     let created = false;
-    fixture = await createSessionFilesViewFixture({ rootPath, rpc: request => {
+    fixture = await createSessionFilesViewFixture({ rootPath, serverIdentityId: 'srv_code_root_controls', rpc: request => {
         if (request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
             const path = (request.payload as { path: string }).path;
             return { ok: true, path, truncated: false, entries: [

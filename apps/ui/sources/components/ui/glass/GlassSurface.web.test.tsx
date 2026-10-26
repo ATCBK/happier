@@ -140,7 +140,7 @@ describe('web glass material', () => {
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');
-        const scene = (atmosphereBehind: 'band' | 'wallpaper', preset: 'everywhere' | 'auto' = 'everywhere') => <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials(preset) }}>
+        const scene = (atmosphereBehind: 'band' | 'wallpaper', preset: 'everywhere' | 'auto' | 'solid' = 'everywhere') => <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials(preset) }}>
             <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
                 <GlassSurface plane surfaceGroup="sidebar" finishRole={null} solidColor="#1b1717">
                     <GlassSurface testID="sidebar-group" surfaceGroup="card" nested finishRole="card" solidColor="#221c1c"><DraftInput /></GlassSurface>
@@ -160,10 +160,13 @@ describe('web glass material', () => {
         await screen.update(scene('wallpaper'));
         expect(cardBackdrops(screen)).toHaveLength(2);
         expect(screen.findHostByTestId('draft')?.props.value).toBe('keep the sidebar draft');
-        // Auto keeps a browser sidebar solid, so a wallpaper under it backs nothing in it.
+        // Auto: a shown wallpaper is backing for the browser sidebar too (owner ruling 2026-10-23), so it backs both groups.
         await screen.update(scene('wallpaper', 'auto'));
-        expect(cardBackdrops(screen)).toHaveLength(1);
-        expect(screen.findAll(node => typeof node.type === 'string' && flattenTestStyle(node.props.style)?.backgroundColor === '#ffffff')).toHaveLength(1);
+        expect(cardBackdrops(screen)).toHaveLength(2);
+        expect(screen.findHostByTestId('draft')?.props.value).toBe('keep the sidebar draft');
+        // Solid keeps the sidebar and its Elements opaque, so the wallpaper backs nothing in it.
+        await screen.update(scene('wallpaper', 'solid'));
+        expect(cardBackdrops(screen)).toHaveLength(0);
         expect(screen.findHostByTestId('draft')?.props.value).toBe('keep the sidebar draft');
     });
     it('paints sidebar-held Elements in the page colour, one quiet step above the sidebar, without the card lift', async () => {

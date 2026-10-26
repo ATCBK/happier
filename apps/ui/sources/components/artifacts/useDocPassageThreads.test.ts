@@ -5,6 +5,7 @@ import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { answerDiscussionThreadForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 
 const homes = createHomeGovernanceHarness();
@@ -35,7 +36,7 @@ const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/
 let previousProfileScope = storage.getState().profileScope;
 let previousSettingsScope = storage.getState().settingsScope;
 const previousPlatform = Platform.OS;
-beforeEach(async () => { previousProfileScope = storage.getState().profileScope; previousSettingsScope = storage.getState().settingsScope; await homes.reset(); });
+beforeEach(async () => { previousProfileScope = storage.getState().profileScope; previousSettingsScope = storage.getState().settingsScope; await homes.reset(); await loadSyncSingletonForTests(); });
 afterEach(async () => { standardCleanup(); Object.defineProperty(Platform, 'OS', { configurable: true, value: previousPlatform }); storage.setState({ profileScope: previousProfileScope, settingsScope: previousSettingsScope }); clearDiscussionRepositoryRegistryForTests(); resetServerFeaturesClientForTests(); await homes.reset(); });
 
 describe('Doc passage thread demand', () => {
@@ -75,7 +76,8 @@ describe('Doc passage thread demand', () => {
         } });
         for (const entry of [stored, second]) {
             homes.answer(serverId, `/v1/discussions/${entry.discussion.id}`, { select: () => refused
-                ? { status: 409, body: { error: 'discussion_content_unavailable' } } : { body: { discussion: entry.discussion } } });
+                ? { status: 409, body: { error: 'discussion_content_unavailable' } }
+                : { body: { discussion: (entries.find(current => current.discussion.id === entry.discussion.id) ?? entry).discussion } } });
             homes.answer(serverId, `GET /v1/discussions/${entry.discussion.id}/messages`, { select: () => refused
                 ? { status: 409, body: { error: 'discussion_content_unavailable' } }
                 : { body: { messages: entry.discussion.id === stored.discussion.id ? network.messages : [entry.firstMessage], hasMoreOlder: false,
@@ -256,10 +258,17 @@ describe('Doc passage thread demand', () => {
         expect(hook.getCurrent()?.openCommentCount).toBe(1);
     });
 
-    it('excludes known inaccessible roots without turning an admitted zero count into unknown', async () => {
+    it('establishes admitted zero after scoped discovery excludes an exactly refused root', async () => {
         const { scope, hook, refuse } = await mountedDoc(1);
         refuse(false);
         await act(async () => publishMountedDiscussionChanges({ ...scope, changes: [{ cursor: 1, kind: 'discussion', entityId: 'committed-thread', changedAt: 2 }] }));
+        await vi.waitFor(() => {
+            expect(hook.getCurrent()?.openCommentCount).toBeNull();
+            expect(hook.getCurrent()?.threads).toHaveLength(0);
+        });
+        // Exact denial proves withdrawal, not the complete Doc-scoped corpus.
+        // Its authoritative null-root discovery can separately prove zero.
+        await act(async () => publishMountedDiscussionChanges({ ...scope, changes: [{ cursor: 2, kind: 'artifact', entityId: 'doc-a', changedAt: 3 }] }));
         await vi.waitFor(() => {
             expect(hook.getCurrent()?.openCommentCount).toBe(0);
             expect(hook.getCurrent()?.threads).toHaveLength(0);

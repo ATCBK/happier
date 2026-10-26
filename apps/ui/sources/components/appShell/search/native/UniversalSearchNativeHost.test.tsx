@@ -150,7 +150,7 @@ describe('UniversalSearchNativeHost', () => {
 
         keyboardState.height = 336;
         await act(async () => {
-            screen.tree.update(<UniversalSearchNativeHost {...(defaultProps() as any)} />);
+            await screen.update(<UniversalSearchNativeHost {...(defaultProps() as any)} />);
         });
 
         expect(flatten(screen.findHostByTestId('universal-search-native-host:plane')?.props.style).paddingBottom)
@@ -234,7 +234,7 @@ describe('UniversalSearchNativeHost', () => {
 
         keyboardState.height = 336;
         await act(async () => {
-            screen.tree.update(<UniversalSearchNativeHost {...(defaultProps() as any)} />);
+            await screen.update(<UniversalSearchNativeHost {...(defaultProps() as any)} />);
         });
 
         await act(async () => {
@@ -305,7 +305,8 @@ describe('UniversalSearchNativeHost', () => {
 
         keyboardState.height = 336;
         await act(async () => {
-            screen.tree.update(
+            // Keep the testkit's Profiler/provider ancestors mounted too.
+            await screen.update(
                 <UniversalSearchNativeHost
                     {...(defaultProps({
                         rootStep: makeStep({

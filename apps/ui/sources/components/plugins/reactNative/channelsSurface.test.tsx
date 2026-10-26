@@ -958,7 +958,6 @@ function createChannelsHostApi(input: Readonly<{
   const adapter = createCanonicalPluginReactNativeHostApiAdapter({
     surface: createChannelsSettingsSurfaceContextFixture(),
     requestSurface,
-    requestIdPrefix: 'channels-transport',
     handleRequest: owner.handleRequest,
     installedMethods: owner.installedMethods,
   });
@@ -1195,6 +1194,11 @@ describe('Channels settings surface (real source, mounted)', () => {
       CHANNELS_BINDINGS_RESOURCE,
       expect.any(Object),
     );
+    // The real adapter lazily loads its response codecs. Join those first
+    // reads under act before asserting their rendered result.
+    await act(async () => {
+      await Promise.all(host.readResource.mock.results.map(result => result.value));
+    });
     await vi.waitFor(async () => {
       await flushHookEffects();
       expect(findByTestId(renderer!, 'channels-binding-binding-1').length).toBeGreaterThan(0);
@@ -1344,7 +1348,6 @@ describe('Channels settings surface (real source, mounted)', () => {
     const adapter = createCanonicalPluginReactNativeHostApiAdapter({
       surface: createChannelsPageSurfaceContextFixture(),
       requestSurface,
-      requestIdPrefix: 'channels-outage',
       handleRequest: host.handleRequest,
       installedMethods: host.installedMethods,
       getInstalledMethods: () => host.installedMethods,
@@ -1370,14 +1373,15 @@ describe('Channels settings surface (real source, mounted)', () => {
     const binding = offlineBindingStateRow();
     const data = createOfflineChannelsDataClient({ rows: [connection, binding] });
     let daemonReachable = false;
+    const readResource = vi.fn<PluginSurfaceHostApiMethodHandler>((request) => {
+      const resource = (request.payload as Readonly<{ resource?: Readonly<{ localId?: string }> }>)?.resource;
+      return resourceResponsePayload(resource?.localId === CHANNELS_BINDINGS_RESOURCE.localId
+        ? bindingResourceContent([bindingFixture({ bindingId: 'binding-daemon-1' })])
+        : connectionResourceContent([connectionFixture()]));
+    });
     const adapter = createRealMountChannelsHostApi({
       isDaemonReachable: () => daemonReachable,
-      readResource: (request) => {
-        const resource = (request.payload as Readonly<{ resource?: Readonly<{ localId?: string }> }>)?.resource;
-        return resourceResponsePayload(resource?.localId === CHANNELS_BINDINGS_RESOURCE.localId
-          ? bindingResourceContent([bindingFixture({ bindingId: 'binding-daemon-1' })])
-          : connectionResourceContent([connectionFixture()]));
-      },
+      readResource,
     });
 
     try {
@@ -1388,7 +1392,7 @@ describe('Channels settings surface (real source, mounted)', () => {
 
       renderer = await renderChannelsConversation(
         adapter.api as never,
-        createChannelsPageSurfaceContextFixture(),
+        adapter.getSurfaceContext(),
         undefined,
         data.client,
       '',
@@ -1404,7 +1408,7 @@ describe('Channels settings surface (real source, mounted)', () => {
       expect(data.query).toHaveBeenCalled();
 
       renderer = await renderChannelsConversation(
-        adapter.api as never, undefined, undefined, data.client, 'binding-offline-1', renderer,
+        adapter.api as never, adapter.getSurfaceContext(), undefined, data.client, 'binding-offline-1', renderer,
       );
       await act(async () => {
         findPressableByTestId(renderer!, 'channels-binding-edit-binding-offline-1').props.onPress();
@@ -1412,18 +1416,22 @@ describe('Channels settings surface (real source, mounted)', () => {
       await flushHookEffects();
       expect(findByTestId(renderer, 'channels-binding-target-delivery-mode').length).toBeGreaterThan(0);
       renderer = await renderChannelsConversation(
-        adapter.api as never, undefined, undefined, data.client, '', renderer,
+        adapter.api as never, adapter.getSurfaceContext(), undefined, data.client, '', renderer,
       );
+      expect(readResource).not.toHaveBeenCalled();
 
-      daemonReachable = true;
-      // Recovery is the canonical Resource owner's own watch retry plus
-      // re-read, which only keeps running because the settings surface — not
-      // the daemon child — holds the subscription.
+      // The mounted host publishes execution readmission on reconnect; an
+      // unclassified settled refusal does not authorize Resource polling.
+      await act(async () => {
+        daemonReachable = true;
+        adapter.pushSurfaceContext(createChannelsPageSurfaceContextFixture({ machineExecutionReady: true }));
+      });
       await vi.waitFor(async () => {
         await flushHookEffects();
         expect(findByTestId(renderer!, 'channels-page-row-binding-daemon-1').length).toBeGreaterThan(0);
       }, { timeout: 10_000, interval: 100 });
       expect(findByTestId(renderer, 'channels-page-row-binding-offline-1')).toHaveLength(0);
+      expect(readResource).toHaveBeenCalled();
     } finally {
       adapter.dispose();
     }
@@ -3397,11 +3405,9 @@ describe('Channels settings surface (real source, mounted)', () => {
     expect(findByTestId(renderer, 'channels-provider-setup-connection-form')).not.toHaveLength(0);
     expect(findByTestId(renderer, 'channels-provider-setup-transport-durablePush')).toHaveLength(0);
     await act(async () => {
-      findPressableByTestId(
-        renderer!,
-        'channels-provider-setup-transport-checkpointedPull',
-      ).props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-provider-setup-transport', 'Keeps up after reconnecting');
     });
+    expect(fieldMenuValue(renderer, 'channels-provider-setup-transport')).toBe('Keeps up after reconnecting');
     const readsBeforeCreate = host.readResource.mock.calls.length;
     await act(async () => {
       await findPressableByTestId(renderer!, 'channels-provider-setup-create').props.onPress();
@@ -4130,7 +4136,8 @@ describe('Channels settings surface (real source, mounted)', () => {
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(findByTestId(renderer, 'channels-ingress-attention-controls').length).toBeGreaterThan(0);
     const retry = findPressableByTestId(renderer, `channels-ingress-attention-retry-${obligationId}`);
-    expect(retry.props.accessibilityLabel).toBe('Retry saved input');
+    // The retry names the saved input's conversation, so identical buttons stay distinguishable.
+    expect(retry.props.accessibilityLabel).toMatch(/^Retry saved input \(.+\)$/);
     const resourceReadsBeforeRetry = host.readResource.mock.calls.length;
     const attentionReadsBeforeRetry = data.query.mock.calls.filter(([request]) => (
       request.index === CHANNEL_STATE_INDEX_ID.byAttention

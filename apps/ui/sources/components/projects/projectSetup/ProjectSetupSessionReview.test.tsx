@@ -14,6 +14,7 @@ import {
   restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -124,7 +125,9 @@ function heldScript(
 describe('Project setup review inside a Session', () => {
   it.each(['thisTime', 'skip', 'changed', 'retired', 'checkoutMismatch', 'sourceMismatch', 'effectFailed'] as const)('consumes the mounted Session %s choice through the real Action front door without Trust', async choice => {
     const home = createHomeGovernanceHarness();
-    await home.addHome({ name: 'Setup Home', serverUrl: 'https://session-once.test', serverIdentityId: 'srv_session_once', accountId: 'account' });
+    const homeId = await home.addHome({ name: 'Setup Home', serverUrl: 'https://session-once.test', serverIdentityId: 'srv_session_once', accountId: 'account' });
+    const machine = createPlainMachineRowFixture({ id: 'devbox', accountId: 'account' });
+    home.answer(homeId, '/v1/machines/devbox', { body: { machine } });
     let held: ActionOperationSnapshotV1;
     const decisions: unknown[] = [];
     const receipts: ActionOperationSnapshotV1[] = [];
@@ -139,9 +142,7 @@ describe('Project setup review inside a Session', () => {
       credentials: { token: createAccountTokenForTests('account', { currentAccount: true }) }, request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         paths.push(path);
-        const machine = createPlainMachineRowFixture({ id: 'devbox', accountId: 'account' });
         if (path === '/v1/machines') return Response.json([machine]);
-        if (path === '/v1/machines/devbox') return Response.json({ machine });
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
@@ -263,6 +264,11 @@ describe('Project setup review inside a Session', () => {
         if (path === '/v2/account/settings')
           return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
             approvalWaivedSurfaces: { 'action.operations.cancel': ['ui'] } } } }, version: 1 });
+        if (path === '/v1/account/project-rows/list')
+          return Response.json(createPlainProjectAccountRowListFixture({
+            workspaceRefs: [{ id: 'checkout', serverId: 'srv_setup_session_review', machineId: 'devbox',
+              rootPath: '/src/happier', createdAtMs: 1, projectKey: 'project-happier' }],
+          }));
         if (path === '/v1/account/project-trust/read')
           return Response.json({ status: 'absent' });
         if (path === '/v1/account/project-trust/mutate') {

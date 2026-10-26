@@ -6,15 +6,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { installPopoverCommonModuleMocks } from '@/components/ui/popover/popoverTestHelpers';
 
 installPopoverCommonModuleMocks({
-  reactNative: async () => ({
-    ...(await vi.importActual('react-native-web')),
-    useWindowDimensions: () => ({
+  reactNative: async () => {
+    const native = await vi.importActual<typeof import('react-native')>('react-native-web');
+    const dimensions = () => ({
       width: 1440,
       height: 1000,
       scale: 1,
       fontScale: 1,
-    }),
-  }),
+    });
+    return {
+      ...native,
+      useWindowDimensions: dimensions,
+      Dimensions: {
+        get: dimensions,
+        addEventListener: native.Dimensions.addEventListener.bind(native.Dimensions),
+      },
+    };
+  },
 });
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
