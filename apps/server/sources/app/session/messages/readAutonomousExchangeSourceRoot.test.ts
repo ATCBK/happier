@@ -6,6 +6,30 @@ import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInT
 
 describe('autonomous exchange source root', () => {
     it.each([
+        { name: 'protected CLI original', accountId: 'actor', sessionId: 'source', bound: true, follow: false, found: true },
+        { name: 'foreign Account target', accountId: 'foreign', sessionId: 'source', bound: true, follow: false, found: false },
+        { name: 'foreign Session target', accountId: 'actor', sessionId: 'other', bound: true, follow: false, found: false },
+        { name: 'missing target', accountId: 'actor', sessionId: 'source', bound: false, follow: false, found: false },
+        { name: 'Follow carrier without inherited root', accountId: 'actor', sessionId: 'source', bound: true, follow: true, found: false },
+    ])('resolves an accepted Machine-admitted original without source hydration: $name', async ({ accountId, sessionId, bound, follow, found }) => {
+        // Database boundary: a settled original already carries its exact target receipt.
+        const findUnique = vi.fn();
+        const tx = { discussionMessage: { findUnique } } as unknown as Tx;
+        const result = await readAutonomousExchangeSourceRoot({ tx,
+            sourceSessionId: 'source', actorAccountId: 'actor', expectedTurnId: 'accepted-turn',
+            sourceInputs: [{ localId: 'cli-original', acceptedTurnId: 'accepted-turn', targetExecutionRunId: null,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine',
+                    ...(follow ? { followRelations: [{ relation: 'follower' }] } : {}),
+                    ...(bound ? { admittedTarget: { homeId: 'home', accountId, sessionId,
+                        machineId: 'machine', installationId: 'installation' } } : {}) },
+                autonomousExchangeRootSessionId: null, autonomousExchangeRootLocalId: null }],
+        });
+        expect(result).toEqual(found ? { status: 'found', root: { sessionId: 'source', localId: 'cli-original' } }
+            : { status: 'unavailable' });
+        expect(findUnique).not.toHaveBeenCalled();
+    });
+
+    it.each([
         { name: 'person', producerV1: null, throughSeq: 2, accountId: 'actor', direct: true, found: true, reads: 1 },
         { name: 'ambient watcher', producerV1: null, throughSeq: 2, accountId: 'actor', direct: false, found: false, reads: 1 },
         { name: 'agent without inherited root', producerV1: { v: 1, kind: 'agent', sessionId: 'other' }, throughSeq: 2, accountId: 'actor', direct: true, found: false, reads: 1 },

@@ -2153,7 +2153,7 @@ describe("pendingMessageService (shared sessions)", () => {
             .autonomousExchangeState).toMatchObject({ observedStarts: 1 });
     });
 
-    it("binds an admitted agent input to the original protected human input across native starts, fanout and controls", async () => {
+    it.each(['authenticatedAccount', 'authenticatedMachine'] as const)("binds an admitted agent input to the original protected input across native starts, fanout and controls (%s)", async issuer => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional" });
         const owner = await db.account.create({ data: createSignedAccountContentBinding(), select: { id: true } });
         const source = await createSession(owner.id);
@@ -2182,12 +2182,21 @@ describe("pendingMessageService (shared sessions)", () => {
             expect(mutations).toMatchObject([{ action: 'begin', startingInputId: inputId }]);
             return mutations[0]!;
         };
+        const sourcePublisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: source.id });
+        await db.machine.update({ where: { id: sourcePublisher.machineId }, data: {
+            installationId: `install-${sourcePublisher.machineId}`,
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
+        const sourceReceipt = SessionInputAdmissionReceiptV1Schema.parse(issuer === 'authenticatedAccount'
+            ? { v: 1, issuer, actorAccountId: owner.id, sessionRelationship: 'owner' }
+            : { v: 1, issuer, admittedTarget: { homeId: await getOrCreateServerIdentityId(), accountId: owner.id,
+                sessionId: source.id, machineId: sourcePublisher.machineId, installationId: `install-${sourcePublisher.machineId}` } });
         await db.session.update({ where: { id: source.id }, data: { seq: 1 } });
         await db.sessionMessage.create({ data: {
             sessionId: source.id, localId: sourceLocalId, seq: 1, messageRole: "user",
             content: { t: "encrypted", c: "original-human-input" },
-            inputAdmissionReceipt: { v: 1, issuer: "authenticatedAccount", actorAccountId: owner.id,
-                sessionRelationship: "owner" },
+            inputAdmissionReceipt: sourceReceipt,
             autonomousExchangeState: null,
             acceptedTurnId: sourceTurnId,
             acceptedTurnKind: 'newTurn',
@@ -2257,12 +2266,6 @@ describe("pendingMessageService (shared sessions)", () => {
         const returnLocalId = deriveSessionMessageReplyReturnLocalIdV1({
             sessionId: target.id, localId: targetLocalId, acceptedTurnId,
         });
-        const sourcePublisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: source.id });
-        await db.machine.update({ where: { id: sourcePublisher.machineId }, data: {
-            installationId: `install-${sourcePublisher.machineId}`,
-            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } },
-            operationProtocolCapabilitiesRevision: 1,
-        } });
         expect(await enqueuePendingMessageByAuthenticatedMachine({
             accountId: owner.id, sourceMachineId: sourcePublisher.machineId,
             targetMachineId: sourcePublisher.machineId, sessionId: source.id, localId: returnLocalId,

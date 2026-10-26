@@ -1,5 +1,5 @@
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { Tx } from '@/storage/inTx';
 import type { AutonomousExchangeRootV1 } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
@@ -16,12 +16,17 @@ type SourceInput = Readonly<{
 
 export type AutonomousExchangeRoot = AutonomousExchangeRootV1;
 
-/** A receiving Account controls its own admitted root, never a foreign actor. */
-export function isAutonomousExchangeRootReceiptForAccount(value: unknown, accountId: string, sessionId: string): boolean {
+function readAutonomousExchangeRootReceiptForAccount(value: unknown, accountId: string, sessionId: string): SessionInputAdmissionReceiptV1 | null {
     const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(value);
     return receipt.success && (receipt.data.issuer === 'authenticatedAccount'
         ? receipt.data.actorAccountId === accountId
-        : receipt.data.admittedTarget?.accountId === accountId && receipt.data.admittedTarget.sessionId === sessionId);
+        : receipt.data.admittedTarget?.accountId === accountId && receipt.data.admittedTarget.sessionId === sessionId)
+        ? receipt.data : null;
+}
+
+/** A receiving Account controls its own admitted root, never a foreign actor. */
+export function isAutonomousExchangeRootReceiptForAccount(value: unknown, accountId: string, sessionId: string): boolean {
+    return readAutonomousExchangeRootReceiptForAccount(value, accountId, sessionId) !== null;
 }
 
 /** Foreign causes join the receiver's current local input/root, not the sender's private lineage. */
@@ -82,22 +87,25 @@ export async function readAutonomousExchangeSourceRoot(input: Readonly<{
         const inheritedSessionId = sourceInput.autonomousExchangeRootSessionId;
         const inheritedLocalId = sourceInput.autonomousExchangeRootLocalId;
         if ((inheritedSessionId === null) !== (inheritedLocalId === null)) return { status: 'invalid' };
-        const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
-            .safeParse(sourceInput.inputAdmissionReceipt);
+        const receipt = readAutonomousExchangeRootReceiptForAccount(sourceInput.inputAdmissionReceipt,
+            input.actorAccountId, input.sourceSessionId);
+        // Protected CLI originals use Machine admission too. Their accepted,
+        // exact Account/Session receipt is already an owned root; this does not
+        // turn a Follow or Discussion carrier into a new person input.
+        const directOriginal = receipt && (receipt.issuer === 'authenticatedAccount'
+            || !receipt.followDeliveryV1 && !receipt.followSources && !receipt.followRelations && !receipt.discussionAddressing);
         let candidate = inheritedSessionId && inheritedLocalId
             ? { sessionId: inheritedSessionId, localId: inheritedLocalId }
-            : receipt.success && receipt.data.issuer === 'authenticatedAccount'
-                && receipt.data.actorAccountId === input.actorAccountId && sourceInput.localId
+            : directOriginal && sourceInput.localId
                 ? { sessionId: input.sourceSessionId, localId: sourceInput.localId }
                 : null;
         // A person's Discussion request enters through Machine admission. Its
         // committed question, not that carrier or user-role text, proves a new
         // human cause. Agent/workflow questions must retain their existing root.
-        const addressing = receipt.success && receipt.data.issuer === 'authenticatedMachine'
-            ? receipt.data.discussionAddressing : undefined;
+        const addressing = receipt?.issuer === 'authenticatedMachine'
+            ? receipt.discussionAddressing : undefined;
         if (!candidate && addressing && addressing.participantSessionId === input.sourceSessionId
-            && sourceInput.localId === deriveDiscussionFollowInputLocalIdV1(addressing)
-            && isAutonomousExchangeRootReceiptForAccount(receipt.data, input.actorAccountId, input.sourceSessionId)) {
+            && sourceInput.localId === deriveDiscussionFollowInputLocalIdV1(addressing)) {
             const question = await input.tx.discussionMessage.findUnique({ where: { id: addressing.messageId },
                 select: { discussionId: true, seq: true, producerV1: true, addressingV1: true } });
             const addressed = createStoredReadSchema(DiscussionMessageAddressingV1Schema).safeParse(question?.addressingV1);
