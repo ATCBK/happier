@@ -532,12 +532,87 @@ describe('warmCachePersistence', () => {
             },
         };
 
-        saveSessionListWarmCacheEntries('server-a', 'account-a', entries);
-        saveSessionListWarmCacheEntries('server-a', 'account-a', entries);
+        // The MMKV boundary is reset between cases; the process-owned admitted
+        // snapshots intentionally outlive it. Give this first-save assertion its own scope.
+        try {
+            saveSessionListWarmCacheEntries('same-object-home', 'same-object-account', entries);
+            saveSessionListWarmCacheEntries('same-object-home', 'same-object-account', entries);
+            expect(stringifySpy).toHaveBeenCalledTimes(1);
+            expect(set).toHaveBeenCalledTimes(1);
+        } finally {
+            stringifySpy.mockRestore();
+        }
+    });
 
-        expect(stringifySpy).toHaveBeenCalledTimes(1);
-        expect(set).toHaveBeenCalledTimes(1);
-        stringifySpy.mockRestore();
+    it('serializes only changed Home/Account resource scopes across repeated hydration arrivals', () => {
+        const session = {
+            sessionId: 's1', metadataVersion: 1, agentStateVersion: 1,
+            path: '/workspace/hydration',
+            updatedAt: 20, createdAt: 10, active: true, activeAt: 20,
+            archivedAt: null, pendingCount: 0, pendingVersion: 0,
+        };
+        const sessions = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => {
+            const sessionId = `s${index + 1}`;
+            return [sessionId, { ...session, sessionId }];
+        }));
+        const inventory = {
+            binding: 'binding-a', cursor: '1', artifacts: Array.from({ length: 2000 }, (_, index) => ({
+                id: `a${index}`, rawHeader: { title: 'Retained header' }, isDecrypted: true,
+                storageMode: 'plain' as const, headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+            })),
+        };
+        const stringify = vi.spyOn(JSON, 'stringify');
+        try {
+            for (let arrival = 0; arrival < 20; arrival++) {
+                const revision = arrival < 10 ? 1 : 2;
+                saveSessionListWarmCacheEntries('hydration-home', 'hydration-account', {
+                    ...sessions,
+                    s1: { ...session, metadataVersion: revision },
+                });
+                warmCache.saveArtifactInventoryWarmCache('hydration-home', 'hydration-account', {
+                    ...inventory, artifacts: inventory.artifacts.map(row => ({ ...row, rawHeader: { ...row.rawHeader } })),
+                });
+            }
+            expect(stringify).toHaveBeenCalledTimes(3); // Two Session revisions; one unchanged inventory.
+            expect(set).toHaveBeenCalledTimes(3);
+            expect(loadSessionListWarmCacheEntries('hydration-home', 'hydration-account').s1.metadataVersion).toBe(2);
+            expect(warmCache.loadArtifactInventoryWarmCache('hydration-home', 'hydration-account', inventory.binding))
+                .toEqual(inventory);
+            // Identical content on another Home or Account remains an independently durable scope.
+            saveSessionListWarmCacheEntries('other-home', 'hydration-account', { s1: session });
+            saveSessionListWarmCacheEntries('hydration-home', 'other-account', { s1: session });
+            expect(stringify).toHaveBeenCalledTimes(5);
+            expect(set).toHaveBeenCalledTimes(5);
+            // Cursor-only progress is a real durable change even if the header rows are unchanged.
+            warmCache.saveArtifactInventoryWarmCache('hydration-home', 'hydration-account', { ...inventory, cursor: '2' });
+            expect(stringify).toHaveBeenCalledTimes(6);
+            expect(set).toHaveBeenCalledTimes(6);
+        } finally {
+            stringify.mockRestore();
+        }
+    });
+
+    it('retries an equal scope after failed persistence and still observes externally replaced raw bytes', () => {
+        const entry = { m1: { machineId: 'm1', kind: 'persistent' as const, metadataVersion: 1, updatedAt: 1,
+            active: true, activeAt: 1, revokedAt: null } };
+        saveMachineDisplayWarmCacheEntries('retry-home', 'retry-account', entry);
+        const changed = { m1: { ...entry.m1, metadataVersion: 2 } };
+        set.mockImplementationOnce(() => { throw new Error('storage temporarily unavailable'); });
+        saveMachineDisplayWarmCacheEntries('retry-home', 'retry-account', changed);
+        expect(loadMachineDisplayWarmCacheEntries('retry-home', 'retry-account')).toEqual(changed);
+        saveMachineDisplayWarmCacheEntries('retry-home', 'retry-account', { m1: { ...changed.m1 } });
+        const key = 'machine-display-warm-cache-v1:retry-home:retry-account';
+        expect(JSON.parse(store.get(key)!)).toEqual(changed);
+        const external = { m1: { ...changed.m1, metadataVersion: 3 } };
+        store.set(key, JSON.stringify(external));
+        expect(loadMachineDisplayWarmCacheEntries('retry-home', 'retry-account')).toEqual(external);
+        const stringify = vi.spyOn(JSON, 'stringify');
+        try {
+            saveMachineDisplayWarmCacheEntries('retry-home', 'retry-account', { m1: { ...external.m1 } });
+            expect(stringify).not.toHaveBeenCalled();
+        } finally {
+            stringify.mockRestore();
+        }
     });
 
     it('does not delete absent warm-cache entries when saving an empty session list', () => {

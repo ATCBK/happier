@@ -41,7 +41,7 @@ async function prepareAdmittedCatalog(input: Readonly<{
     capabilitySelection?: SessionCapabilitySelectionV1;
     availableMaterial?: boolean;
     materialReadUnavailable?: boolean;
-    replaceCredentialsOnMaterialRead?: boolean;
+    credentialChangeOnMaterialRead?: 'refresh' | 'account';
 }>) {
     const home = await upsertServerProfileOnly({ serverUrl: 'https://runner-mcp-admitted.test', name: 'Admitted' });
     const accountId = 'runner-admitted-account';
@@ -67,10 +67,10 @@ async function prepareAdmittedCatalog(input: Readonly<{
             ? { status: 'deleted', revision: 4 }
             : { status: 'present', revision: 4, content: { t: 'plain', v: input.catalog } });
         if (parsed.pathname === '/v1/account/saved-secrets/resources/materials') {
-            if (input.replaceCredentialsOnMaterialRead) {
-                // Same Account id, different credential lifetime: neither a
-                // ready row nor fresh material may authorize the old capture.
-                await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, { token: `${token}-replacement` });
+            if (input.credentialChangeOnMaterialRead) {
+                const subject = input.credentialChangeOnMaterialRead === 'account' ? 'replacement-account' : accountId;
+                const replacement = `e30.${Buffer.from(JSON.stringify({ sub: subject })).toString('base64url')}.refreshed-signature`;
+                await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, { token: replacement });
             }
             return input.materialReadUnavailable
                 ? Response.json({ error: 'unavailable' }, { status: 503 }) : Response.json(materials);
@@ -198,8 +198,13 @@ describe('prepareRunnerMcpMaterial', () => {
         await expect(prepareAdmittedCatalog({ catalog: null, materialReadUnavailable: true })).resolves.toBeNull();
     });
 
-    it('refuses fresh material after the initiating Account credential lifetime retires', async () => {
+    it('keeps selected material usable across a bearer refresh for the same Account', async () => {
         await expect(prepareAdmittedCatalog({ catalog: activeCatalog, availableMaterial: true,
-            replaceCredentialsOnMaterialRead: true })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
+            credentialChangeOnMaterialRead: 'refresh' })).resolves.toMatchObject({ servers: [{ serverId: 'server-a' }] });
+    });
+
+    it('refuses fresh material after the initiating Account is replaced', async () => {
+        await expect(prepareAdmittedCatalog({ catalog: activeCatalog, availableMaterial: true,
+            credentialChangeOnMaterialRead: 'account' })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
     });
 });

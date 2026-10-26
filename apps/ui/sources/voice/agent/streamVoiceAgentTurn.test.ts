@@ -78,10 +78,12 @@ describe('streamVoiceAgentTurn', () => {
     it('does not publish a late delivered receipt after its stream observer is cancelled', async () => {
         const response = createDeferred<unknown>();
         const entered = createDeferred<void>();
+        const cancelRequested = createDeferred<void>();
         const caller = new AbortController();
         const receipts: unknown[] = [];
         const client = serveVoiceStream({ start: async () => ({ streamId: 'receipt-stream' }),
-            read: async () => { entered.resolve(); return await response.promise; }, cancel: async () => ({ ok: true }) });
+            read: async () => { entered.resolve(); return await response.promise; },
+            cancel: async () => { cancelRequested.resolve(); return { ok: true }; } });
         const pending = streamVoiceAgentTurn({ sessionId: 'sys_voice', handle: { client, voiceAgentId: 'run', rpcSessionId: 'sys_voice' },
             userText: 'hello', displayUserText: 'hello', options: { signal: caller.signal,
                 onPreparedInstructionsFor: fact => { receipts.push(fact); } } });
@@ -91,6 +93,9 @@ describe('streamVoiceAgentTurn', () => {
         response.resolve({ streamId: 'receipt-stream', preparedInstructionsFor: { serverId: home.id, sessionId: 'target' },
             events: [], nextCursor: 0, done: true });
         await cancelled;
+        // The cancelled observer still retires its daemon stream; that cleanup
+        // request must reach the daemon before this case's Home is replaced.
+        await cancelRequested.promise;
         expect(receipts).toEqual([]);
     });
     it('cancels an unanswered stream admission and permits a fresh turn', async () => {

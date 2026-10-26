@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as httpClient from '@/sync/http/client';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 const kvStore = vi.hoisted(() => new Map<string, string>());
-const serverFetchMock = vi.hoisted(() => vi.fn());
-const runtimeFetchMock = vi.hoisted(() => vi.fn());
+const serverFetchMock = vi.spyOn(httpClient, 'serverFetch');
+const runtimeFetchMock = vi.hoisted(() => vi.fn<(request: { url: string; init?: RequestInit }) => Promise<Response>>());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-const createEncryptionFromAuthCredentialsMock = vi.hoisted(() => vi.fn());
+const SECRET_A = btoa('a'.repeat(32));
+const SECRET_B = btoa('b'.repeat(32));
 
 vi.mock('react-native-mmkv', () => {
     class MMKV {
@@ -25,14 +28,6 @@ vi.mock('react-native-mmkv', () => {
     return { MMKV };
 });
 
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
-
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
-
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
     return {
@@ -43,10 +38,6 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         },
     };
 });
-
-vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
-    createEncryptionFromAuthCredentials: createEncryptionFromAuthCredentialsMock,
-}));
 
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
@@ -67,13 +58,17 @@ function tokenForSub(sub: string): string {
 
 beforeEach(() => {
     kvStore.clear();
-    serverFetchMock.mockReset();
+    serverFetchMock.mockClear();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
-    createEncryptionFromAuthCredentialsMock.mockReset();
+    machineRpc.mockReset();
+    // The Home HTTP owner, scoped authority and crypto run for real. Network
+    // delivery and native credential persistence remain external boundaries.
+    setRuntimeFetch(async (input, init) => await runtimeFetchMock({ url: String(input), init }));
 });
 
 afterEach(() => {
+    resetRuntimeFetch();
     kvStore.clear();
 });
 
@@ -104,9 +99,19 @@ async function activateHome(name: string, serverUrl: string): Promise<string> {
 }
 
 function mockScopedHomeResponse(response: Response): void {
-    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account'), secret: 'secret' });
-    createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
-    runtimeFetchMock.mockResolvedValue(response);
+    getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account'), secret: SECRET_A });
+    mockSearchResponse(response);
+}
+
+function mockSearchResponse(response: Response): void {
+    runtimeFetchMock.mockImplementation(async ({ url }) => {
+        const path = new URL(url).pathname;
+        if (path === '/v1/home/search') return response.clone();
+        // An unavailable search endpoint is not an unreachable Home. Preserve
+        // real reachability admission instead of returning search404 to health.
+        if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
+        return Response.json({ error: 'not_found' }, { status: 404 });
+    });
 }
 
 describe('searchHomeMemory', () => {
@@ -159,7 +164,7 @@ describe('searchHomeMemory', () => {
         const init = call?.[0]?.init;
         expect(call?.[0]?.url).toBe('https://home-a.example/v1/home/search');
         expect(init?.method).toBe('POST');
-        expect(JSON.parse(init?.body ?? '{}')).toEqual({
+        expect(JSON.parse(String(init?.body ?? '{}'))).toEqual({
             v: 1,
             query: 'vector cache',
             scope: { type: 'global' },
@@ -196,7 +201,7 @@ describe('searchHomeMemory', () => {
 
         const call = runtimeFetchMock.mock.calls.find(([input]) => String(input?.url).includes('/v1/home/search'));
         const init = call?.[0]?.init;
-        expect(JSON.parse(init?.body ?? '{}')).toEqual(expect.objectContaining({
+        expect(JSON.parse(String(init?.body ?? '{}'))).toEqual(expect.objectContaining({
             eligibleSessionIds: ['archived-session'],
         }));
         expect(result).toEqual(expect.objectContaining({
@@ -209,9 +214,8 @@ describe('searchHomeMemory', () => {
         await activateHome('Home A', 'https://home-a.example');
         const homeB = await upsertServerProfile({ serverUrl: 'https://home-b.example', name: 'Home B' });
         const homeBToken = tokenForSub('home-b-account');
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: homeBToken, secret: 'home-b-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
-        runtimeFetchMock.mockResolvedValue(new Response(JSON.stringify({
+        getCredentialsForServerUrlMock.mockResolvedValue({ token: homeBToken, secret: SECRET_B });
+        mockSearchResponse(new Response(JSON.stringify({
             v: 1,
             ok: true,
             hits: [createHomeSearchHit('home-b-session')],
@@ -241,9 +245,8 @@ describe('searchHomeMemory', () => {
         const homeB = await activateHome('Home B', 'https://home-b.example');
         getCredentialsForServerUrlMock.mockResolvedValue({
             token: tokenForSub('different-account'),
-            secret: 'home-b-secret',
+            secret: SECRET_B,
         });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
 
         const result = await searchHomeMemory({
             serverId: homeB,
@@ -260,9 +263,8 @@ describe('searchHomeMemory', () => {
     it('uses explicitly scoped Home authority even when the target is the focused Home', async () => {
         const homeA = await activateHome('Home A', 'https://home-a.example');
         const homeAToken = tokenForSub('home-a-account');
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: homeAToken, secret: 'home-a-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
-        runtimeFetchMock.mockResolvedValue(new Response(JSON.stringify({
+        getCredentialsForServerUrlMock.mockResolvedValue({ token: homeAToken, secret: SECRET_A });
+        mockSearchResponse(new Response(JSON.stringify({
             v: 1,
             ok: true,
             hits: [createHomeSearchHit('home-a-session')],
@@ -295,11 +297,10 @@ describe('searchHomeMemory', () => {
         getCredentialsForServerUrlMock.mockImplementation(async (serverUrl: string) => {
             await setActiveServerId(homeB.id, { scope: 'device' });
             return serverUrl === 'https://home-a.example'
-                ? { token: homeAToken, secret: 'home-a-secret' }
-                : { token: homeBToken, secret: 'home-b-secret' };
+                ? { token: homeAToken, secret: SECRET_A }
+                : { token: homeBToken, secret: SECRET_B };
         });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
-        runtimeFetchMock.mockResolvedValue(new Response(JSON.stringify({
+        mockSearchResponse(new Response(JSON.stringify({
             v: 1,
             ok: true,
             hits: [createHomeSearchHit('home-a-session')],
@@ -352,7 +353,7 @@ describe('searchHomeMemory', () => {
             mode: 'auto',
         });
         expect(malformedHits).toMatchObject({ v: 1, ok: false, errorCode: 'memory_failed' });
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+        expect(runtimeFetchMock.mock.calls.filter(([input]) => new URL(input.url).pathname === '/v1/home/search')).toHaveLength(1);
     });
 
     it('maps Home endpoint unavailability to a typed unavailable result', async () => {

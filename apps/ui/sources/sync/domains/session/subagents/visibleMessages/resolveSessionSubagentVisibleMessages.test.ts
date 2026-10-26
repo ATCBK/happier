@@ -103,7 +103,7 @@ describe('resolveSessionSubagentVisibleMessages', () => {
 
     it('includes only the addressed Run’s committed questions beside its sidechain answers, once and in order', async () => {
         const question = { kind: 'user-text', id: 'question', localId: 'input-1', createdAt: 2, seq: 23,
-            text: 'Why keep this selection?', meta: { happier: { kind: 'participant_message.v1',
+            text: 'Host evidence followed by the question', displayText: 'Why keep this selection?', meta: { happier: { kind: 'participant_message.v1',
                 payload: { recipient: { kind: 'execution_run', runId: 'run_1' } } } } } satisfies Message;
         const answer = { ...createAgentTextMessage('answer', 'It survives refresh.'), createdAt: 3, seq: 25 };
         const runMessage = createToolMessage({ id: 'run', name: 'SubAgentRun', state: 'running', input: { runId: 'run_1' } });
@@ -111,9 +111,11 @@ describe('resolveSessionSubagentVisibleMessages', () => {
             payload: { recipient: { kind: 'execution_run', runId: 'run_2' } } } } };
         const messages = [runMessage, other, question];
         const params = { session: { metadata: { flavor: 'codex' } }, tool: runMessage.tool, messages };
-        expect(await resolveVisibleMessages({ ...params, focusedMessages: [answer] })).toEqual([question, answer]);
-        expect(await resolveVisibleMessages({ ...params, focusedMessages: [question, answer] })).toEqual([question, answer]);
-        expect(await resolveVisibleMessages({ ...params, focusedMessages: [] })).toEqual([question]);
+        const plainQuestion = { ...question, meta: {} };
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [answer] })).toEqual([plainQuestion, answer]);
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [question, answer] })).toEqual([plainQuestion, answer]);
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [] })).toEqual([plainQuestion]);
+        expect(question.meta.happier.kind).toBe('participant_message.v1');
     });
 
     it('keeps execution-run focused messages unchanged', async () => {
@@ -137,6 +139,26 @@ describe('resolveSessionSubagentVisibleMessages', () => {
         });
 
         expect(visibleMessages).toEqual(focusedMessages);
+    });
+
+    it('hides the captured host startup context but keeps the committed person question in both Run entrances', async () => {
+        const routing = { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'run_7425823b-704c-445f-aa46-a2ceb57bcfa1' } } } as const;
+        const authority = { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: { admittedPermissionCeiling: 'default' } } as const;
+        const host = { kind: 'user-text', id: 'host-context', realID: 'cmvlva2g0007mmcdtsorblbuf',
+            localId: '96fbe1db-c2de-4d0f-a564-e1076982ef2b', createdAt: 1792814190028, seq: 14,
+            text: '[host context redacted]', meta: { source: 'ui', sentFrom: 'cli', happier: routing,
+                happierProvenanceV1: { v: 1, kind: 'host', producer: 'happierApp' }, happierInputAuthorityV1: authority } } satisfies Message;
+        const question = { ...host, id: 'question', realID: 'cmvlvcymq007ymcdtu4qqa7xj',
+            localId: '9e38ea44-a338-4e25-bc57-cef1250b0856', createdAt: 1792814325035, seq: 16,
+            text: '[question redacted]', meta: { ...host.meta, sentFrom: 'web',
+                happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } } satisfies Message;
+        const run = createToolMessage({ id: 'run', name: 'SubAgentRun', state: 'completed', input: { runId: routing.payload.recipient.runId } });
+        const module = await import('./resolveSessionSubagentVisibleMessages');
+        const direct = module.resolveExecutionRunVisibleMessages({ runId: routing.payload.recipient.runId, messages: [], focusedMessages: [host, question] });
+        expect(direct.map(row => row.realID)).toEqual([question.realID]);
+        expect(await resolveVisibleMessages({ session: { metadata: { flavor: 'codex' } }, tool: run.tool,
+            messages: [run], focusedMessages: [host, question] })).toEqual(direct);
+        expect(direct[0]).toMatchObject({ kind: 'user-text', text: question.text });
     });
 
     it('does not apply Claude lifecycle filtering to an external Agent that uses the Agent tool name', async () => {

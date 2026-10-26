@@ -166,7 +166,7 @@ it('lets all parked machine watches follow the remote reply and caller cancellat
             for (const socket of home.socketServer.sockets.sockets.values()) socket.disconnect(true);
             const disconnectResults = await Promise.all(disconnected);
             expect(disconnectResults).toMatchObject(watches.map(() => ({ ok: false, reason: 'request_failed' })));
-            expect(disconnectResults[0]).toMatchObject({ errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+            expect(disconnectResults[0]).toMatchObject({ errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
             await vi.advanceTimersByTimeAsync(36_000);
             expect(home.calls).toHaveLength(watches.length * 3);
         } finally { controller.abort(); vi.useRealTimers(); }
@@ -499,12 +499,14 @@ it('suspends Storage, Processes, Guard and Activity through their retained desti
             children: React.createElement(OtherResourcesProbe, { serverId: home.serverId }),
         });
         const screen = await renderScreen(content(true));
+        const watchMethods = [RPC_METHODS.DAEMON_STORAGE_WATCH, RPC_METHODS.DAEMON_PROCESSES_WATCH,
+            RPC_METHODS.DAEMON_GUARD_WATCH, RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH].sort();
         try {
             await act(async () => { await vi.waitFor(() => {
                 const state = screen.findByType('OtherResourcesProbe').props;
                 expect([state.storage.status, state.processes.status, state.guard.status, state.activity.status, state.fleetActivity[0].status])
                     .toEqual(['ready', 'ready', 'ready', 'ready', 'ready']);
-                expect(home.calls.filter(call => call.method.endsWith('.watch'))).toHaveLength(3);
+                expect(home.calls.filter(call => call.method.endsWith('.watch')).map(call => call.method).sort()).toEqual(watchMethods);
             }); });
             const watches = home.calls.filter(call => call.method.endsWith('.watch'));
             await screen.update(content(false));
@@ -513,7 +515,8 @@ it('suspends Storage, Processes, Guard and Activity through their retained desti
             await screen.update(content(false));
             expect(home.calls).toHaveLength(count);
             await screen.update(content(true));
-            await act(async () => { await vi.waitFor(() => expect(home.calls.filter(call => call.method.endsWith('.watch'))).toHaveLength(6)); });
+            await act(async () => { await vi.waitFor(() => expect(home.calls.filter(call => call.method.endsWith('.watch'))
+                .map(call => call.method).sort()).toEqual([...watchMethods, ...watchMethods].sort())); });
         } finally { await screen.unmount(); }
     });
 });

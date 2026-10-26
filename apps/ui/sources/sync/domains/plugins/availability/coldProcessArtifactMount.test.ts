@@ -13,6 +13,7 @@ import {
     computePluginUiArtifactSha256DigestV1,
     PluginUiArtifactDigestV1Schema,
 } from '@happier-dev/protocol/plugins/ui';
+import { DaemonPluginUiArtifactBytesReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import {
     PluginAccountAvailabilityIntentReadResponseV1Schema,
     PluginReleaseFactsV1Schema,
@@ -70,11 +71,15 @@ function createDurableCacheStorage(): CacheStorage {
     };
 }
 
-function fixture() {
+function fixture(input: Readonly<{
+    platform?: PluginReactNativeBundleCacheIdentity['platform'];
+    entryBytes?: Uint8Array;
+}> = {}) {
+    const platform = input.platform ?? 'ios';
     const artifactContributionId = 'native-preview';
     const artifactId = 'native-preview-artifact';
     const entryPath = `react-native/${artifactId}/entry.cjs.bundle`;
-    const entryBytes = new TextEncoder().encode('// entry bundle bytes');
+    const entryBytes = input.entryBytes ?? new TextEncoder().encode('// entry bundle bytes');
     const files = [
         {
             relativePath: entryPath,
@@ -103,7 +108,7 @@ function fixture() {
             contributionId: artifactContributionId,
             artifactId,
             tier: 'reactNative',
-            platform: 'ios',
+            platform,
             artifactDigest,
             hostUiApiRange: '^1.0.0',
         }],
@@ -122,7 +127,7 @@ function fixture() {
             contributionId: artifactContributionId,
             artifactId,
             tier: 'reactNative',
-            platform: 'ios',
+            platform,
             artifactDigest,
             hostUiApiRange: '^1.0.0',
         }],
@@ -166,7 +171,7 @@ function fixture() {
         contributionId: artifactContributionId,
         artifactId,
         artifactDigest,
-        platform: 'ios' as const,
+        platform,
     } satisfies PluginReactNativeBundleCacheIdentity;
     const artifactGraph = {
         artifactId,
@@ -186,7 +191,7 @@ function fixture() {
             pluginId: materialization.pluginId,
         },
     } as const;
-    const daemonResponse = {
+    const daemonResponse = DaemonPluginUiArtifactBytesReadResponseSchema.parse({
         ok: true as const,
         artifactFamily: 'reactNative' as const,
        
@@ -197,13 +202,86 @@ function fixture() {
             format: 'plainJs' as const,
             byteSize: entryBytes.byteLength,
         },
-        bytesBase64: encodeBase64(entryBytes),
         files: [
             { ...files[0], bytesBase64: encodeBase64(entryBytes) },
         ],
-    };
-    return { reader, cacheIdentity, artifactGraph, origin, daemonResponse };
+    });
+    return { reader, snapshot, cacheIdentity, artifactGraph, origin, daemonResponse };
 }
+
+describe('browser Artifact byte reuse across reload and Resume', () => {
+    it('transfers a multi-MiB digest once while retained and reads it again after device custody is emptied', async () => {
+        const entryBytes = new TextEncoder().encode(`// ${'x'.repeat(3 * 1024 * 1024)}\n`);
+        const current = fixture({ platform: 'web', entryBytes });
+        const cacheStorage = createDurableCacheStorage();
+        let transferredResponseBytes = 0;
+        let artifactReads = 0;
+        // This is the external daemon-RPC boundary. The production source,
+        // digest verification, persistence and executable cache remain real.
+        const fetchDaemonArtifactBytes = async () => {
+            artifactReads += 1;
+            transferredResponseBytes += new TextEncoder().encode(JSON.stringify(current.daemonResponse)).byteLength;
+            return current.daemonResponse;
+        };
+        const openBrowserProcess = () => {
+            const browserStore = createBrowserPluginUiPersistentArtifactStore(cacheStorage);
+            const cache = createPluginReactNativeBundleCache({
+                persistentStore: adaptPluginUiPersistentArtifactStoreForReactNativeBundleCache(browserStore),
+            });
+            const lifetime: ActiveServerAccountScopeLifetime = Object.freeze({
+                scope,
+                isCurrent: () => true,
+                onRetire: () => Object.freeze({ dispose: () => {} }),
+            });
+            const reader = createPluginAccountAvailabilityReader({ scope, snapshot: current.snapshot });
+            const producer = createPluginReactNativeArtifactAvailabilityProducer({
+                getCache: () => cache,
+                appExact: inactiveAppExactSource,
+                fetchDaemonArtifactBytes,
+            });
+            return {
+                browserStore,
+                mount: async () => {
+                    const result = await producer.acquire({
+                        reader,
+                        artifactGraph: current.artifactGraph,
+                        cacheIdentity: current.cacheIdentity,
+                        accountLifetime: lifetime,
+                        daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
+                        isCurrent: () => true,
+                    });
+                    expect(result.kind).toBe('available');
+                    const installed = cache.readInstalledArtifact(current.cacheIdentity, scope);
+                    expect(installed?.bytes.byteLength).toBe(entryBytes.byteLength);
+                    expect(installed?.bytes.every((byte, index) => byte === entryBytes[index])).toBe(true);
+                    if (result.kind === 'available') result.dispose();
+                },
+            };
+        };
+
+        const warm = openBrowserProcess();
+        await warm.mount();
+        expect(artifactReads).toBe(1);
+        const coldTransferBytes = transferredResponseBytes;
+        expect(coldTransferBytes).toBeGreaterThan(3 * 1024 * 1024);
+        // Resuming/remounting keeps the same byte custody; a browser reload
+        // recreates every process-local reader, lifetime, producer and cache.
+        await warm.mount();
+        const reloaded = openBrowserProcess();
+        await reloaded.mount();
+        await reloaded.mount();
+        await openBrowserProcess().mount();
+        expect(artifactReads).toBe(1);
+        expect(transferredResponseBytes - coldTransferBytes).toBe(0);
+
+        // Sensitivity: the same admitted digest with no retained bytes must
+        // cross the boundary again. A no-op transport counter cannot pass.
+        await reloaded.browserStore.removeAccount(scope);
+        await openBrowserProcess().mount();
+        expect(artifactReads).toBe(2);
+        expect(transferredResponseBytes - coldTransferBytes).toBe(coldTransferBytes);
+    });
+});
 
 describe('cold process Artifact mount with every daemon unreachable', () => {
     it('mounts Account-qualified bytes from device custody and refuses once that custody is empty', async () => {
@@ -231,12 +309,12 @@ describe('cold process Artifact mount with every daemon unreachable', () => {
         });
         expect(warm.kind).toBe('available');
 
-        // Cold process: a brand new in-memory cache, no daemon route at all,
-        // and a daemon fetcher that fails loudly if anything reaches for it.
+        // Cold process: a brand new in-memory cache, no explicit daemon route,
+        // and an unreachable advertised daemon that fails if reached.
         // The journey is "laptop asleep, phone on cellular": every daemon is
         // unreachable while the server still answers Account Availability.
         const coldDaemonFetch = vi.fn(async () => {
-            throw new Error('a cold process must not need a daemon to mount');
+            throw new Error('the advertised daemon is unreachable');
         });
         const coldProducer = createPluginReactNativeArtifactAvailabilityProducer({
             getCache: () => createPluginReactNativeBundleCache({ persistentStore }),
@@ -253,8 +331,9 @@ describe('cold process Artifact mount with every daemon unreachable', () => {
         expect(cold.kind).toBe('available');
         expect(coldDaemonFetch).not.toHaveBeenCalled();
 
-        // Falsification: empty the device custody for this Account and the same
-        // cold process must fail closed instead of mounting anything.
+        // Falsification: empty the device custody for this Account. Its
+        // advertised byte supplier is attempted but unreachable, so it fails
+        // closed instead of mounting anything.
         await browserStore.removeAccount(scope);
         const emptied = await coldProducer.acquire({
             reader: current.reader,
@@ -264,6 +343,6 @@ describe('cold process Artifact mount with every daemon unreachable', () => {
             isCurrent: () => true,
         });
         expect(emptied).toMatchObject({ kind: 'unavailable', code: 'artifact_source_unavailable' });
-        expect(coldDaemonFetch).not.toHaveBeenCalled();
+        expect(coldDaemonFetch).toHaveBeenCalledTimes(1);
     });
 });
