@@ -30,6 +30,12 @@ const modalAlertMock = vi.hoisted(() => vi.fn());
 const modalConfirmMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
 
+// The draft repository imports Sync before file setup; install its external
+// Socket boundary before those imports through the canonical harness.
+vi.mock('socket.io-client', async (importOriginal) => (
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
+));
+
 // Canonical qualified Connected Account service keys used across this suite.
 const CLAUDE_SERVICE_KEY = 'happier.agent.claude/anthropic';
 const CODEX_SERVICE_KEY = 'happier.agent.codex/openai-codex';
@@ -2301,10 +2307,9 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         expect(requestClose).toHaveBeenCalledOnce();
         expect(routerPushMock).toHaveBeenCalledWith({
-            pathname: '/(app)/settings/connected-services',
+            pathname: '/(app)/settings/connected-services/connect',
             params: {
                 service: CLAUDE_SERVICE_KEY,
-                connect: '1',
             },
         });
     });

@@ -365,6 +365,7 @@ describe('Bots roster', () => {
     metadataReads = 0;
     for (let index = 0; index < 10; index += 1) expect(readSummary({ ...closedRows })).toBe(summary);
     const closed = { rowMapEnumerations, metadataReads };
+    console.info('PERF_D4_BOTS_COUNTS', JSON.stringify({ candidates: population.length, mountedRows, unrelated, ownBotCommits, closed }));
     expect(unrelated.notifications).toBe(10);
     expect(unrelated.rowMapEnumerations).toBe(0);
   });
@@ -384,6 +385,7 @@ describe('Bots roster', () => {
       createSessionListRenderableSessionFixture({ id: 'offline-working', presence: now - 2 * hour, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now, activeAt: now - 2 * hour, metadata: { ...bot, name: 'A pinned companion' } }),
     ], { source: 'ordinary', mode: 'replace' });
 
+    storage.getState().applySettingsLocal({ sessionListAttentionPlacementV1: 'both' });
     const { BotsPopoverContent } = await import('./BotsPopoverContent');
     const screen = await renderScreen(
       <InjectedAuthProvider credentials={null}><BotsPopoverContent close={() => {}} maxHeight={520} /></InjectedAuthProvider>,
@@ -394,7 +396,18 @@ describe('Bots roster', () => {
     const order = ['Flake hunter', 'Release captain', 'Deps', 'Docs gardener'].map(name => text.indexOf(name));
     expect(order.every(index => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(text).toContain(`${t('bots.roster.needsYou', { count: 1 })} · ${t('bots.roster.working', { count: 1 })}`);
+    // A blocked delivery is canonical Needs you even while its Machine is offline.
+    expect(text).toContain(`${t('bots.roster.needsYou', { count: 2 })} · ${t('bots.roster.working', { count: 1 })}`);
+    const expectUniqueRows = () => {
+      for (const id of ['idle-old', 'idle-new', 'working', 'needs-you', 'offline-blocked', 'offline-failed', 'offline-working']) {
+        expect(screen.findAllHostsByTestId(`session-list-item-${id}`), id).toHaveLength(1);
+      }
+    };
+    expectUniqueRows();
+    await act(async () => { storage.getState().applySettingsLocal({ sessionListAttentionPlacementV1: 'top' }); });
+    await flushHookEffects({ cycles: 3 });
+    expectUniqueRows();
+    expect(screen.getTextContent()).toContain(`${t('bots.roster.needsYou', { count: 2 })} · ${t('bots.roster.working', { count: 1 })}`);
     // The row's age already says when it was last active; an idle Bot adds no "Last seen" line.
     expect(text).not.toContain('Last seen');
   });

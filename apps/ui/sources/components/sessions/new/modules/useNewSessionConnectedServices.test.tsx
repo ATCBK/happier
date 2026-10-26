@@ -1546,10 +1546,9 @@ describe('useNewSessionConnectedServices', () => {
         // UI-2: the picker's settings action deep-links to the tapped service's
         // settings screen instead of discarding the serviceId.
         expect(routerPush).toHaveBeenCalledWith({
-            pathname: '/(app)/settings/connected-services',
+            pathname: '/(app)/settings/connected-services/connect',
             params: {
                 service: CLAUDE_SERVICE_KEY,
-                connect: '1',
             },
         });
 

@@ -218,8 +218,10 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
   await restoreConnectionToActiveServer(credentials);
   const scope = { serverId: home.serverIdentityId, accountId: 'owner' };
   const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
-  getStorage().setState({ settingsScope: scope, profileScope: scope, machines: { machine },
-    machineListByServerId: { [scope.serverId]: [machine] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+  getStorage().setState({ settingsScope: scope, profileScope: scope });
+  getStorage().getState().applyMachines([machine], true, {
+    sourceServerId: scope.serverId, sourceAccountId: scope.accountId,
+  });
   // A published Agent may omit optional capability declarations. The open sheet must still
   // render its catalog and known costs, without inventing native-disable support.
   const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {

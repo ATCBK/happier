@@ -9,7 +9,7 @@ import { InstalledPluginCapabilityEntryV1Schema } from '@happier-dev/protocol/ca
 import { BUILT_IN_REGISTRY_SOURCES_V1, createRegistryHostV1, RegistryFetchErrorV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { installPromptRegistriesCommonModuleMocks } from '@/components/settings/prompts/registries/promptRegistriesScreenTestHelpers';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, deriveMarketplaceSourceId } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 import { ExpectedMarketplaceListingV1Schema } from '@happier-dev/protocol/marketplace/internal';
@@ -766,8 +766,8 @@ describe('createTemporaryComputerCreatorDependencies external Agent acquisition'
             v: 2, disabledSourceIds: BUILT_IN_REGISTRY_SOURCES_V1.map(source => source.id),
             sources: [{ id: sourceId, title: 'Private catalog', format: 'happier-catalog', kinds: ['plugin'], url: sourceUrl,
                 enabled: true, addedAt: 0, npmRegistryProfileId: 'creator_private_profile' }],
-        } }, 'updated', { handleRequest: async path => path === '/catalog.json' ? Response.json(snapshot)
-            : path === '/v1/machines/machine-1' ? Response.json({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null });
+        } }, 'updated', { handleRequest: async (path, init) => path === '/catalog.json' ? Response.json(snapshot)
+            : createPlainMachineReadHttpResponseFixture(path, init) });
         onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
         phase = 'hydrate Account settings';
         await fixture.hydrateAccountSettings();

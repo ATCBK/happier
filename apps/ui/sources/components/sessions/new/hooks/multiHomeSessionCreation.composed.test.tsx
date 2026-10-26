@@ -627,6 +627,86 @@ describe('multi-Home Session creation composition', () => {
         } finally { await reopened.unmount(); }
     });
 
+    it('keeps the mounted embedded composer quiet across unrelated Machine and Session arrivals', async () => {
+        const coreHttp = await createDraftSurfaceCoreHttpBoundary();
+        sessionHttpBoundary = url => coreHttp(new URL(url).pathname);
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('composer-publication-locality', { applyConnectionManager: true }));
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { createMachineFixture, createSessionFixture, flushHookEffects } = await import('@/dev/testkit');
+        await storage.getState().activateSettingsScope({ serverId: homeAScopeId, accountId: 'account-a' });
+        storage.getState().applySettingsLocal({ useEnhancedSessionWizard: false, newSessionDraftEntryMode: 'alwaysFresh' });
+        const machineMetadata = createMachineFixture().metadata!;
+        const selected = createMachineFixture({ id: 'composer-selected', activeAt: Date.now(),
+            metadata: { ...machineMetadata, displayName: 'Selected', homeDir: '/selected' } });
+        let others = Array.from({ length: 127 }, (_, index) => createMachineFixture({ id: `composer-other-${index}`,
+            metadata: { ...machineMetadata, displayName: `Other ${index}` } }));
+        const publishMachines = () => {
+            machineHttpSnapshots.set(new URL(homeA.serverUrl).origin, [selected, ...others]);
+            storage.getState().applyMachines([selected, ...others], true, { sourceServerId: homeAScopeId });
+        };
+        publishMachines();
+        const sessions = Array.from({ length: 1000 }, (_, index) => createSessionFixture({ id: `composer-session-${index}`,
+            serverId: homeAScopeId, metadata: { machineId: others[0]!.id, path: `/other/${index}`, host: 'other' } }));
+        storage.getState().applySessions(sessions);
+        routeBoundary.params = { machineId: selected.id, directory: '/authored' };
+        const { NewSessionScreen } = await import('../NewSessionScreen');
+        const { NewSessionLaunchSurface } = await import('../components/NewSessionLaunchSurface');
+        const { NewSessionComposerCard } = await import('../components/NewSessionComposerCard');
+        const { SessionAuthoringComposer } = await import('@/components/sessions/authoring/SessionAuthoringComposer');
+        const { NewSessionEmbeddedHostProvider } = await import('../navigation/newSessionHost');
+        const { useNewSessionEmbeddedHostState } = await import('../navigation/useNewSessionEmbeddedHostState');
+        const initialParams = { machineId: selected.id, directory: '/authored', spawnServerId: homeAScopeId };
+        function EmbeddedComposerFixture() {
+            const { host } = useNewSessionEmbeddedHostState(initialParams);
+            return <NewSessionEmbeddedHostProvider host={host}><NewSessionScreen presentation="embedded" /></NewSessionEmbeddedHostProvider>;
+        }
+        const screen = await renderScreen(<InjectedAuthProvider credentials={{ token: homeAToken }}>
+            <EmbeddedComposerFixture />
+        </InjectedAuthProvider>);
+        try {
+            // Join the focus effect's existing refresh, so its selected-row
+            // hydration is not confused with the unrelated-arrival window.
+            await act(async () => { await sync.refreshMachinesThrottled({ staleMs: 15_000 }); });
+            await flushHookEffects();
+            expect(storage.getState().machineListByServerId[homeAScopeId]?.find(machine => machine.id === selected.id))
+                .toMatchObject({ metadata: { displayName: 'Selected', homeDir: '/selected' }, availability: { kind: 'available' } });
+            expect(screen.root.findByType(NewSessionComposerCard).props.panelProps.machineName).toBe('Selected');
+            const readOutputs = () => [screen.root.findByType(NewSessionLaunchSurface).props,
+                screen.root.findByType(NewSessionComposerCard).props,
+                screen.root.findByType(SessionAuthoringComposer).props];
+            // These are the actual output boundaries of Inner, EmbeddedCard and
+            // ComposerCard, respectively; each execution publishes fresh JSX props.
+            let previous = readOutputs();
+            const renders = [0, 0, 0];
+            const stop = screen.subscribe(() => {
+                const next = readOutputs();
+                next.forEach((props, index) => { if (props !== previous[index]) renders[index]! += 1; });
+                previous = next;
+            });
+            try {
+                for (let index = 0; index < 5; index += 1) {
+                    others = others.map((machine, position) => position === index ? { ...machine, metadataVersion: machine.metadataVersion + 1,
+                        metadata: { ...machine.metadata!, displayName: `Changed other ${index}` } } : machine);
+                    const incumbent = storage.getState().machineListByServerId[homeAScopeId]?.find(machine => machine.id === selected.id);
+                    await act(async () => { storage.getState().applyMachines([others[index]!], false, { sourceServerId: homeAScopeId }); });
+                    expect(storage.getState().machineListByServerId[homeAScopeId]?.find(machine => machine.id === selected.id)).toBe(incumbent);
+                    await act(async () => { storage.getState().applySessions([{ ...sessions[index]!, metadataVersion: 2,
+                        metadata: { ...sessions[index]!.metadata!, name: `Unrelated ${index}` } }]); });
+                }
+                expect(renders).toEqual([0, 0, 0]);
+                const incumbent = storage.getState().machineListByServerId[homeAScopeId]?.find(machine => machine.id === selected.id);
+                if (!incumbent) throw new Error('Missing selected Machine');
+                await act(async () => { storage.getState().applyMachines([{ ...incumbent, metadataVersion: incumbent.metadataVersion + 1,
+                    metadata: { ...incumbent.metadata!, displayName: 'Selected renamed' } }], false, { sourceServerId: homeAScopeId }); });
+                expect(storage.getState().machineListByServerId[homeAScopeId]?.find(machine => machine.id === selected.id))
+                    .toMatchObject({ metadata: { displayName: 'Selected renamed' }, availability: { kind: 'available' } });
+                expect(renders.every(count => count > 0)).toBe(true);
+                expect(screen.root.findByType(NewSessionComposerCard).props.panelProps.machineName).toBe('Selected renamed');
+                expect(screen.root.findByType(NewSessionComposerCard).props.panelProps.selectedPath).toBe('/authored');
+            } finally { stop(); }
+        } finally { await screen.unmount(); }
+    });
+
     it.each([false, true])('admits a fresh New Session without Account-wide draft readiness and retains its generated route identity (seeded=%s)', async (seeded) => {
         const heldList = createDeferred<void>();
         let listRequested = false;
@@ -2223,10 +2303,18 @@ describe('multi-Home Session creation composition', () => {
         } finally { await hook.unmount(); }
     });
 
-    it('explicit Send retains the reopened original Project destination on the created owner tuple after editing the launch Home and folder', async () => {
+    it.each([
+        { edit: 'replace', launchHome: 'origin' },
+        { edit: 'clear-then-type', launchHome: 'origin' },
+        { edit: 'replace', launchHome: 'other' },
+    ] as const)('explicit Send retains the seeded Project setup origin after $edit prompt editing and $launchHome launch Home selections', async ({ edit, launchHome }) => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         await arrangeHomeB();
-        await selectHomeView({ version: 1, activeTargetKind: 'server', activeTargetId: homeBScopeId, groups: [] });
+        const launchServerId = launchHome === 'origin' ? homeAScopeId : homeBScopeId;
+        const launchProfile = launchHome === 'origin' ? homeA : homeB;
+        const launchAccountId = launchHome === 'origin' ? 'account-a' : 'account-b';
+        const launchToken = launchHome === 'origin' ? homeAToken : homeBToken;
+        await selectHomeView({ version: 1, activeTargetKind: 'server', activeTargetId: launchServerId, groups: [] });
         const { writeNewSessionDraftToRepository, readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         const { createSessionAccessFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -2238,20 +2326,22 @@ describe('multi-Home Session creation composition', () => {
             SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1');
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
         const draftId = crypto.randomUUID();
-        const origin = { kind: 'project', purpose: 'session', accountId: scope.accountId, page: 'overview', comparisonId: 'original-comparison',
+        const origin = { kind: 'project', accountId: scope.accountId, page: 'scripts', comparisonId: 'original-comparison',
             layoutId: 'release-dashboard', surface: 'tabs', companion: 'files', resource: { kind: 'file', path: 'src/original.ts' },
             workspace: { serverId: homeAScopeId, workspaceId: 'original-workspace', machineId: 'original-machine', rootPath: '/original/project' } } as const;
         const draft = { input: 'Review the original changes', selectedMachineId: 'original-machine', selectedPath: '/original/project',
-            targetServerId: homeAScopeId, selectedProfileId: null, selectedSecretId: null, agentType: 'codex',
-            permissionMode: 'default', acpSessionModeId: null, updatedAt: 1, authoringOrigin: origin,
+            targetServerId: homeAScopeId, selectedProfileId: null, selectedSecretId: null, agentType: 'claude',
+            permissionMode: 'default', acpSessionModeId: null, updatedAt: 1,
             executionTarget: { kind: 'machine', target: { serverId: homeAScopeId, machineId: 'original-machine' } } } as const;
-        writeNewSessionDraftToRepository({ scope, draftId, draft });
+        const { seedNewSessionDraftV1 } = await import('@/components/sessions/new/newSessionDraftSeed');
+        seedNewSessionDraftV1({ scope, createDraftId: () => draftId, configurationDraft: draft,
+            seed: { origin, prompt: { text: draft.input, mode: 'replace' } } });
         resetSessionDraftRepositoryForTests();
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
         if (!reopened) throw new Error('Expected the persisted authoring draft');
-        writeNewSessionDraftToRepository({ scope, draftId, draft: { ...reopened, targetServerId: homeBScopeId,
+        writeNewSessionDraftToRepository({ scope, draftId, draft: { ...reopened, targetServerId: launchServerId,
             selectedMachineId: 'machine-b', selectedPath: '/edited/project',
-            executionTarget: { kind: 'machine', target: { serverId: homeBScopeId, machineId: 'machine-b' } } } });
+            executionTarget: { kind: 'machine', target: { serverId: launchServerId, machineId: 'machine-b' } } } });
         resetSessionDraftRepositoryForTests();
         routeBoundary.params = {};
         const metadata = { path: '/edited/project', host: 'home-b-machine', machineId: 'machine-b', flavor: 'codex',
@@ -2270,16 +2360,16 @@ describe('multi-Home Session creation composition', () => {
         const writes: Array<{ url: string; patch: ReturnType<typeof SessionMetadataTuplePatchV1Schema.parse> }> = [];
         sessionHttpBoundary = (url, init) => {
             if (new URL(url).pathname === '/v1/account/entity-rows/connected-accounts/purposes') {
-                expect(new URL(url).origin).toBe(new URL(homeB.serverUrl).origin);
-                expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${homeBToken}`);
+                expect(new URL(url).origin).toBe(new URL(launchProfile.serverUrl).origin);
+                expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${launchToken}`);
                 return Response.json(ConnectedAccountCatalogRowReadResponseV1Schema.parse({
                     status: 'present', revision: 1,
                     content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
                 }));
             }
             if (new URL(url).pathname !== '/v2/sessions/created-origin-send') return null;
-            expect(new URL(url).origin).toBe(new URL(homeB.serverUrl).origin);
-            expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${homeBToken}`);
+            expect(new URL(url).origin).toBe(new URL(launchProfile.serverUrl).origin);
+            expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${launchToken}`);
             if (init?.method === 'PATCH') {
                 const patch = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(String(init.body)));
                 if (patch.mode !== 'owner') throw new Error('Expected the owner-private tuple writer');
@@ -2294,19 +2384,58 @@ describe('multi-Home Session creation composition', () => {
             return Response.json({ session: record });
         };
         socketBoundary.emits.mockClear();
-        const createHook = await renderProductionCreateCaller({ activeServerId: homeAScopeId, targetServerId: homeBScopeId, draftId });
+        const createHook = await renderProductionCreateCaller({ activeServerId: homeAScopeId, targetServerId: launchServerId, draftId });
         try {
-            // Send inherits the edited launch Account's defaults, not the origin Account's.
+            // Send inherits the selected launch Account's defaults.
             // Let the real scoped reader admit its HTTP row before pressing the production action.
             await vi.waitFor(() => expect(getConnectedAccountCatalogValue({
-                serverId: homeBScopeId, accountId: 'account-b',
+                serverId: launchServerId, accountId: launchAccountId,
             }, 'purposes')).toMatchObject({ status: 'ready', stale: false }));
+            const model = createHook.getCurrent();
+            const composer = model.variant === 'simple' ? model.simpleProps : model.wizardProps.footer;
+            if (edit === 'clear-then-type') {
+                await act(async () => { composer.setSessionPrompt(''); });
+                expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe('');
+            }
+            const editedPrompt = 'Please inspect the project setup after my edits.';
+            await act(async () => { composer.setSessionPrompt(editedPrompt); });
+            const readAgentControls = () => {
+                const current = createHook.getCurrent();
+                return current.variant === 'simple' ? current.simpleProps : current.wizardProps.agent;
+            };
+            const codex = readAgentControls().agentPickerOptions?.find(option => option.id.includes('codex'));
+            if (!codex) throw new Error('Expected the available Codex picker option');
+            const selectAgent = readAgentControls().onAgentPickerSelect;
+            if (!selectAgent) throw new Error('Missing Agent picker selection action');
+            await act(async () => { selectAgent(codex.id); });
+            const selectModel = readAgentControls().setModelMode;
+            if (!selectModel) throw new Error('Missing model selection action');
+            await act(async () => { selectModel('gpt-6-luna'); });
+            const poolId = '00000000-0000-4000-8000-000000001013';
+            // Pool selection resolves to an exact Machine and hands these route
+            // operands to New Session. Exercise that production route consumer.
+            routeBoundary.params = { machineId: 'machine-b', spawnServerId: launchServerId, machinePoolId: poolId };
+            await createHook.rerender();
+            const { resolveNewSessionDraftAutoPersistDelayMs } = await import('./useNewSessionDraftAutoPersist');
+            // Exercise the real delayed authoring write as well as the immediate
+            // Composer write; sending before autosave would miss lost local custody.
+            await act(async () => {
+                await new Promise(resolve => setTimeout(resolve, resolveNewSessionDraftAutoPersistDelayMs({
+                    platformOS: 'web', draftTextLength: editedPrompt.length,
+                }) + 1));
+            });
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe(editedPrompt);
+            expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+                agentType: 'codex', modelSelection: { ref: { modelId: 'gpt-6-luna' } },
+                executionTarget: { kind: 'machine', target: { serverId: launchServerId, machineId: 'machine-b' },
+                    selectionOrigin: { kind: 'machine_pool', poolId } },
+            });
             expect(readNewSessionDraftFromRepository({ scope, draftId })?.authoringOrigin).toEqual(origin);
             expect(writes).toHaveLength(0);
             expect(socketBoundary.emits.mock.calls.filter(([request]) =>
                 request.payload?.method?.endsWith(':session.spawnNew'))).toHaveLength(0);
             socketBoundary.result = { type: 'success', disposition: 'created', sessionId: record.id,
-                executionTarget: { serverId: homeBScopeId, machineId: 'machine-b' },
+                executionTarget: { serverId: launchServerId, machineId: 'machine-b' },
                 organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'accepted', localId: 'origin-first-turn' } };
             socketBoundary.emits.mockClear();
             await act(async () => { await readProductionCreateAction(createHook.getCurrent())(); });
@@ -2316,9 +2445,9 @@ describe('multi-Home Session creation composition', () => {
                 errors: observabilityBoundary.capture.mock.calls.map(([error]) => error instanceof Error ? error.stack : error),
                 requests: socketBoundary.fetches.mock.calls })).toBeDefined();
             expect(SessionSpawnNewInputV2Schema.parse(spawn?.[0]?.payload?.params)).toMatchObject({
-                executionTarget: { serverId: homeBScopeId, machineId: 'machine-b' },
+                executionTarget: { serverId: launchServerId, machineId: 'machine-b' },
                 directory: { kind: 'path', path: '/edited/project' },
-                initialInput: { text: draft.input },
+                initialInput: { text: editedPrompt },
             });
             expect(record.ownerMetadata).toMatchObject({ t: 'plain', v: { work: {
                 memoryEnabled: false, viewPreferences: { showToolCalls: true }, authoringOriginV1: origin,
@@ -2770,10 +2899,15 @@ describe('multi-Home Session creation composition', () => {
             if (!React.isValidElement<PickerProps>(picker)) throw new Error('Missing Machine picker');
             const { loadEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
             expect(loadEffectiveHomeViewState()).toMatchObject({ activeTargetKind: 'group', activeTargetId: 'both' });
-            expect(picker.props.groups.map((group) => group.serverId)).toContain(homeBScopeId);
-            const machine = storage.getState().machineListByServerId[homeBScopeId]?.find((candidate) => candidate.id === 'machine-b');
-            if (!machine) throw new Error('Missing Home B fixture');
-            await act(async () => picker.props.onSelectScopedMachine({ ...machine, serverId: homeBScopeId, serverName: 'Home B' }));
+            const { NewSessionMachineSelectionContent } = await import('../components/NewSessionMachineSelectionContent');
+            const pickerScreen = await renderScreen(<InjectedAuthProvider credentials={{ token: homeAToken }}>{picker}</InjectedAuthProvider>);
+            try {
+                const content = () => pickerScreen.root.findByType(NewSessionMachineSelectionContent);
+                await vi.waitFor(() => expect(content().props.groups.map((group: { serverId: string }) => group.serverId)).toContain(homeBScopeId));
+                const machine = storage.getState().machineListByServerId[homeBScopeId]?.find((candidate) => candidate.id === 'machine-b');
+                if (!machine) throw new Error('Missing Home B fixture');
+                await act(async () => content().props.onSelectScopedMachine({ ...machine, serverId: homeBScopeId, serverName: 'Home B' }));
+            } finally { await pickerScreen.unmount(); }
             await createHook.rerender();
             const selected = createHook.getCurrent();
             expect(selected.variant === 'simple' ? selected.simpleProps.targetServerId : selected.wizardProps.machine.serverId)

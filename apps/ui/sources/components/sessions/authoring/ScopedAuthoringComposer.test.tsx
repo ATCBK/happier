@@ -2,72 +2,35 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import {
-    applyComposerPresentationTransaction,
-    readComposerPresentationSnapshot,
-} from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { createMachineFixture, renderScreen as renderPanelScreen } from '@/dev/testkit';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installAgentInputCommonModuleMocks } from '@/components/sessions/agentInput/agentInputTestHelpers';
+import { DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-const randomUUIDSpy = vi.hoisted(() => vi.fn(() => 'scoped-authoring-composer-scope'));
-const agentInputSpy = vi.hoisted(() => vi.fn());
-const machineRpcWithServerScopeSpy = vi.hoisted(() => vi.fn<
-    (params: unknown) => Promise<unknown>
->(async () => ({})));
-const getSuggestionsSpy = vi.hoisted(() => vi.fn());
-
-vi.mock('@/platform/randomUUID', () => ({
-    randomUUID: () => randomUUIDSpy(),
-}));
-
-vi.mock('@/components/sessions/agentInput', () => ({
-    AgentInput: (props: unknown) => {
-        agentInputSpy(props);
-        return React.createElement('AgentInput', props as Record<string, unknown>);
-    },
-}));
-
-vi.mock(
-    '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
-    async (importOriginal) => {
-        const { installServerScopedMachineRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-        return installServerScopedMachineRpcModuleMock({
-            machineRpcWithServerScope: (params: unknown) => machineRpcWithServerScopeSpy(params) as never,
-        })(importOriginal);
-    },
-);
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({ phase: 'idle' as const, inputs: null }),
-}));
-vi.mock('@/components/plugins/actions/pluginContributedActionComposerChips', () => ({
-    createPluginContributedActionComposerChips: () => [],
-}));
-vi.mock('@/components/plugins/surfaces/PluginContextualResourceStoreProvider', () => ({
-    PluginContextualResourceStoreProvider: (props: Readonly<{ children?: React.ReactNode }>) => <>{props.children}</>,
-    PluginContextualResourceState: (props: Readonly<{
-        children: (snapshot: null) => React.ReactNode;
-    }>) => <>{props.children(null)}</>,
-}));
-vi.mock('@/components/sessions/model/useSessionMachineTarget', () => ({
-    useSessionMachineTarget: (sessionId: string | null) => (
-        sessionId === null ? null : { machineId: 'machine-1' }
-    ),
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
-    usePreferredServerIdForSession: (_target: unknown, enabled = true) => (enabled ? 'server-1' : null),
-}));
-vi.mock('@/components/autocomplete/suggestions', () => ({
-    getSuggestions: (...args: unknown[]) => {
-        getSuggestionsSpy(...args);
-        return Promise.resolve([]);
-    },
-}));
+const machineCalls: Array<Readonly<{ method: string; input: unknown; targetId: string }>> = [];
+installAgentInputCommonModuleMocks();
+const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
+const runtime = installSessionPaneRuntimeTestHarness({
+    request: async (url, init) => createPlainMachineReadHttpResponseFixture(new URL(String(url)).pathname, init, 'account-a'),
+    rpc: async (method, input, targetId) => {
+    machineCalls.push({ method, input, targetId });
+    if (method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST) return DaemonWorkspaceFileListResponseSchema.parse({ ok: true, paths: ['src/index.ts'], truncated: false });
+    return {};
+} });
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { AgentInput } = await import('@/components/sessions/agentInput');
+const { ScopedAuthoringComposer } = await import('@/components/sessions/authoring/ScopedAuthoringComposer');
+const { applyComposerPresentationTransaction, readComposerPresentationSnapshot } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
+async function renderScreen(element: React.ReactElement) {
+    storage.getState().applyMachines([createMachineFixture({ id: 'machine-9' })]);
+    const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
+    observeMachinePresenceForTest({ serverId: runtime.serverId, accountId: 'account-a' }, ['machine-9']);
+    return renderPanelScreen(element, { wrapper: runtime.Wrapper });
+}
 
 describe('ScopedAuthoringComposer', () => {
     it('keeps duplicate-token ranges and staged content when its portable projection echoes back', async () => {
-        const { ScopedAuthoringComposer } = await import(
-            '@/components/sessions/authoring/ScopedAuthoringComposer'
-        );
         const custody = (await import(
             '@/components/sessions/authoring/authoringComposerCustody'
         )).createWorkflowAuthoringComposerCustody('workflow-draft-echo').entryFor('review-step');
@@ -103,7 +66,7 @@ describe('ScopedAuthoringComposer', () => {
             });
             return <ScopedAuthoringComposer
                 custody={custody}
-                scope={{ kind: 'session', sessionId: 's1', serverId: 'server-1' }}
+                scope={{ kind: 'session', sessionId: 's1', serverId: runtime.serverId }}
                 document={document as never}
                 onChangeDocument={(next) => {
                     published(next);
@@ -163,9 +126,6 @@ describe('ScopedAuthoringComposer', () => {
     });
 
     it('round-trips and removes portable Workflow references and attachments through the shared composer owner', async () => {
-        const { ScopedAuthoringComposer } = await import(
-            '@/components/sessions/authoring/ScopedAuthoringComposer'
-        );
         const onChangeDocument = vi.fn();
         const custody = (await import(
             '@/components/sessions/authoring/authoringComposerCustody'
@@ -186,9 +146,9 @@ describe('ScopedAuthoringComposer', () => {
             presentation: { label: 'Issue #42', typeLabel: 'Issue' },
         };
 
-        await renderScreen(<ScopedAuthoringComposer
+        const screen = await renderScreen(<ScopedAuthoringComposer
             custody={custody}
-            scope={{ kind: 'session', sessionId: 's1', serverId: 'server-1' }}
+            scope={{ kind: 'session', sessionId: 's1', serverId: runtime.serverId }}
             document={{
                 text: 'Review @issue',
                 references: [reference],
@@ -214,9 +174,7 @@ describe('ScopedAuthoringComposer', () => {
         });
         if (!initial) throw new Error('expected mounted Workflow composer target');
 
-        expect(agentInputSpy).toHaveBeenCalledWith(expect.objectContaining({
-            sessionAddress: { serverId: 'server-1', sessionId: 's1' },
-        }));
+        expect(screen.findByType<typeof AgentInput>(AgentInput).props.sessionAddress).toEqual({ serverId: runtime.serverId, sessionId: 's1' });
 
         await act(async () => {
             expect(applyComposerPresentationTransaction({
@@ -254,22 +212,18 @@ describe('ScopedAuthoringComposer', () => {
      * and it must not address a Session it does not have.
      */
     it('addresses a Machine-scoped document by its selected Machine and project folder', async () => {
-        const { ScopedAuthoringComposer } = await import(
-            '@/components/sessions/authoring/ScopedAuthoringComposer'
-        );
         const custody = (await import(
             '@/components/sessions/authoring/authoringComposerCustody'
         )).createWorkflowAuthoringComposerCustody('workflow-draft-2').entryFor('neutral-step');
         const composerRef = custody.ref;
-        agentInputSpy.mockClear();
-        getSuggestionsSpy.mockClear();
+        machineCalls.length = 0;
 
-        await renderScreen(<ScopedAuthoringComposer
+        const screen = await renderScreen(<ScopedAuthoringComposer
             custody={custody}
             scope={{
                 kind: 'machine',
                 machineId: 'machine-9',
-                serverId: 'server-2',
+                serverId: runtime.serverId,
                 directory: '~/code/app',
                 machineHomeDir: '/Users/dev',
             }}
@@ -279,7 +233,7 @@ describe('ScopedAuthoringComposer', () => {
             placeholder="Describe the step"
         />);
 
-        const composerProps = agentInputSpy.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+        const composerProps = screen.findByType<typeof AgentInput>(AgentInput).props;
         expect(composerProps).toBeDefined();
         // No Session is fabricated for a portable document.
         expect(composerProps?.sessionId).toBeUndefined();
@@ -292,24 +246,24 @@ describe('ScopedAuthoringComposer', () => {
 
         const resolve = composerProps?.autocompleteSuggestions as
             (query: string, signal: AbortSignal) => Promise<unknown>;
-        await act(async () => { await resolve('@src', new AbortController().signal); });
-
-        expect(getSuggestionsSpy).toHaveBeenCalledTimes(1);
-        const [sessionId, query, options] = getSuggestionsSpy.mock.calls[0] as [
-            unknown, string, Record<string, unknown>,
-        ];
-        expect(sessionId).toBeNull();
-        expect(query).toBe('@src');
-        expect(options.serverId).toBe('server-2');
+        let suggestions: unknown;
+        await act(async () => { suggestions = await resolve('@src', new AbortController().signal); });
+        expect(suggestions).toEqual(expect.arrayContaining([expect.objectContaining({
+            kind: 'file', structuredInput: expect.objectContaining({ ref: 'file:src/index.ts' }),
+        })]));
+        expect(machineCalls).toEqual(expect.arrayContaining([expect.objectContaining({
+            targetId: 'machine-9', method: RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST,
+            input: expect.objectContaining({ rootPath: '/Users/dev/code/app' }),
+        })]));
         // The home-relative project folder is expanded by the canonical resolver,
         // so the daemon searches the project rather than its own directory.
-        expect(options.workspace).toEqual({
-            serverId: 'server-2',
+        expect(composerProps.composerFileScope).toEqual({
+            serverId: runtime.serverId,
             machineId: 'machine-9',
             rootPath: '/Users/dev/code/app',
         });
         const { resolveComposerEntityDrop } = await import('@/components/sessions/composer/composerEntityDrop');
-        const scope = { serverId: 'server-2', accountId: 'account-2' };
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
         const result = resolveComposerEntityDrop({
             kind: 'repository-file', scope, machineId: 'machine-9', path: '/Users/dev/code/app/src/index.ts',
         }, {
