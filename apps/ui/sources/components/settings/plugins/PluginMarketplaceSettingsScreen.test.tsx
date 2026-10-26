@@ -5,8 +5,7 @@ import { NavigationContext } from '@react-navigation/native';
 
 import type { PluginDiagnosticRecordV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
@@ -17,6 +16,7 @@ import {
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { flattenTestStyle, renderHook, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     createMachineAdministrationTargetSelectionMock,
     installMachineAdministrationTargetSelectionBoundary,
@@ -655,13 +655,13 @@ installSettingsViewCommonModuleMocks({
         }).module;
     },
     storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleStub, createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
-            // The Plugins page remembers Grid | List per view on this device. This suite reads the list: its rows
-            // mount before the page is measured, where the grid (as in the app) waits for its measured width.
-            useLocalSettingMutable: ((key: string) => (key === 'pluginsCollectionViewV1'
-                ? [{ installed: 'list', discover: 'list' }, () => {}]
-                : [undefined, () => {}])) as never,
+            // List rows mount without the grid's measured viewport. Supply the
+            // read subscription the page actually uses for its device preference.
+            useLocalSetting: createUseLocalSettingMock({ values: {
+                pluginsCollectionViewV1: { installed: 'list', discover: 'list' },
+            } }),
             useAllMachines: () => [],
             useMachineListByServerId: () => ({}),
             useMachineListStatusByServerId: () => ({}),
@@ -754,10 +754,6 @@ vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({
     useServerProfilesGeneration: () => 1,
 }));
 
-vi.mock('@/sync/domains/state/warmCachePersistence', () => ({
-    loadMachineDisplayWarmCacheEntries: () => ({}),
-}));
-
 vi.mock('@/sync/domains/state/storageStore', async () => {
     const { createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     const storage = createLiveStorageStoreMock(() => ({
@@ -778,10 +774,9 @@ vi.mock('@/sync/store/hooks', async () => ({
     // configures its storage boundary; give both paths the same canonical defaults.
     ...(await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({}),
     useEndpointStatus: () => endpointConnectivityState.status,
-    // The app's pane state starts empty; every other local setting this page reads is the list density.
-    useLocalSetting: (key: string) => (key === 'appPaneScopesV1' ? null : 'comfortable'),
-    // The Plugins page remembers Grid | List per view on this device; the default (grid) is read.
-    useLocalSettingMutable: () => [{}, () => {}],
+    useLocalSetting: (await import('@/dev/testkit/mocks/storage')).createUseLocalSettingMock({ values: {
+        pluginsCollectionViewV1: { installed: 'list', discover: 'list' },
+    } }),
     useMachineCliDetectionTarget: (...args: unknown[]) => useMachineCliDetectionTargetMock(...args),
     useMachineRecordValues: () => machineAdministrationFixture.activeMachines,
     useMachineRecordListsByServerId: () => machineAdministrationFixture.machineListByServerId,
@@ -1116,11 +1111,16 @@ beforeEach(async () => {
         lifecycleHomes.answer(homeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, approvalWaivedSurfaces: Object.fromEntries(lifecycleActionIds.map(id => [id, ['ui']])) },
         } } } });
-        lifecycleHomes.answer(homeId, '/v1/machines', { body: ['machine-1', 'machine-2'].map(id => ExternalActionMachineBootstrapV1Schema.parse({
-            id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
-            installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'account-a', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        })) });
+        const machines = ['machine-1', 'machine-2'].map(id => ({
+            ...createPlainMachineRowFixture({ id, accountId: 'account-a' }),
+            installationId: `${id}-installation`, runnerContentKeyBinding: null,
+        }));
+        lifecycleHomes.answer(homeId, '/v1/machines', { body: machines });
+        // Exact admission and its batched transport share these same published
+        // rows through the Home testkit; a census alone grants no authority.
+        for (const machine of machines) {
+            lifecycleHomes.answer(homeId, `/v1/machines/${machine.id}`, { body: { machine } });
+        }
         for (const actionId of lifecycleActionIds) lifecycleHomes.answer(homeId, `/v1/actions/${actionId}`, { select: async body => {
             const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
             const execution = await lifecycleActionBoundary({ actionId, ...request });
@@ -2345,12 +2345,12 @@ describe('PluginSettingsHomeScreen', () => {
         expect(findInstalledRowToggle(screen, 'installed-plugin')).toMatchObject({ action: 'disable', disabled: false });
         expect(invokeWithAlertsMock).not.toHaveBeenCalled();
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledTimes(2);
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-1', {
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
             // The read is routed to, and shared only within, this Home's
             // Account; the RPC transport owns its deadline.
             serverId: 'server-a',
             accountLifetime: expect.objectContaining({ scope: { serverId: 'srv_identity-a', accountId: 'account-a' } }),
-        });
+        }));
 
         // Update is offered from the installed record itself (its page's `⋯`
         // menu) once the daemon is current again — never re-created as a
@@ -2680,6 +2680,38 @@ describe('PluginSettingsHomeScreen', () => {
         // the caller cannot insert an independent confirmation decision.
         expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(invokeWithAlertsMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses lifecycle dispatch when exact Machine admission is bound only on another Home', async () => {
+        const installedPlugin = createInstalledPlugin({
+            pluginId: 'acme.admission', title: 'Admission plugin', version: '1.0.0',
+        });
+        const refresh = vi.fn();
+        useMachineCapabilitiesCacheMock.mockReturnValue({
+            state: createMachineCapabilitiesState([installedPlugin]), refresh,
+        });
+        const home = lifecycleHomes.findByServerUrl('https://server-a.example.test');
+        if (!home) throw new Error('Expected the selected Home fixture');
+        // Its census and the other Home still publish machine-1. Neither may
+        // substitute for the exact target's missing admission row.
+        lifecycleHomes.answer(home.serverId, '/v1/machines/machine-1', { status: 404 });
+        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
+            pluginId: installedPlugin.pluginId,
+        }));
+        await act(async () => { await flushAsync(); await flushAsync(); });
+        await act(async () => {
+            pressDetailLifecycleAction(screen, installedPlugin.pluginId, 'uninstall');
+            await flushAsync();
+        });
+        await waitForHomeGovernance(() => expect(modalAlertMock).toHaveBeenCalledWith('common.error', expect.any(String)));
+        const admissionReads = lifecycleHomes.requestsFor('/v1/machines/read-batch');
+        expect(admissionReads).toContainEqual(expect.objectContaining({
+            serverUrl: 'https://server-a.example.test', input: { machineIds: ['machine-1'] },
+        }));
+        expect(admissionReads.every(request => request.serverUrl === 'https://server-a.example.test')).toBe(true);
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.uninstall')).toEqual([]);
+        expect(refresh).not.toHaveBeenCalled();
+        expect(screen.findRow(`settings.plugins.detail.${installedPlugin.pluginId}.header`)).toBeTruthy();
     });
 
     it.each([
@@ -3551,12 +3583,12 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
             await flushAsync();
         });
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-1', {
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
             // The read is routed to, and shared only within, this Home's
             // Account; the RPC transport owns its deadline.
             serverId: 'server-a',
             accountLifetime: expect.objectContaining({ scope: { serverId: 'srv_identity-a', accountId: 'account-a' } }),
-        });
+        }));
 
         setMachineAdministrationTargetFixture({
             serverIdentityId: 'srv_identity-b',
@@ -3573,12 +3605,12 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', {
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', expect.objectContaining({
             // The read is routed to, and shared only within, this Home's
             // Account; the RPC transport owns its deadline.
             serverId: 'server-b',
             accountLifetime: expect.objectContaining({ scope: { serverId: 'srv_identity-b', accountId: 'account-a' } }),
-        });
+        }));
     });
 
     it('fences a late destructive lifecycle response from the previously selected machine authority', async () => {
