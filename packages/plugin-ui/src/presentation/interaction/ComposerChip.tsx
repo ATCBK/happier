@@ -1,12 +1,10 @@
 import * as React from 'react';
 import {
-  Platform,
   Pressable,
   type AccessibilityState,
-  type ViewStyle,
 } from 'react-native';
 
-import { resolveHappierMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import type {
   HappierAccessibilityRole,
   HappierAccessibilityState,
@@ -14,12 +12,7 @@ import type {
   HappierStyleProp,
 } from '../portableTypes.js';
 import type { HappierPressableProps } from './Pressable.js';
-
-const nativeTargetStyle = (): ViewStyle | undefined => {
-  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return undefined;
-  const size = resolveHappierMinimumInteractiveTargetSize(Platform.OS);
-  return { minWidth: size, minHeight: size };
-};
+import { useHappierHitArea } from './hitArea.js';
 
 type WebToggleProps = Readonly<{ 'aria-pressed'?: boolean }>;
 const ComposerChipPressable = Pressable as React.ComponentType<
@@ -38,13 +31,16 @@ export type HappierComposerChipProps = Readonly<{
   accessibilityHint?: string;
   accessibilityState?: HappierAccessibilityState;
   hitSlop?: HappierPressableProps['hitSlop'];
+  /** How far the chip's touch hit area may reach past it: half the rail gap ({@link HappierPressableProps.hitReach}). */
+  hitReach?: HappierHitReach;
   style?: (pressed: boolean) => HappierStyleProp;
 }>;
 
 /**
  * The one compact Composer-rail chip shell used by Happier core and Plugin UI.
  * Callers supply semantic content and the rail's theme chrome; this owner keeps
- * press, disabled/selected semantics, and native touch geometry identical.
+ * press, disabled/selected semantics, and the touch hit area identical. The chip keeps the rail's
+ * compact drawing; under a finger its hit area reaches the touch target past it.
  */
 export const HappierComposerChip = React.forwardRef<unknown, HappierComposerChipProps>(
   function HappierComposerChip(props, ref) {
@@ -54,6 +50,11 @@ export const HappierComposerChip = React.forwardRef<unknown, HappierComposerChip
       ...(disabled ? { disabled: true } : {}),
       ...(props.expressesSelection ? { selected: props.selected === true } : {}),
     } satisfies AccessibilityState;
+    const hitArea = useHappierHitArea({
+      restingStyle: () => props.style?.(false),
+      hitReach: props.hitReach,
+      hitSlop: props.hitSlop,
+    });
 
     return (
       <ComposerChipPressable
@@ -66,10 +67,12 @@ export const HappierComposerChip = React.forwardRef<unknown, HappierComposerChip
         accessibilityState={accessibilityState}
         {...(props.expressesSelection ? { 'aria-pressed': props.selected === true } : {})}
         disabled={disabled}
-        hitSlop={props.hitSlop}
+        hitSlop={hitArea.hitSlop}
+        onLayout={hitArea.onLayout}
         onPress={props.onPress}
-        style={({ pressed }) => [props.style?.(pressed), nativeTargetStyle()]}
+        style={({ pressed }) => props.style?.(pressed)}
       >
+        {hitArea.frame}
         {props.children}
       </ComposerChipPressable>
     );

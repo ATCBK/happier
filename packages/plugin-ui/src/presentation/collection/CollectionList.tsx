@@ -335,9 +335,6 @@ export const HappierCardSelectionRingContext = createContext(false);
  */
 export const HappierCardActionsCornerContext = createContext<Readonly<{ top: number; end: number; height: number }> | null>(null);
 
-/** The open row's leading edge in a Collection's table or list (lab `.br.on::before`). */
-export const HAPPIER_COLLECTION_SELECTED_EDGE_WIDTH = 2.5;
-
 const railStyle: ViewStyle = { flex: 1, minHeight: 0 };
 const M = HAPPIER_COLLECTION_LIST_METRICS;
 const headerStyle: ViewStyle = {
@@ -351,6 +348,8 @@ const headerStyle: ViewStyle = {
   paddingRight: M.rowInset,
   marginBottom: M.headerGap,
 };
+// Several actions (a filter and a "+") sit together at the row's end; the header's space-between would spread them.
+const headerActionStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center' };
 const headingStyle: ViewStyle = { flexDirection: 'row', alignItems: 'baseline', gap: 8, flexShrink: 1 };
 // With a control beside it the heading takes the row's free width, so its measured width is the title's room.
 const headingWithAccessoryStyle: ViewStyle = { flexGrow: 1, flexBasis: 0, minWidth: 0 };
@@ -472,7 +471,7 @@ function HappierCollectionListImpl(props: HappierCollectionListProps): ReactElem
             <SearchToggle open={searchOpen} onPress={onToggleSearch} accessibilityLabel={search.placeholder}
               {...(search.testID === undefined ? {} : { testID: `${search.testID}:toggle` })} />
           ) : null}
-          {props.headerAction}
+          {props.headerAction != null ? <View style={headerActionStyle}>{props.headerAction}</View> : null}
         </View>
       ) : null}
       {showHeader && props.subtitle ? (
@@ -632,6 +631,8 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
             expanded={disclosure.expanded}
             onPress={disclosure.onToggle}
             hitSlop={6}
+            // It abuts the lead (no gap between the two targets): a finger's hit area never reaches back into it.
+            hitReach={{ left: 0 }}
             style={groupLabelChevronStyle}
             {...(props.testID === undefined ? {} : { testID: `${props.testID}:fold` })}
           >

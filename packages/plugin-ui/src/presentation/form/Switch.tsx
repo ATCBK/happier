@@ -1,6 +1,7 @@
-import { Switch as ReactNativeSwitch, View, type ViewStyle } from 'react-native';
+import { Pressable as ReactNativePressable, Switch as ReactNativeSwitch, View, type ViewStyle } from 'react-native';
 
 import { HappierPressable } from '../interaction/Pressable.js';
+import { useHappierHitArea } from '../interaction/hitArea.js';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import type { HappierFocusable, HappierStyleProp } from '../portableTypes.js';
@@ -97,10 +98,15 @@ function isToggleKey(key: string): boolean {
   return key === ' ' || key === 'Spacebar' || key === 'Enter';
 }
 
-/** The platform switch (iOS/Android) in the caller's colours, on the platform touch-target floor. */
+/**
+ * The platform switch (iOS/Android) in the caller's colours, at the platform's own size. Under a finger
+ * its hit area reaches the touch target past the drawn switch: a press there toggles it, while the
+ * switch itself stays the one accessible control.
+ */
 export function HappierSwitchNative(props: HappierSwitchProps) {
   const { colors } = props;
-  const target = props.minimumTouchTarget;
+  const hitArea = useHappierHitArea({ restingStyle: () => null, hitTarget: props.minimumTouchTarget });
+  const toggle = props.onValueChange;
   const control = (
     <ReactNativeSwitch
       ref={props.controlRef as ((instance: ReactNativeSwitch | null) => void) | undefined}
@@ -112,16 +118,28 @@ export function HappierSwitchNative(props: HappierSwitchProps) {
       accessibilityRole="switch"
       accessibilityLabel={props.accessibilityLabel}
       accessibilityHint={props.accessibilityHint}
-      style={[
-        props.style as ViewStyle | undefined,
-        target === undefined ? null : { minWidth: target, minHeight: target },
-      ]}
+      style={props.style as ViewStyle | undefined}
+      onLayout={hitArea.onLayout}
       trackColor={{ false: colors.trackOff, true: colors.trackOn }}
       ios_backgroundColor={colors.trackOff}
       thumbColor={colors.thumb}
     />
   );
-  if (!props.presentational) return control;
+  if (!props.presentational) {
+    if (hitArea.onLayout === undefined || toggle === undefined) return control;
+    // The wrapper only catches presses that land beside the switch; one on the switch is its own.
+    return (
+      <ReactNativePressable
+        accessible={false}
+        importantForAccessibility="no"
+        disabled={props.disabled}
+        hitSlop={hitArea.hitSlop}
+        onPress={() => { toggle(!props.value); }}
+      >
+        {control}
+      </ReactNativePressable>
+    );
+  }
   return (
     <View pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
       {control}

@@ -1,7 +1,6 @@
 import { isValidElement, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, View, type ViewStyle } from 'react-native';
 
-import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import {
   useOptionalHappierUiTheme,
   useOptionalHappierUiTypography,
@@ -324,8 +323,6 @@ export function HappierLink(
     testID?: string;
   }>,
 ) {
-  const nativeMinimumTouchTarget =
-    useHappierNativeMinimumInteractiveTargetSize();
   return (
     <HappierPressable
       accessibilityRole="link"
@@ -337,12 +334,6 @@ export function HappierLink(
         alignSelf: 'flex-start',
         alignItems: 'center',
         justifyContent: 'center',
-        ...(nativeMinimumTouchTarget === undefined
-          ? {}
-          : {
-              minHeight: nativeMinimumTouchTarget,
-              minWidth: nativeMinimumTouchTarget,
-            }),
         borderBottomWidth: 1,
         borderBottomColor: props.theme.colors.accent,
         ...happierFocusRingStyle({

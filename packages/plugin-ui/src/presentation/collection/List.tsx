@@ -9,10 +9,6 @@ import {
   useOptionalHappierUiTheme,
   useOptionalHappierUiTypography,
 } from '../../environment/context.js';
-import {
-  HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
-  useHappierNativeMinimumInteractiveTargetSize,
-} from '../../environment/interactiveTarget.js';
 import type { HappierTypeRole, HappierUiTheme, HappierUiTypography } from '../../environment/types.js';
 import type {
   HappierGestureResponderEvent,
@@ -47,7 +43,6 @@ import { HappierRowActionRevealSlot } from './RowActionRevealSlot.js';
 import {
   HAPPIER_COLLECTION_LIST_METRICS,
   HAPPIER_COLLECTION_LIST_TEXT,
-  HAPPIER_COLLECTION_SELECTED_EDGE_WIDTH,
   HappierListRowOpenContext,
   HappierCardSelectionRingContext,
   HappierCardActionsCornerContext,
@@ -241,7 +236,10 @@ export type HappierListItemProps = Readonly<{
   textScale?: number;
   /** Resolved by the shared page-row metrics owner from the adapter's density and pointer facts. */
   pageRowMetrics?: HappierPageRowMetrics;
-  /** Additive host floor; the mounted environment's native target always wins. */
+  /**
+   * The host's row height in place of the density's (a declarative mount's row floor; `0` lets content size
+   * the row). A row is its own hit area: neither this nor a finger ever grows the row past its design.
+   */
   minimumTouchTarget?: number;
   density?: HappierItemDensity;
   showDivider?: boolean;
@@ -594,7 +592,6 @@ export function HappierListItem({
   const paintColor = useHappierMaterialColorResolver();
   const environmentTheme = useOptionalHappierUiTheme();
   const hostTypography = useOptionalHappierUiTypography();
-  const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   // React Native Web 0.21 drops `accessibilityHint` entirely and emits a
   // description only from `aria-describedby`, so a web row needs a referenced
   // node of its own. Native keeps the hint prop and needs no extra node.
@@ -765,18 +762,17 @@ export function HappierListItem({
     showDivider,
   });
   const isInteractive = behavior.interactive;
-  const requestedTargetSize = minimumTouchTarget ?? ({
-    comfortable: HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
+  const requestedRowHeight = minimumTouchTarget ?? ({
+    comfortable: 44,
     cozy: 42,
     compact: 38,
     tight: 36,
   } satisfies Record<HappierItemDensity, number>)[behavior.density];
-  // A navigation row keeps its compact height under a pointer; the platform's touch floor still wins.
-  const baseTargetSize = navigationRow ? HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight
-    : pageSection && pageRowMetrics ? pageRowMetrics.minHeightPx : requestedTargetSize;
-  const targetSize = isInteractive
-    ? Math.max(baseTargetSize, nativeMinimumTouchTarget ?? 0)
-    : baseTargetSize;
+  // A row draws at its design height under every pointer. A full-width row is its own hit area and rows
+  // stack flush, so a finger's target never grows the row or reaches into its neighbours (DESIGN.md →
+  // touch targets are hit areas, not drawn sizes).
+  const rowHeight = navigationRow ? HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight
+    : pageSection && pageRowMetrics ? pageRowMetrics.minHeightPx : requestedRowHeight;
 
   const renderSemanticContent = (isBusy: boolean, includeAccessory: boolean) => {
     if (!resolvedTheme) return customContent;
@@ -805,8 +801,8 @@ export function HappierListItem({
           flexDirection: 'row',
           alignItems: 'center',
           columnGap: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap,
-          // The row's height is the target; a wrapped title grows it, never the glyph.
-          minHeight: targetSize - 2 * NAVIGATION_ROW_FOCUS_RING_WIDTH,
+          // The row's design height; a wrapped title grows it, never the glyph.
+          minHeight: rowHeight - 2 * NAVIGATION_ROW_FOCUS_RING_WIDTH,
           paddingLeft: resolveHappierCollectionListRowPadding(0).paddingLeft - NAVIGATION_ROW_FOCUS_RING_WIDTH,
           paddingRight: resolveHappierCollectionListRowPadding(0).paddingRight - NAVIGATION_ROW_FOCUS_RING_WIDTH,
           paddingVertical: NAVIGATION_ROW_TEXT_FLOOR_PX,
@@ -819,7 +815,7 @@ export function HappierListItem({
           columnGap: HAPPIER_PAGE_METRICS.rowLeadingGapPx,
           rowGap: 10,
           minHeight: Math.max(
-            targetSize,
+            rowHeight,
             pageRowMetrics?.minHeightPx ?? (pageCompact ? HAPPIER_PAGE_METRICS.compactRowMinHeightPx : HAPPIER_PAGE_METRICS.rowMinHeightPx),
           ),
           paddingHorizontal: pageSection.rowInsetPx,
@@ -831,7 +827,7 @@ export function HappierListItem({
           alignItems: 'center',
           flexWrap: accessoryWraps ? 'wrap' : 'nowrap',
           gap: resolvedTheme.spacing.small,
-          minHeight: targetSize,
+          minHeight: rowHeight,
           paddingHorizontal: resolvedTheme.spacing.medium,
           paddingVertical: resolvedTheme.spacing.small,
         }}
@@ -1021,9 +1017,11 @@ export function HappierListItem({
       onContextMenu={onContextMenu}
       onLongPress={Platform.OS === 'web' ? undefined : onContextMenu}
       onPress={(event) => onPress?.(event)}
+      // Rows stack flush: the row's own box is its hit area, never reaching over the next row.
+      hitReach={0}
       style={(state) => withRowLayer(navigationRow ? ({
         minWidth: 0,
-        minHeight: targetSize,
+        minHeight: rowHeight,
         marginHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset,
         borderRadius: HAPPIER_COLLECTION_LIST_METRICS.rowRadius,
         // The transparent border is the inset ring's band; the content padding subtracts its
@@ -1042,7 +1040,7 @@ export function HappierListItem({
       }) : collectionRow ? ({
         width: '100%',
         minWidth: 0,
-        minHeight: targetSize,
+        minHeight: rowHeight,
         // The ring is keyboard focus only; the row's fills are the wrapper's, across the accessory too.
         // Inset: the row spans its group, which clips anything drawn outside it.
         borderWidth: 1,
@@ -1055,7 +1053,7 @@ export function HappierListItem({
       }) : ({
         width: '100%',
         minWidth: 0,
-        minHeight: targetSize,
+        minHeight: rowHeight,
         borderWidth: 1,
         borderColor: 'transparent',
         // Inset: the row spans its list, which clips anything drawn outside it.
@@ -1080,7 +1078,7 @@ export function HappierListItem({
   const row = layered ? (
     <View style={ROW_LAYER_STYLE}>
       {pressTarget}
-      <View pointerEvents={HAPPIER_ROW_CONTENT_POINTER_EVENTS} style={{ minHeight: targetSize, borderWidth: 1, borderColor: 'transparent' }}>
+      <View pointerEvents={HAPPIER_ROW_CONTENT_POINTER_EVENTS} style={{ minHeight: rowHeight, borderWidth: 1, borderColor: 'transparent' }}>
         {renderSemanticContent(busy === true, includeAccessory)}
       </View>
     </View>
@@ -1246,16 +1244,6 @@ export function HappierListItem({
               }}
             />
           )}
-          {openRow ? (
-            <View
-              pointerEvents="none"
-              style={{
-                position: 'absolute', left: 0, top: 0, bottom: 0,
-                width: HAPPIER_COLLECTION_SELECTED_EDGE_WIDTH,
-                backgroundColor: resolvedTheme.colors.text,
-              }}
-            />
-          ) : null}
         </>
       ) : null}
       {rowDescriptionId ? (

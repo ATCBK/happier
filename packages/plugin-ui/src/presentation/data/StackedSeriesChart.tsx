@@ -6,6 +6,7 @@ import type { HappierUiTheme } from '../../environment/types.js';
 import { useOptionalHappierUiAccessibility, useOptionalHappierUiLocalization } from '../../environment/context.js';
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierPressable } from '../interaction/Pressable.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierPortableStyle } from '../portableTypes.js';
 import { readHappierVisibleLayoutWidth } from '../layout/pageMetrics.js';
@@ -368,7 +369,10 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
     select(id);
     return id;
   };
-  const bucketControl = (bucket: HappierSeriesBucket, index: number, visual: ReactNode, style?: HappierPortableStyle, key: string | number = bucket.id) => <HappierPressable key={key}
+  // A bucket's hit area never reaches a neighbouring bucket: bar columns split their gap, stacked
+  // exact-value rows stay on their own row.
+  const bucketControl = (bucket: HappierSeriesBucket, index: number, visual: ReactNode, style: HappierPortableStyle | undefined, hitReach: HappierHitReach, key: string | number = bucket.id) => <HappierPressable key={key}
+    hitReach={hitReach}
     testID={props.testID ? `${props.testID}-bucket-${bucket.id}` : undefined}
     controlRef={(control) => { if (control) controls.current.set(bucket.id, control); else controls.current.delete(bucket.id); }}
     accessibilityLabel={describe(bucket)} selected={selectedId === bucket.id}
@@ -587,7 +591,7 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
             tabularNumbers>{format(peakTotal)}</HappierText> : null;
         if (props.renderBucket) return <View key={columnKey} style={columnStyle}>{peakLabel}{props.renderBucket(bucket, visual, () => select(bucket.id))}</View>;
         if (nativeInline || nativeDense) return <View key={columnKey} style={columnStyle} aria-hidden importantForAccessibility="no-hide-descendants">{peakLabel}{visual}</View>;
-        return bucketControl(bucket, index, <>{peakLabel}{visual}</>, columnStyle, columnKey);
+        return bucketControl(bucket, index, <>{peakLabel}{visual}</>, columnStyle, { left: barGap / 2, right: barGap / 2 }, columnKey);
       })}
     </View>
     {props.renderPlotOverlay && plotWidth > 0 && geometry.buckets.length ? <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, top: 0, width: plotWidth, height }}>
@@ -691,7 +695,8 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
     {props.summary ? <HappierText style={text.caption} tabularNumbers>{props.summary}</HappierText> : null}
     {valuesLabel && !toggleInLegend ? valuesToggle : null}
     {nativeDense && (valuesExpanded || (!valuesLabel && !historyCanInteract)) ? <View testID={props.testID ? `${props.testID}-values` : undefined}>
-      {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describe(bucket)}</HappierText>, { justifyContent: 'center' }))}
+      {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describe(bucket)}</HappierText>,
+        { justifyContent: 'center', paddingVertical: HAPPIER_DATA_METRICS.cellPaddingVerticalPx }, { top: 0, bottom: 0 }))}
     </View> : valuesExpanded ? <View style={{ marginTop: HAPPIER_DATA_METRICS.blockGapPx }}><HappierDataTable theme={props.theme} label={props.label}
       columns={[{ label: props.label }, ...props.series.map((entry) => ({ label: entry.label }))]}
       // Details keeps every meaningful digit (a display formatter may abbreviate); coordinates read in the caller's words.

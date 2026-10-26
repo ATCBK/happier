@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import { View } from 'react-native';
 
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import { useOptionalHappierUiPalette, useOptionalHappierUiTheme } from '../../environment/context.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HappierPressable } from '../interaction/Pressable.js';
@@ -24,6 +25,8 @@ export type HappierBreadcrumbProps = Readonly<{
   separator?: ReactNode;
   style?: HappierStyleProp;
   linkStyle?: HappierStyleProp;
+  /** How far an ancestor link's hit area may reach past its box, where a neighbour sits flush against it. */
+  linkHitReach?: HappierHitReach;
   colors?: Readonly<{ focus: string; hover: string }>;
   /** The core host keeps its font and context-specific label treatment. */
   renderLabel?: (item: HappierBreadcrumbItem) => ReactNode;
@@ -59,6 +62,7 @@ export function HappierBreadcrumb(props: HappierBreadcrumbProps) {
               accessibilityLabel={item.label}
               onPress={item.onPress}
               hitSlop={6}
+              hitReach={props.linkHitReach}
               style={({ hovered, pressed, focused }) => [
                 { flexShrink: 1, minWidth: 0 },
                 props.linkStyle,

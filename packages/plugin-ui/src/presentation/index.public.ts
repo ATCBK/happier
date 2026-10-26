@@ -18,6 +18,13 @@ export type {
 } from './portableTypes.js';
 export { HappierRowOperationContext } from './collection/rowOperation.js';
 export {
+  HappierCollectionAddMenu,
+  COLLECTION_ADD_MENU_SEARCH_THRESHOLD,
+  type CollectionAddMenuItem,
+  type HappierCollectionAddMenuHost,
+  type HappierCollectionAddMenuProps,
+} from './collection/CollectionAddMenu.js';
+export {
   HappierItemAddRow,
   type HappierItemAddRowContentProps,
   type HappierItemAddRowRenderProps,
@@ -53,6 +60,21 @@ export {
   type HappierNoticeLineProps,
   type HappierNoticeLineTextRender,
 } from './interaction/ApprovalPendingNotice.js';
+export {
+  HAPPIER_APPROVAL_FIELDS_METRICS,
+  HappierApprovalFieldEntries,
+  HappierApprovalFields,
+  type HappierApprovalFieldEntriesProps,
+  type HappierApprovalFieldEntry,
+  type HappierApprovalFieldResolve,
+  type HappierApprovalFieldRow,
+  type HappierApprovalFieldsColors,
+  type HappierApprovalFieldsLook,
+  type HappierApprovalFieldsProps,
+  type HappierApprovalFieldsSpace,
+  type HappierApprovalFieldsTextRender,
+  type HappierApprovalFieldsTextRole,
+} from './interaction/ApprovalFields.js';
 export * from './interaction/companionPointerDragConfig.js';
 export * from './interaction/resolveCompanionDragVelocity.js';
 export * from './interaction/companionGeometry.js';
@@ -173,6 +195,7 @@ export {
   type HappierMaterialRole,
 } from './layout/material.js';
 export { HappierSurfaceGradientLayer } from './layout/SurfaceGradientLayer.js';
+export { happierSvgGradientStop } from './layout/svgGradientStop.js';
 export { HappierMaterialRoleProvider, HappierOpenedLayer, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierFloatingRole, type HappierMaterialSurfaceRender } from './layout/Surface.js';
 export {
   matchFindText,
@@ -461,8 +484,10 @@ export {
 } from './layout/widgetGroupLayout.js';
 export {
   HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
+  resolveHappierPublicProfilePlanetBand,
   HappierPublicProfile,
   HappierPublicProfileWidget,
+  type HappierPublicProfileBrand,
   type HappierPublicProfileHeroGeometry,
   type HappierPublicProfileLabels,
   type HappierPublicProfileOwner,
@@ -654,6 +679,16 @@ export {
   type HappierStatusCapsuleProps,
 } from './status/StatusCapsule.js';
 export {
+  HAPPIER_COMPOSER_STATUS_BADGE_METRICS,
+  HAPPIER_COMPOSER_STATUS_BADGE_TYPE,
+  HappierComposerStatusBadge,
+  resolveHappierComposerStatusState,
+  type HappierComposerStatusBadgeProps,
+  type HappierComposerStatusEmphasis,
+  type HappierComposerStatusState,
+  type HappierComposerStatusTone,
+} from './status/ComposerStatusBadge.js';
+export {
   HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE,
   HAPPIER_CONTROL_CAPSULE_METRICS,
   HappierControlCapsule,
@@ -754,6 +789,15 @@ export {
   type HappierFindBarNote,
   type HappierFindBarProps,
 } from './find/FindBar.js';
+export {
+  HAPPIER_PROMPT_PICKER_METRICS,
+  HappierPromptPickerMetaLine,
+  HappierPromptPickerPreview,
+  HappierPromptPickerRow,
+  type HappierPromptPickerColors,
+  type HappierPromptPickerHost,
+  type HappierPromptPickerMetaPart,
+} from './prompts/PromptPicker.js';
 export type {
   FindCapabilities,
   FindController,
@@ -771,6 +815,7 @@ export {
   type HappierPressableState,
   type HappierPressableStyleState,
 } from './interaction/Pressable.js';
+export { useHappierHitArea } from './interaction/hitArea.js';
 export { HappierTextLinkButton, type HappierTextLinkButtonProps } from './interaction/TextLinkButton.js';
 export {
   HAPPIER_FOCUS_RING_DELEGATED_STYLE,
@@ -1176,6 +1221,7 @@ export {
   resolveHappierWorkStatusGlyphColor,
   resolveHappierWorkStatusSurfaceStyle,
   resolveHappierWorkStatusWordColor,
+  type CollectionGroupRollup,
   type HappierWorkStateColors,
   type HappierWorkStatusBucket,
   type HappierWorkStatusColors,

@@ -1,7 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { View } from 'react-native';
 import { resolveHappierUiPalette, useOptionalHappierUiPalette, useOptionalHappierUiTheme } from '../../environment/context.js';
-import { resolveHappierInteractiveTargetFloor, useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierText } from '../text/Text.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
@@ -28,6 +27,7 @@ export type HappierShareHost = Readonly<{
   focusColor: string;
   borderColor: string;
   noteColor: string;
+  /** The host's hit-area request for row actions; it sizes their hit area, never their drawing. */
   minimumTargetSize?: number;
 }>;
 
@@ -78,11 +78,11 @@ export type HappierShareRowActionProps = HappierShareAction & Readonly<{
 export function HappierShareRowAction(props: HappierShareRowActionProps) {
   const host = useHappierShareHost(props.host);
   const { Text } = host;
-  const minimum = resolveHappierInteractiveTargetFloor(host.minimumTargetSize, useHappierNativeMinimumInteractiveTargetSize());
   return <HappierPressable testID={props.testID} accessibilityRole="button"
     accessibilityLabel={props.accessibilityLabel ?? props.label} selected={props.selected}
+    hitTarget={host.minimumTargetSize}
     disabled={props.disabled} onPress={props.onPress} style={state => ({
-      minHeight: minimum, justifyContent: 'center', paddingHorizontal: 8,
+      justifyContent: 'center', paddingHorizontal: 8,
       paddingRight: props.trailing || props.endsRow ? 0 : 8,
       ...happierFocusRingStyle({ visible: state.focused, color: host.focusColor }),
     })}>

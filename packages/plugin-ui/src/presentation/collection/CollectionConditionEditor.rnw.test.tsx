@@ -3,12 +3,15 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { describe, expect, it } from 'vitest';
 import { createWorkflowListFilterRegistryV1 } from '@happier-dev/protocol/workflows/listing/workflowListFilterV1';
 import { admitPluginListFilterFieldV1 } from '@happier-dev/protocol/collections/filter/pluginListFilterFieldV1';
+import { normalizeSessionListFilterV1, sessionWorkFilterFields } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { listSessionPresentationStatesForWorkStatusFilterV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import {
   applyCollectionConditionEdit,
   conditionModelFromFilter,
   type CollectionConditionEdit,
+  type CollectionConditionValueCountRequest,
 } from './conditionModel.js';
 import {
   HappierCollectionConditionEditor,
@@ -93,6 +96,51 @@ const press = (container: HTMLElement, testID: string) =>
   });
 
 describe('HappierCollectionConditionEditor', () => {
+  it('demands value counts only for an open value list, keeps demand stable on count arrivals and releases it on Back/unmount', async () => {
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+    const demands: (CollectionConditionValueCountRequest | null)[] = [];
+    const onValuePickerChange = (request: CollectionConditionValueCountRequest | null) => demands.push(request);
+    const view = (count?: number) => <HappierCollectionConditionEditor host={host} labels={labels}
+      model={conditionModelFromFilter(sessionWorkFilterFields, filter, count === undefined ? {} : {
+        valueCounts: { fieldId: 'statuses', options: [{ value: 'working', count }] },
+      })} onChange={() => {}} onValuePickerChange={onValuePickerChange} />;
+    const mount = mountThroughReactNativeWeb(view());
+    expect(demands).toEqual([]);
+    await press(mount.container, 'collection-filter-add');
+    expect(demands).toEqual([]);
+    await press(mount.container, 'collection-filter-field:statuses');
+    expect(demands).toHaveLength(1);
+    expect(demands[0]).toMatchObject({ fieldId: 'statuses', options: expect.arrayContaining([{ value: 'working',
+      values: listSessionPresentationStatesForWorkStatusFilterV1('working') }]) });
+    await mount.render(view(7));
+    await mount.render(view(8));
+    expect(demands).toHaveLength(1);
+    await press(mount.container, 'collection-filter-back');
+    expect(demands.at(-1)).toBeNull();
+    await press(mount.container, 'collection-filter-add');
+    await press(mount.container, 'collection-filter-field:statuses');
+    expect(demands).toHaveLength(3);
+    mount.unmount();
+    expect(demands).toHaveLength(4);
+    expect(demands.at(-1)).toBeNull();
+  });
+
+  it('draws each value\'s held count beside it, and nothing where there is no local evidence (lab clfilter:add)', async () => {
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+    const mount = mountThroughReactNativeWeb(<HappierCollectionConditionEditor host={host} labels={labels}
+      model={conditionModelFromFilter(sessionWorkFilterFields, filter, {
+        valueCounts: { fieldId: 'statuses', options: [{ value: 'working', count: 9 }, { value: 'idle', count: 0 }] },
+      })} onChange={() => {}} />);
+    await press(mount.container, 'collection-filter-add');
+    await press(mount.container, 'collection-filter-field:statuses');
+    const countOf = (value: string) => mount.container
+      .querySelector(`[data-testid="collection-filter-value-count:statuses:${value}"]`)?.textContent ?? null;
+    expect(countOf('working')).toBe('9');
+    expect(countOf('idle')).toBe('0');
+    expect(countOf('failed')).toBeNull();
+    mount.unmount();
+  });
+
   it('adds, narrows, flips and removes a plugin-owned condition as edits its owner applies', async () => {
     const stage = stageField();
     const registry = createWorkflowListFilterRegistryV1([stage]);
@@ -168,6 +216,55 @@ describe('HappierCollectionConditionEditor', () => {
         `[data-testid^="collection-filter-condition:${stage.id}"]`,
       ),
     ).toBeNull();
+    mount.unmount();
+  });
+
+  it('picks a grouped choice as its whole value vector, checks it, names it once and unpicks it whole (P6 grouped Status)', async () => {
+    let filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+    const working = listSessionPresentationStatesForWorkStatusFilterV1('working');
+    const needsYou = listSessionPresentationStatesForWorkStatusFilterV1('needs_you');
+    const base = conditionModelFromFilter(sessionWorkFilterFields, filter).availableFields.find((field) => field.id === 'statuses')!;
+    const bindings = {
+      fields: {
+        statuses: {
+          label: 'Status',
+          valueOptions: base.valueOptions.map((option) => ({ ...option, label: option.value === 'working' ? 'Working' : String(option.value) })),
+        },
+      },
+    };
+    const edits: CollectionConditionEdit[] = [];
+    const view = () => (
+      <HappierCollectionConditionEditor
+        host={host}
+        labels={labels}
+        model={conditionModelFromFilter(sessionWorkFilterFields, filter, bindings)}
+        onChange={(edit) => {
+          edits.push(edit);
+          filter = applyCollectionConditionEdit(sessionWorkFilterFields, filter, edit);
+        }}
+      />
+    );
+    const mount = mountThroughReactNativeWeb(view());
+    await press(mount.container, 'collection-filter-add');
+    await press(mount.container, 'collection-filter-field:statuses');
+    await press(mount.container, 'collection-filter-value:statuses:working');
+    expect(edits.at(-1)).toEqual({ type: 'add', condition: { fieldId: 'statuses', operator: 'is', values: [...working] } });
+    await mount.render(view());
+    const workingOption = mount.container.querySelector('[data-testid="collection-filter-value:statuses:working"]');
+    expect(workingOption?.getAttribute('aria-checked')).toBe('true');
+    await press(mount.container, 'collection-filter-value:statuses:needs_you');
+    expect(edits.at(-1)).toMatchObject({ type: 'change', condition: { values: [...working, ...needsYou] } });
+    await mount.render(view());
+    await press(mount.container, 'collection-filter-value:statuses:working');
+    expect(edits.at(-1)).toMatchObject({ type: 'change', condition: { values: [...needsYou] } });
+    await mount.render(view());
+    await press(mount.container, 'collection-filter-value:statuses:working');
+    await mount.render(view());
+    await press(mount.container, 'collection-filter-back');
+    // The row names the group once, not each state it stands for.
+    const row = mount.container.querySelector('[data-testid="collection-filter-condition:statuses:is"]');
+    expect(row?.textContent).toContain('Working');
+    for (const state of working) expect(row?.textContent).not.toContain(state);
     mount.unmount();
   });
 

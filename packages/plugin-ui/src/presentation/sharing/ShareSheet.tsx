@@ -5,7 +5,6 @@ import type { HappierStyleProp } from '../portableTypes.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { resolveHappierButtonChrome, useHappierButtonMaterial } from '../interaction/buttonChrome.js';
 import { useOptionalHappierUiTheme } from '../../environment/context.js';
-import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierText } from '../text/Text.js';
 import { useHappierShareHost, type HappierShareAction, type HappierShareHost } from './ShareGrantRow.js';
 
@@ -30,10 +29,9 @@ export type HappierShareSheetProps = Readonly<{
 function DefaultButton(props: HappierShareSheetButtonProps) {
   const theme = useOptionalHappierUiTheme();
   if (!theme) throw new Error('Sharing buttons require a mounted theme or a Button binding.');
-  const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
   const material = useHappierButtonMaterial(theme);
   const chrome = (focused: boolean, disabled: boolean) => resolveHappierButtonChrome({
-    theme, variant: props.emphasis, size: 'small', focused, disabled, nativeMinimumTarget, ...material,
+    theme, variant: props.emphasis, size: 'small', focused, disabled, ...material,
   });
   return <HappierPressable testID={props.testID} accessibilityLabel={props.accessibilityLabel ?? props.label}
     disabled={props.disabled} onPress={props.onPress} style={state => [chrome(state.focused, state.disabled).style, props.style]}>

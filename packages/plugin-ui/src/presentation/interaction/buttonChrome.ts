@@ -1,6 +1,5 @@
 import type { HappierUiTheme } from '../../environment/types.js';
 import { Platform } from 'react-native';
-import { HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE } from '../../environment/interactiveTarget.js';
 import type { HappierPortableStyle } from '../portableTypes.js';
 import { happierRaisedEdgeStyle, settleHappierRaisedEdge, type HappierRaisedEdge } from '../layout/raisedEdge.js';
 import { happierFocusRingStyle } from './focusVisible.js';
@@ -10,6 +9,7 @@ import { useContainingHappierMaterialRole, useHappierMaterialColorResolver } fro
 import { useOptionalHappierUiPlatform } from '../../environment/context.js';
 import { useOptionalPluginUiPresentationHost } from '../../presentationHost/context.js';
 import { mixHappierColorOverPaper } from '../data/dataModel.js';
+import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 
 /** Material facts are resolved at the host boundary; this does not own glass policy. */
 export function useHappierButtonMaterial(theme: HappierUiTheme) {
@@ -30,16 +30,19 @@ export function useHappierButtonMaterial(theme: HappierUiTheme) {
 export type HappierButtonChromeVariant = 'primary' | 'secondary' | 'plain' | 'destructive';
 
 /**
- * `normal` is the page action (the shared 44 pt target everywhere). `small` is an action inside a dense
- * pointer layout — a row's peek, a card, a detail header — drawn at the host's desktop control height;
- * on a native touch platform it never drops under that platform's touch floor.
+ * `normal` is the page action, drawn at the page control height (`HAPPIER_PAGE_METRICS.controlHeightPx`,
+ * the settings lab's `.btn`). `small` is an action inside a dense layout — a row's peek, a card, a detail
+ * header — drawn at the lab's small control (`.btn.sm`). Neither is sized by a touch target, on any
+ * platform: under a finger the shared pressable reaches the target with its hit area, past the drawn
+ * button (DESIGN.md → touch targets are hit areas, not drawn sizes).
  */
 export type HappierButtonChromeSize = 'normal' | 'small';
 
-/** The dense pointer control height (the lab's and the host's desktop button, `.btn`). */
-export const HAPPIER_SMALL_BUTTON_HEIGHT = 32;
+/** The dense control height (settings lab `.btn.sm`). */
+export const HAPPIER_SMALL_BUTTON_HEIGHT = HAPPIER_PAGE_METRICS.smallControlHeightPx;
 
-const BUTTON_PADDING_VERTICAL = 8;
+/** A label line (20) and the edge (2 × 2) centred in the 32 control: a wrapped label still breathes. */
+const BUTTON_PADDING_VERTICAL = 4;
 /** The button's edge: transparent, it carries the primary fill's gloss line on its top side. */
 const BUTTON_EDGE_WIDTH = 2;
 export const HAPPIER_BUTTON_DISABLED_OPACITY = 0.35;
@@ -69,8 +72,6 @@ export function resolveHappierButtonChrome(input: Readonly<{
   disabled: boolean;
   focused: boolean;
   size?: HappierButtonChromeSize;
-  /** The native touch floor (`useHappierNativeMinimumInteractiveTargetSize`); undefined on pointer platforms. */
-  nativeMinimumTarget?: number;
   /** Pressed this frame: a primary button's gloss goes flat under the finger. */
   pressed?: boolean;
   /** The host's accent gloss (`HappierUiPalette.accentGloss`), the light top line of the primary fill. */
@@ -104,9 +105,7 @@ export function resolveHappierButtonChrome(input: Readonly<{
     gradient,
     disabledOpacity: receded === null ? HAPPIER_BUTTON_DISABLED_OPACITY : 1,
     style: {
-      minHeight: small
-        ? Math.max(HAPPIER_SMALL_BUTTON_HEIGHT, input.nativeMinimumTarget ?? 0)
-        : HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
+      minHeight: small ? HAPPIER_SMALL_BUTTON_HEIGHT : HAPPIER_PAGE_METRICS.controlHeightPx,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

@@ -253,6 +253,36 @@ describe('Work primitives for plugin authors', () => {
     }
   });
 
+  it('lets the host cap how far an ancestor link reaches for a finger, so a control flush below it is not covered', () => {
+    const reachBelow = (linkHitReach?: Parameters<typeof authorBarrel.HappierBreadcrumb>[0]['linkHitReach']) => {
+      const mounted = mountThroughReactNativeWeb(
+        <HappierUiEnvironmentProvider
+          environment={projectHappierUiEnvironment(createSurfaceContext({ platform: 'ios' }))}
+        >
+          <authorBarrel.HappierBreadcrumb
+            linkHitReach={linkHitReach}
+            linkStyle={{ height: 16 }}
+            items={[
+              { key: 'root', label: 'Project', testID: 'ancestor', onPress: () => {} },
+              { key: 'current', label: 'File', testID: 'current' },
+            ]}
+          />
+        </HappierUiEnvironmentProvider>,
+      );
+      try {
+        const frame = byTestId(mounted.container, 'ancestor')!.querySelector<HTMLElement>(
+          ':scope > [data-happier-hit-area="true"]',
+        );
+        return frame === null ? null : Math.abs(Number.parseFloat(getComputedStyle(frame).bottom));
+      } finally {
+        mounted.unmount();
+      }
+    };
+    // A finger reaches the platform target around the link; the host's declared cap holds on the side it names.
+    expect(reachBelow()).toBeGreaterThan(0);
+    expect(reachBelow({ bottom: 0 })).toBe(0);
+  });
+
   it('publishes the status language: bucket order and localized labels', () => {
     expect(HAPPIER_WORK_STATUS_BUCKETS).toEqual([
       'needs_you',

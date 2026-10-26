@@ -46,8 +46,9 @@ export type HappierPageRowMetrics = Readonly<{
 }>;
 
 /**
- * A finger's minimum target: every page row is at least this tall when the primary pointer is touch
- * (iOS HIG 44pt; the design doctrine's touch floor). A precise pointer keeps the denser desktop rows.
+ * The finger's hit-area height (iOS HIG 44pt). A page row never draws at it: a full-width row is its own
+ * hit area and keeps its density's height (DESIGN.md → touch targets are hit areas, not drawn sizes).
+ * Kept for consumers that size layout quanta in finger units.
  */
 export const HAPPIER_PAGE_ROW_TOUCH_MIN_HEIGHT_PX = 44;
 
@@ -106,14 +107,19 @@ const resolvedHappierPageRowMetrics = new Map<string, HappierPageRowMetrics>();
  * A page row's box, type and glyph for a density and shape. Referentially stable per input, so rows
  * can put the result straight into style arrays without churning memoized children.
  */
-export function resolveHappierPageRowMetrics(input: Readonly<{ density: HappierPageRowDensity; shape: HappierPageRowShape; touch: boolean }>): HappierPageRowMetrics {
-    const key = `${input.density}:${input.shape}:${input.touch ? 1 : 0}`;
+export function resolveHappierPageRowMetrics(input: Readonly<{
+    density: HappierPageRowDensity;
+    shape: HappierPageRowShape;
+    /** @deprecated A row's height no longer depends on the pointer: its hit area is the row itself. Ignored. */
+    touch?: boolean;
+}>): HappierPageRowMetrics {
+    const key = `${input.density}:${input.shape}`;
     const cached = resolvedHappierPageRowMetrics.get(key);
     if (cached) return cached;
     const table = PAGE_ROW_DENSITY_METRICS[input.density];
     const box = table[input.shape];
     const metrics: HappierPageRowMetrics = Object.freeze({
-        minHeightPx: input.touch ? Math.max(box.minHeightPx, HAPPIER_PAGE_ROW_TOUCH_MIN_HEIGHT_PX) : box.minHeightPx,
+        minHeightPx: box.minHeightPx,
         paddingVerticalPx: box.paddingVerticalPx,
         title: table.title,
         titleWeight: table.titleWeight ?? 'medium',

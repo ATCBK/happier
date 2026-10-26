@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe('shared overlay menu Android touch targets', () => {
-  it('keeps Menu, Dropdown, and ContextMenu rows and plain-text triggers at physical 48dp targets without overlapping hit slop', async () => {
+  it('keeps Menu, Dropdown, and ContextMenu rows and triggers at their drawn size and reaches 48dp with hit area only where it cannot overlap', async () => {
     const context = createSurfaceContext({ platform: 'android' });
     const presentationHost = createPresentationHost();
 
@@ -109,10 +109,11 @@ describe('shared overlay menu Android touch targets', () => {
 
     for (const row of rows) {
       const frame = resolvePressableStyle(row.props.style);
-      expect(frame.minHeight).toBeGreaterThanOrEqual(48);
+      // The menu's own row height, not a touch floor.
+      expect(frame.minHeight).toBe(36);
       // A minimum lets enlarged text grow. A fixed height could clip it.
       expect(frame.height).toBeUndefined();
-      // Adjacent menu rows need physical targets, not overlapping hit rectangles.
+      // Rows touch their neighbours inside a clipping surface: no hit area reaches past a row.
       expect(row.props.hitSlop).toBeUndefined();
     }
 
@@ -123,13 +124,16 @@ describe('shared overlay menu Android touch targets', () => {
 
     for (const trigger of triggers) {
       const frame = resolvePressableStyle(trigger.props.style);
-      expect(frame.minHeight).toBeGreaterThanOrEqual(48);
-      expect(frame.minWidth).toBeGreaterThanOrEqual(48);
-      // A minimum lets enlarged text grow. Fixed dimensions could clip it.
+      // The trigger is drawn at its content size; nothing floors it to the touch target.
+      expect(frame.minHeight).toBeUndefined();
+      expect(frame.minWidth).toBeUndefined();
       expect(frame.height).toBeUndefined();
       expect(frame.width).toBeUndefined();
-      // The physical frame, not overlapping hit rectangles, owns the target.
-      expect(trigger.props.hitSlop).toBeUndefined();
+      // Once laid out, its hit area reaches 48dp past the drawn text.
+      await act(async () => {
+        trigger.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 40, height: 20 } } });
+      });
+      expect(trigger.props.hitSlop).toEqual({ top: 14, bottom: 14, left: 4, right: 4 });
     }
   });
 

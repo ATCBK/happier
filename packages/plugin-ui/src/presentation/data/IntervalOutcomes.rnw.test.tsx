@@ -112,7 +112,7 @@ describe('neutral intervals and outcomes', () => {
     } finally { mount.unmount(); }
   });
 
-  it.each(['ios', 'android', 'web'] as const)('%s lanes keep honest targets: one platform-height track per line on touch, a target per run on web', platform => {
+  it.each(['ios', 'android', 'web'] as const)('%s lanes keep the dense drawing: one track per line on touch, a target per run on web', platform => {
     const intervals = [
       { id: 'a', label: 'Run A', lane: 'devbox', start: 1, end: 7 },
       { id: 'b', label: 'Run B', lane: 'devbox', start: 2, end: 8 },
@@ -139,15 +139,14 @@ describe('neutral intervals and outcomes', () => {
         expect(trackHeight + gap).toBeLessThan(24);
         expect(tracks[0]!.contains(target)).toBe(true);
       } else {
-        const floor = platform === 'android' ? 48 : 44;
         // The whole track is the one press target (press and drag along it); runs never overlap targets.
         expect(query(mount.container, 'touch-select-a')).toBeNull();
-        expect(trackHeight).toBe(floor);
+        // A touch target is a hit area: the track keeps the dense bar's height and gap, never the finger's.
+        expect(trackHeight).toBe(10);
+        expect(trackHeight + gap).toBeLessThan(24);
         expect(tracks[0]!.getAttribute('role')).toBe('slider');
         expect(tracks[0]!.getAttribute('aria-label')).toContain('devbox');
-        // A thicker visible bar, about half the track, carries the run's label where it fits.
-        expect(barHeight).toBeGreaterThanOrEqual(floor / 2 - 1);
-        expect(bar.textContent).toContain('Run A');
+        expect(barHeight).toBe(10);
       }
       expect(barTop + barHeight).toBeLessThanOrEqual(trackHeight);
       expect(Number.parseFloat(bar.style.left)).toBeCloseTo(10);

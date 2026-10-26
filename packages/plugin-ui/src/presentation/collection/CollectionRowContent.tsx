@@ -34,14 +34,16 @@ const CONTENT_PADDING_PX =
 
 /**
  * The one geometry owner of collection work rows. Compact is the dense pointer row (32, lab `clflat`); a
- * touch-first compact row keeps the platform's readable height (`touchCompact`). Text scaling may grow a row.
+ * touch-first compact row (`touchCompact`) sets its larger readable title in the same breathing room, so it is
+ * only as tall as that line needs — never the finger's target: a full-width row is its own hit area. Text
+ * scaling may grow a row.
  */
 export const HAPPIER_COLLECTION_ROW_METRICS = Object.freeze({
   height: Object.freeze({
     compact: 32,
     comfortable: 58,
     detailed: 84,
-    touchCompact: 44,
+    touchCompact: 36,
   }),
   /** The leading identity column and the mark inside it. */
   identity: Object.freeze({
@@ -225,16 +227,64 @@ const pressTarget: ViewStyle = {
   alignItems: 'center',
 };
 
+export type HappierCollectionRowMainProps = Readonly<{
+  density: HappierCollectionRowDensity;
+  touchCompact?: boolean;
+  identity?: ReactNode;
+  /** The title line: the title, then its quiet context and qualifiers. */
+  title: ReactNode;
+  /** Lines under the title. */
+  children?: ReactNode;
+}>;
+
+/**
+ * The slot layout every work row shares: the identity column at the density's size, then the text column
+ * (the title line, then the lines under it) after the density's gap. {@link HappierCollectionRowContent}
+ * frames it as a collection row; a Work summary (`HappierWorkSummary`) sets it inside its own row shell.
+ * It brings no frame, press target or alignment of its own; its parent row decides those.
+ */
+export function HappierCollectionRowMain(
+  props: HappierCollectionRowMainProps,
+): ReactElement {
+  const touchCompact =
+    props.touchCompact === true && props.density === 'compact';
+  const identity = resolveHappierCollectionRowIdentityMetrics(
+    props.density,
+    touchCompact,
+  );
+  return (
+    <>
+      {props.identity != null ? (
+        <View
+          style={[
+            identityBase,
+            { width: identity.slotSize, height: identity.slotSize },
+          ]}
+        >
+          {props.identity}
+        </View>
+      ) : null}
+      <View
+        style={[
+          contentBase,
+          props.identity != null
+            ? { marginLeft: M.contentGap[props.density] }
+            : null,
+        ]}
+      >
+        <View style={titleRow}>{props.title}</View>
+        {props.children}
+      </View>
+    </>
+  );
+}
+
 export function HappierCollectionRowContent(
   props: HappierCollectionRowContentProps,
 ): ReactElement {
   const touchCompact =
     props.touchCompact === true && props.density === 'compact';
   const height = resolveHappierCollectionRowHeight(props.density, touchCompact);
-  const identity = resolveHappierCollectionRowIdentityMetrics(
-    props.density,
-    touchCompact,
-  );
   const textScale =
     typeof props.textScale === 'number' && Number.isFinite(props.textScale)
       ? Math.max(1, props.textScale)
@@ -261,29 +311,14 @@ export function HappierCollectionRowContent(
     props.style,
   ];
   const content = (
-    <>
-      {props.identity != null ? (
-        <View
-          style={[
-            identityBase,
-            { width: identity.slotSize, height: identity.slotSize },
-          ]}
-        >
-          {props.identity}
-        </View>
-      ) : null}
-      <View
-        style={[
-          contentBase,
-          props.identity != null
-            ? { marginLeft: M.contentGap[props.density] }
-            : null,
-        ]}
-      >
-        <View style={titleRow}>{props.title}</View>
-        {props.children}
-      </View>
-    </>
+    <HappierCollectionRowMain
+      density={props.density}
+      touchCompact={touchCompact}
+      identity={props.identity}
+      title={props.title}
+    >
+      {props.children}
+    </HappierCollectionRowMain>
   );
   return (
     <View style={rowStyle} onLayout={props.onLayout}>

@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { describe, expect, it } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
+import { HappierUiPlatformProvider } from '../../environment/context.js';
 import { createHappierCollectionDraftTitleStore } from './collectionModel.js';
 import {
   HappierCollectionList,
@@ -164,6 +165,30 @@ describe('HappierCollectionList (list presentation)', () => {
     expect(calls).toEqual(['toggle', 'open', 'toggle']);
     expect(mount.container.querySelector('[data-testid="group:fold"]')?.getAttribute('aria-expanded')).toBe('false');
     mount.unmount();
+  });
+
+  // The fold chevron abuts the lead it folds (no gap between the two targets): a finger's hit area on the
+  // chevron must not reach back into the lead, or one tap near their seam is ambiguous.
+  it('keeps the separate fold control\'s hit area off the lead it sits against', () => {
+    const glyphHost: HappierCollectionListHost = { ...host, useGroupGlyphColor: () => '#000' };
+    const mount = mountThroughReactNativeWeb(
+      <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+        <HappierCollectionListGroupLabel host={glyphHost} testID="group" title="Needs you" count={4}
+          disclosure={{ expanded: true, onToggle: () => {}, onOpen: () => {} }} />
+      </HappierUiPlatformProvider>,
+    );
+    try {
+      const fold = mount.container.querySelector<HTMLElement>('[data-testid="group:fold"]')!;
+      const frame = fold.querySelector<HTMLElement>(':scope > [data-happier-hit-area="true"]');
+      expect(frame).not.toBeNull();
+      const style = getComputedStyle(frame!);
+      expect(Number.parseFloat(style.left)).toBeCloseTo(0);
+      // Away from the lead it still reaches toward the 44 pt target.
+      expect(-Number.parseFloat(style.right)).toBeGreaterThan(0);
+      expect(-Number.parseFloat(style.top)).toBeGreaterThan(0);
+    } finally {
+      mount.unmount();
+    }
   });
 
   it('titles the draft row from the typed name, falling back to the placeholder', () => {

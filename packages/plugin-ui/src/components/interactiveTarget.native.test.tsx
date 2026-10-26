@@ -54,6 +54,7 @@ import {
   Text,
 } from './index.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 
 function flattenStyle(style: unknown): Record<string, unknown> {
   if (Array.isArray(style)) {
@@ -158,12 +159,19 @@ function findPressable(testID: string) {
   return target[0]!;
 }
 
-function expectPhysicalTarget(testID: string, minimum: number) {
-  const target = findPressable(testID);
-  const style = resolvePressableStyle(target.props.style);
-  expect(style.minWidth, `${testID} must have a physical minimum width`).toBeGreaterThanOrEqual(minimum);
-  expect(style.minHeight, `${testID} must have a physical minimum height`).toBeGreaterThanOrEqual(minimum);
-  return target;
+function layOut(node: { props: Record<string, unknown> }, width: number, height: number) {
+  const onLayout = node.props.onLayout as ((event: unknown) => void) | undefined;
+  expect(onLayout, 'a control under a finger measures its drawn box').toBeTypeOf('function');
+  act(() => {
+    onLayout!({ nativeEvent: { layout: { x: 0, y: 0, width, height } } });
+  });
+}
+
+/** Re-read a host node after a state update replaced it. */
+function findHost(type: string, testID: string) {
+  const hosts = renderer!.root.findAll((node) => node.type === type && node.props.testID === testID);
+  expect(hosts, `missing ${type} ${testID}`).toHaveLength(1);
+  return hosts[0]!;
 }
 
 describe('public interactive families use the provider-owned native target policy', () => {
@@ -171,48 +179,65 @@ describe('public interactive families use the provider-owned native target polic
     ['android', 48],
     ['ios', 44],
   ] as const) {
-    it(`gives ${platform} the physical target across shared public families`, async () => {
+    it(`keeps ${platform} controls at their drawn size and reaches the touch target as hit area`, async () => {
       await renderInteractiveFamilies(platform);
 
-      for (const testID of [
-        'button',
-        'icon-button',
-        'surface',
-        'list-tight:first',
-        'list-tight:second',
-        'toggle',
-        'select-option',
-        'tabs:summary',
-        'link',
-        'menu-trigger',
-      ]) {
-        const target = expectPhysicalTarget(testID, minimum);
-        // Physical frames are required for adjacent controls; hit-slop-only
-        // growth can overlap the next row or action.
-        expect(target.props.hitSlop).toBeUndefined();
-        // DOM-only semantics must not leak into the native view config. Native
-        // assistive technology consumes the canonical accessibilityRole arm.
+      // Interaction-core families: the drawing keeps its design size and the hit area reaches the
+      // target past it, never a physical floor.
+      for (const testID of ['button', 'icon-button', 'surface', 'tabs:summary', 'link', 'menu-trigger']) {
+        const target = findPressable(testID);
+        const style = resolvePressableStyle(target.props.style);
+        expect(style.minWidth ?? 0, `${testID} must not be floored wide`).toBeLessThan(minimum);
+        // A page button is drawn at the page control height on every platform, Android included.
+        expect(style.minHeight ?? 0, `${testID} must not be floored tall`)
+          .toBeLessThanOrEqual(testID === 'button' ? HAPPIER_PAGE_METRICS.controlHeightPx : minimum - 1);
+        // DOM-only semantics must not leak into the native view config.
         expect(target.props.role).toBeUndefined();
         expect(target.props.onKeyDown).toBeUndefined();
         expect(target.props.accessibilityRole).toBeTypeOf('string');
+
+        layOut(target, 28, 20);
+        const slop = findHost('Pressable', testID).props.hitSlop as Record<string, number>;
+        const reach = (minimum - 20) / 2;
+        // A tab's strip clips above and below it; every other control reaches the full target.
+        expect(slop.top, testID).toBe(testID.startsWith('tabs:') ? 0 : reach);
+        expect(slop.bottom, testID).toBe(testID.startsWith('tabs:') ? 0 : reach);
+        expect(slop.left + 28 + slop.right, testID).toBeGreaterThanOrEqual(testID.startsWith('tabs:') ? 28 : minimum);
       }
+
+      // The platform switch keeps the platform's own size; a press beside it reaches it.
+      const toggle = findPressable('toggle');
+      expect(resolvePressableStyle(toggle.props.style).minWidth).toBeUndefined();
+      expect(resolvePressableStyle(toggle.props.style).minHeight).toBeUndefined();
+      layOut(toggle, 51, 31);
+      const toggleHit = renderer!.root.findAll((node) => (
+        node.type === 'Pressable' && node.props.accessible === false && node.props.hitSlop !== undefined
+      ));
+      expect(toggleHit).toHaveLength(1);
+      expect(toggleHit[0]!.props.hitSlop.top).toBe((minimum - 31) / 2);
+
+      // A tight list row keeps its density height on a finger too. Its reach between stacked rows
+      // belongs to the List owner (TT-SHARED-B), not to this family check.
+      for (const testID of ['list-tight:first', 'list-tight:second']) {
+        expect(resolvePressableStyle(findPressable(testID).props.style).minHeight).toBe(36);
+      }
+      // A select option takes the shared hit area (its group owner bounds the reach between options).
+      layOut(findPressable('select-option'), 60, 20);
+      const optionReach = findHost('Pressable', 'select-option').props.hitSlop.top as number;
+      expect(optionReach).toBeGreaterThan(0);
+      expect(optionReach).toBeLessThanOrEqual((minimum - 20) / 2);
 
       const textField = renderer!.root.findAll((node) => (
         node.type === 'TextInput' && node.props.testID === 'text-field'
       ));
       expect(textField, 'missing native text input').toHaveLength(1);
-      const textFieldStyle = flattenStyle(textField[0]!.props.style);
-      expect(textFieldStyle.minWidth).toBeGreaterThanOrEqual(minimum);
-      expect(textFieldStyle.minHeight).toBeGreaterThanOrEqual(minimum);
 
       const menuRows = renderer!.root.findAll((node) => (
         node.type === 'Pressable' && node.props.accessibilityRole === 'menuitem'
       ));
       expect(menuRows).toHaveLength(2);
       for (const row of menuRows) {
-        const style = resolvePressableStyle(row.props.style);
-        expect(style.minWidth).toBeGreaterThanOrEqual(minimum);
-        expect(style.minHeight).toBeGreaterThanOrEqual(minimum);
+        // Adjacent rows inside a clipping menu: each row is its own hit area.
         expect(row.props.hitSlop).toBeUndefined();
       }
     });

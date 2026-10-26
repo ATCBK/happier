@@ -6,19 +6,33 @@ import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HappierPageRowFieldLayoutContext } from '../layout/pageRowField.js';
 import { HappierChevron } from '../collection/DisclosureChevron.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
+import { useHappierHitArea } from '../interaction/hitArea.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import { happierRaisedEdgeStyle, type HappierRaisedEdge } from '../layout/raisedEdge.js';
 import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
 import { resolveHappierTypeScale } from '../text/typeScale.js';
 
-/** The compact rail/search well; phones take the platform target supplied by the adapter. */
+const SEARCH_FIELD_HIT_REACH: HappierHitReach = Object.freeze({ left: 0, right: 0 });
+const SEARCH_FIELD_SURFACE_FRAME: HappierPortableStyle = Object.freeze({ maxWidth: '100%', minWidth: 0 });
+
+/**
+ * The compact rail/search well. It keeps its drawn height under every pointer; under a finger a tap just
+ * above or below it still focuses the field, through the shared hit area (never a taller well).
+ */
 export const HAPPIER_SEARCH_FIELD_METRICS = Object.freeze({ heightPx: HAPPIER_PAGE_METRICS.controlHeightPx, iconInsetPx: 10, iconSizePx: 14, iconGapPx: 8, trailingInsetPx: 8 });
 
 export function HappierSearchFieldBox(props: Readonly<{
   testID?: string;
   colors: Pick<HappierFieldBoxColors, 'borderColor' | 'backgroundColor' | 'edge'>;
   radius: number;
+  /** A hit area the host asks for beyond the environment's finger target; it never grows the drawn well. */
   minimumTargetSize?: number;
+  /**
+   * How far the well's hit area may reach past it. By default it reaches up and down only: the controls
+   * beside a search field own their own hit areas.
+   */
+  hitReach?: HappierHitReach;
   onFocusInput: () => void;
   leading?: ReactNode;
   trailing?: ReactNode;
@@ -29,13 +43,21 @@ export function HappierSearchFieldBox(props: Readonly<{
 }>) {
   const metrics = HAPPIER_SEARCH_FIELD_METRICS;
   const paintColor = useHappierMaterialColorResolver();
-  const style = [{ flexDirection: 'row' as const, alignItems: 'center' as const, borderRadius: props.radius, paddingLeft: metrics.iconInsetPx, paddingRight: metrics.trailingInsetPx, paddingVertical: 0, minHeight: Math.max(metrics.heightPx, props.minimumTargetSize ?? 0), backgroundColor: paintColor(props.colors.backgroundColor), borderColor: props.colors.borderColor, borderWidth: StyleSheet.hairlineWidth }, happierRaisedEdgeStyle(props.colors.edge), props.style];
+  const style = [{ flexDirection: 'row' as const, alignItems: 'center' as const, borderRadius: props.radius, paddingLeft: metrics.iconInsetPx, paddingRight: metrics.trailingInsetPx, paddingVertical: 0, minHeight: metrics.heightPx, backgroundColor: paintColor(props.colors.backgroundColor), borderColor: props.colors.borderColor, borderWidth: StyleSheet.hairlineWidth }, happierRaisedEdgeStyle(props.colors.edge), props.style];
   const children = <>
     {props.leading ? <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ marginRight: metrics.iconGapPx }}>{props.leading}</View> : null}
     {props.children}
     {props.trailing ?? null}
   </>;
-  return <Pressable testID={props.testID ? `${props.testID}.field` : undefined} onPress={props.onFocusInput} accessible={false} focusable={false} tabIndex={-1} style={props.renderSurface ? { maxWidth: '100%', minWidth: 0 } : style}>
+  const pressableStyle = props.renderSurface ? SEARCH_FIELD_SURFACE_FRAME : style;
+  const hitArea = useHappierHitArea({
+    restingStyle: () => pressableStyle,
+    hitTarget: props.minimumTargetSize,
+    hitReach: props.hitReach ?? SEARCH_FIELD_HIT_REACH,
+  });
+  return <Pressable testID={props.testID ? `${props.testID}.field` : undefined} onPress={props.onFocusInput} accessible={false} focusable={false} tabIndex={-1}
+    hitSlop={hitArea.hitSlop} onLayout={hitArea.onLayout} style={pressableStyle}>
+    {hitArea.frame}
     {props.renderSurface ? props.renderSurface({ style, children }) : children}
   </Pressable>;
 }
@@ -257,21 +279,22 @@ export const HAPPIER_FIELD_TEXT_METRICS = Object.freeze({
 });
 
 /**
- * The input's own text box inside the field box: the field's text step with no
- * padding of its own (the box pads), at least one line tall, a multiline field
- * `lines` tall and top-aligned, and — on a touch platform — the native target
- * floor, so a tap anywhere in the box lands in the field.
- */
-/**
  * How a text field presents. `field`: the bordered box of a row's control. `document`: long prose a
  * person reads and edits in place (a role's instructions, notes) as a soft filled card at reading
  * size, so it reads like the text it is rather than a form control.
  */
 export type HappierFieldTextPresentation = 'field' | 'document';
 
+/**
+ * The input's own text box inside the field box: the field's text step with no
+ * padding of its own (the box pads), a multiline field `lines` tall and
+ * top-aligned, and a single-line field filling the box's drawn height, so a tap
+ * anywhere in the box lands in the field without the box ever growing.
+ */
 export function resolveHappierFieldTextInputMetrics(input: Readonly<{
   multiline?: boolean;
   minLines?: number;
+  /** @deprecated A finger's target never grows the drawn field; the input fills the box instead. Ignored. */
   nativeMinimumTargetSize?: number;
   presentation?: HappierFieldTextPresentation;
 }>): Readonly<{
@@ -309,7 +332,7 @@ export function resolveHappierFieldTextInputMetrics(input: Readonly<{
     lineHeight: line,
     padding: 0,
     margin: 0,
-    minHeight: Math.max(line, input.nativeMinimumTargetSize ?? 0),
+    minHeight: HAPPIER_FIELD_BOX_METRICS.minHeightPx - 2 * HAPPIER_FIELD_BOX_METRICS.borderWidthPx,
   };
 }
 

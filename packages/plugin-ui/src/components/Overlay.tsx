@@ -2,9 +2,6 @@ import { useCallback, useContext, useLayoutEffect, useMemo, useRef, type Mutable
 import { View } from 'react-native';
 
 import {
-  useHappierNativeMinimumInteractiveTargetSize,
-} from '../environment/interactiveTarget.js';
-import {
   useOptionalPluginUiPresentationHost,
   useOptionalPluginUiPopoverScrollSource,
   type PluginUiPopoverContentControls,
@@ -204,7 +201,6 @@ function PopoverPresentation({
   if (typeof trigger !== 'string') {
     throw new TypeError('Popover requires a plain text trigger because it owns the trigger interaction.');
   }
-  const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   const theme = usePluginTheme();
   const host = useOptionalPluginUiPresentationHost();
   const followScrollRef = useOptionalPluginUiPopoverScrollSource();
@@ -295,14 +291,7 @@ function PopoverPresentation({
         accessibilityRole="button"
         tabIndex={triggerTabIndex}
         testID={testID}
-        style={(state) => buttonFace ? {
-          ...(nativeMinimumTouchTarget === undefined ? {} : { minWidth: nativeMinimumTouchTarget }),
-          ...buttonFace.style(state),
-        } : ({
-          ...(nativeMinimumTouchTarget === undefined ? {} : {
-            minHeight: nativeMinimumTouchTarget,
-            minWidth: nativeMinimumTouchTarget,
-          }),
+        style={(state) => buttonFace ? buttonFace.style(state) : ({
           alignItems: 'center',
           justifyContent: 'center',
           // Like Happier's page field trigger: it hugs its choice beside a label, and under a label
@@ -547,7 +536,6 @@ function MenuRows({
   restingHighlight = true,
 }: MenuRowsProps): ReactElement {
   const theme = usePluginTheme();
-  const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   const content = useMemo(
     () => resolveHappierMenuContent({ items: ungroupedItems, groups }),
     [groups, ungroupedItems],
@@ -635,6 +623,8 @@ function MenuRows({
         disabled={item.disabled}
         tabIndex={!item.disabled && index === selectedIndex ? 0 : -1}
         onKeyDown={(key) => onItemKey(key, index)}
+        // Rows touch their neighbours and span the clipping menu surface: the row is its own hit area.
+        hitReach={0}
         onPress={() => {
           if (item.disabled) return;
           setSelectedIndex(index);
@@ -642,11 +632,8 @@ function MenuRows({
           if (item.kind !== 'checkbox') controls.requestClose('selection');
         }}
         style={(state) => ({
-          minHeight: Math.max(HAPPIER_MENU_ROW_METRICS.minHeightPx, nativeMinimumTouchTarget ?? 0),
+          minHeight: HAPPIER_MENU_ROW_METRICS.minHeightPx,
           paddingVertical: HAPPIER_MENU_ROW_METRICS.paddingVerticalPx,
-          ...(nativeMinimumTouchTarget === undefined ? {} : {
-            minWidth: nativeMinimumTouchTarget,
-          }),
           paddingHorizontal: HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
           borderRadius: HAPPIER_MENU_ROW_METRICS.radiusPx,
           borderWidth: 0,

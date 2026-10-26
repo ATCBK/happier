@@ -8,7 +8,7 @@ import { createHostApiStub, createSurfaceContext } from '../../surfaceFixture.te
 import { PluginUiProvider } from '../../components/PluginUiProvider.js';
 import { HappierMaterialSurface } from '../layout/Surface.js';
 import { happierSurfaceGradientWebStyle } from '../layout/material.js';
-import { HappierFindBar, type HappierFindBarHost, type HappierFindBarInputProps, type HappierFindBarLabels, type HappierFindBarProps } from './FindBar.js';
+import { HAPPIER_FIND_BAR_METRICS, HappierFindBar, type HappierFindBarHost, type HappierFindBarInputProps, type HappierFindBarLabels, type HappierFindBarProps } from './FindBar.js';
 import type { FindOptions, FindStatus } from './findTypes.js';
 
 const host: HappierFindBarHost = {
@@ -398,6 +398,24 @@ describe('HappierFindBar', () => {
       } finally {
         mounted.unmount();
       }
+    }
+  });
+
+  it('keeps the inline capsule and its buttons at their drawn size under a finger, reaching only into the gaps', () => {
+    const { mounted } = mountBar({ minimumTargetSize: 44, status: { kind: 'results', current: 1, total: 3, coverage: 'complete' } });
+    try {
+      const previous = buttonNamed(mounted.container, labels.previous)!;
+      expect(parseFloat(getComputedStyle(previous).width)).toBe(HAPPIER_FIND_BAR_METRICS.inline.buttonPx);
+      expect(parseFloat(getComputedStyle(previous).height)).toBe(HAPPIER_FIND_BAR_METRICS.inline.buttonPx);
+      const frame = previous.querySelector<HTMLElement>(':scope > [data-happier-hit-area="true"]')!;
+      expect(frame).not.toBeNull();
+      // Two buttons 2 px apart each reach 1 px toward the other, and the full target vertically.
+      expect(-parseFloat(getComputedStyle(frame).right)).toBe(HAPPIER_FIND_BAR_METRICS.inline.gapPx / 2);
+      expect(-parseFloat(getComputedStyle(frame).top)).toBe((44 - HAPPIER_FIND_BAR_METRICS.inline.buttonPx) / 2);
+      const field = byTestId(mounted.container, 'find.field')!;
+      expect(parseFloat(getComputedStyle(field).minHeight) || 0).toBeLessThanOrEqual(HAPPIER_FIND_BAR_METRICS.inline.heightPx);
+    } finally {
+      mounted.unmount();
     }
   });
 

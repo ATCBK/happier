@@ -20,9 +20,6 @@ import {
   useOptionalHappierUiTypography,
 } from '../../environment/context.js';
 import { resolveHappierRovingTabStop } from '../collection/semantics.js';
-import {
-  useHappierNativeMinimumInteractiveTargetSize,
-} from '../../environment/interactiveTarget.js';
 import type { HappierUiTheme } from '../../environment/types.js';
 import { HappierScrollArea } from '../layout/Layout.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
@@ -290,7 +287,6 @@ export function HappierTabs(props: Readonly<{
     const { content, viewport } = stripWidths.current;
     if (content !== null && viewport !== null) props.onStripLayout?.({ contentWidth: content, viewportWidth: viewport });
   };
-  const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   const localization = useOptionalHappierUiLocalization();
   const typography = useOptionalHappierUiTypography();
   const labelStyle = resolveHappierTypeRoleStyle('label', props.theme, typography);
@@ -477,18 +473,16 @@ export function HappierTabs(props: Readonly<{
                 onPress={() => props.onValueChange(tab.value)}
                 onFocusChange={(isFocused) => { recordFocusWithin(tab.value, isFocused); }}
                 testID={`${props.testID ?? 'tabs'}:${tab.value}`}
+                // The strip's scroller clips above and below; sideways each tab reaches half the gap.
+                hitReach={{ top: 0, bottom: 0, left: props.theme.spacing.large / 2, right: props.theme.spacing.large / 2 }}
                 style={(state) => ({
-                  ...(nativeMinimumTouchTarget === undefined ? {} : {
-                    minWidth: nativeMinimumTouchTarget,
-                    minHeight: nativeMinimumTouchTarget,
-                  }),
                   flexDirection: 'row',
                   alignItems: 'center',
                   // The scroller absorbs the overflow; a flexible trigger would
                   // instead compress until its own label is unreadable.
                   flexShrink: 0,
                   gap: props.theme.spacing.xsmall,
-                  minHeight: Math.max(TAB_STRIP_HEIGHT, nativeMinimumTouchTarget ?? 0),
+                  minHeight: TAB_STRIP_HEIGHT,
                   borderBottomWidth: 2,
                   borderBottomColor: isSelected ? props.theme.colors.accent : 'transparent',
                   // Inset: the strip scrolls, and its scroller clips anything drawn outside a tab.

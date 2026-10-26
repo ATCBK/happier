@@ -69,10 +69,14 @@ export function OutcomeScatter(props: OutcomeScatterProps) {
   const xDomain = props.xDomain ?? finiteDomain(complete.map((point) => point.x));
   const yDomain = props.yDomain ?? finiteDomain(complete.map((point) => point.y));
   const width = props.geometry?.width ?? measuredWidth;
+  // The separation a point's hit area needs; it decides which marks are isolated enough to select.
   const target = nativeTarget ?? HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE;
+  // A selectable point draws a small ring around its mark; its hit area reaches the target invisibly, so the
+  // plot keeps only the ring's margin rather than a finger's (DESIGN.md → touch targets are hit areas).
+  const ring = HAPPIER_DATA_METRICS.lineStrokePx * 8;
   const plotHeight = props.geometry === undefined ? HAPPIER_DATA_METRICS.plotHeightPx * 2
     : props.geometry.height - (text.caption.lineHeight ?? props.theme.typography.caption.lineHeight) * 3
-      - target - HAPPIER_DATA_METRICS.axisGapPx;
+      - ring - HAPPIER_DATA_METRICS.axisGapPx;
   const showPlot = (props.size ?? 'full') === 'full' && xDomain !== null && yDomain !== null
     && resolveHappierDataDomainFraction(xDomain[0], ...xDomain) !== null && resolveHappierDataDomainFraction(yDomain[0], ...yDomain) !== null
     && Number.isFinite(plotHeight) && plotHeight > target && (width === null || Number.isFinite(width) && width >= target * 2);
@@ -92,7 +96,7 @@ export function OutcomeScatter(props: OutcomeScatterProps) {
     {props.basis ? <HappierText style={text.caption}>{props.basis}</HappierText> : null}
     {showPlot && xDomain && yDomain ? <View testID={props.testID ? `${props.testID}-plot` : undefined}>
       <HappierText style={text.caption}>{props.yLabel}</HappierText>
-      <View style={{ height: plotHeight, marginHorizontal: target / 2, marginVertical: target / 2,
+      <View style={{ height: plotHeight, marginHorizontal: ring / 2, marginVertical: ring / 2,
         borderBottomWidth: 1, borderLeftWidth: 1, borderColor: props.theme.colors.divider }}>
         {xDomain === null ? null : guides.map((guide) => {
           const at = resolveHappierDataDomainFraction(guide.value, ...xDomain);
@@ -125,8 +129,9 @@ export function OutcomeScatter(props: OutcomeScatterProps) {
             {isolated ? <HappierPressable testID={props.testID ? `${props.testID}-select-${vertex.point.id}` : undefined}
               accessibilityRole="button" accessibilityLabel={describe(vertex.point)} selected={selectedId === vertex.point.id}
               onPress={() => setSelectedId(vertex.point.id)} onFocusChange={(focused) => { if (focused) setSelectedId(vertex.point.id); }}
-              style={{ position: 'absolute', width: target, height: target, top: -target / 2, left: -target / 2,
-                borderRadius: target / 2, borderWidth: selectedId === vertex.point.id ? 1 : 0, borderColor: props.theme.colors.text }} /> : null}
+              hitTarget={target}
+              style={{ position: 'absolute', width: ring, height: ring, top: -ring / 2, left: -ring / 2,
+                borderRadius: ring / 2, borderWidth: selectedId === vertex.point.id ? 1 : 0, borderColor: props.theme.colors.text }} /> : null}
           </View>;
         })}
       </View>

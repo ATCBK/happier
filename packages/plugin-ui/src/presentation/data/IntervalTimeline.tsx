@@ -1,7 +1,7 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 
-import { HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE, useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import type { HappierUiTheme } from '../../environment/types.js';
 import { HappierDataHatch } from '../content/Hatch.js';
 import { HappierPressable } from '../interaction/Pressable.js';
@@ -212,17 +212,17 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
     }
     return kept;
   })();
-  const rowHeight = Math.max(nativeTarget ?? HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
-    (text.body.lineHeight ?? props.theme.typography.body.lineHeight) + HAPPIER_DATA_METRICS.cellPaddingVerticalPx * 2);
+  // A row is its label line and its proportion bar; rows stack flush, each its own hit area.
+  const rowHeight = (text.body.lineHeight ?? props.theme.typography.body.lineHeight) + HAPPIER_DATA_METRICS.cellPaddingVerticalPx * 2;
   const validDomain = Number.isFinite(props.domain.start) && Number.isFinite(props.domain.end) && props.domain.start < props.domain.end;
   const sideLabels = width === null || width >= HAPPIER_DATA_METRICS.laneSideLabelMinWidthPx;
   const plotWidth = width === null ? null : Math.max(1, width - (sideLabels ? HAPPIER_DATA_METRICS.laneLabelWidthPx + HAPPIER_DATA_METRICS.blockGapPx : 0));
   const marksOf = (interval: IntervalTimelineInterval) => projectIntervalMarks(interval, props.domain);
-  // A track is one press target tall: the pointer's dense bar on web, the platform's finger target on
-  // native, where the whole track is a single target selecting the run under the finger (press and drag),
-  // so packed runs never share overlapping targets and a busy day stays packed on a phone.
-  const trackHeight = nativeTarget ?? HAPPIER_DATA_METRICS.laneBarHeightPx;
-  const trackGap = nativeTarget === undefined ? HAPPIER_DATA_METRICS.laneTrackGapPx : 0;
+  // A track is the dense bar on every pointer. On native the whole track is a single target selecting the
+  // run under the finger (press and drag), so packed runs never share overlapping targets; its hit area
+  // reaches half the gap to the next track, never a taller track (DESIGN.md → touch targets are hit areas).
+  const trackHeight = HAPPIER_DATA_METRICS.laneBarHeightPx;
+  const trackGap = HAPPIER_DATA_METRICS.laneTrackGapPx;
   const lanes = lanesLayout && validDomain
     ? packIntervalLanes(props.intervals, (interval) => laneMarkOf(marksOf(interval)), HAPPIER_DATA_METRICS.barStubPx / (plotWidth ?? 800)) : [];
   const captionLine = text.caption.lineHeight ?? props.theme.typography.caption.lineHeight;
@@ -262,6 +262,7 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
             testID={props.testID ? `${props.testID}-lane-${laneIndex}-track-${trackIndex}` : undefined}
             style={{ height: trackHeight }}
             {...(touchTrack ? {
+              hitSlop: { top: trackGap / 2, bottom: trackGap / 2 },
               accessible: true, accessibilityRole: 'adjustable' as const,
               accessibilityLabel: `${lane.label}${lane.tracks.length > 1 ? ` ${trackIndex + 1}` : ''}`,
               accessibilityValue: { text: trackSelected ? describe(trackSelected) : `${trackStops(track).length}` },
@@ -284,24 +285,19 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
               // A run too short to draw as a span keeps a visible stub; a run with no end draws only its start.
               const place = { position: 'absolute' as const, left: `${mark.from * 100}%` as const, width: span > 0 ? `${span * 100}%` as const : undefined,
                 minWidth: span > 0 ? HAPPIER_DATA_METRICS.barStubPx : HAPPIER_DATA_METRICS.lineStrokePx };
-              // Touch draws a thicker bar (about half the track) and names the run inside it where the name fits.
-              const barHeight = touchTrack ? Math.round(trackHeight / 2) : HAPPIER_DATA_METRICS.laneBarHeightPx;
-              const spanPx = plotWidth === null ? 0 : span * plotWidth;
-              const named = touchTrack && interval.pattern !== 'hatched'
-                && spanPx >= interval.label.length * captionWidth + HAPPIER_DATA_METRICS.columnGapPx * 2;
+              const barHeight = HAPPIER_DATA_METRICS.laneBarHeightPx;
               return <Fragment key={interval.id}>
                 <View testID={props.testID ? `${props.testID}-interval-${interval.id}` : undefined} aria-hidden importantForAccessibility="no-hide-descendants"
                   style={{ ...place, top: (trackHeight - barHeight) / 2, height: barHeight,
                     borderRadius: span > 0 ? HAPPIER_DATA_METRICS.barRadiusPx : 0, overflow: 'hidden', justifyContent: 'center',
-                    paddingHorizontal: named ? HAPPIER_DATA_METRICS.columnGapPx : 0,
                     backgroundColor: color, opacity: selectedId !== null && selectedId !== interval.id ? 0.55 : 1 }}>
                   {interval.pattern === 'hatched' ? <HappierDataHatch theme={props.theme} /> : null}
-                  {named ? <HappierText style={{ ...text.caption, color: props.theme.colors.onAccent }} numberOfLines={1}>{interval.label}</HappierText> : null}
                 </View>
                 {/* Pointer: the target covers the whole track over the ink, one per run. */}
                 {touchTrack ? null : <HappierPressable testID={props.testID ? `${props.testID}-select-${interval.id}` : undefined}
                   accessibilityRole="button" accessibilityLabel={describe(interval)} selected={selectedId === interval.id}
                   hitSlop={{ top: trackGap / 2, bottom: trackGap / 2 }}
+                  hitReach={{ top: trackGap / 2, bottom: trackGap / 2, left: 0, right: 0 }}
                   onPress={() => setSelectedId(interval.id)} onFocusChange={(focused) => { if (focused) setSelectedId(interval.id); }}
                   style={{ ...place, top: 0, bottom: 0 }} />}
               </Fragment>;
@@ -315,6 +311,7 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
         return <HappierPressable key={interval.id} testID={props.testID ? `${props.testID}-select-${interval.id}` : undefined}
           accessibilityRole="button" accessibilityLabel={describe(interval)} selected={selectedId === interval.id}
           onPress={() => setSelectedId(interval.id)} onFocusChange={(focused) => { if (focused) setSelectedId(interval.id); }}
+          hitReach={{ top: 0, bottom: 0 }}
           style={{ minHeight: rowHeight, justifyContent: 'center' }}>
           <View aria-hidden importantForAccessibility="no-hide-descendants">
             <HappierText style={text.caption}>{interval.label}</HappierText>

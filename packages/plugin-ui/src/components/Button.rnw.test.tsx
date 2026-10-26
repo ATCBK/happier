@@ -7,6 +7,7 @@ import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { HappierSectionActionStackedContext } from '../presentation/layout/PageSection.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import { Button, IconButton } from './Button.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
 
@@ -621,23 +622,37 @@ describe('plugin-ui Button renders real React Native pressable semantics', () =>
     mount.unmount();
   });
 
-  it('draws a small button at the dense pointer height and never under the native touch floor', () => {
-    const regular = mountSurface(<Button title="Open" onPress={() => {}} />);
-    const regularHeight = Number.parseFloat(getComputedStyle(findButton(regular.container)).minHeight);
-    regular.unmount();
+  it('draws buttons at the page control heights on every pointer and gives a finger its target as hit area', () => {
+    const measure = (size: 'normal' | 'small', platform?: 'ios' | 'android') => {
+      const mount = mountSurface(
+        <Button title="Open" size={size} onPress={() => {}} />,
+        platform === undefined ? undefined : createSurfaceContext({ platform }),
+      );
+      const button = findButton(mount.container);
+      const height = Number.parseFloat(getComputedStyle(button).minHeight);
+      const hitFrame = button.querySelector<HTMLElement>(':scope > [data-happier-hit-area="true"]');
+      // The frame is offset from the padding edge, inside the button's border, so its reach past the
+      // drawn outer box is its offset minus that border.
+      const border = Number.parseFloat(getComputedStyle(button).borderTopWidth);
+      const reach = hitFrame === null ? 0 : -Number.parseFloat(getComputedStyle(hitFrame).top) - border;
+      mount.unmount();
+      return { height, reach };
+    };
 
-    const web = mountSurface(<Button title="Open" size="small" onPress={() => {}} />);
-    const webHeight = Number.parseFloat(getComputedStyle(findButton(web.container)).minHeight);
-    web.unmount();
-
-    const ios = mountSurface(<Button title="Open" size="small" onPress={() => {}} />, createSurfaceContext({ platform: 'ios' }));
-    const iosHeight = Number.parseFloat(getComputedStyle(findButton(ios.container)).minHeight);
-    ios.unmount();
-
-    // A pointer layout keeps its density (the host's desktop control height); a finger keeps its 44 pt target.
-    expect(webHeight).toBeLessThan(regularHeight);
-    expect(webHeight).toBe(32);
-    expect(iosHeight).toBeGreaterThanOrEqual(44);
+    // The design draws the page action at the page control height and a dense action at the lab's small
+    // control, under a mouse and under a finger alike (settings lab `.btn` / `.btn.sm`).
+    for (const platform of [undefined, 'ios', 'android'] as const) {
+      expect(measure('normal', platform).height).toBe(HAPPIER_PAGE_METRICS.controlHeightPx);
+      expect(measure('small', platform).height).toBe(28);
+    }
+    // A precise pointer gets no hit frame; a finger reaches the platform target past the drawing.
+    expect(measure('normal').reach).toBe(0);
+    for (const size of ['normal', 'small'] as const) {
+      const ios = measure(size, 'ios');
+      expect(ios.height + 2 * ios.reach).toBe(44);
+      const android = measure(size, 'android');
+      expect(android.height + 2 * android.reach).toBe(48);
+    }
   });
 
   it('keeps a declared selection in the shared pressable style state', () => {

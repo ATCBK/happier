@@ -137,7 +137,9 @@ describe('neutral series dataset', () => {
       const values = find(mount.container, 'native-dense-values');
       expect(values.querySelectorAll('button')).toHaveLength(400);
       const last = find(values, 'native-dense-bucket-p399');
-      expect(last.style.minHeight).toBe('48px');
+      // A stacked exact-value row is drawn as a row, and its hit area stays on it.
+      expect(last.style.minHeight).toBe('');
+      expect(last.querySelector(':scope > [data-happier-hit-area="true"]')).toBeNull();
       expect(last.getAttribute('aria-label')).toContain('Used 399');
     } finally { mount.unmount(); }
   });
@@ -483,8 +485,9 @@ describe('neutral series dataset', () => {
       act(() => find(mount.container, 'orders-values-toggle').click());
       expect(mount.container.querySelectorAll('[data-testid^="orders-bucket-"]')).toHaveLength(40);
       const first = find(mount.container, 'orders-bucket-0');
-      expect(first.style.minWidth).toBe('48px');
-      expect(first.style.minHeight).toBe('48px');
+      expect(first.style.minWidth).toBe('');
+      expect(first.style.minHeight).toBe('');
+      expect(first.querySelector(':scope > [data-happier-hit-area="true"]')).toBeNull();
       expect(first.textContent).toContain('Orders 0.00004');
       act(() => first.click());
       expect(find(mount.container, 'orders-readout').textContent).toContain('0.00004');

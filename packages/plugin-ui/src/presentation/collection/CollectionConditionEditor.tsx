@@ -1,7 +1,9 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
   type ReactElement,
@@ -23,6 +25,12 @@ import type {
   CollectionConditionModel,
   CollectionConditionRow,
   CollectionConditionValueOption,
+  CollectionConditionValueCountRequest,
+} from './conditionModel.js';
+import {
+  collectionConditionOptionValues,
+  collectionConditionValueLabels,
+  isCollectionConditionOptionPicked,
 } from './conditionModel.js';
 
 /**
@@ -43,6 +51,8 @@ export type HappierCollectionConditionTextRole =
   | 'action'
   | 'count'
   | 'option'
+  /** A value's held count in a value list: quiet and tabular, never announced as it arrives. */
+  | 'optionCount'
   | 'groupTitle'
   | 'empty';
 
@@ -87,7 +97,10 @@ export type HappierCollectionConditionEditorHost = Readonly<{
       testID?: string;
     }>
   >;
-  /** The platform's touch floor where the pointer is a finger; controls never shrink below it. */
+  /**
+   * A hit area the host asks for where the pointer is a finger. Controls keep their drawn sizes; each
+   * one's hit area reaches into the room around it within its row (DESIGN.md → touch targets).
+   */
   touchTargetPx?: number;
   /** Ink fills, read while rendering so they follow the host theme. */
   useColors: () => Readonly<{
@@ -158,6 +171,8 @@ export type HappierCollectionConditionEditorProps = Readonly<{
   /** Words for a whole condition when its values read as fewer choices (a status group stored as its states). */
   summarizeValues?: (field: CollectionConditionField, values: readonly JsonValue[]) => readonly string[] | null;
   renderValuePicker?: HappierCollectionConditionValuePicker;
+  /** Demand only while a value list is presented; null on Back/dismissal/unmount. Never asks for a read. */
+  onValuePickerChange?: (request: CollectionConditionValueCountRequest | null) => void;
   maxHeight?: number;
   testID?: string;
 }>;
@@ -180,23 +195,21 @@ export const HAPPIER_COLLECTION_CONDITION_EDITOR_METRICS = Object.freeze({
   searchThreshold: 8,
 });
 
+/** A condition row's control reaches the row's edges vertically and half the 6 px gap toward its neighbours. */
+function rowControlHitReach(drawnHeight: number) {
+  const vertical = Math.max(0, (HAPPIER_COLLECTION_CONDITION_EDITOR_METRICS.rowMinHeight - drawnHeight) / 2);
+  return { top: vertical, bottom: vertical, left: 3, right: 3 };
+}
+
 const M = HAPPIER_COLLECTION_CONDITION_EDITOR_METRICS;
 
 const sameValue = (a: JsonValue, b: JsonValue) =>
   JSON.stringify(a) === JSON.stringify(b);
 
-function valueLabel(
-  field: CollectionConditionField,
-  value: JsonValue,
-  formatValue: HappierCollectionConditionEditorProps['formatValue'],
-): string {
-  const option = field.valueOptions.find((candidate) =>
-    sameValue(candidate.value, value),
-  );
-  if (option?.label) return option.label;
-  if (formatValue) return formatValue(field, value);
-  return typeof value === 'string' ? value : JSON.stringify(value);
-}
+const optionValues = collectionConditionOptionValues;
+const optionPicked = isCollectionConditionOptionPicked;
+const includesValue = (values: readonly JsonValue[], value: JsonValue) =>
+  values.some((candidate) => sameValue(candidate, value));
 
 /** One value (a radio choice) or several (a set, OR within the condition). */
 const isMultiValue = (field: CollectionConditionField) => field.kind === 'set';
@@ -312,7 +325,7 @@ export const HappierCollectionConditionEditor = memo(
   ): ReactElement {
     const { host, labels, model, onChange } = props;
     const colors = host.useColors();
-  const touch = host.touchTargetPx ?? 0;
+  const hitTarget = host.touchTargetPx;
     const [picker, setPicker] = useState<Picker | null>(null);
     const close = useCallback(() => setPicker(null), []);
     const shownRows = useMemo(
@@ -331,6 +344,26 @@ export const HappierCollectionConditionEditor = memo(
         ),
       [model.availableFields],
     );
+    const countDemand = useRef<{ key: string; request: CollectionConditionValueCountRequest | null }>({ key: 'null', request: null });
+    const countDemandListener = useRef(props.onValuePickerChange);
+    useEffect(() => { countDemandListener.current = props.onValuePickerChange; }, [props.onValuePickerChange]);
+    useEffect(() => {
+      if (!props.onValuePickerChange) return;
+      const field = picker?.kind === 'values'
+        ? fieldsById.get(picker.fieldId) ?? rowForField(picker.fieldId)?.field : undefined;
+      const request = field ? { fieldId: field.id, options: field.valueOptions.map(({ value, values }) =>
+        values ? { value, values } : { value }) } : null;
+      // Count arrivals and label-only rebindings cannot feed demand back into the producer.
+      const key = JSON.stringify(request);
+      if (countDemand.current.key === key) return;
+      countDemand.current = { key, request };
+      props.onValuePickerChange(request);
+    }, [fieldsById, picker, props.onValuePickerChange, rowForField]);
+    useEffect(() => () => {
+      if (countDemand.current.request === null) return;
+      countDemand.current = { key: 'null', request: null };
+      countDemandListener.current?.(null);
+    }, []);
 
     const press = (
       state: HappierPressableStyleState,
@@ -389,7 +422,7 @@ export const HappierCollectionConditionEditor = memo(
           const condition = {
             fieldId: field.id,
             operator,
-            values: [option.value],
+            values: [...optionValues(option)],
           };
           onChange(
             live
@@ -400,9 +433,10 @@ export const HappierCollectionConditionEditor = memo(
           return;
         }
         const current = live?.values ?? [];
-        const values = current.some((value) => sameValue(value, option.value))
-          ? current.filter((value) => !sameValue(value, option.value))
-          : [...current, option.value];
+        const picked = optionValues(option);
+        const values = optionPicked(current, option)
+          ? current.filter((value) => !includesValue(picked, value))
+          : [...current, ...picked.filter((value) => !includesValue(current, value))];
         if (live && values.length === 0)
           onChange({ type: 'remove', rowId: live.id });
         else if (live)
@@ -546,12 +580,13 @@ export const HappierCollectionConditionEditor = memo(
               accessibilityRole="button"
               accessibilityLabel={labels.clear}
               onPress={() => onChange({ type: 'clear' })}
+              hitTarget={hitTarget}
               style={(state) =>
                 press(
                   state,
                   {
                     paddingHorizontal: 4,
-                    minHeight: Math.max(24, touch),
+                    minHeight: 24,
                     borderRadius: 6,
                     justifyContent: 'center',
                   },
@@ -570,13 +605,13 @@ export const HappierCollectionConditionEditor = memo(
               row.field.kind === 'set';
             const values =
               props.summarizeValues?.(row.field, row.values) ??
-              row.values.map((value) => valueLabel(row.field, value, props.formatValue));
+              collectionConditionValueLabels(row.field, row.values, props.formatValue);
             const shown = values.length > 0 ? values : ['—'];
             return (
               <View
                 key={row.id}
                 testID={`collection-filter-condition:${row.fieldId}:${row.operator}`}
-                style={touch ? [styles.row, { minHeight: touch }] : styles.row}
+                style={styles.row}
               >
                 <View style={styles.field}>
                   <Text role="field" numberOfLines={1}>
@@ -589,6 +624,8 @@ export const HappierCollectionConditionEditor = memo(
                     accessibilityRole="button"
                     accessibilityLabel={`${row.field.label} ${labels.operators[row.operator]}`}
                     onPress={() => toggleOperator(row)}
+                    hitTarget={hitTarget}
+                    hitReach={rowControlHitReach(24)}
                     style={(state) =>
                       press(state, styles.operator, 'transparent')
                     }
@@ -612,6 +649,8 @@ export const HappierCollectionConditionEditor = memo(
                   onPress={() =>
                     setPicker({ kind: 'values', fieldId: row.fieldId })
                   }
+                  hitTarget={hitTarget}
+                  hitReach={rowControlHitReach(M.valueMinHeight)}
                   style={(state) => press(state, styles.value, colors.fill)}
                 >
                   {shown.map((value, index) => (
@@ -632,7 +671,7 @@ export const HappierCollectionConditionEditor = memo(
                     </View>
                   ))}
                 </HappierPressable>
-                <View style={touch ? { width: touch } : styles.removeSlot}>
+                <View style={styles.removeSlot}>
                   {locked ? null : (
                     <HappierPressable
                       testID={`collection-filter-condition:${row.fieldId}:${row.operator}:remove`}
@@ -641,9 +680,10 @@ export const HappierCollectionConditionEditor = memo(
                       onPress={() =>
                         onChange({ type: 'remove', rowId: row.id })
                       }
-                      style={(state) =>
-                        press(state, touch ? { ...styles.remove, width: touch, height: touch } : styles.remove, 'transparent')
-                      }
+                      hitTarget={hitTarget}
+                      // The row's last control: half the gap toward the value, the row's end padding beyond it.
+                      hitReach={{ ...rowControlHitReach(M.removeSize), right: 4 }}
+                      style={(state) => press(state, styles.remove, 'transparent')}
                     >
                       <Icon name="remove" />
                     </HappierPressable>
@@ -658,7 +698,10 @@ export const HappierCollectionConditionEditor = memo(
               accessibilityRole="button"
               accessibilityLabel={labels.add}
                             onPress={() => setPicker({ kind: 'add' })}
-              style={(state) => press(state, touch ? { ...styles.add, minHeight: touch } : styles.add, colors.fill)}
+              hitTarget={hitTarget}
+              // Half its top margin toward the last row's controls.
+              hitReach={{ top: 2 }}
+              style={(state) => press(state, styles.add, colors.fill)}
             >
               <Icon name="add" />
               <Text role="action">{labels.add}</Text>
@@ -864,18 +907,17 @@ function ValueList(
         ) : null}
         {options.map((option) => {
           const selected =
-            props.row?.values.some((value) =>
-              sameValue(value, option.value),
-            ) === true;
+            props.row !== null && optionPicked(props.row.values, option);
           const label =
             option.label ??
             (typeof option.value === 'string'
               ? option.value
               : JSON.stringify(option.value));
+          const valueKey = typeof option.value === 'string' ? option.value : JSON.stringify(option.value);
           return (
             <HappierPressable
               key={JSON.stringify(option.value)}
-              testID={`collection-filter-value:${field.id}:${typeof option.value === 'string' ? option.value : JSON.stringify(option.value)}`}
+              testID={`collection-filter-value:${field.id}:${valueKey}`}
               accessibilityRole={multi ? 'checkbox' : 'radio'}
               accessibilityLabel={label}
               checked={selected}
@@ -890,6 +932,12 @@ function ValueList(
                   {label}
                 </Text>
               </View>
+              {/* How many held rows carry it (lab `clfilter:add`); absent when nothing local says. */}
+              {option.count !== undefined ? (
+                <Text role="optionCount" numberOfLines={1} testID={`collection-filter-value-count:${field.id}:${valueKey}`}>
+                  {String(option.count)}
+                </Text>
+              ) : null}
               <View style={styles.optionMark}>
                 {selected ? <Icon name="check" /> : null}
               </View>

@@ -8,7 +8,7 @@ vi.mock('react-native', () => ({
   Platform: { OS: 'ios', select: <T,>(options: Readonly<{ ios?: T; native?: T; default?: T }>) => options.ios ?? options.native ?? options.default },
   I18nManager: { isRTL: false },
   Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', View: 'View',
-  StyleSheet: { hairlineWidth: 1, create: <T extends Record<string, unknown>>(styles: T) => styles },
+  StyleSheet: { hairlineWidth: 1, create: <T extends Record<string, unknown>>(styles: T) => styles, flatten: (style: unknown) => flattenStyle(style) },
 }));
 
 import { SURFACE_CONTEXT_THEME_FIXTURE } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
@@ -39,8 +39,8 @@ let renderer: ReactTestRenderer | null = null;
 afterEach(() => { act(() => renderer?.unmount()); renderer = null; });
 
 describe('native grid target geometry', () => {
-  for (const [platform, floor] of [['ios', 44], ['android', 48]] as const) {
-    it(`fits the real ${platform} targets inside the declared frame without enlarging the visual marks`, () => {
+  for (const platform of ['ios', 'android'] as const) {
+    it(`keeps the ${platform} grid at its drawn geometry and reaches the target only into the gaps`, () => {
       const frames: HappierGridFrame[] = [];
       act(() => {
         renderer = create(<HappierUiPlatformProvider platform={{ platform, colorScheme: 'dark' }}>
@@ -50,14 +50,16 @@ describe('native grid target geometry', () => {
       const controls = renderer!.root.findAllByType('Pressable');
       expect(controls.map(control => control.props.accessibilityLabel)).toEqual(['Zero sample: 0', 'Missing sample: Unknown']);
       const style = physicalStyle(controls[0].props.style);
-      expect(style.minWidth).toBe(floor);
-      expect(style.minHeight).toBe(floor);
-      const physicalWidth = Math.max(Number(style.width), Number(style.minWidth));
-      expect(frames[0].columnStride).toBeGreaterThanOrEqual(physicalWidth);
-      expect(frames[0].contentWidth).toBeGreaterThanOrEqual(physicalWidth * grid.columns.length);
+      // A touch target is a hit area: the cell keeps its 11 px slot and 3 px gap, and its hit area
+      // reaches half the gap on each side so neighbouring cells never share a touch.
+      expect(style).toMatchObject({ width: 11, height: 11 });
+      expect(style.minWidth).toBeUndefined();
+      expect(style.minHeight).toBeUndefined();
+      expect(controls[0].props.hitSlop).toEqual({ top: 1.5, bottom: 1.5, left: 1.5, right: 1.5 });
+      expect(frames[0].columnStride).toBe(14);
       expect(renderer!.root.findAllByType('ScrollView')).toHaveLength(0);
       const marks = controls[0].findAllByType('View').filter(view => flattenStyle(view.props.style).backgroundColor);
-      expect(flattenStyle(marks[0].props.style)).toMatchObject({ width: 11, height: 11 });
+      expect(flattenStyle(marks[0].props.style)).toMatchObject({ height: 11 });
     });
   }
 

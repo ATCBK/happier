@@ -81,7 +81,8 @@ it('keeps an unmeasured native tile finite and selects exact samples through nat
   expect(control().props.accessibilityLabel).toContain('Used 0.00004');
   expect(control().props.accessibilityActions).toEqual([{ name: 'increment' }, { name: 'decrement' }]);
   expect(control().props.accessibilityCollectionItem.rowIndex).toBe(0);
-  expect(JSON.stringify(control().props.style)).toContain('"minHeight":48');
+  // The plot control keeps the plot's own geometry: no touch floor is drawn into it.
+  expect(JSON.stringify(control().props.style)).not.toContain('"minHeight":48');
   act(() => control().props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } }));
   expect(control().props.accessibilityLabel).toContain('Used —');
   act(() => control().props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } }));

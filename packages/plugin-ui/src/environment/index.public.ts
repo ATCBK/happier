@@ -38,8 +38,14 @@ export {
   HAPPIER_ANDROID_MINIMUM_INTERACTIVE_TARGET_SIZE,
   HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
   HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
+  isHappierCoarsePrimaryPointer,
+  isHappierTouchPrimaryPointer,
+  resolveHappierHitInsets,
   resolveHappierMinimumInteractiveTargetSize,
   useHappierNativeMinimumInteractiveTargetSize,
+  useHappierTouchTargetSize,
+  type HappierHitInsets,
+  type HappierHitReach,
 } from './interactiveTarget.js';
 export { projectHappierUiEnvironment } from './projectEnvironment.js';
 export {

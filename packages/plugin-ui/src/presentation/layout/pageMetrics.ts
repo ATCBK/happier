@@ -10,7 +10,20 @@ export const HAPPIER_PUBLIC_PROFILE_HERO_METRICS = Object.freeze({
   /** Existing owner-preview recomposition threshold. */
   singleColumnBelowWidthPx: 640,
   horizonAt: 0.6,
+  /** A paused or unavailable page's quiet horizon (lab `ppstate-X`): a small planet, no picture. */
+  quietBandHeightPx: Object.freeze({ wide: 260, phone: 220 }),
 });
+
+/**
+ * A Rise planet in a profile band (lab `c3hero`): round, its radius from the column rather than Home's
+ * pane-wide arc, and its limb high in the band. The identity starts under the band, so the planet fills
+ * the sky under the brand bar instead of leaving it empty. App and server paint the band from this.
+ */
+export function resolveHappierPublicProfilePlanetBand(pane: Readonly<{ width: number; height: number }>):
+  Readonly<{ limb: number; radius: number }> {
+  const phone = pane.width < HAPPIER_PUBLIC_PROFILE_HERO_METRICS.singleColumnBelowWidthPx;
+  return { limb: 0.25 * pane.height, radius: phone ? 0.68 * pane.width : Math.min(0.46 * pane.width, 680) };
+}
 
 /** The gap between a row's title and its title-line meta (one owner with the gap the renderers draw). */
 export const HAPPIER_ROW_TITLE_META_GAP_PX = 12;

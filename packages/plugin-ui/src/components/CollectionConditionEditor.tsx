@@ -33,6 +33,7 @@ const TEXT: Readonly<
   join: { role: 'meta', ink: 'mutedText' },
   action: { role: 'meta', ink: 'secondaryText' },
   count: { role: 'meta', ink: 'mutedText' },
+  optionCount: { role: 'meta', ink: 'mutedText' },
   option: { role: 'body', ink: 'text' },
   groupTitle: { role: 'meta', ink: 'mutedText' },
   empty: { role: 'meta', ink: 'mutedText' },
@@ -61,7 +62,7 @@ function PluginConditionText(
     <HappierText
       numberOfLines={props.numberOfLines}
       accessibilityRole={props.accessibilityRole}
-      tabularNumbers={props.role === 'count'}
+      tabularNumbers={props.role === 'count' || props.role === 'optionCount'}
       {...(props.testID === undefined ? {} : { testID: props.testID })}
       style={{ ...style, color: theme.colors[spec.ink], flexShrink: 1 }}
     >

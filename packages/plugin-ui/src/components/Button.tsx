@@ -17,7 +17,7 @@ import {
 import { HappierSpinner, iconMatchedSpinnerSize } from '../presentation/feedback/Spinner.js';
 import { HappierText } from '../presentation/text/Text.js';
 import { HAPPIER_ICON_BUTTON_SIZE, resolveHappierIconButtonChrome } from '../presentation/interaction/iconButtonChrome.js';
-import { useHappierNativeMinimumInteractiveTargetSize } from '../environment/interactiveTarget.js';
+import { PluginUiLeadingGlyphInkContext } from './Icon.js';
 import {
   type PluginUiFocusTarget,
   usePluginUiFocusTargetBindingInternal,
@@ -182,12 +182,11 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
   const material = useHappierButtonMaterial(theme);
   const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion ?? false;
   const palette = useOptionalHappierUiPalette(theme);
-  const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
   const underSectionText = useContext(HappierSectionActionStackedContext);
   const { foreground } = resolveHappierButtonChrome({ theme, variant, disabled, focused: false, ...material });
   const style = (state: HappierPressableStyleState): HappierPortableStyle => {
     const chrome = resolveHappierButtonChrome({
-      theme, variant, size, nativeMinimumTarget, disabled: state.disabled, focused: state.focused,
+      theme, variant, size, disabled: state.disabled, focused: state.focused,
       pressed: state.pressed, gloss: palette?.accentGloss, ...material,
     });
     return {
@@ -222,7 +221,9 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
           color={foreground}
           testID={content.spinnerTestID}
         />
-      ) : content.icon}
+      ) : content.icon === undefined ? null : (
+        <PluginUiLeadingGlyphInkContext.Provider value={foreground}>{content.icon}</PluginUiLeadingGlyphInkContext.Provider>
+      )}
       {/*
         The label keeps its box while busy instead of being replaced, so the
         button does not change width the moment it is pressed — a control
@@ -273,7 +274,6 @@ export function IconButton({
     undefined,
   );
   const size = HAPPIER_ICON_BUTTON_SIZE;
-  const minimumTarget = useHappierNativeMinimumInteractiveTargetSize() ?? size;
   const chrome = (state: HappierPressableStyleState) => resolveHappierIconButtonChrome({
     size, variant: 'plain', selected: state.selected, hovered: state.hovered,
     pressed: state.pressed, focused: state.focused, disabled: state.disabled && !state.busy,
@@ -292,13 +292,9 @@ export function IconButton({
       testID={testID}
       onPress={onPress}
       controlRef={focusBinding}
-      style={(state) => ({
-        ...chrome(state).frame,
-        minWidth: minimumTarget,
-        minHeight: minimumTarget,
-      })}
+      style={(state) => ({ ...chrome(state).frame, width: size, height: size })}
     >
-      {/* The frame is the touch target; the drawn square carries every tint and the focus ring. */}
+      {/* The frame is the drawn square's box; a finger's hit area reaches past it (HappierPressable). */}
       {(state) => <View style={chrome(state).surface}>
         {state.busy ? <HappierSpinner size="small" color={theme.colors.secondaryText} /> : icon}
       </View>}

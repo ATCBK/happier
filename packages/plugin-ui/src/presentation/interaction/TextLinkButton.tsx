@@ -1,7 +1,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import { View } from 'react-native';
 
-import { resolveHappierInteractiveTargetFloor, useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import { resolveHappierInteractiveTargetFloor, useHappierTouchTargetSize } from '../../environment/interactiveTarget.js';
 import type { HappierPortableStyle } from '../portableTypes.js';
 import { happierFocusRingStyle } from './focusVisible.js';
 import { HappierPressable } from './Pressable.js';
@@ -25,14 +25,13 @@ export type HappierTextLinkButtonProps = Readonly<{
   focusColor: string;
   /** A sentence that wraps naturally, with the action following its final separator. */
   note?: Readonly<{ text: string; style: HappierPortableStyle }>;
-  /** The host's pointer-aware touch floor; native providers retain their own physical minimum. */
+  /** The host's hit-area request; a finger's touch target applies without it. It never widens the label. */
   minimumTargetSize?: number;
 }>;
 
 /** One inline operation owner for host links and Find notes, with host-bound text and theme. */
 export function HappierTextLinkButton(props: HappierTextLinkButtonProps): ReactNode {
-  const nativeFloor = useHappierNativeMinimumInteractiveTargetSize();
-  const targetFloor = resolveHappierInteractiveTargetFloor(props.minimumTargetSize, nativeFloor);
+  const targetFloor = resolveHappierInteractiveTargetFloor(props.minimumTargetSize, useHappierTouchTargetSize());
   const grow = targetFloor === undefined ? 0 : Math.max(0, (targetFloor - props.labelStyle.lineHeight) / 2);
   const action = (
     <HappierPressable
@@ -42,15 +41,16 @@ export function HappierTextLinkButton(props: HappierTextLinkButtonProps): ReactN
       expanded={props.expanded}
       disabled={props.disabled}
       onPress={props.onPress}
+      // The padded frame below already is the hit area; it never reaches sideways over the
+      // neighbouring words, however short the label.
+      hitReach={0}
       style={(state) => ({
         alignSelf: 'flex-start',
-        // RNW drops hitSlop. The physical frame grows vertically and gives that space back to
-        // the sentence, without reaching sideways over neighbouring words.
+        // The frame grows vertically inside a wrapping sentence and gives that space back to it.
         paddingTop: grow,
         paddingBottom: grow,
         marginTop: -grow,
         marginBottom: -grow,
-        minWidth: targetFloor,
         opacity: state.disabled ? 0.4 : state.pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacity : 1,
       })}
     >

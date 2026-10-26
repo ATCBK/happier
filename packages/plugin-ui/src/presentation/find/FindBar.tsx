@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode, type Ref } from 'react';
 import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 
-import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import { HappierSearchFieldBox } from '../form/FieldBox.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HappierPressable } from '../interaction/Pressable.js';
@@ -177,7 +177,10 @@ export type HappierFindBarProps = Readonly<{
   /** Core binds its incumbent material owner; standalone plugins consume their presentation host. */
   renderMaterialSurface?: HappierMaterialSurfaceRender;
   host: HappierFindBarHost;
-  /** The runtime's touch-target floor where a finger is the pointer (44/48); pointer platforms omit it. */
+  /**
+   * A hit area the host asks for where a finger is the pointer (44/48). The bar and its buttons keep their
+   * drawn sizes; each control's hit area reaches it into the room around it (DESIGN.md → touch targets).
+   */
   minimumTargetSize?: number;
   reducedMotion?: boolean;
   /**
@@ -299,8 +302,7 @@ function isComposing(event: HappierFindBarKeyEvent): boolean {
 
 export function HappierFindBar(props: HappierFindBarProps) {
   const seated = props.presentation === 'keyboardSeated';
-  const nativeFloor = useHappierNativeMinimumInteractiveTargetSize();
-  const targetFloor = Math.max(props.minimumTargetSize ?? 0, nativeFloor ?? 0);
+  const hitTarget = props.minimumTargetSize;
   const { colors, labels, host } = props;
   const count = resolveHappierFindBarCount(props.status, labels);
   const stepEnabled = canStep(props.status);
@@ -441,7 +443,7 @@ export function HappierFindBar(props: HappierFindBarProps) {
       colors={colors}
       host={host}
       seated={seated}
-      minimumTargetSize={targetFloor}
+      minimumTargetSize={hitTarget}
       gradient={props.gradient}
       renderMaterialSurface={props.renderMaterialSurface}
       elevation={props.elevation}
@@ -470,7 +472,10 @@ export function HappierFindBar(props: HappierFindBarProps) {
 
   if (seated) {
     const seatedMetrics = HAPPIER_FIND_BAR_METRICS.keyboardSeated;
-    const button = Math.max(seatedMetrics.buttonPx, targetFloor);
+    const button = seatedMetrics.buttonPx;
+    // Controls on the bar reach half the gap toward each other; the options pills half their column gap.
+    const hit: FindBarHit = { target: hitTarget, reach: { left: seatedMetrics.gapPx / 2, right: seatedMetrics.gapPx / 2 } };
+    const pillHit: FindBarHit = { target: hitTarget, reach: { left: 4, right: 4 } };
     const optionsActive = props.options.matchCase || (props.capabilities.regex && props.options.regex);
     return (
       <Animated.View
@@ -494,10 +499,10 @@ export function HappierFindBar(props: HappierFindBarProps) {
             borderTopWidth: StyleSheet.hairlineWidth,
             borderTopColor: colors.ring,
           }}>
-            <FindBarOptionPill glyph="Aa" text={labels.matchCase} label={labels.matchCase} on={props.options.matchCase} minHeight={Math.max(seatedMetrics.optionRowHeightPx, targetFloor)} colors={colors} host={host}
+            <FindBarOptionPill glyph="Aa" text={labels.matchCase} label={labels.matchCase} on={props.options.matchCase} minHeight={seatedMetrics.optionRowHeightPx} hit={pillHit} colors={colors} host={host}
               onPress={() => props.onOptionsChange({ ...props.options, matchCase: !props.options.matchCase })} testID={props.testID ? `${props.testID}.matchCase` : undefined} />
             {props.capabilities.regex ? (
-              <FindBarOptionPill glyph=".*" text={labels.regexShort} label={labels.regex} on={props.options.regex} minHeight={Math.max(seatedMetrics.optionRowHeightPx, targetFloor)} colors={colors} host={host}
+              <FindBarOptionPill glyph=".*" text={labels.regexShort} label={labels.regex} on={props.options.regex} minHeight={seatedMetrics.optionRowHeightPx} hit={pillHit} colors={colors} host={host}
                 onPress={() => props.onOptionsChange({ ...props.options, regex: !props.options.regex })} testID={props.testID ? `${props.testID}.regex` : undefined} />
             ) : null}
           </View>
@@ -511,13 +516,13 @@ export function HappierFindBar(props: HappierFindBarProps) {
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: colors.ring,
         }}>
-          <FindBarGlyphButton glyph="previous" label={labels.previous} size={button} glyphSize={seatedMetrics.glyphPx} color={colors.accent} disabled={!stepEnabled} onPress={() => props.onStep(-1)} colors={colors} host={host} radius={button / 2} testID={props.testID ? `${props.testID}.previous` : undefined} />
-          <FindBarGlyphButton glyph="next" label={labels.next} size={button} glyphSize={seatedMetrics.glyphPx} color={colors.accent} disabled={!stepEnabled} onPress={() => props.onStep(1)} colors={colors} host={host} radius={button / 2} testID={props.testID ? `${props.testID}.next` : undefined} />
+          <FindBarGlyphButton glyph="previous" label={labels.previous} size={button} glyphSize={seatedMetrics.glyphPx} color={colors.accent} disabled={!stepEnabled} onPress={() => props.onStep(-1)} hit={hit} colors={colors} host={host} radius={button / 2} testID={props.testID ? `${props.testID}.previous` : undefined} />
+          <FindBarGlyphButton glyph="next" label={labels.next} size={button} glyphSize={seatedMetrics.glyphPx} color={colors.accent} disabled={!stepEnabled} onPress={() => props.onStep(1)} hit={hit} colors={colors} host={host} radius={button / 2} testID={props.testID ? `${props.testID}.next` : undefined} />
           <HappierSearchFieldBox
             testID={props.testID}
             colors={{ backgroundColor: colors.field, borderColor: 'transparent' }}
             radius={seatedMetrics.fieldRadiusPx}
-            minimumTargetSize={Math.max(seatedMetrics.fieldHeightPx, targetFloor)}
+            minimumTargetSize={hitTarget}
             onFocusInput={focusInput}
             leading={host.renderGlyph('search', colors.tertiaryText, HAPPIER_FIND_BAR_METRICS.inline.glyphPx)}
             trailing={(
@@ -530,6 +535,8 @@ export function HappierFindBar(props: HappierFindBarProps) {
                   expanded={optionsOpen}
                   onPress={() => setOptionsOpen((open) => !open)}
                   testID={props.testID ? `${props.testID}.options` : undefined}
+                  hitTarget={hit.target}
+                  hitReach={hit.reach}
                   style={(state) => [buttonStyle({ size: seatedMetrics.optionsButtonPx, radius: 7, colors, on: optionsActive }, state), { marginLeft: 6 }]}
                 >
                   {(state) => (
@@ -541,7 +548,7 @@ export function HappierFindBar(props: HappierFindBarProps) {
                 </HappierPressable>
               </View>
             )}
-            style={{ flex: 1, minWidth: 0, borderWidth: 0 }}
+            style={{ flex: 1, minWidth: 0, minHeight: seatedMetrics.fieldHeightPx, borderWidth: 0 }}
           >
             {input}
           </HappierSearchFieldBox>
@@ -549,8 +556,10 @@ export function HappierFindBar(props: HappierFindBarProps) {
             accessibilityLabel={labels.close}
             onPress={props.onClose}
             testID={props.testID ? `${props.testID}.close` : undefined}
+            hitTarget={hit.target}
+            hitReach={hit.reach}
             style={({ pressed }) => ({
-              minHeight: Math.max(button, targetFloor),
+              minHeight: button,
               paddingLeft: 2.5,
               paddingRight: 4.5,
               justifyContent: 'center',
@@ -570,10 +579,12 @@ export function HappierFindBar(props: HappierFindBarProps) {
   }
 
   const inline = HAPPIER_FIND_BAR_METRICS.inline;
-  const button = Math.max(inline.buttonPx, targetFloor);
+  const button = inline.buttonPx;
   const barHeight = Math.max(inline.heightPx, button + 8);
+  // The capsule's buttons sit `gapPx` apart: each reaches half of it sideways and its full target up and down.
+  const hit: FindBarHit = { target: hitTarget, reach: { left: inline.gapPx / 2, right: inline.gapPx / 2 } };
   const glyphButton = (glyph: 'previous' | 'next', direction: 1 | -1, label: string) => (
-    <FindBarGlyphButton glyph={glyph} label={label} size={button} glyphSize={inline.glyphPx} color={colors.secondaryText} disabled={!stepEnabled} onPress={() => props.onStep(direction)} colors={colors} host={host} radius={inline.buttonRadiusPx} testID={props.testID ? `${props.testID}.${glyph}` : undefined} />
+    <FindBarGlyphButton glyph={glyph} label={label} size={button} glyphSize={inline.glyphPx} color={colors.secondaryText} disabled={!stepEnabled} onPress={() => props.onStep(direction)} hit={hit} colors={colors} host={host} radius={inline.buttonRadiusPx} testID={props.testID ? `${props.testID}.${glyph}` : undefined} />
   );
   return (
     <Animated.View
@@ -591,7 +602,7 @@ export function HappierFindBar(props: HappierFindBarProps) {
         testID={props.testID}
         colors={{ backgroundColor: colors.surface, borderColor: colors.ring }}
         radius={inline.radiusPx}
-        minimumTargetSize={barHeight}
+        minimumTargetSize={hitTarget}
         onFocusInput={focusInput}
         leading={compact ? undefined : host.renderGlyph('search', colors.tertiaryText, inline.glyphPx)}
         trailing={(
@@ -601,15 +612,15 @@ export function HappierFindBar(props: HappierFindBarProps) {
             {glyphButton('previous', -1, labels.previous)}
             {glyphButton('next', 1, labels.next)}
             {compact ? null : <Divider color={colors.divider} />}
-            <FindBarToggle text="Aa" label={labels.matchCase} on={props.options.matchCase} size={button} colors={colors} host={host} onPress={() => props.onOptionsChange({ ...props.options, matchCase: !props.options.matchCase })} testID={props.testID ? `${props.testID}.matchCase` : undefined} />
+            <FindBarToggle text="Aa" label={labels.matchCase} on={props.options.matchCase} size={button} hit={hit} colors={colors} host={host} onPress={() => props.onOptionsChange({ ...props.options, matchCase: !props.options.matchCase })} testID={props.testID ? `${props.testID}.matchCase` : undefined} />
             {props.capabilities.regex ? (
-              <FindBarToggle text=".*" label={labels.regex} on={props.options.regex} size={button} colors={colors} host={host} onPress={() => props.onOptionsChange({ ...props.options, regex: !props.options.regex })} testID={props.testID ? `${props.testID}.regex` : undefined} />
+              <FindBarToggle text=".*" label={labels.regex} on={props.options.regex} size={button} hit={hit} colors={colors} host={host} onPress={() => props.onOptionsChange({ ...props.options, regex: !props.options.regex })} testID={props.testID ? `${props.testID}.regex` : undefined} />
             ) : null}
-            <FindBarGlyphButton glyph="close" label={labels.close} size={button} glyphSize={inline.glyphPx} color={colors.secondaryText} onPress={props.onClose} colors={colors} host={host} radius={inline.buttonRadiusPx} testID={props.testID ? `${props.testID}.close` : undefined} />
+            <FindBarGlyphButton glyph="close" label={labels.close} size={button} glyphSize={inline.glyphPx} color={colors.secondaryText} onPress={props.onClose} hit={hit} colors={colors} host={host} radius={inline.buttonRadiusPx} testID={props.testID ? `${props.testID}.close` : undefined} />
           </View>
         )}
         // A narrow pane shrinks the field first; the count and controls never clip.
-        style={[{ paddingRight: inline.paddingRightPx, borderWidth: StyleSheet.hairlineWidth, maxWidth: '100%' }, props.elevation ?? null] as HappierStyleProp}
+        style={[{ minHeight: barHeight, paddingRight: inline.paddingRightPx, borderWidth: StyleSheet.hairlineWidth, maxWidth: '100%' }, props.elevation ?? null] as HappierStyleProp}
         renderSurface={body => <HappierMaterialSurface materialRole="floating" finishRole="floating" gradient={props.gradient}
           renderMaterialSurface={props.renderMaterialSurface} testID={props.testID ? `${props.testID}.capsule` : undefined}
           style={body.style}>{body.children}</HappierMaterialSurface>}
@@ -648,7 +659,11 @@ function FocusRing({ visible, color, radius }: Readonly<{ visible: boolean; colo
   return <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: radius, borderWidth: 1.5, borderColor: color }} />;
 }
 
+/** A bar control's hit area: the host's finger target and how far it may reach past the drawn button. */
+type FindBarHit = Readonly<{ target: number | undefined; reach: HappierHitReach }>;
+
 function FindBarGlyphButton(props: Readonly<{
+  hit: FindBarHit;
   glyph: HappierFindBarGlyph;
   label: string;
   size: number;
@@ -667,6 +682,8 @@ function FindBarGlyphButton(props: Readonly<{
       disabled={props.disabled}
       onPress={props.onPress}
       testID={props.testID}
+      hitTarget={props.hit.target}
+      hitReach={props.hit.reach}
       style={(state) => buttonStyle({ size: props.size, radius: props.radius, colors: props.colors, disabled: props.disabled }, state)}
     >
       {(state) => (
@@ -680,6 +697,7 @@ function FindBarGlyphButton(props: Readonly<{
 }
 
 function FindBarToggle(props: Readonly<{
+  hit: FindBarHit;
   text: string;
   label: string;
   on: boolean;
@@ -697,6 +715,8 @@ function FindBarToggle(props: Readonly<{
       checked={props.on}
       onPress={props.onPress}
       testID={props.testID}
+      hitTarget={props.hit.target}
+      hitReach={props.hit.reach}
       style={(state) => buttonStyle({ size: props.size, radius, colors: props.colors, on: props.on }, state)}
     >
       {(state) => (
@@ -719,6 +739,7 @@ function FindBarToggle(props: Readonly<{
 
 /** A phone option pill (Find lab `.fd-popt span`): the glyph and its name, a switch within the touch floor. */
 function FindBarOptionPill(props: Readonly<{
+  hit: FindBarHit;
   glyph: string;
   text: string;
   label: string;
@@ -738,6 +759,8 @@ function FindBarOptionPill(props: Readonly<{
       checked={props.on}
       onPress={props.onPress}
       testID={props.testID}
+      hitTarget={props.hit.target}
+      hitReach={props.hit.reach}
       style={{ minHeight: props.minHeight, justifyContent: 'center', flexShrink: 1 }}
     >
       {(state) => (
@@ -765,7 +788,7 @@ function FindBarNote(props: Readonly<{
   colors: HappierFindBarColors;
   host: HappierFindBarHost;
   seated: boolean;
-  minimumTargetSize: number;
+  minimumTargetSize: number | undefined;
   gradient?: HappierSurfaceGradient | null;
   renderMaterialSurface?: HappierMaterialSurfaceRender;
   elevation?: HappierPortableStyle;

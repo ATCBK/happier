@@ -7,7 +7,8 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
+import { useHappierHitArea } from './hitArea.js';
 import { isHappierFocusVisible } from './focusVisible.js';
 import type {
   HappierFocusable,
@@ -160,7 +161,23 @@ export type HappierPressableProps = Readonly<{
   /** Native assistive actions, supplied by the owning domain operation. */
   accessibilityActions?: readonly Readonly<{ name: string; label?: string }>[];
   onAccessibilityAction?: (event: Readonly<{ nativeEvent: Readonly<{ actionName: string }> }>) => void;
+  /**
+   * A precise pointer's extra press reach, forwarded as React Native `hitSlop`. Where the control has
+   * a hit area (a finger, or a declared `hitTarget`), the hit area replaces it.
+   */
   hitSlop?: number | Readonly<{ top?: number; bottom?: number; left?: number; right?: number }>;
+  /**
+   * The smallest hit area this control asks for, beyond the environment's touch target (44, 48 on
+   * Android, under a finger). It never changes the drawn size: the hit area reaches past the drawn box
+   * (native `hitSlop`, an invisible frame on the web).
+   */
+  hitTarget?: number;
+  /**
+   * How far the hit area may reach past the drawn box on each side: half the gap to a neighbour, or the
+   * free space to a clipping edge. Omitted sides reach as far as the target needs; `0` keeps the hit
+   * area on the drawn box (a control whose own frame already owns its reach).
+   */
+  hitReach?: HappierHitReach;
   testID?: string;
   /** Internal composite-widget focus registration; disabled controls report no target. */
   controlRef?: (instance: HappierFocusable | null) => void;
@@ -223,6 +240,7 @@ function isKeyboardGeneratedClick(event: unknown): boolean {
 
 const anchorStyle: ViewStyle = { position: 'relative' };
 
+
 function isTouchPointer(event: unknown): boolean {
   const native = (event as { nativeEvent?: { pointerType?: unknown } } | null)?.nativeEvent;
   return native?.pointerType === 'touch';
@@ -264,6 +282,8 @@ export function HappierPressable({
   accessibilityActions,
   onAccessibilityAction,
   hitSlop,
+  hitTarget,
+  hitReach,
   testID,
   controlRef,
   tabIndex,
@@ -274,7 +294,6 @@ export function HappierPressable({
   overlay,
   children,
 }: HappierPressableProps) {
-  const nativeMinimumInteractiveTargetSize = useHappierNativeMinimumInteractiveTargetSize();
   const [pendingPress, setPendingPress] = useState(false);
   const [pressed, setPressed] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -416,14 +435,14 @@ export function HappierPressable({
     disabled: isDisabled,
   };
 
-  const content = typeof children === 'function' ? children(state) : children;
-  const nativeMinimumTargetStyle: ViewStyle | undefined = nativeMinimumInteractiveTargetSize === undefined
-    ? undefined
-    : {
-        minWidth: nativeMinimumInteractiveTargetSize,
-        minHeight: nativeMinimumInteractiveTargetSize,
-      };
-  const physicalHitSlop = nativeMinimumInteractiveTargetSize === undefined ? hitSlop : undefined;
+  const renderedContent = typeof children === 'function' ? children(state) : children;
+  const hitArea = useHappierHitArea({
+    restingStyle: () => (typeof style === 'function' ? style({ ...state, pressed: false }) : style),
+    hitTarget,
+    hitReach,
+    hitSlop,
+  });
+  const content = hitArea.frame === null ? renderedContent : <>{hitArea.frame}{renderedContent}</>;
   const webContextMenuProps = Platform.OS === 'web' && onContextMenu && !isDisabled
     ? { onContextMenu: (event: unknown) => onContextMenu(event) }
     : undefined;
@@ -475,10 +494,9 @@ export function HappierPressable({
         focused: Platform.OS === 'web' ? focused : web.focused === true || focused,
         pressed: pressState.pressed,
       };
-      const callerStyle = style(styleState);
-      return nativeMinimumTargetStyle ? [callerStyle, nativeMinimumTargetStyle] : callerStyle;
+      return style(styleState);
     }
-    : nativeMinimumTargetStyle ? [style, nativeMinimumTargetStyle] : style;
+    : style;
 
   const pressable = (
     <ReactNativePressable
@@ -520,10 +538,10 @@ export function HappierPressable({
       aria-keyshortcuts={keyboardShortcuts}
       tabIndex={isDisabled && !explainsDisabled ? -1 : tabIndex}
       disabled={isDisabled && !explainsDisabled}
-      // Touch targets grow through their physical layout box, never an
-      // overlapping hit-slop rectangle. Pointer layouts keep their incumbent
-      // hit-slop behavior because the provider explicitly reports desktop/web.
-      hitSlop={physicalHitSlop}
+      // A touch target is a hit area, never a drawn size: native reaches it with hitSlop, the web
+      // (whose Pressable ignores hitSlop) with the invisible frame above, and the box keeps its size.
+      hitSlop={hitArea.hitSlop}
+      onLayout={hitArea.onLayout}
       onPress={handlePress}
       onPressIn={(event) => { setPressed(true); onPressIn?.(event); }}
       onPressOut={(event) => { setPressed(false); onPressOut?.(event); }}

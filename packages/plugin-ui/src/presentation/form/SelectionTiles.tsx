@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { I18nManager, Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 
 import type { HappierTypeEmphasis, HappierTypeRole } from '../text/typeScale.js';
@@ -11,6 +11,8 @@ import { HappierChevron } from '../collection/DisclosureChevron.js';
 import { HappierPageSheet, useHappierPageSection, type HappierPageSheetProps } from '../layout/PageSection.js';
 import type { HappierPageRowMetrics } from '../layout/pageRowMetrics.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
+import { useHappierHitArea } from '../interaction/hitArea.js';
+import type { HappierHitReach } from '../../environment/interactiveTarget.js';
 import { HAPPIER_PAGE_METRICS, isHappierPageRowNarrow } from '../layout/pageMetrics.js';
 import { resolveHappierTabKeySelection } from '../navigation/Tabs.js';
 import { HAPPIER_FIELD_BOX_METRICS } from './FieldBox.js';
@@ -719,8 +721,10 @@ function CardSelectionTiles<T extends string, I extends string>(props: HappierCh
               { borderColor },
             ]}
           >
-            <Pressable
+            <SelectionTilePressable
               {...tileKeyboardProps(index)}
+              // Sheet cells meet edge to edge; separate tiles reach half the gap between them.
+              hitReach={sheet ? 0 : gap / 2}
               testID={option.testID ?? (props.testIdPrefix ? `${props.testIdPrefix}:${option.id}` : undefined)}
               accessibilityRole={selectionAccessibilityRole}
               accessibilityLabel={hasSubtitle ? `${option.title}, ${option.subtitle}` : option.title}
@@ -777,7 +781,7 @@ function CardSelectionTiles<T extends string, I extends string>(props: HappierCh
                     : <View style={resolveHappierRadioMarkStyle({ selected, ink: props.colors.selection, quiet: props.colors.glyph, surface: 'transparent' })} />}
                 </View>
               </View>
-            </Pressable>
+            </SelectionTilePressable>
             {footer != null && footer !== false ? (
               <View style={[styles.footer, compact ? styles.footerCompact : null]}>
                 {footer}
@@ -801,6 +805,27 @@ const VISUAL_FILL_PREVIEW_ASPECT_RATIO = 2.2;
 
 const ACTION_TILE_MIN_WIDTH_PX = 180;
 const ACTION_GRID_GAP_PX = 10;
+
+/**
+ * A choice tile's press target. Under a finger its hit area reaches past the drawn tile into the gap around
+ * it (half the gap, so neighbours never overlap); the tile itself never grows (DESIGN.md → touch targets are
+ * hit areas, not drawn sizes).
+ */
+function SelectionTilePressable({ hitReach, style, children, ...rest }: Omit<ComponentProps<typeof Pressable>, 'children'> & Readonly<{
+  hitReach: HappierHitReach;
+  children: ReactNode;
+}>) {
+  const hitArea = useHappierHitArea({
+    restingStyle: () => (typeof style === 'function' ? style({ pressed: false }) : style),
+    hitReach,
+  });
+  return (
+    <Pressable {...rest} hitSlop={hitArea.hitSlop} onLayout={hitArea.onLayout} style={style}>
+      {hitArea.frame}
+      {children}
+    </Pressable>
+  );
+}
 
 /** Card icon slot: the list row's icon box, so a tile glyph lines up with a row glyph. */
 const CARD_ICON_BOX_PX = {
@@ -959,9 +984,10 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
       minHeight: 48,
     },
     // A one-line compact card is a bordered choice in a dense grid (a popover's scope tiles): the
-    // field box's height on pointer platforms, the touch target elsewhere, its title centred.
+    // field box's height under every pointer, its title centred. A finger reaches it through the tile's
+    // hit area, never a taller tile.
     tileCompactWithoutSubtitle: {
-      minHeight: Platform.OS === 'web' ? HAPPIER_FIELD_BOX_METRICS.minHeightPx : 44,
+      minHeight: HAPPIER_FIELD_BOX_METRICS.minHeightPx,
       paddingTop: 6,
       paddingBottom: 6,
       justifyContent: 'center',

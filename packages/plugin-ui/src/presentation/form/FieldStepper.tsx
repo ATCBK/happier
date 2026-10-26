@@ -1,12 +1,14 @@
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 
-import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { happierRaisedEdgeStyle } from '../layout/raisedEdge.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
 import { HAPPIER_FIELD_BOX_METRICS, HAPPIER_FIELD_BOX_SHAPE, type HappierFieldBoxColors } from './FieldBox.js';
+
+const STEP_DOWN_HIT_REACH = Object.freeze({ right: 0 });
+const STEP_UP_HIT_REACH = Object.freeze({ left: 0 });
 
 /** Numeric field anatomy shared by app settings and public plugin fields. The draft owner steps it. */
 export function HappierFieldStepper(props: Readonly<{
@@ -28,9 +30,10 @@ export function HappierFieldStepper(props: Readonly<{
    */
   compact?: boolean;
 }>) {
-  const target = useHappierNativeMinimumInteractiveTargetSize();
   const paintColor = useHappierMaterialColorResolver();
-  const size = Math.max(HAPPIER_FIELD_BOX_METRICS.minHeightPx, target ?? 0);
+  // The buttons keep the field's drawn size under every pointer; under a finger each reaches its target
+  // outward and up and down, never over the value between them (DESIGN.md → touch targets are hit areas).
+  const size = HAPPIER_FIELD_BOX_METRICS.minHeightPx;
   const compact = props.compact === true;
   return <View style={compact ? [
     HAPPIER_FIELD_BOX_SHAPE,
@@ -42,6 +45,7 @@ export function HappierFieldStepper(props: Readonly<{
       const button = <HappierPressable key={direction} testID={props.testID ? `${props.testID}.${direction === -1 ? 'decrement' : 'increment'}` : undefined}
         accessibilityRole="button" accessibilityLabel={direction === -1 ? props.decreaseLabel : props.increaseLabel}
         disabled={disabled} onPress={() => props.onStep(direction)}
+        hitReach={direction === -1 ? STEP_DOWN_HIT_REACH : STEP_UP_HIT_REACH}
         style={({ focused, pressed }) => ({
           // Inside the compact box the buttons share its edge; apart they are boxes of their own.
           borderRadius: HAPPIER_FIELD_BOX_METRICS.radiusPx,
