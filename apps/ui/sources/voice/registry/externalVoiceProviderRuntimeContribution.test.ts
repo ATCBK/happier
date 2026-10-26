@@ -921,8 +921,15 @@ describe('external Voice provider host composition', () => {
   });
 
   it('refuses a prepared carrier when the exact target is revoked during the provider preparation boundary', async () => {
+    const account = await captureLazyActionAccountContext(preparationHome.home.id);
+    try {
+      await account.createArtifactDocument({ artifactId: 'pending-instructions', header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' },
+        body: JSON.stringify({ v: 1, markdown: 'Prepared before revocation', createdAtMs: 1, updatedAtMs: 1 }) });
+    } finally { account.dispose(); }
     storage.setState({ sessions: { ...storage.getState().sessions,
-      'pending-target': createSessionFixture({ id: 'pending-target', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, work: {} } }),
+      'pending-target': createSessionFixture({ id: 'pending-target', serverId: preparationHome.home.id, metadata: { ...fixtureSessionMetadata, work: {
+        promptStack: [{ id: 'session.instructions', ref: { kind: 'doc', artifactId: 'pending-instructions' }, enabled: true, placement: 'system_append' }],
+      } } }),
     } });
     let reachedPrepare!: () => void;
     const reached = new Promise<void>(resolve => { reachedPrepare = resolve; });
@@ -938,7 +945,9 @@ describe('external Voice provider host composition', () => {
     const { 'pending-target': _removed, ...sessions } = storage.getState().sessions;
     storage.setState({ sessions });
     finishPrepare();
-    expect(await pending).toMatchObject({ kind: 'declined', code: 'voice_account_operation_cancelled' });
+    const result = await pending;
+    expect(result).toMatchObject({ kind: 'declined', code: 'voice_account_operation_cancelled' });
+    expect(result).not.toHaveProperty('preparedInstructionsFor');
   });
 
   it('hands initial prepare one immutable preflight snapshot and consumes it before every settlement', async () => {

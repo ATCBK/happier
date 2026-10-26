@@ -219,7 +219,8 @@ export async function applyExecutionRunAction(args: Readonly<{
             : {}),
         });
         await args.onVoiceAgentWelcomed?.(args.runId, ctrl.transcript.epoch);
-        return { ok: true, result: { assistantText: welcomed.assistantText } };
+        return { ok: true, result: { assistantText: welcomed.assistantText,
+          ...(welcomed.preparedInstructionsFor ? { preparedInstructionsFor: welcomed.preparedInstructionsFor } : {}) } };
       } catch (e) {
         if (e instanceof VoiceAgentError) {
           if (e.code === 'VOICE_AGENT_BUSY') return { ok: false, errorCode: 'execution_run_busy', error: e.message };

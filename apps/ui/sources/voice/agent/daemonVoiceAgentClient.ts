@@ -6,6 +6,7 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunActionResponseSchema, ExecutionRunEnsureOrStartResponseSchema } from '@happier-dev/protocol/execution/runs/index';
 import { ExecutionRunStopResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamStartResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema, type ExecutionRunTurnStreamReadResponse } from '@happier-dev/protocol/execution/runs/streaming';
+import { ExecutionRunPreparedInstructionsForSchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import type { ExecutionRunUserTranscriptDirective, VoiceAssistantAction } from '@happier-dev/protocol';
 
 import type { VoiceAgentClient, VoiceAgentStartParams, VoiceAgentStartResult, VoiceAgentSendTurnOptions } from './types';
@@ -160,7 +161,8 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       throwIfRpcError(res);
       const parsed = ensureOk(res, ExecutionRunEnsureOrStartResponseSchema);
       if (!parsed.ok) throw createRpcCallError({ error: parsed.error, errorCode: parsed.errorCode });
-      return { voiceAgentId: parsed.runId };
+      return { voiceAgentId: parsed.runId,
+        ...(parsed.preparedInstructionsFor ? { preparedInstructionsFor: parsed.preparedInstructionsFor } : {}) };
     };
 
     try {
@@ -214,7 +216,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     });
   }
 
-  async welcome(params: Readonly<{ sessionId: string; voiceAgentId: string; welcomeText?: string }>): Promise<{ assistantText: string }> {
+  async welcome(params: Readonly<{ sessionId: string; voiceAgentId: string; welcomeText?: string }>): ReturnType<VoiceAgentClient['welcome']> {
     const res: any = await this.sessionRpc({
       sessionId: params.sessionId,
       method: SESSION_RPC_METHODS.EXECUTION_RUN_ACTION,
@@ -228,12 +230,16 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       },
     });
     throwIfRpcError(res);
-    const parsed = ensureOk(res, ExecutionRunActionResponseSchema) as any;
-    const assistantText = parsed?.result?.assistantText;
+    const parsed = ensureOk(res, ExecutionRunActionResponseSchema);
+    const result = parsed.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('invalid_rpc_response');
+    const assistantText: unknown = Reflect.get(result, 'assistantText');
     if (typeof assistantText !== 'string') {
       throw new Error('invalid_rpc_response');
     }
-    return { assistantText };
+    const prepared: unknown = Reflect.get(result, 'preparedInstructionsFor');
+    const preparedInstructionsFor = prepared === undefined ? undefined : ensureOk(prepared, ExecutionRunPreparedInstructionsForSchema);
+    return { assistantText, ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}) };
   }
 
   async startTurnStream(params: Readonly<{

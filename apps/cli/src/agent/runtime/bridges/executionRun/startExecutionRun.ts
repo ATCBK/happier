@@ -255,6 +255,12 @@ async function retireProvisionedRuntimeWithoutDispatch(params: Readonly<{
 
 type StartExecutionRunArgs = Readonly<{
   params: ExecutionRunManagerStartParams;
+  /** Final prompt sizing uses this exact registered runtime's prepared context. */
+  finalizeStartParamsForRuntime?: (
+    params: ExecutionRunManagerStartParams,
+    runtime: ExecutionRunHostRuntime,
+    runId: string,
+  ) => Promise<ExecutionRunManagerStartParams>;
   /** The host's captured Account authority; never fall back to ambient state when supplied. */
   resolveAccountSettingsSnapshot?: AccountSettingsSnapshotResolver;
   /** Host-private scope and opened-parent reader; never an authored Run input. */
@@ -415,7 +421,12 @@ async function startAdmittedExecutionRun(
       defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(args.params.backendTarget)) },
     });
     if (args.params.roleId && !args.params.resolvedRole) {
-      throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
+      throw Object.assign(new Error('The requested role has no admitted start context.'), {
+        code: 'target_unavailable',
+        details: withExecutionRunStartFailureDetails({ executionRunStart: { v: 1, runCreation: 'noRunCreated',
+          refusal: { code: 'agent_start_context_unavailable', phase: 'agent_start_context' },
+        } }, 'noRunCreated'),
+      });
     }
     const inheritedMemory = args.params.sessionId && args.params.roleSessionMetadata
       ? await prepareSessionMemoryInheritance({ metadata: readRecord(args.params.roleSessionMetadata),
@@ -529,7 +540,8 @@ async function startAdmittedExecutionRun(
       ...(originalParams.childSelection ? { childSelection: originalParams.childSelection,
         agentDefaultSelection } : {}),
     });
-    if (childSelection.inheritedFromDifferentAgent && childSelection.modelSelection?.providerConnectionId) {
+    const explicitProviderEffortRequested = originalParams.sessionConfigOptionOverrides?.overrides.reasoning_effort?.value != null;
+    if ((childSelection.inheritedFromDifferentAgent || explicitProviderEffortRequested) && childSelection.modelSelection?.providerConnectionId) {
       if (!args.admitInheritedProviderSelection) {
         throw Object.assign(new Error('Choose a compatible child Agent, Provider and model.'), { code: 'execution_run_child_choice_required' });
       }
@@ -545,7 +557,7 @@ async function startAdmittedExecutionRun(
           code: 'execution_run_child_choice_required',
         });
       }
-      if (voiceCommit.inheritedFromDifferentAgent && voiceCommit.modelSelection?.providerConnectionId) {
+      if ((voiceCommit.inheritedFromDifferentAgent || explicitProviderEffortRequested) && voiceCommit.modelSelection?.providerConnectionId) {
         if (!args.admitInheritedProviderSelection) {
           throw Object.assign(new Error('Choose a compatible child Agent, Provider and model.'), { code: 'execution_run_child_choice_required' });
         }
@@ -769,55 +781,57 @@ async function startAdmittedExecutionRun(
       return startResult;
     }
 
-    // Materialize the run in transcript (tool-call).
-    if (shouldMaterializeInTranscript) {
-      await sendAcp(args.parentProvider, {
-        type: 'tool-call',
-        callId,
-        name: 'SubAgentRun',
-        input: {
-          runId,
-          intent: args.params.intent,
-          backendTarget: args.params.backendTarget,
-          instructions: args.params.instructions ?? '',
-          ...(typeof args.params.intentInput !== 'undefined' ? { intentInput: args.params.intentInput } : {}),
-          ...(args.params.display ? { display: args.params.display } : {}),
-          ...(args.params.launchOrigin ? { launchOrigin: args.params.launchOrigin } : {}),
-          ...(requestedConfiguration ? { requestedConfiguration } : {}),
-          ...(resolvedSelection ? { resolvedSelection } : {}),
-          permissionMode: args.params.permissionMode,
-          retentionPolicy: args.params.retentionPolicy,
-          runClass: args.params.runClass,
-          ioMode: args.params.ioMode,
-        },
-        id: randomUUID(),
-      });
-      if (args.runs.get(runId)?.status !== 'running') {
-        return startResult;
+    const publishStartedRun = async (): Promise<boolean> => {
+      // Materialize the prepared run in transcript (tool-call).
+      if (shouldMaterializeInTranscript) {
+        await sendAcp(args.parentProvider, {
+          type: 'tool-call',
+          callId,
+          name: 'SubAgentRun',
+          input: {
+            runId,
+            intent: args.params.intent,
+            backendTarget: args.params.backendTarget,
+            instructions: args.params.instructions ?? '',
+            ...(typeof args.params.intentInput !== 'undefined' ? { intentInput: args.params.intentInput } : {}),
+            ...(args.params.display ? { display: args.params.display } : {}),
+            ...(args.params.launchOrigin ? { launchOrigin: args.params.launchOrigin } : {}),
+            ...(requestedConfiguration ? { requestedConfiguration } : {}),
+            ...(resolvedSelection ? { resolvedSelection } : {}),
+            permissionMode: args.params.permissionMode,
+            retentionPolicy: args.params.retentionPolicy,
+            runClass: args.params.runClass,
+            ioMode: args.params.ioMode,
+          },
+          id: randomUUID(),
+        });
+        if (args.runs.get(runId)?.status !== 'running') return false;
       }
-    }
 
-    const initialPublication = args.params.runClass === 'bounded'
-      ? await profile.onStarted?.({ start: args.runs.get(runId)!, rawText: '', finishedAtMs: args.getNowMs() }) : null;
-    if (args.runs.get(runId)?.status !== 'running') return startResult;
-    if (initialPublication) {
-      const finishedAtMs = args.getNowMs();
-      const status = initialPublication.status;
-      await args.finishRun(
-        runId,
-        {
-          status,
-          summary: initialPublication.summary,
-          finishedAtMs,
-          ...(status === 'failed'
-            ? { error: { code: 'cached_diff_summary_failed', message: 'Cached diff summary failure restored.' } }
-            : {}),
-        },
-        { output: initialPublication.toolResultOutput, meta: initialPublication.toolResultMeta },
-        initialPublication.structuredMeta,
-      );
-      return startResult;
-    }
+      const initialPublication = args.params.runClass === 'bounded'
+        ? await profile.onStarted?.({ start: args.runs.get(runId)!, rawText: '', finishedAtMs: args.getNowMs() }) : null;
+      if (args.runs.get(runId)?.status !== 'running') return false;
+      if (initialPublication) {
+        const finishedAtMs = args.getNowMs();
+        const status = initialPublication.status;
+        await args.finishRun(
+          runId,
+          {
+            status,
+            summary: initialPublication.summary,
+            finishedAtMs,
+            ...(status === 'failed'
+              ? { error: { code: 'cached_diff_summary_failed', message: 'Cached diff summary failure restored.' } }
+              : {}),
+          },
+          { output: initialPublication.toolResultOutput, meta: initialPublication.toolResultMeta },
+          initialPublication.structuredMeta,
+        );
+        return false;
+      }
+      return true;
+    };
+    if (!args.finalizeStartParamsForRuntime && !await publishStartedRun()) return startResult;
 
     if (args.params.intent === 'voice_agent' && args.params.ioMode === 'streaming') {
       let resolveTerminal!: () => void;
@@ -999,10 +1013,11 @@ async function startAdmittedExecutionRun(
       }
 
       await args.writeActivityMarker(runId, args.getNowMs(), { force: true }).catch(() => {});
-      return startResult;
+      return { ...startResult, ...(startedVoice.preparedInstructionsFor ? { preparedInstructionsFor: startedVoice.preparedInstructionsFor } : {}) };
     }
 
     let ctrl: ExecutionRunBackendController | null = null;
+    let backendStartContext!: ExecutionRunBackendStartContext;
     const backend = args.createRuntime({
       runId,
       controllerOccurrenceId,
@@ -1041,7 +1056,7 @@ async function startAdmittedExecutionRun(
       ...(args.params.connectedServicesDefaultServiceIds && args.params.connectedServicesDefaultServiceIds.length > 0
         ? { connectedServicesDefaultServiceIds: args.params.connectedServicesDefaultServiceIds }
         : {}),
-      start: {
+      start: backendStartContext = {
         ...startParams,
         profileId: profileId ?? undefined,
         ...(startProfileSourceCustody
@@ -1125,6 +1140,28 @@ async function startAdmittedExecutionRun(
     backendBeforeControllerRegistration = null;
     const releaseOccurrence = args.registerRunOccurrence?.({ runId, sidechainId, controller: ctrl });
     if (releaseOccurrence) ctrl.releaseSessionInputAttachment = async () => releaseOccurrence();
+    const finalizedProfilePromise = (async (): Promise<boolean> => {
+      if (!args.finalizeStartParamsForRuntime) return true;
+      const finalized = await args.finalizeStartParamsForRuntime(args.params, backend, runId);
+      if (!isExecutionRunControllerCurrent({ runId, controller: ctrl, controllers: args.controllers })
+        || args.runs.get(runId)?.status !== 'running') return false;
+      // Native adapters retain this exact start context. Only input fields may
+      // change after policy, working directory and context were prepared.
+      const inputPatch = { instructions: finalized.instructions, intentInput: finalized.intentInput };
+      args = { ...args, params: { ...args.params, ...inputPatch } };
+      Object.assign(startParams, inputPatch);
+      Object.assign(backendStartContext, inputPatch);
+      const current = args.runs.get(runId)!;
+      args.runs.set(runId, { ...current, instructions: finalized.instructions ?? '', intentInput: finalized.intentInput });
+      ctrl.initialInputPending = args.params.initialInput?.kind !== 'deferred_session_pending'
+        && Boolean(args.params.instructions?.trim());
+      args.onPublicStateUpdated?.(runId);
+      await args.writeActivityMarker(runId, args.getNowMs(), { force: true });
+      if (!isExecutionRunControllerCurrent({ runId, controller: ctrl, controllers: args.controllers })
+        || args.runs.get(runId)?.status !== 'running') return false;
+      return await publishStartedRun();
+    })();
+    void finalizedProfilePromise.catch(() => undefined);
     // A lazy host runtime may have to spawn/connect to the native backend before it can
     // answer its resume capabilities. The run is already accepted and registered, so keep
     // that optional discovery inside controller-owned provisioning instead of withholding
@@ -1133,6 +1170,10 @@ async function startAdmittedExecutionRun(
       backendSupportsResume: boolean;
       backendSupportsInitialResume: boolean;
     }> | null> => {
+        if (!await finalizedProfilePromise) {
+          await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
+          return null;
+        }
         const supportsInitialResume = await backend.readResumeSupport();
         const supportsResume = args.params.runClass === 'long_lived'
           ? await backend.readResumeSupport({ captureReplay: true })
@@ -1266,6 +1307,7 @@ async function startAdmittedExecutionRun(
       return startResult;
     }
 
+    if (args.finalizeStartParamsForRuntime && !await finalizedProfilePromise) return startResult;
     const initialInstructions = args.params.initialInput?.kind !== 'deferred_session_pending' && typeof args.params.instructions === 'string'
       ? args.params.instructions
       : '';

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { ExecutionRunPreparedInstructionsForSchema } from './runPrimitives.js';
 
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { ExecutionRunResultContractV1Schema } from './resultContractV1.js';
@@ -279,7 +280,8 @@ export const ExecutionRunEnsureOrStartRequestSchema = lazyZodSchema(() => z.loos
 export type ExecutionRunEnsureOrStartRequest = z.infer<typeof ExecutionRunEnsureOrStartRequestSchema>;
 
 export const ExecutionRunEnsureOrStartResponseSchema = lazyZodSchema(() => z.union([
-  z.looseObject({ ok: z.literal(true), runId: z.string().check(z.minLength(1)), created: z.boolean() }),
+  z.looseObject({ ok: z.literal(true), runId: z.string().check(z.minLength(1)), created: z.boolean(),
+    preparedInstructionsFor: z.optional(ExecutionRunPreparedInstructionsForSchema) }),
   z.looseObject({ ok: z.literal(false), error: z.string().check(z.minLength(1)), errorCode: z.optional(z.string().check(z.minLength(1))) }),
 ]));
 export type ExecutionRunEnsureOrStartResponse = z.infer<typeof ExecutionRunEnsureOrStartResponseSchema>;

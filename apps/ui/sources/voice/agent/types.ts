@@ -101,6 +101,7 @@ export type VoiceAgentStartParams = Readonly<{
 
 export type VoiceAgentStartResult = Readonly<{
   voiceAgentId: string;
+  preparedInstructionsFor?: ExecutionRunTurnStreamReadResponse['preparedInstructionsFor'];
   effective?: {
     chatModelId: string;
     commitModelId: string;
@@ -183,7 +184,7 @@ export interface VoiceAgentClient {
   ): Promise<{ assistantText: string; actions?: VoiceAssistantAction[] }>;
   welcome(
     params: Readonly<{ sessionId: string; voiceAgentId: string; welcomeText?: string }>,
-  ): Promise<{ assistantText: string }>;
+  ): Promise<{ assistantText: string; preparedInstructionsFor?: ExecutionRunTurnStreamReadResponse['preparedInstructionsFor'] }>;
   startTurnStream(
     params: Readonly<{
       sessionId: string;

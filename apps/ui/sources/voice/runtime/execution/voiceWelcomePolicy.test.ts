@@ -19,6 +19,8 @@ let artifacts: ReturnType<typeof createArtifactStoreBoundary>;
 let rpc: Awaited<ReturnType<typeof createRetainedVoiceAgentRpcBoundary>>;
 const welcomeRequests: Array<ReturnType<typeof ExecutionRunActionRequestSchema.parse>> = [];
 let assistantReplyText = 'Welcome!';
+let preparedInstructionsFor: { serverId: string; sessionId: string } | undefined;
+let beforeWelcomeReply: (() => void) | undefined;
 
 await prepareStandaloneVoicePolicyHarness();
 
@@ -49,6 +51,8 @@ describe('Voice welcome through retained initialization, execution cache and Hom
     beforeEach(async () => {
         welcomeRequests.length = 0;
         assistantReplyText = 'Welcome!';
+        preparedInstructionsFor = undefined;
+        beforeWelcomeReply = undefined;
         ({ storage } = await import('@/sync/domains/state/storage'));
         artifacts = createArtifactStoreBoundary({
             ownerAccountId: () => storage.getState().profileScope?.accountId ?? null, encryptionMode: 'plain',
@@ -59,7 +63,9 @@ describe('Voice welcome through retained initialization, execution cache and Hom
                 const request = ExecutionRunActionRequestSchema.parse(input);
                 if (request.actionId !== 'voice_agent.welcome') throw new Error('Unexpected Voice Action: ' + request.actionId);
                 welcomeRequests.push(request);
-                return ExecutionRunActionResponseSchema.parse({ ok: true, result: { assistantText: assistantReplyText } });
+                beforeWelcomeReply?.();
+                return ExecutionRunActionResponseSchema.parse({ ok: true, result: { assistantText: assistantReplyText,
+                    ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}) } });
             },
         });
         fixture = await createStandaloneVoicePolicyHarness({
@@ -94,6 +100,38 @@ describe('Voice welcome through retained initialization, execution cache and Hom
         expect(welcomeRequests).toHaveLength(2);
         expect(welcomeRequests[0]?.input).toMatchObject({ welcomeText: expect.stringMatching(/Bonjour/) });
         expect((await readRunMetadata())?.welcomedEpoch).toBeUndefined();
+    });
+    it('publishes an actual welcome instruction receipt into its current local attempt', async () => {
+        const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        machine.reset();
+        machine.transitionToConnecting({ controlSessionId: fixture.sessionId });
+        preparedInstructionsFor = { serverId: fixture.handle.accountLifetime.scope.serverId, sessionId: fixture.sessionId };
+        try {
+            await execution.ensureRunningAndMaybeWelcome(fixture.sessionId);
+            expect(machine.getSnapshot().preparedInstructionsFor).toEqual(preparedInstructionsFor);
+        } finally { machine.reset(); }
+    });
+    it('does not publish a welcome receipt after the bound target changes during delivery', async () => {
+        const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        const { bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner, unbindVoiceRuntimeAttemptBindingIfOwned } = await import('@/voice/binding/voiceConversationBindingStore');
+        const owner = createVoiceRuntimeAttemptBindingOwner();
+        const serverId = fixture.handle.accountLifetime.scope.serverId;
+        const binding = { adapterId: 'local_conversation', controlSessionId: fixture.sessionId, conversationSessionId: fixture.sessionId,
+            conversationSessionAddress: { serverId, sessionId: fixture.sessionId }, targetSessionAddress: { serverId, sessionId: 'target-a' },
+            transcriptMode: 'native_session' as const, lifetime: 'runtime_attempt' as const, updatedAt: 1 };
+        bindVoiceRuntimeAttemptBinding({ owner, binding });
+        machine.reset();
+        machine.transitionToConnecting({ controlSessionId: fixture.sessionId });
+        preparedInstructionsFor = binding.targetSessionAddress;
+        beforeWelcomeReply = () => bindVoiceRuntimeAttemptBinding({ owner, binding: { ...binding,
+            targetSessionAddress: { serverId, sessionId: 'target-b' }, updatedAt: 2 } });
+        try {
+            await execution.ensureRunningAndMaybeWelcome(fixture.sessionId);
+            expect(machine.getSnapshot().preparedInstructionsFor).toBeUndefined();
+        } finally {
+            unbindVoiceRuntimeAttemptBindingIfOwned({ conversationSessionId: fixture.sessionId, owner });
+            machine.reset();
+        }
     });
 
     it('suppresses duplicate welcome once welcomedEpoch is persisted', async () => {

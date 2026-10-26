@@ -62,6 +62,7 @@ export type VoiceAgentStartParams = Readonly<{
 
 export type VoiceAgentStartResult = Readonly<{
   voiceAgentId: string;
+  preparedInstructionsFor?: VoicePromptPreparation['preparedInstructionsFor'];
   effective: {
     chatModelId: string;
     commitModelId: string;

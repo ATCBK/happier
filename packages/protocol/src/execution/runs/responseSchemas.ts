@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { ExecutionRunPreparedInstructionsForSchema } from './runPrimitives.js';
 import { ExecutionRunPermissionRequestIdentitySchema } from './runPrimitives.js';
 import { ExecutionRunTransportErrorCodeSchema } from './runPrimitives.js';
 export { ExecutionRunTransportErrorCodeSchema, type ExecutionRunTransportErrorCode } from './runPrimitives.js';
@@ -40,13 +41,16 @@ import {
   type ExecutionRunLifecycleV1,
 } from './executionRunLifecycleV1.js';
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
-import { ExecutionRunOutputObservationSchema } from '../../reviews/reviewNarration.js';
+import { ExecutionRunOutputObservationSchema, ExecutionRunOutputRefV1Schema } from '../../reviews/reviewNarration.js';
+import { ExecutionRunFollowOutputV1Schema } from '../../sessions/follow/sessionFollowInputV1.js';
 import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
+import { ProviderErrorV1Schema } from '../../providers/errors.js';
 import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
 import { SessionRuntimeIssueV1Schema } from '../../sessions/control/runtimeIssueV1.js';
 import { ActionInputIssueSchema } from '../../actions/executor/actionInputValidation.js';
 import { ActionErrorClassV1Schema, type ActionErrorClassV1 } from '../../actions/actionErrorClassV1.js';
+import { WorkflowTargetUnavailableReasonV1Schema } from '../../workflows/workflowTargetUnavailableReasonV1.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -68,10 +72,16 @@ export function projectExecutionRunChildChoiceV1(input: Readonly<{
 export const ExecutionRunStartRunCreationSchema = lazyZodSchema(() => z.enum(['noRunCreated', 'outcomeUnknown']));
 export type ExecutionRunStartRunCreation = z.infer<typeof ExecutionRunStartRunCreationSchema>;
 
+const ExecutionRunStartRefusalV1Schema = lazyZodSchema(() => z.strictObject({
+  code: WorkflowTargetUnavailableReasonV1Schema,
+  phase: z.literal('agent_start_context'),
+}));
+
 const ExecutionRunStartFailureEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   runCreation: ExecutionRunStartRunCreationSchema,
   errorClass: z.optional(ActionErrorClassV1Schema),
+  refusal: z.optional(ExecutionRunStartRefusalV1Schema),
 }));
 
 /**
@@ -84,6 +94,7 @@ export const ExecutionRunStartFailureDetailsV1Schema = lazyZodSchema(() => z.str
   executionRunStart: ExecutionRunStartFailureEvidenceV1Schema,
   updateRequired: z.optional(OperationUpdateRequiredV1Schema),
   childChoice: z.optional(ExecutionRunChildChoiceV1Schema),
+  providerError: z.optional(ProviderErrorV1Schema),
   issues: z.optional(z.array(ActionInputIssueSchema)),
 }));
 export type ExecutionRunStartFailureDetailsV1 = z.infer<typeof ExecutionRunStartFailureDetailsV1Schema>;
@@ -105,6 +116,8 @@ export function withExecutionRunStartFailureDetails(
     ? details.executionRunStart : undefined;
   const parsedClass = ActionErrorClassV1Schema.safeParse(errorClass ?? (
     evidence && typeof evidence === 'object' && 'errorClass' in evidence ? evidence.errorClass : undefined));
+  const refusal = ExecutionRunStartRefusalV1Schema.safeParse(evidence && typeof evidence === 'object'
+    && 'refusal' in evidence ? evidence.refusal : undefined);
   const updateRequired = details && typeof details === 'object' && !Array.isArray(details)
     ? OperationUpdateRequiredV1Schema.safeParse(
         (details as Readonly<Record<string, unknown>>).updateRequired,
@@ -112,12 +125,16 @@ export function withExecutionRunStartFailureDetails(
     : null;
   const childChoice = ExecutionRunChildChoiceV1Schema.safeParse(details && typeof details === 'object'
     && 'childChoice' in details ? details.childChoice : undefined);
+  const providerError = ProviderErrorV1Schema.safeParse(details && typeof details === 'object'
+    && 'providerError' in details ? details.providerError : undefined);
   const issues = z.array(ActionInputIssueSchema).safeParse(details && typeof details === 'object'
     && 'issues' in details ? details.issues : undefined);
   return {
-    executionRunStart: { v: 1, runCreation, ...(parsedClass.success ? { errorClass: parsedClass.data } : {}) },
+    executionRunStart: { v: 1, runCreation, ...(parsedClass.success ? { errorClass: parsedClass.data } : {}),
+      ...(refusal.success ? { refusal: refusal.data } : {}) },
     ...(updateRequired?.success ? { updateRequired: updateRequired.data } : {}),
     ...(childChoice.success ? { childChoice: childChoice.data } : {}),
+    ...(providerError.success ? { providerError: providerError.data } : {}),
     ...(issues.success ? { issues: issues.data } : {}),
   };
 }
@@ -232,6 +249,8 @@ export type ExecutionRunListResponse = z.infer<typeof ExecutionRunListResponseSc
 export const ExecutionRunGetRequestSchema = lazyZodSchema(() => z.looseObject({
   runId: z.string().check(z.minLength(1)),
   includeStructured: z.optional(z.boolean()),
+  /** Content-free callers explicitly omit the result body; legacy reads retain it by default. */
+  includeLatestToolResult: z.optional(z.boolean()),
   /** Await this exact current/last input turn before returning the Run snapshot. */
   waitForInputId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   waitForOutput: z.optional(ExecutionRunOutputObservationSchema),
@@ -247,17 +266,24 @@ export const ExecutionRunGetResponseSchema = lazyZodSchema(() => z.looseObject({
 export type ExecutionRunGetResponse = z.infer<typeof ExecutionRunGetResponseSchema>;
 
 /** Retained source identity only; unlike get, this read never returns Run content. */
-export const ExecutionRunFollowFrontierRequestSchema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.string().check(z.minLength(1)),
+const executionRunFollowFrontierRequestFields = () => ({
+  runId: z.string().check(z.minLength(1)), outputRefs: z.optional(z.array(ExecutionRunOutputRefV1Schema)),
+});
+export const ExecutionRunFollowFrontierRequestSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...executionRunFollowFrontierRequestFields(), sessionId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ ...executionRunFollowFrontierRequestFields(), machineId: z.string().check(z.minLength(1)) }),
+]));
+const executionRunFollowFrontierResponseFields = () => ({
   runId: z.string().check(z.minLength(1)),
-}));
-export const ExecutionRunFollowFrontierResponseSchema = lazyZodSchema(() => z.strictObject({
-  runId: z.string().check(z.minLength(1)),
-  sessionId: z.string().check(z.minLength(1)),
   status: ExecutionRunStatusSchema,
   terminalEventId: z.nullable(z.string().check(z.minLength(1))),
   attention: z.optional(ExecutionRunPermissionAttentionSchema),
-}));
+  outputs: z.optional(z.array(ExecutionRunFollowOutputV1Schema)),
+});
+export const ExecutionRunFollowFrontierResponseSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...executionRunFollowFrontierResponseFields(), sessionId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ ...executionRunFollowFrontierResponseFields(), machineId: z.string().check(z.minLength(1)), sessionId: z.null() }),
+]));
 export type ExecutionRunFollowFrontierResponse = z.infer<typeof ExecutionRunFollowFrontierResponseSchema>;
 
 /**
@@ -322,6 +348,7 @@ export const ExecutionRunStartResponseSchema = lazyZodSchema(() => z.looseObject
   requestedConfiguration: z.optional(ExecutionRunRequestedConfigurationSchema),
   resolvedSelection: z.optional(ExecutionRunResolvedSelectionSchema),
   wait: z.optional(ExecutionRunWaitResultSchema),
+  preparedInstructionsFor: z.optional(ExecutionRunPreparedInstructionsForSchema),
 }));
 export type ExecutionRunStartResponse = z.infer<typeof ExecutionRunStartResponseSchema>;
 

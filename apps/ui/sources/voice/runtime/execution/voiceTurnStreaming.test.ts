@@ -32,7 +32,7 @@ afterEach(async () => {
     finally { disposeStreamingFixture = undefined; }
 });
 
-async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; targetWithoutTerminal?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
+async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; targetWithoutTerminal?: boolean; persistent?: boolean; staleRpc?: boolean; bootstrapReceipt?: boolean }> = {}) {
     const starts: Array<ReturnType<typeof ExecutionRunTurnStreamStartRequestSchema.parse>> = [];
     const reads: Array<ReturnType<typeof ExecutionRunTurnStreamReadRequestSchema.parse>> = [];
     let events: ExecutionRunTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
@@ -94,6 +94,13 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
         } },
         async dispatch(method, input) {
             const result = await rpc.dispatch(method, input);
+            if (options.bootstrapReceipt && (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+                || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1)) {
+                const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+                if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Missing bootstrap response');
+                return { ...result, preparedInstructionsFor: {
+                    serverId: captureActiveServerAccountScopeLifetime()!.scope.serverId, sessionId: target.id } };
+            }
             // The external daemon projects the transcript admitted in the actual
             // Ensure request; the initializer's handle is never reconstructed.
             if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && result && typeof result === 'object' && 'run' in result) {
@@ -186,6 +193,16 @@ async function mountAutomaticUiContext() {
 }
 
 describe('Voice streaming through retained initialization, execution transport and daemon RPC', () => {
+    it('publishes actual bootstrap instruction delivery while the current local attempt connects', async () => {
+        const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+        machine.reset();
+        machine.transitionToConnecting({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+        onTestFinished(() => machine.reset());
+        const f = await createStreamingFixture({ target: true, bootstrapReceipt: true });
+        expect(machine.getSnapshot().preparedInstructionsFor).toEqual({
+            serverId: f.fixture.handle.accountLifetime.scope.serverId, sessionId: 'streaming-target' });
+    });
     it.each([true, false])('projects actual delivered instructions through local tool delivery (streaming=%s)', async streaming => {
         const f = await createStreamingFixture({ streaming, target: true });
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
@@ -249,7 +266,7 @@ describe('Voice streaming through retained initialization, execution transport a
         expect(f.rpc.readRetainedRun()?.status).toBe('running');
     });
 
-    it('admits provider resume from the current bound publication while the retained RPC Session is stale', async () => {
+    it('sends ordinary input without recovery intent while the retained RPC Session is stale', async () => {
         const f = await createStreamingFixture({ persistent: true, staleRpc: true });
         const { voiceSessionBindingStore, bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner } = await import('@/voice/binding/voiceConversationBindingStore');
         const original = voiceSessionBindingStore.getState().getByControlSessionId(f.controlSessionId);
@@ -260,13 +277,18 @@ describe('Voice streaming through retained initialization, execution transport a
             updatedAt: original.updatedAt + 1,
         } });
         onTestFinished(() => voiceSessionBindingStore.getState().unbind('current-resume-publication'));
-        const sockets = [...new Set(f.fixture.rpcSockets)].map(socket => ({
-            socket, before: vi.mocked(socket.emitWithAck).mock.calls.length,
-        }));
+        // The canonical Home boundary may wrap SDK acknowledgements to retain
+        // the socket's principal. Observe that actual outer boundary directly.
+        const emissions = [...new Set(f.fixture.rpcSockets)].map(socket => {
+            const emission = vi.spyOn(socket, 'emitWithAck');
+            onTestFinished(() => emission.mockRestore());
+            return emission;
+        });
         expect((await f.transport.sendTurn(f.controlSessionId, 'hello')).assistantText).toBe('assistant reply');
-        expect(f.starts).toEqual([expect.objectContaining({ runId: 'streaming-run', resume: true })]);
-        const startMethods = sockets.flatMap(({ socket, before }) =>
-            vi.mocked(socket.emitWithAck).mock.calls.slice(before).flatMap(([event, payload]) => {
+        expect(f.starts).toEqual([expect.objectContaining({ runId: 'streaming-run' })]);
+        expect(f.starts[0]).not.toHaveProperty('resume');
+        const startMethods = emissions.flatMap(emission =>
+            emission.mock.calls.flatMap(([event, payload]) => {
                 if (event !== 'rpc-call' || !payload || typeof payload !== 'object' || !('method' in payload)
                     || typeof payload.method !== 'string' || !payload.method.endsWith(`:${SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START}`)) return [];
                 return [payload.method];

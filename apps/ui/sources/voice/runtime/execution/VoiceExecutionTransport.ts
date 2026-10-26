@@ -5,6 +5,7 @@ import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import { clearRetainedLocalVoiceEffectOutcomes } from '@/voice/tools/localVoiceEffectOutcomeCustody';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
+import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 
 import { createVoiceRunRecovery } from './voiceRunRecovery';
 import { createVoiceTurnStreaming } from './voiceTurnStreaming';
@@ -114,6 +115,10 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
                     signal: lifetime.signal,
                     getDaemonVoiceAgentClient: (scope) => new DaemonVoiceAgentClient(scope, lifetime.signal),
                     getCleanupSignal: () => voiceAgentStopPromiseBySessionId.get(sessionId)?.signal,
+                    onPreparedInstructionsFor: preparedInstructionsFor => {
+                        if (lifetime.signal.aborted || voiceAgentLifetimeBySessionId.get(sessionId) !== lifetime) return;
+                        voiceConversationRuntimeMachine.setPreparedInstructionsFor({ controlSessionId: sessionId, preparedInstructionsFor });
+                    },
                     setDeferredTargetSessionContext: (pendingSessionId, update) => {
                         const text = update.trim();
                         if (!text) return;

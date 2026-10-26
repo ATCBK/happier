@@ -4,7 +4,7 @@ import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { ExecutionRunEnsureOrStartRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunActionRequestSchema, ExecutionRunSendRequestSchema } from '@happier-dev/protocol/execution/runs/index';
 import { ExecutionRunCancelTurnRequestSchema } from '@happier-dev/protocol/execution/runs/cancelTurn';
-import { ExecutionRunGetRequestSchema, ExecutionRunListRequestSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails, ExecutionRunTransportErrorCodeSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunGetRequestSchema, ExecutionRunListRequestSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails, ExecutionRunTransportErrorCodeSchema, type ExecutionRunStartFailureDetailsV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunTurnStreamCancelRequestSchema, ExecutionRunTurnStreamStartRequestSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import { ExecutionRunTurnStreamReadRequestSchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
@@ -16,6 +16,7 @@ import type { ActionExecutorDeps, ActionExecutorContext, ActionExecuteResult, Pl
 import { isRuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isAgentStartActionV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { AGENT_START_REFUSAL_CODES_V1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
+import { WorkflowTargetUnavailableReasonV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { readRetainedReviewFindings } from '@/agent/reviews/normalize/readRetainedReviewFindings';
 
 import type { SimulatorPreviewRoutes } from '@/daemon/devices/simulator/previewRoutes.types';
@@ -315,7 +316,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     return run?.sessionId === sessionId ? run : null;
   }
 
-  function projectExecutionRunGetResponse(runId: string, includeStructured: boolean) {
+  function projectExecutionRunGetResponse(runId: string, includeStructured: boolean, includeLatestToolResult = true) {
     const run = params.manager.getPublic(runId);
     const runState = params.manager.get(runId);
     if (!run || !runState) return null;
@@ -324,7 +325,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     const reviewFindings = includeStructured ? readRetainedReviewFindings(runState) : null;
     return {
       run,
-      ...(hasLatestToolResult ? { latestToolResult: params.manager.getLatestToolResult(runId) } : {}),
+      ...(hasLatestToolResult && includeLatestToolResult ? { latestToolResult: params.manager.getLatestToolResult(runId) } : {}),
       ...(structuredMeta !== null ? { structuredMeta } : {}),
       ...(reviewFindings !== null ? { reviewFindings } : {}),
     };
@@ -652,6 +653,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
             ...(started.requestedConfiguration
               ? { requestedConfiguration: started.requestedConfiguration }
               : {}),
+            ...(started.preparedInstructionsFor ? { preparedInstructionsFor: started.preparedInstructionsFor } : {}),
           }
         : started;
     },
@@ -681,7 +683,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
       const observedInputTurn = parsed.waitForInputId
         ? await params.manager.waitForInputTurn(parsed.runId, parsed.waitForInputId, opts?.signal)
         : null;
-      const response = projectExecutionRunGetResponse(parsed.runId, parsed.includeStructured === true);
+      const response = projectExecutionRunGetResponse(parsed.runId, parsed.includeStructured === true, parsed.includeLatestToolResult !== false);
       if (!response) return executionRunNotFound();
       if (!observedInputTurn) return response;
       const projectedTurns = response.run.inputTurns;
@@ -769,6 +771,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
           ok: false,
           error: ensured.error ?? 'Ensure failed',
           ...(ensured.errorCode ? { errorCode: ensured.errorCode } : {}),
+          ...(ensured.details ? { details: ensured.details } : {}),
         };
       }
       return { ok: true };
@@ -795,6 +798,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
             ok: false,
             error: ensured.error ?? 'Ensure failed',
             ...(ensured.errorCode ? { errorCode: ensured.errorCode } : {}),
+            ...(ensured.details ? { details: ensured.details } : {}),
           };
         }
         return { ok: true, runId, created: false };
@@ -847,7 +851,8 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
       if (!read.ok) {
         return { ok: false, error: read.error, errorCode: read.errorCode };
       }
-      return { streamId: read.streamId, events: read.events, nextCursor: read.nextCursor, done: read.done };
+      return { streamId: read.streamId, events: read.events, nextCursor: read.nextCursor, done: read.done,
+        ...(read.preparedInstructionsFor ? { preparedInstructionsFor: read.preparedInstructionsFor } : {}) };
     },
     executionRunStreamCancel: async (sessionId, request) => {
       const disabled = ensureEnabled();
@@ -1092,8 +1097,33 @@ export function createExecutionRunRpcActionExecutor(
       if (context?.authority === 'present_user' && isAgentStartActionV1(actionId)
         && input && typeof input === 'object' && 'roleId' in input && typeof input.roleId === 'string'
         && !context.agentStartContext) {
-        const resolved = await params.context.resolveAgentStartContext?.(context);
-        if (!resolved) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        let refusal: NonNullable<ExecutionRunStartFailureDetailsV1['executionRunStart']['refusal']> = {
+          code: 'agent_start_context_unavailable', phase: 'agent_start_context',
+        };
+        let resolved: ActionExecutorContext['agentStartContext'] | null;
+        let errorCode = 'target_unavailable';
+        try {
+          resolved = await params.context.resolveAgentStartContext?.({ ...context,
+            recordActionStartDiagnostic: event => {
+              if (event.refusalReason) refusal = { code: event.refusalReason, phase: 'agent_start_context' };
+              context?.recordActionStartDiagnostic?.(event);
+            },
+          });
+        } catch (error) {
+          const code = readRpcErrorCode(error) ?? (error && typeof error === 'object' && 'code' in error ? error.code : undefined);
+          const reason = WorkflowTargetUnavailableReasonV1Schema.safeParse(
+            code === 'account_role_overrides_unavailable' ? 'role_overrides_unavailable' : code);
+          if (!reason.success) throw error;
+          refusal = { code: reason.data, phase: 'agent_start_context' };
+          errorCode = typeof code === 'string' ? code : 'target_unavailable';
+          context.recordActionStartDiagnostic?.({ phase: 'agent_start_context', refusalReason: reason.data });
+          resolved = null;
+        }
+        if (!resolved) return { ok: false, errorCode,
+          error: 'The selected role cannot be prepared for this Session. Check its Account and role availability.',
+          details: withExecutionRunStartFailureDetails({ executionRunStart: {
+            v: 1, runCreation: 'noRunCreated', refusal,
+          } }, 'noRunCreated') };
         context = { ...context, agentStartContext: resolved };
       }
       return await executor.execute(actionId, input, context);

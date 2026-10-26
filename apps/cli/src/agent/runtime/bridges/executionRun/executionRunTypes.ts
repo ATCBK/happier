@@ -175,6 +175,7 @@ export type ExecutionRunStartResult = Readonly<{
   sidechainId: string;
   requestedConfiguration?: ExecutionRunRequestedConfiguration;
   resolvedSelection?: import('@happier-dev/protocol/execution/runs/requestedConfiguration').ExecutionRunResolvedSelection;
+  preparedInstructionsFor?: import('@/agent/voice/agent/voiceAgentTypes').VoicePromptPreparation['preparedInstructionsFor'];
 }>;
 
 export type ExecutionRunRuntimeSettings = Readonly<{

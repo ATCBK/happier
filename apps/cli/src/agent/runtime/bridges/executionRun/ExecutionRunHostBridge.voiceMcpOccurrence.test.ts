@@ -17,7 +17,7 @@ import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/ad
 import type { PluginDaemonModuleNamespace } from '@/plugins/runtime/types';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
-import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createMutableApiSessionClientFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
@@ -29,6 +29,10 @@ import { toAgentSessionMcpLaunchConfigs } from '@/agent/runtime/registry/engineR
 import { createDeferred } from '@/testkit/async/deferred';
 import { reloadConfiguration } from '@/configuration';
 import { ExecutionRunHostBridge } from './ExecutionRunHostBridge';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { createExecutionRunRpcActionDeps } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
+import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
+import { ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamStartResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import '@/agent/runtime/registry/engineRegistry/runtimeCore';
 
 // Credential persistence and Home HTTP are external boundaries. Never read a
@@ -46,17 +50,20 @@ vi.mock('@/daemon/controlClient', async importOriginal => ({
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); reloadConfiguration(); resetActiveAccountSettingsSnapshotForTests(); });
 
 describe('Voice Run MCP provisioning occurrence', () => {
-  it('keeps Global fixed-Agent Voice start/resume tools and prompt aligned with Agent policy', async () => {
+  it.each(['global', 'bound'] as const)('keeps %s fixed-Agent Voice carriers and prompt aligned with Agent policy', async mode => {
     const home = await mkdtemp(join(tmpdir(), 'happier-voice-mcp-occurrence-'));
     vi.stubEnv('HAPPIER_HOME_DIR', home);
     vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
     reloadConfiguration();
+    if (mode === 'bound') {
+      await seedTestServerProfile({ id: 'receipt', homeId: 'srv_receipt_home', serverUrl: 'https://receipt.example.test' });
+    }
     const actualFetch = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
       if (new URL(input instanceof Request ? input.url : String(input)).hostname === '127.0.0.1') return actualFetch(input, init);
       throw new Error('Unexpected fixture Home request');
     }));
-    vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected fixture Home request'));
+    const homeGet = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected fixture Home request'));
     vi.spyOn(axios, 'post').mockRejectedValue(new Error('Unexpected fixture Home request'));
     const resource = 'https://mcp.example.test/voice';
     const settings = accountSettingsParse({ mcpServersStrictMode: true });
@@ -106,8 +113,9 @@ describe('Voice Run MCP provisioning occurrence', () => {
         await client.connect(new StreamableHTTPClientTransport(new URL(url)));
         const catalog = await client.listTools();
         expect(catalog.tools.map(tool => tool.name)).toEqual(expect.arrayContaining([
-          'settings_list', 'settings_get', 'settings_set', 'settings_reset',
+          'settings_list', 'settings_get', 'settings_set', 'settings_reset', 'settings_invoke',
         ]));
+        expect(catalog.tools.map(tool => tool.name)).not.toContain('approval_request_decide');
       } finally { await client.close(); }
       const selected = request.mcpServers?.['voice-oauth'];
       expect(selected).toBeDefined();
@@ -158,15 +166,28 @@ describe('Voice Run MCP provisioning occurrence', () => {
       const engineRegistry = await resolveCliEngineRegistry({ runtimeRegistry: fixture.registry });
       const profileCatalog = await engineRegistry.resolveExecutionRunProfileCatalog({ resolveAgentIdentity: () => agent });
       const parent = createMutableApiSessionClientFixture({ sessionId: 'voice-parent', metadata: createTestMetadata({ path: home,
-        // Voice control Session keys are protocol metadata outside the CLI Metadata projection.
-        ...{
-          systemSessionV1: { v: 1, key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true },
-          voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
-          voiceConversationBindingV1: { v: 1, adapterId: 'local_conversation', controlSessionId: '__voice_agent__',
-            transcriptMode: 'native_session', targetSessionId: null, updatedAt: 1 },
-        },
+        ...(mode === 'bound' ? { work: { promptStack: [{ id: 'session.instructions', enabled: true, required: true,
+          placement: 'system_append', ref: { kind: 'doc', artifactId: 'instructions' } }] } } : {
+        systemSessionV1: { v: 1, key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true },
+        voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+        voiceConversationBindingV1: { v: 1, adapterId: 'local_conversation', controlSessionId: '__voice_agent__',
+          transcriptMode: 'native_session', targetSessionId: null, updatedAt: 1 },
+        }),
       }),
         overrides: { getMcpRequestAuthPort: () => port } });
+      // Hidden carriers are re-read at the Home boundary before prompt admission.
+      // Keep that target/currentness logic real, using the canonical wire fixtures.
+      homeGet.mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption/currentness') {
+          return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+        }
+        if (path === `/v2/sessions/${parent.sessionId}`) {
+          return { status: 200, data: { session: { ...createSessionNotificationContextFixture(parent.sessionId),
+            encryptionMode: 'plain', metadata: JSON.stringify(parent.getMetadataSnapshot()) } } };
+        }
+        throw new Error('Unexpected fixture Home request');
+      });
       bridge = new ExecutionRunHostBridge({ parentProvider: 'claude', cwd: home, happyHomeDir: home, sendAcp: async () => {},
         resolveRunReportPolicy: async () => ({ preset: 'important' }),
         getNowMs: () => 1_700_000_000_000, resolveAccountSettingsSnapshot: async () => snapshot,
@@ -183,18 +204,52 @@ describe('Voice Run MCP provisioning occurrence', () => {
           },
         },
         resolveVoicePromptPreparation: async args => await resolveCliVoicePromptPreparation({ ...args,
-          sessionMetadata: parent.getMetadataSnapshot(), accountEntries: [], profileEntries: [], directory: home }),
+          credentials: { token: 'voice-mcp-fixture', encryption: null },
+          serverId: 'receipt', sessionMetadata: parent.getMetadataSnapshot(), accountEntries: [], profileEntries: [], directory: home,
+          readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
+          readArtifact: async () => ({ id: 'instructions', header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' },
+            revision: { headerVersion: 1, bodyVersion: 1 }, body: JSON.stringify({ v: 1, markdown: 'VOICE_RECEIPT_PERSONA', createdAtMs: 1, updatedAtMs: 1 }) }),
+        }),
         resolveExecutionRunProfileCatalog: async () => ({ profileCatalog, engineRegistry }) });
       const started = await bridge.start({ sessionId: parent.sessionId, intent: 'voice_agent', backendTarget: { kind: 'builtInAgent', agentId },
         permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
         chatModelId: 'voice-model', commitModelId: 'default', bootstrapMode: 'ready_handshake', initialContextMode: 'first_turn', connectedServices: null });
-      expect(proofs).toHaveLength(1);
+      expect(proofs, JSON.stringify(started)).toHaveLength(1);
       expect(opened).toHaveLength(1);
       // Local Voice's action-block instructions must not hide the Agent-direct
       // catalog the same native provider has just received over real MCP.
       expect(prompts).toHaveLength(1);
       expect([...prompts[0]!.matchAll(/^- ([A-Za-z0-9_]+):/gm)].map(match => match[1]))
         .toEqual(expect.arrayContaining(directTools));
+      // These are host Voice Actions, not permission-elevated native MCP
+      // tools. Both Global and scoped carriers must document their real route.
+      expect([...prompts[0]!.matchAll(/^- ([A-Za-z0-9_]+):/gm)].map(match => match[1]))
+        .toEqual(expect.arrayContaining([
+          'settings_list', 'settings_get', 'settings_set', 'settings_invoke',
+          'approval_request_get', 'approval_request_decide',
+          'session_permission_respond',
+        ]));
+      // Account queue discovery remains in the canonical long tail; the
+      // prompt explains it without inlining its large selector schema.
+      expect(prompts[0]).toContain('approval_request_list with status open');
+      if (mode === 'bound') {
+        const receipt = { serverId: 'srv_receipt_home', sessionId: 'voice-parent' };
+        expect(prompts[0]).toContain('VOICE_RECEIPT_PERSONA');
+        expect.soft(started).toHaveProperty('preparedInstructionsFor', receipt);
+        const welcomed = await bridge.applyAction(started.runId, { actionId: 'voice_agent.welcome' });
+        expect(prompts.at(-1)).toContain('VOICE_RECEIPT_PERSONA');
+        expect.soft(welcomed).toHaveProperty('result.preparedInstructionsFor', receipt);
+        const deps = createExecutionRunRpcActionDeps({ manager: bridge, context: { sessionId: parent.sessionId, cwd: home },
+          policy: resolveExecutionRunPolicy({ defaults: { maxConcurrentRuns: null, boundedTimeoutMs: null,
+            reviewBoundedTimeoutMs: null, maxTurns: null } }), isExecutionRunsEnabled: () => true });
+        const stream = ExecutionRunTurnStreamStartResponseSchema.parse(await deps.executionRunStreamStart!(parent.sessionId,
+          { runId: started.runId, message: 'hello' }, { authority: 'present_user' }));
+        let read = ExecutionRunTurnStreamReadResponseSchema.parse(await deps.executionRunStreamRead!(parent.sessionId,
+          { runId: started.runId, streamId: stream.streamId, cursor: 0, waitForEvents: true }));
+        while (!read.done) read = ExecutionRunTurnStreamReadResponseSchema.parse(await deps.executionRunStreamRead!(parent.sessionId,
+          { runId: started.runId, streamId: stream.streamId, cursor: read.nextCursor, waitForEvents: true }));
+        expect.soft(read).toHaveProperty('preparedInstructionsFor', receipt);
+      } else expect(started).not.toHaveProperty('preparedInstructionsFor');
       const first = proofs[0]!;
       expect(bridge.readExecutionRunOccurrenceWitnessReader().readCurrentRunOccurrence(started.runId)?.occurrenceId).toBe(first.occurrenceId);
       expect(bridge.resolveLiveBrokerAuthority({ v: 1, executionRunId: started.runId, expectedOccurrenceId: randomUUID() }))

@@ -1,6 +1,12 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
+/** Display-only proof of supported instruction delivery; Home is the portable identity. */
+export const ExecutionRunPreparedInstructionsForSchema = lazyZodSchema(() => z.strictObject({
+  serverId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
+}));
+
 export const ExecutionRunPermissionRequestIdentitySchema = lazyZodSchema(() => z.strictObject({
   requestId: z.string().check(z.minLength(1)), createdAt: z.number().check(z.int(), z.nonnegative()),
 }));
@@ -31,6 +37,7 @@ export type ExecutionRunIoMode = z.infer<typeof ExecutionRunIoModeSchema>;
 // Keep this pinned and deterministic; clients should branch on these strings.
 export const ExecutionRunTransportErrorCodeSchema = lazyZodSchema(() => z.enum([
   'execution_run_not_allowed',
+  'execution_run_input_required',
   'execution_run_not_found',
   'execution_run_action_not_supported',
   'execution_run_invalid_action_input',

@@ -69,6 +69,7 @@ import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-
 import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { isVoiceConversationSystemSessionMetadata } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import { readPersistentVoiceTranscriptEpoch } from '@/voice/persistence/voiceTranscriptMemory';
+import { createRpcCallError } from '@/sync/runtime/rpcErrors';
 
 type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
@@ -76,6 +77,7 @@ type InitializeVoiceAgentHandleParams = Readonly<{
     getDaemonVoiceAgentClient: (scope: ServerAccountScope) => VoiceAgentClient;
     getCleanupSignal?: () => AbortSignal | undefined;
     setDeferredTargetSessionContext: (sessionId: string, update: string) => void;
+    onPreparedInstructionsFor?: (target: SessionAddress) => void;
 }>;
 
 type VoiceAgentBootstrapConfig = Readonly<{
@@ -163,6 +165,7 @@ export async function initializeVoiceAgentHandle({
     getDaemonVoiceAgentClient,
     getCleanupSignal,
     setDeferredTargetSessionContext,
+    onPreparedInstructionsFor,
 }: InitializeVoiceAgentHandleParams): Promise<VoiceAgentHandle> {
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     if (!accountLifetime) throw new Error('voice_agent_account_scope_unavailable');
@@ -817,7 +820,18 @@ export async function initializeVoiceAgentHandle({
         // A policy snapshot is needed even if persisting the optional resume
         // pointer fails. A prior adoption read can still prove the same Run.
         const getRes = await sessionExecutionRunGet(rpcSessionId, { runId: started.voiceAgentId, includeStructured: false }, runOptions).catch(() => null);
-        if (getRes && 'run' in getRes) retainedRunState = getRes.run;
+        if (getRes && 'run' in getRes) {
+            retainedRunState = getRes.run;
+            // A Run receipt establishes identity, not successful preparation.
+            // Keep the exact startup failure instead of returning a handle
+            // whose first stream would replace it with "Not running".
+            if (retainedRunState.runId === started.voiceAgentId && retainedRunState.status === 'failed') {
+                throw createRpcCallError({
+                    error: retainedRunState.error?.message ?? 'Execution Run startup failed',
+                    errorCode: retainedRunState.error?.code ?? 'execution_run_failed',
+                });
+            }
+        }
         try {
             const resumeHandle = getRes && 'run' in getRes ? getRes.run.resumeHandle ?? null : null;
             await persistVoiceAgentRunMetadata(runMetadataSessionId, {
@@ -856,6 +870,8 @@ export async function initializeVoiceAgentHandle({
     }
 
     clearVoiceAgentRecoveryReplaySource(sessionId);
+
+    if (started.preparedInstructionsFor) onPreparedInstructionsFor?.(started.preparedInstructionsFor);
 
     return {
         accountLifetime,

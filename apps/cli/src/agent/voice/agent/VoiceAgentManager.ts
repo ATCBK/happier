@@ -933,6 +933,7 @@ export class VoiceAgentManager {
       }
 
       const bootstrapMode = params.bootstrapMode ?? 'none';
+      let preparedInstructionsFor: VoicePromptPreparation['preparedInstructionsFor'];
       if (!resume.chatSessionId && bootstrapMode === 'ready_handshake') {
         const shouldDeferInitialContextUntilFirstTurn = params.initialContextMode === 'first_turn';
         instance.clearChatBuffer();
@@ -958,6 +959,7 @@ export class VoiceAgentManager {
         instance.chatSessionSeeded = !shouldDeferInitialContextUntilFirstTurn;
         // A readiness handshake is not a greeting to the user.
         instance.welcomed = false;
+        preparedInstructionsFor = preparation.preparedInstructionsFor;
       }
 
       ensureCurrentStart();
@@ -968,6 +970,7 @@ export class VoiceAgentManager {
 
       return {
         voiceAgentId,
+        ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}),
         effective: {
           chatModelId: params.chatModelId,
           commitModelId: params.commitModelId,
@@ -1084,7 +1087,7 @@ export class VoiceAgentManager {
     voiceAgentId: string;
     welcomeText?: string;
     causalPermissionAuthority?: import('@happier-dev/protocol').SessionInputCausalPermissionAuthorityV1;
-  }>): Promise<Readonly<{ assistantText: string }>> {
+  }>): Promise<Readonly<{ assistantText: string; preparedInstructionsFor?: VoicePromptPreparation['preparedInstructionsFor'] }>> {
     const voiceAgent = this.voiceAgents.get(params.voiceAgentId);
     if (!voiceAgent) throw new VoiceAgentError('VOICE_AGENT_NOT_FOUND', 'Voice agent not found');
     if (voiceAgent.lifecycleInFlight || voiceAgent.inFlight || voiceAgent.activeTurnStream) {
@@ -1096,7 +1099,7 @@ export class VoiceAgentManager {
 
     voiceAgent.lastUsedAt = this.getNowMs();
     const run = (async () => {
-      const { ensureCurrent } = await this.prepareSystemAppendBlocks(voiceAgent);
+      const { ensureCurrent, preparedInstructionsFor } = await this.prepareSystemAppendBlocks(voiceAgent);
       voiceAgent.clearChatBuffer();
       const prompt = buildVoiceAgentBootstrapPrompt({
         verbosity: voiceAgent.verbosity,
@@ -1121,11 +1124,12 @@ export class VoiceAgentManager {
       if (voiceAgent.chatBackend.waitForTurnCompletion) {
         await voiceAgent.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs());
       }
+      ensureCurrent();
       const assistantText = extractVoiceActionsFromAssistantText(voiceAgent.chatBuffer).assistantText;
       voiceAgent.clearChatBuffer();
       voiceAgent.chatSessionSeeded = true;
       voiceAgent.welcomed = true;
-      return { assistantText };
+      return { assistantText, ...(preparedInstructionsFor ? { preparedInstructionsFor } : {}) };
     })();
 
     return await this.trackWork(voiceAgent, 'inFlight', run);
