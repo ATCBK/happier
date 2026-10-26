@@ -321,7 +321,8 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
   value; an inner surface's radius is the outer radius minus its inset, so nested layers stay
   concentric. A radius chosen per surface is a defect.
 - **Spacing runs on one rhythm.** Card insets, header heights, row heights and gaps are steps of the
-  same grid. Dense desktop rows are compact; touch rows keep their target size.
+  same grid. Dense desktop rows are compact; a row's hit area is the whole row, and its drawn height follows
+  the design, not a touch-target number.
 - Align icons optically, not only mathematically; asymmetric symbols often need correction.
 - Keep icons and labels visually balanced and baseline-aligned.
 - Avoid creating every grouping as a rounded card. Use proximity, whitespace, headings, dividers, background regions, and elevation according to meaning.
@@ -463,7 +464,8 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 
 - Feedback begins immediately, while commitment happens at the correct semantic point.
 - Preserve cancellation when a press or gesture moves away before commitment.
-- Keep interactive hit targets generous and non-overlapping across touch and pointer layouts.
+- Keep interactive hit areas generous and non-overlapping across touch and pointer layouts. A hit
+  area is invisible; it never makes the drawn control, its padding or its margins bigger.
 - Support keyboard focus, activation, dismissal, traversal, and shortcuts where the platform permits.
 - Focus must remain perceptible against every supported background. Editable
   text fields use their native insertion caret and selection as the normal-mode
@@ -605,7 +607,7 @@ The baseline is WCAG 2.2 Level AA for applicable web, desktop, and native behavi
 - Focus is one ring everywhere: the focus colour, separated from the control by a gap in the page
   colour and following its radius, so it never merges with a border and reads on every surface.
 - Honor reduced motion and reduced transparency throughout a complete flow, not only in isolated components.
-- Target at least 44×44 points on iOS and 48×48 dp on Android for touch interactions, using the stricter applicable platform or canonical-primitive requirement elsewhere. Keep targets from overlapping; dense pointer layouts must still meet applicable WCAG target-size requirements and remain keyboard accessible.
+- Touch targets are hit areas, not drawn sizes. Give touch controls a 44×44 point (iOS) or 48×48 dp (Android) hit area where the surrounding space allows, by extending the hit area beyond the drawn control (`hitSlop` on native, an invisible hit extension on web). Never enlarge the drawn control, its padding, its row height or the spacing around it to reach the number. Adjacent hit areas never overlap; where neighbours sit closer, each hit area extends to half the gap, and every target still meets WCAG 2.5.8 (24×24 CSS px or its spacing exception) and stays keyboard accessible.
 - Automatically started moving, blinking, or scrolling content that lasts more than five seconds and appears alongside other content must provide the pause, stop, or hide controls required by WCAG 2.2.2 unless it is essential. Auto-updating content presented alongside other content must provide the applicable pause, stop, hide, or update-frequency control unless essential. Document and verify any essential exception; short entrance and exit transitions remain governed by the motion rules rather than being treated as auto-updating content.
 - Keep accessibility labels specific and localized.
 - Verify accessibility after responsive recomposition; mobile and desktop DOM/native order may differ.
@@ -883,7 +885,8 @@ Reject or revisit designs that exhibit:
 - dense settings or dashboards where every control has equal emphasis;
 - mobile layouts that are merely compressed desktop screens;
 - desktop layouts that waste space because they are enlarged mobile stacks;
-- hover-only actions or tiny touch targets;
+- hover-only actions or tiny hit areas;
+- controls, rows or spacing drawn larger only to meet a touch target;
 - animation that blocks input, restarts on interruption, replays because of incidental remount churn, or repeats signature choreography in a high-frequency workflow;
 - long transitions on frequently repeated actions;
 - moving, blinking, scrolling, or auto-updating content that lacks controls when required by the accessibility baseline, or nonessential ambient updates that distract from the user’s work;

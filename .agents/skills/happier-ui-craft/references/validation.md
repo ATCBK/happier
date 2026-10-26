@@ -128,7 +128,9 @@ scope comes from the surfaces the program touched, not from a list of earlier fi
    capture or a "styling-only" label never close it; only a whole-page live pair does. Dev fixture
    routes and component boards are intermediate evidence, never acceptance.
 8. **Capture what the user sees.** Wait for hydration, theme and animation to settle, and confirm
-   the theme from the pixels, not the filename. A headless or software-composited browser cannot
+   the theme from the pixels, not the filename. After every viewport change, wait for two animation
+   frames and confirm the captured surface's bounding rect is stable before the capture counts as evidence.
+   A headless or software-composited browser cannot
    show blur, backdrop or glass correctly; mark those regions unverified and check them in a
    GPU-backed browser or on a device rather than accepting or redesigning from a flat capture.
 
@@ -203,7 +205,8 @@ Run it on the rendered screen, not the code.
 
 - [ ] 390px phone: nothing wide sits beside a label; nothing hidden under the tab bar or keyboard.
 - [ ] Keyboard order equals visual order; focus lands somewhere useful on open.
-- [ ] Every control has an accessible name and role; hit targets are adequate; reduced motion works.
+- [ ] Every control has an accessible name and role; hit areas meet the target without making any control drawn larger (a control, row or gap drawn bigger than the design to reach a touch target is a finding; the touch target is the hit area, see the taste digest); reduced motion works.
+      Probe it live with `node apps/ui/scripts/qa/hitAreaProbe.mjs --session <name>` (every `[data-happier-hit-area]` frame pairwise: zero overlaps, nothing drawn under 24 px without a hit area) on phone (coarse pointer) and desktop.
 
 **Truthfulness**
 

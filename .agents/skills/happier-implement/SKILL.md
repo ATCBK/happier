@@ -58,6 +58,8 @@ Smallest coherent does not mean smallest diff. Update every materially affected 
 
 When a change alters a shared fact's shape, vocabulary, timing, readiness, acquisition, error code or a projection's carried fields, enumerate every writer and reader of that fact by symbol, store slice, hook, schema and error code. A strict-parse consumer counts as a reader, and so does a twin projection of the same fact (tool list vs prompt docs, client vs daemon spelling, UI vs agent path). Update each in the same change or state why it is unreachable, and run the existing suites that import the changed owner. List the sweep in the handoff. A fix that lands only where its RED measured it, while a sibling keeps the defect, is incomplete.
 
+The same applies before changing any shared contract: acquisition, readiness, publication, a geometry or policy owner, a public prop or helper signature. Write the consumer inventory first. One line per consumer, tests and testkits included: what it needs from the contract, and which test covers it. A consumer with no covering test gets one, or the handoff says why none is needed. Reviewers re-derive the list from symbols, not from the author's summary.
+
 A user-facing mutation is wired through the Action executor when it is built. A direct transport or settings write from a UI component is a review finding. Extend the canonical walker `scripts/testing/lib/uiActionParity.ts` rather than running a census afterwards.
 
 Before adding a protocol, registry, table, state machine, gate, lease, generation, fallback, cache, or parallel path, name the approved requirement, reproduced failure, external contract, or reachable risk it serves. Apply the deletion test. If the mechanism only adds concepts while required behavior survives without it, do not build it.
@@ -71,6 +73,8 @@ When the change adds or alters a read, publication, subscription, timer, poll, c
 Use direct implementation for tightly coupled work and `.agents/skills/decompose-gates` for meaningful independent responsibilities. For repeated units with an unproven shared assumption, apply that skill's concurrency ramp: gate only dependent replication, keep independent work moving, and skip the ramp when prior evidence or a deterministic tool already proves the unit shape.
 
 Delegate complete responsibilities rather than tiny edits. A lane owns its discovery, implementation, focused RED/GREEN proof, relevant validation, compact self-review, and concise result. Briefs name the goal, intent, corridor, evidence, dependencies, collision surfaces, completion and negative criteria, validation, permissions, and stop conditions. Do not reserve files or duplicate generic doctrine in every brief.
+
+Quote product prompts and execution recipes verbatim in briefs, including instructions to send a seeded prompt unchanged; do not paraphrase away inputs or steps that determine the outcome.
 
 Use the fastest reliable mechanism for the work:
 

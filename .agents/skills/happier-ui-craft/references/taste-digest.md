@@ -41,8 +41,8 @@ Sources: `DESIGN.md` (Typography); `happier-ui-craft/references/components.md`;
   `apps/ui/sources/components/ui/lists/pageListMetrics.ts`, for columns, gutters, section gaps,
   sheets, cards, rows, controls, pane headers, and breakpoints.
 - Use `PageFrame` for the page column. Page title, purpose, section title, and sheet share one edge.
-- Density follows use: compact single-line desktop indexes; roomy described rows; canonical 44pt iOS
-  and 48dp Android touch targets even when the visible control is smaller.
+- Density follows use: compact single-line desktop indexes; roomy described rows. Touch targets are
+  hit areas, not drawn sizes: a control keeps its designed size and its hit area reaches the target.
 - Keep one spacing rhythm and one radius base. Nested radii are optically concentric: outer radius
   equals inner radius plus the inset.
 - Align asymmetric glyphs and icon-label pairs optically, not merely by bounding-box arithmetic.
@@ -122,9 +122,13 @@ Sources: `DESIGN.md` (Motion); `happier-ui-craft/references/states-and-motion.md
 
 ## Interaction details
 
-- Touch targets are at least 44x44pt on iOS and 48x48dp on Android. Dense pointer controls still
-  meet the canonical/WCAG target, with at least 24x24 CSS px as the pointer visual baseline.
-- The hit area may exceed the drawn control, but adjacent hit areas never overlap.
+- A touch target is the hit area, never the drawn control. Aim for 44x44pt on iOS and 48x48dp on
+  Android by extending the hit area past the drawn control (`hitSlop` on native, an invisible hit
+  extension on web, as `HappierTextLinkButton` does). Never enlarge a control, its padding, its row
+  height or the spacing around it to reach the number; a small control drawn small is correct.
+- Adjacent hit areas never overlap. Where neighbours sit closer than the target, each hit area
+  extends to half the gap, and every target still meets WCAG 2.5.8 (24x24 CSS px or its spacing
+  exception).
 - Hover is an enhancement gated to fine pointers. Its shape hugs the drawn control; do not expose a
   row-sized hover slab for a small glyph unless the whole row is the action.
 - Use `HappierPressable` for pressables. Pointer presses do not leave a focus ring; keyboard focus

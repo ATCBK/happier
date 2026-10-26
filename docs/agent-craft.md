@@ -142,6 +142,7 @@ Each of these *reads* as skill from the outside. That's what makes them dangerou
 8. **Answering the letter.** Technically responsive to every word of the request; misses what it was for. Passes any checklist; fails the user (§1).
 9. **Silent recovery.** Hitting an error, working around it, never mentioning it. Looks smooth. But an unexpected error is a message from reality that your model of the system is wrong somewhere — swallowing it discards the most informative event of the session and leaves the flawed model in place for the next task.
 10. **Premature unification.** Merging two similar-looking implementations that are actually different bounded contexts. Looks architectural; creates a coupling both callers now fight forever. The real skill is telling coincidental similarity from shared essence — the constitution is right to warn in both directions (centralize true duplication, never coincidental duplication).
+11. **Competing captures.** Several lanes each profile, trace or reproduce the same cross-program incident (a freeze, a leak, a restart loop). Reads as diligence; the captures contend for the same machine, disturb the symptom and produce disagreeing evidence. A cross-program incident has one capture and diagnosis owner, named when it is opened. Every other lane supplies repro facts (time, page, build identity, steps, what it observed) to that owner, keeps working on rows the incident does not block, and runs no competing capture.
 
 ---
 
