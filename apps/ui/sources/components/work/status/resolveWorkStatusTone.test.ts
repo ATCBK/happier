@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentActivityStatusV1 } from '@happier-dev/protocol';
+import type { WorkerUpdateV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -101,7 +102,7 @@ describe('resolveWorkStatusTone', () => {
     });
     it('derives a worker update\'s tone and its state word from the update alone', () => {
         const base = { v: 1, headline: 'Check complete', result: '', canInspect: false } as const;
-        const status = (update: Parameters<typeof describeWorkerUpdateState>[0]) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update } });
+        const status = (update: WorkerUpdateV1) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update } });
         expect(status({ ...base, workerKind: 'execution_run', workerId: 'run_1', ownerState: 'failed', wake: 'finished' }))
             .toMatchObject({ bucket: 'finished', tone: 'danger', word: t('sessionWork.workerUpdate.state.failed') });
         expect(status({ ...base, workerKind: 'execution_run', workerId: 'run_1', ownerState: 'failed', wake: 'needs_you' }))
@@ -116,7 +117,7 @@ describe('resolveWorkStatusTone', () => {
         expect(status({ ...base, workerKind: 'workflow_run', workerId: 'workflow', ownerState: 'running', wake: 'needs_you' }))
             .toMatchObject({ bucket: 'needs_you', tone: 'attention', word: t('sessionWork.workerUpdate.state.needsYou') });
         // An earlier notice the transcript has moved past is told in the past tense and stops asking, but a failure stays one.
-        const earlier = (update: Parameters<typeof describeWorkerUpdateState>[0]) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update, earlier: true } });
+        const earlier = (update: WorkerUpdateV1) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update, earlier: true } });
         expect(earlier({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'needs_input', wake: 'needs_you' }))
             .toMatchObject({ bucket: 'finished', tone: 'neutral', word: t('sessionWork.workerUpdate.state.neededYou') });
         expect(earlier({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'failed', wake: 'needs_you' }).tone).toBe('danger');
@@ -133,7 +134,7 @@ describe('resolveWorkStatusTone', () => {
         // A workflow state the card has no word of its own for keeps the run owner's word.
         expect(status({ ...base, workerKind: 'workflow_run', workerId: 'workflow', ownerState: 'interrupted', wake: 'finished' }).word)
             .toBe(t('workflows.runState.interrupted'));
-        expect(describeWorkerUpdateState({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'published', wake: 'published' }))
+        expect(describeWorkerUpdateState({ workerKind: 'session', ownerState: 'published', wake: 'published' }))
             .toBe(t('sessionWork.workerUpdate.state.published'));
     });
     it('keeps healthy workflow presenters neutral', () => {
