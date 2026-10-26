@@ -2,7 +2,8 @@ import * as React from 'react';
 import { type SavedSecretCatalogCorruptEntryV1, type SavedSecretCatalogEntryV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 
-import { useSettingsVersion } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -97,7 +98,6 @@ export function useSavedSecretCatalog(options?: Readonly<{
     /** Legacy caller input; the engine imports Settings material rather than projecting it here. */
     personalSecrets?: readonly SavedSecret[];
 }>): SavedSecretCatalogProjection {
-    const settingsVersion = useSettingsVersion();
     const activeScope = useAccountSettingsScope();
     const scope = options && Object.prototype.hasOwnProperty.call(options, 'scope')
         ? options.scope ?? null
@@ -140,18 +140,21 @@ export function useSavedSecretCatalog(options?: Readonly<{
         // The owner reference census reads this Account's own current Settings,
         // so an unknown version fails the repair closed rather than deleting a
         // resource other Settings may still reference.
-        if (settingsVersion === null) return { ok: false, reason: 'unavailable' };
+        const current = getStorage().getState();
+        if (!areServerAccountScopesEqual(current.settingsScope, scope) || current.settingsVersion === null) {
+            return { ok: false, reason: 'unavailable' };
+        }
         const result = await deleteSavedSecretResource({
             scope,
             resourceId: entry.repair.resourceId,
             expectedRevision: entry.repair.expectedRevision,
-            expectedSettingsVersion: settingsVersion,
+            expectedSettingsVersion: current.settingsVersion,
         });
         if (!result.ok && result.reason === 'outcome_unknown') {
             await refreshSavedSecretCatalog(scope).catch(() => undefined);
         }
         return result;
-    }, [scope, scopeIsActive, settingsVersion, catalogEnabled]);
+    }, [scope, scopeIsActive, catalogEnabled]);
 
     const updateResource = React.useCallback(async (secret: SavedSecret, change: Readonly<{ nextName?: string; nextValue?: string }>): Promise<boolean> => {
         try {
@@ -242,7 +245,9 @@ export function useSavedSecretCatalog(options?: Readonly<{
         return updateResource(secret, { nextValue: value });
     }, [updateResource]);
     const deletePersonal = React.useCallback(async (secret: SavedSecret) => {
-        if (!scope || !scopeIsActive || !catalogEnabled || settingsVersion === null) return false;
+        if (!scope || !scopeIsActive || !catalogEnabled) return false;
+        const current = getStorage().getState();
+        if (!areServerAccountScopesEqual(current.settingsScope, scope) || current.settingsVersion === null) return false;
         const reference = parseSavedSecretRefV1(secret.id);
         const entry = sharedEntries.find(candidate => candidate.ref === secret.id);
         if (reference.kind !== 'shared_resource' || !entry || entry.relationship !== 'owner'
@@ -251,7 +256,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
             parse:value=>PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.delete'].parse(value)});
         if (result.kind==='failed' && result.failure.kind==='outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
         return result.kind==='succeeded';
-    }, [scope, scopeIsActive, settingsVersion, catalogEnabled, sharedEntries]);
+    }, [scope, scopeIsActive, catalogEnabled, sharedEntries]);
     const personalMutations = React.useMemo(() => Object.freeze({
         create: createPersonal,
         rename: renamePersonal,
