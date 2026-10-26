@@ -23,6 +23,15 @@ beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests();
 afterEach(async () => { await homes.reset(); });
 
 describe('Project context through the default Account Action host', () => {
+    it('does not demand Project rows for readable Session metadata without a checkout address', async () => {
+        const serverId = await homes.addHome({ name: 'No checkout', serverUrl: 'https://no-checkout.test', accountId: 'owner', active: false });
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const inherited = await readUiMemoryInheritedContext(account, { revision: 1, metadata: {} }, { surface: 'ui' });
+            expect(inherited.projectEntries).toEqual([]);
+            expect(homes.requests.filter(request => request.path.includes(PROJECT_ACCOUNT_ROWS_ROUTE_V1))).toHaveLength(0);
+        } finally { account.dispose(); }
+    });
     it('inherits Project memory for a directory-only newborn Session at the exact checkout, never a descendant or another Machine', async () => {
         const serverId = await homes.addHome({ name: 'Directory Birth Home', serverUrl: 'https://directory-birth.test', accountId: 'memory-owner', active: false });
         await homes.addHome({ name: 'Focused Home', serverUrl: 'https://other-directory-birth.test', accountId: 'other-owner' });
@@ -48,7 +57,7 @@ describe('Project context through the default Account Action host', () => {
             }
         } finally { account.dispose(); }
     });
-    it('refuses a stale workspace mapping as Session Machine authority before selecting Project memory', async () => {
+    it('retains explicit accepted checkout identity across sandbox paths and Machine differences when selecting Project memory', async () => {
         const serverId = await homes.addHome({ name: 'Machine Authority Home', serverUrl: 'https://machine-authority.test', accountId: 'memory-owner', active: false });
         await homes.addHome({ name: 'Focused Home', serverUrl: 'https://focused-machine-authority.test', accountId: 'other-owner' });
         const workspaceKey = { kind: 'workspace-ref' as const, serverId, id: 'checkout' };
@@ -69,12 +78,12 @@ describe('Project context through the default Account Action host', () => {
         try {
             const snapshot = { revision: 3, metadata: { machineId: 'actual-machine', workspaceId: 'checkout', projectId: 'project', path: '/agent',
                 sessionWorkspaceLocationV1: { v: 1, machineId: 'stale-machine', agentPath: '/agent', machinePath: '/stale-repo' } } };
-            await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).rejects.toMatchObject({
-                code: 'preparation_pending', reason: 'project_association_unavailable',
+            await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).resolves.toMatchObject({
+                projectEntries: [{ ...memoryEntry, ref: { ...memoryEntry.ref, serverId } }],
             });
             rowMachineId = 'actual-machine';
-            await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).rejects.toMatchObject({
-                code: 'preparation_pending', reason: 'project_association_unavailable',
+            await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).resolves.toMatchObject({
+                projectEntries: [{ ...memoryEntry, ref: { ...memoryEntry.ref, serverId } }],
             });
             rootPath = '/agent';
             await expect(readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' })).resolves.toMatchObject({

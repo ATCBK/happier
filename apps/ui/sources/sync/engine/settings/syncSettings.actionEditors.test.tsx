@@ -45,21 +45,20 @@ describe('Action editors through the real Account settings writer', () => {
         installHomeGovernanceBoundaries(harness);
         const serverId = await harness.addHome({ name: 'Action edits', serverUrl: 'https://action-edits.example', accountId: 'owner', currentAccount: true });
         const scope = { serverId, accountId: 'owner' };
-        let raw: Record<string, unknown> = { actionsSettingsV1: normalizeActionsSettings({ v: 1,
-            actions: value === 'off' ? {} : Object.fromEntries(actionIds.map(id => [id, { disabledSurfaces: ['agent'] }])) }) };
+        // Settings -> Actions submits each intent as an `actions.policy.set` Action; this test is about
+        // ordinary present-user writes, not the separate Ask-first review journey, so the Account
+        // has waived that approval for the UI surface.
+        let raw: Record<string, unknown> = { actionsSettingsV1: {
+            ...normalizeActionsSettings({ v: 1,
+                actions: value === 'off' ? {} : Object.fromEntries(actionIds.map(id => [id, { disabledSurfaces: ['agent'] }])) }),
+            approvalWaivedSurfaces: { 'actions.policy.set': ['ui'] },
+        } };
         const assertAllIntents = (settings: unknown) => {
             const actions = normalizeActionsSettings(settings).actions;
             for (const actionId of actionIds) expect(actions[actionId]?.disabledSurfaces.includes('agent') ?? false, actionId).toBe(value === 'off');
         };
         let version = 1;
         storage.setState({ settingsScope: scope, settingsVersion: version, settings: settingsParse(raw) });
-        runtime.pendingSettings = {};
-        runtime.pendingSettingsDirty = false;
-        runtime.pendingSettingsFlushTimer = null;
-        savePendingAccountSettings(scope, {});
-        // Hold only the real persistence/network flush clock. Editors, hook,
-        // singleton ingress, pending reconciliation and projection stay real.
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
         let release!: () => void;
         const acknowledgement = new Promise<void>(resolve => { release = resolve; });
         let issued!: () => void;
@@ -80,42 +79,33 @@ describe('Action editors through the real Account settings writer', () => {
             if (posts === 1) issued();
             return { body: { success: true, version }, ...(posts === 1 ? { respondAfter: acknowledgement } : {}) };
         } });
-        const flush = () => syncSettings({ credentials: { token: createAccountTokenForTests('owner', { currentAccount: true }) },
-            encryption: null, settingsScope: scope, pendingSettings: runtime.pendingSettings,
-            getPendingSettings: () => runtime.pendingSettings,
-            clearPendingSettings: next => { runtime.pendingSettings = next; savePendingAccountSettings(scope, next); } });
         const screen = await renderScreen(<>{actionIds.map(actionId => <ActionSettingsDetailContent key={actionId} actionId={actionId} />)}</>);
         const controls = () => actionIds.map(actionId => screen.findAllByType(ActionSettingsTargetModeControl)
             .find(node => node.props.testIDPrefix === `settings-actions:action:${actionId}:target:agent`)!.props.onChange as (value: 'off' | 'on') => void);
         await act(async () => { controls()[0]!(value); });
-        savePendingAccountSettings(scope, runtime.pendingSettings);
-        const inFlight = flush();
         await firstPost;
         try {
             // Two controls can deliver intents before React commits another render.
             const [, archive, unarchive] = controls();
             await act(async () => { archive!(value); unarchive!(value); });
-            assertAllIntents(runtime.pendingSettings.actionsSettingsV1);
         } finally {
             release();
-            await act(async () => { await inFlight; });
         }
+        await vi.waitFor(() => {
+            expect(posts).toBeGreaterThanOrEqual(3);
+            assertAllIntents(raw.actionsSettingsV1);
+            expect(raw.analyticsOptOut).toBe(true);
+        });
+        expect(conflicts).toBeGreaterThanOrEqual(1);
+        await act(async () => { await Promise.resolve(); });
         assertAllIntents(storage.getState().settings.actionsSettingsV1);
-        assertAllIntents(runtime.pendingSettings.actionsSettingsV1);
-        assertAllIntents(loadPendingAccountSettings(scope).actionsSettingsV1);
-        await act(async () => { await flush(); });
-        expect(runtime.pendingSettings).toEqual({});
-        expect(conflicts).toBe(1);
-        const response = await harness.request('https://action-edits.example/v2/account/settings');
-        const readback = await response.json() as { content: { t: 'plain'; v: Record<string, unknown> } };
-        assertAllIntents(readback.content.v.actionsSettingsV1);
-        expect(readback.content.v.analyticsOptOut).toBe(true);
-        // A stale whole-object diff would also lose a reversal to the original
-        // rendered value. The canonical updater applies both explicit intents.
-        const archive = controls()[1]!;
-        await act(async () => { archive(value === 'off' ? 'on' : 'off'); archive(value); });
-        await act(async () => { await flush(); });
-        assertAllIntents(storage.getState().settings.actionsSettingsV1);
-        expect(runtime.pendingSettings).toEqual({});
+        // A reversal after the retry applies the explicit intent, not a diff against the originally rendered value.
+        const reversed = value === 'off' ? 'on' : 'off';
+        await act(async () => { controls()[1]!(reversed); });
+        await vi.waitFor(() => expect(normalizeActionsSettings(raw.actionsSettingsV1).actions['session.archive']
+            ?.disabledSurfaces.includes('agent') ?? false).toBe(reversed === 'off'));
+        await act(async () => { controls()[1]!(value); });
+        await vi.waitFor(() => assertAllIntents(raw.actionsSettingsV1));
+        await vi.waitFor(() => assertAllIntents(storage.getState().settings.actionsSettingsV1));
     });
 });

@@ -69,6 +69,7 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
         automationRuns: [workflowRunRowFromAutomationRun(run)], automationServerId: serverId, openApprovals: [approval],
         stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
     const model: InboxModel = {
+        invokePluginSessionControl: async () => ({ kind: 'unavailable' }),
         source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         ...createInboxAttentionFixture(serverId),
@@ -173,7 +174,9 @@ describe('mounted canonical Work reads', () => {
             actionOperations: createActionOperationSelectors().selectForSession(operations.getSnapshot(),
                 { serverId: 'home-a', accountId: 'account-a', sessionId: 'lead' }),
             describeOperationStatus: () => 'Running',
-            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null }, title: 'Review', word: 'Running', needsAttention: true }],
+            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null,
+                attentionRequired: true, invocationAttentionRequired: true, failureUnseen: false },
+                title: 'Review', word: 'Running' }],
             ownTriggerRunIds: new Set(), describeAgentStatus: () => '', describeProgress: () => '',
         });
         const remove = registerMountedWorkReadOwner({
@@ -192,7 +195,10 @@ describe('mounted canonical Work reads', () => {
             if (!result.ok) throw new Error('Expected a readable mounted Work projection');
             expect(AppShellActionOutputSchemas['session.work.get'].parse(result.result)).toEqual(result.result);
             expect(result).toMatchObject({ ok: true, result: { status: 'ready', summary: projection.summary,
-                items: expect.arrayContaining([expect.objectContaining({ key: 'run:run-a', title: 'Review', status: projection.workflows[0]!.status }),
+                items: expect.arrayContaining([expect.objectContaining({ key: 'run:run-a', title: 'Review', status: {
+                    bucket: projection.workflows[0]!.status.bucket, tone: projection.workflows[0]!.status.tone,
+                    word: projection.workflows[0]!.status.word,
+                } }),
                     expect.objectContaining({ key: projection.projectCommands[0]!.key,
                         open: projection.projectCommands[0]!.open })]) } });
             const serialized = JSON.stringify(result);

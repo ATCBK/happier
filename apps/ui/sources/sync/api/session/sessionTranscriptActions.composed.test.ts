@@ -76,7 +76,8 @@ it('reads one old committed message through the exact Home semantic reader witho
     const query = state.messageRequests[0]!.searchParams;
     expect(query.get('messageId')).toBe(state.source.id);
     expect(query.has('limit')).toBe(false);
-    expect(homes.requests.filter(request => request.path.endsWith('/messages')).map(request => request.serverId)).toEqual([state.scope.serverId]);
+    expect(homes.requests.filter(request => new URL(request.path, request.serverUrl).pathname.endsWith('/messages'))
+        .map(request => request.serverId)).toEqual([state.scope.serverId]);
 });
 
 it('retains ordinary transcript pagination when no exact message is requested', async () => {

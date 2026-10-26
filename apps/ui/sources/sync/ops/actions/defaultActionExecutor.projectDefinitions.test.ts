@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectManifestUpdateInputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
-import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
+import { createPlainMachineRowFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
@@ -39,12 +39,7 @@ describe('Project definition Actions through the UI executor', () => {
                 execution: { ok: true, result: inspectionReply } }) };
         } });
         // The real Action root discovers custody before retaining the own-Machine RPC path.
-        const machine = ExternalActionMachineBootstrapV1Schema.parse({
-            id: workspace.machineId, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
-            installationId: 'project-machine-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        });
+        const machine = createPlainMachineRowFixture({ id: workspace.machineId, accountId: 'alice' });
         harness.answer(serverId, '/v1/machines', { body: [machine] });
         harness.answer(serverId, 'GET /v1/machines/machine', { body: { machine } });
         // These cases exercise direct guarded editor outcomes, not Ask-first's mounted continuation.

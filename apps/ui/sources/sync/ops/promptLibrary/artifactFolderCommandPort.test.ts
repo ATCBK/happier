@@ -35,7 +35,7 @@ describe('folder command Account port', () => {
         } finally { account.dispose(); await fixture.dispose(); }
     });
 
-    it('creates then renames while history maintenance is pending', async () => {
+    it('creates then renames without activating retained Settings history maintenance', async () => {
         const history = createDeferred<Response>();
         const boundary = createPromptLibraryCatalogBoundary({ revision: 4 });
         let historyStarted = false;
@@ -51,8 +51,7 @@ describe('folder command Account port', () => {
             id: 'r2-folder', name: 'Created', parentId: null, expectedRevision: 4,
         } }).then(result => { created = result; return result; });
         try {
-            await vi.waitFor(() => expect(historyStarted).toBe(true));
-            // A held HTTP request, not a production deadline, discriminates demand from maintenance.
+            // A held HTTP boundary detects accidental maintenance without adding a production deadline.
             await vi.waitFor(() => expect(created).toEqual({ status: 'updated', revision: 5 }));
             expect(await executeArtifactFolderActionV1({ port, actionId: 'artifact.folders.rename', input: {
                 folderId: 'r2-folder', name: 'Renamed', expectedRevision: 5,
@@ -60,6 +59,7 @@ describe('folder command Account port', () => {
             expect(boundary.read('folders')).toMatchObject({ value: { folders: [{ id: 'r2-folder', name: 'Renamed' }] } });
             await vi.waitFor(() => expect(getPromptLibraryCatalogValue({ serverId: fixture.home.id, accountId: 'artifact-account' }, 'folders'))
                 .toMatchObject({ status: 'ready', revision: 6, value: { folders: [{ id: 'r2-folder', name: 'Renamed' }] } }));
+            expect(historyStarted).toBe(false);
         } finally {
             history.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
             await create;

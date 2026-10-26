@@ -5,6 +5,8 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { resolvePromptDocCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
+import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
+import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import {
   createPromptDoc,
@@ -32,8 +34,10 @@ const promptWriteSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces:
 afterEach(async () => {
   await fixture?.dispose();
   fixture = undefined;
+  resetPromptLibraryCatalogEngineForTests();
+  resetPromptLibraryCatalogSnapshotsForTests();
 });
-async function home(receivedId?: string) {
+async function home() {
   catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1,
     folders: [{ id: 'folder-1', name: 'Personal' }] } }] });
   fixture = await createPlainArtifactHomeFixture(
@@ -42,18 +46,6 @@ async function home(receivedId?: string) {
       if (path === '/v2/account/settings') return Response.json({ version: 2, content: { t: 'plain', v: promptWriteSettings } });
       const response = await catalog.handle(path, init);
       if (response) return response;
-      if (receivedId && path === `/v1/artifacts/${receivedId}` && (init?.method ?? 'GET') === 'GET') {
-        const row = fixture?.boundary.read(receivedId);
-        if (row) return Response.json({ ...row, access: 'view', ownerAccountId: 'foreign-account' });
-      }
-      if (receivedId && new URL(path, 'https://prompt-doc-operations.test').pathname === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
-        const inventory = await fixture?.boundary.handle(path, init);
-        if (inventory) {
-          const rows = await inventory.json();
-          return Response.json(rows.map((row: { id: string }) => row.id === receivedId
-            ? { ...row, access: 'view', ownerAccountId: 'foreign-account' } : row));
-        }
-      }
       return null;
     } },
   );
@@ -136,13 +128,17 @@ describe('promptDocs qualified operations', () => {
   });
 
   it('duplicates received content without copying the owner organization', async () => {
-    const f = await home('received');
+    const f = await home();
     await f.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'received',
       header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Received',
         folderId: 'foreign-folder', tags: ['private-owner'] }),
       body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown: 'Shared content', createdAtMs: 1, updatedAtMs: 1 }) }),
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
     }) });
+    // Seed the actual owner and grant so detail, inventory and read-batch
+    // requests all observe the same received Artifact.
+    f.boundary.replaceStoredRow({ ...f.boundary.read('received')!, ownerAccountId: 'foreign-account' });
+    f.boundary.seedAccountGrant('received', 'artifact-account', 'view');
     const copyId = await duplicatePromptDoc('received');
     expect(JSON.parse(f.boundary.readPlainBody(copyId)!)).toMatchObject({ markdown: 'Shared content' });
     expect(decodePlainArtifactStoredContent(f.boundary.read(copyId)!.header)).not.toHaveProperty('folderId');

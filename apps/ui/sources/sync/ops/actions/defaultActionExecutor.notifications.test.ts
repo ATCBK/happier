@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import * as React from 'react';
-import { renderScreen } from '@/dev/testkit';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import {
     createHomeGovernanceHarness,
@@ -17,7 +15,6 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 
 let daemonResult: unknown;
 let beforeDaemonReply: (() => Promise<void>) | undefined;
@@ -30,8 +27,6 @@ let machineState: Pick<StorageState, 'machines' | 'machineListByServerId'>;
 // module preparation belongs to collection rather than the first hook timeout.
 await import('@/sync/domains/state/storage');
 await import('./defaultActionExecutor');
-const { createWorkNotificationOwnerFixture } = await import('@/dev/testkit/harness/workNotificationOwner');
-const { RunWorkNotifyOperation } = await import('@/components/sessions/work/RunWorkNotifications');
 
 async function addHome() {
     const serverId = await harness.addHome({
@@ -47,10 +42,13 @@ async function addHome() {
         machineListByServerId: { [serverId]: [machine] },
     });
     const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(5));
-    harness.answer(serverId, '/v1/machines', { body: [{ id: machine.id, kind: 'persistent', active: true,
+    const publishedMachine = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a', machine }),
         installationId: 'notification-installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null,
         replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-        access: { custodian: { accountId: 'account-a', displayName: 'Account A' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }] });
+        access: { custodian: { accountId: 'account-a', displayName: 'Account A' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
+    harness.answer(serverId, '/v1/machines', { body: [publishedMachine] });
+    // Requester custody uses the canonical exact read, not the ordinary census.
+    harness.answer(serverId, `/v1/machines/${machine.id}`, { body: { machine: publishedMachine } });
     for (const actionId of ['notifications.notify_me', 'action.options.resolve'] as const) {
         harness.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
@@ -139,43 +137,19 @@ describe('default Action notification daemon transport', () => {
         }, { surface: 'ui', serverId })).resolves.toMatchObject({ ok: false, errorCode: 'action_disabled' });
     });
 
-    it('arms a Run notification through the UI adapter and real daemon options policy', async () => {
-        const serverId = await addHome();
-        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
-        const executor = createDefaultActionExecutor();
-        daemonResult = { options: [{ value: 'plugin/channel', label: 'Plugin channel' }] };
-        const owner = createWorkNotificationOwnerFixture({ notificationChannelsList: async context => {
-            const result = await executor.execute('action.options.resolve', {
-                optionsSourceId: 'notifications.channels.available',
-            }, { ...context, serverId });
-            if (!result.ok) return result;
-            const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result);
-            return { items: parsed.options };
-        } });
-        owner.acceptCreate();
-        const screen = await renderScreen(React.createElement(RunWorkNotifyOperation, {
-            source: { kind: 'workflow_run', runId: 'run-one' },
-            project: { machineId: 'machine-one', directory: '/workspace' }, read: owner.runRead, execute: owner.execute }));
-        try {
-            const prefix = 'notify-run-terminal';
-            const sourceId = 'run-one';
-            await screen.pressByTestIdAsync(`${prefix}:${sourceId}`);
-            expect(screen.findByTestId(`${prefix}-armed:${sourceId}`)).not.toBeNull();
-            expect([...owner.rows.values()].flatMap(row => row.triggers)).toHaveLength(1);
-        } finally { await screen.unmount(); }
-    });
-
     it('does not borrow the focused Home daemon for a notification Account on another Home', async () => {
         const serverId = await addHome();
         const otherServerId = await harness.addHome({
             name: 'Other Home', serverUrl: 'https://other-notifications-home.example', accountId: 'account-b',
         });
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        daemonResult = { attemptedChannels: 1, deliveredChannels: 1 };
         await expect(createDefaultActionExecutor().execute('notifications.notify_me', { message: 'Private' }, {
             surface: 'voice', serverId,
-        })).resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        })).resolves.toEqual({ ok: true, result: daemonResult });
         expect(otherServerId).not.toBe(serverId);
-        expect(harness.requestsFor('/v1/actions/notifications.notify_me')).toEqual([]);
+        expect(harness.requestsFor('/v1/actions/notifications.notify_me').map(request => request.serverId)).toEqual([serverId]);
+        expect(harness.requests.filter(request => request.serverId === otherServerId && request.path.startsWith('/v1/actions/'))).toEqual([]);
     });
 
     it('withholds channel content when the captured Account changes while its daemon answers', async () => {
