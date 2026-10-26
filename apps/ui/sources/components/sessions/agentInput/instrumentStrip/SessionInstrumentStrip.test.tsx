@@ -79,7 +79,7 @@ vi.mock('../contextWarning', () => ({
 vi.mock('../resolveContextWarningWindowTokens', () => ({
     resolveContextWarningWindowTokens: () => 200_000,
 }));
-vi.mock('@/sync/domains/state/storage', () => ({ useSetting: () => false }));
+vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({ useSetting: () => false }));
 vi.mock('@/text', () => ({ t: (key: string) => key }));
 
 import { SessionInstrumentStrip } from './SessionInstrumentStrip';

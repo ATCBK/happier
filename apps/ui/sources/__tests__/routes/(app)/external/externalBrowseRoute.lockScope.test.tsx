@@ -85,7 +85,7 @@ vi.mock('expo-router', () => createExpoRouterMock({
     router: { back: routerBackSpy },
 }).module);
 
-vi.mock('@/sync/domains/state/storage', () => ({
+vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({
     useSettings: () => ({
         backendEnabledByTargetKey: {},
         acpCatalogSettingsV1: { v: 2, backends: [] },
