@@ -57,10 +57,8 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
     anchors?: 'orb' | 'island';
     bottomChromeInset?: number;
     onBottomReservationChange?: (height: number) => void;
-    viewerRect?: FrameRect | null;
+    /** Other current shell companions (the pet, the pane action rail) the presence rests clear of. */
     avoidRects?: readonly FrameRect[];
-    /** Publish settled measured geometry to the existing shell owner, never pointer samples. */
-    onRectChange?: (rect: FrameRect | null) => void;
     testID?: string;
     children: (render: VoicePresenceFloatRender) => React.ReactNode;
 }>): React.ReactElement {
@@ -75,9 +73,7 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
 
     const width = containerSize?.width ?? props.width;
     const height = containerSize?.height ?? props.height;
-    const avoidRects = React.useMemo(() => props.viewerRect
-        ? [...(props.avoidRects ?? []), props.viewerRect] : props.avoidRects,
-    [props.avoidRects, props.viewerRect]);
+    const avoidRects = props.avoidRects;
     const geometry = resolveVoicePresenceGeometry({
         hostWidth: host.w,
         hostHeight: host.h,
@@ -97,14 +93,8 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
     const initialPoint = React.useMemo(() => ({ x: restX, y: restY }), [restX, restY]);
     const onDragRelease = React.useCallback((release: VoicePresenceDragRelease) => {
         setBottomDocked(release.point.y === maxY);
-        props.onRectChange?.({ ...release.point, width, height });
-    }, [height, maxY, props.onRectChange, width]);
+    }, [maxY]);
     React.useEffect(() => { setBottomDocked(initialPoint.y === maxY); }, [initialPoint, maxY]);
-    const reportRect = props.onRectChange;
-    React.useEffect(() => {
-        if (host.w > 0 && host.h > 0) reportRect?.({ ...initialPoint, width, height });
-    }, [height, host.h, host.w, initialPoint, reportRect, width]);
-    React.useEffect(() => () => { reportRect?.(null); }, [reportRect]);
     const reportBottomReservation = props.onBottomReservationChange;
     const reservation = resolveVoicePresenceBottomReservation({
         hostHeight: host.h,

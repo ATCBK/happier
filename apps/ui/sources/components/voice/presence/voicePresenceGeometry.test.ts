@@ -12,18 +12,18 @@ const BOTTOM_CHROME_HEIGHT = 62;
 const COMPOSER_CHROME_HEIGHT = 950 - BOTTOM_CHROME_HEIGHT - 790;
 
 describe('voice presence geometry', () => {
-    it('places a presence clear of the current viewer after a viewport or keyboard change', () => {
-        const viewerRect = { x: 700, y: 460, width: 286, height: 226 };
+    it('places a presence clear of a measured companion after a viewport or keyboard change', () => {
+        const companion = { x: 700, y: 460, width: 286, height: 226 };
         const geometry = resolveVoicePresenceGeometry({
             hostWidth: 1000, hostHeight: 800, containerWidth: 84, containerHeight: 84,
-            restingBottomInset: 80, bottomMargin: 0, viewerRect,
+            restingBottomInset: 80, bottomMargin: 0, avoidRects: [companion],
         });
-        expect(geometry.restingPoint.x + 84 <= viewerRect.x || geometry.restingPoint.y + 84 <= viewerRect.y).toBe(true);
+        expect(geometry.restingPoint.x + 84 <= companion.x || geometry.restingPoint.y + 84 <= companion.y).toBe(true);
         expect(geometry.fits).toBe(true);
         const typing = resolveVoicePresenceGeometry({
             hostWidth: 390, hostHeight: 600, containerWidth: 358, containerHeight: 70,
             restingBottomInset: 340, bottomMargin: 0, minimumTop: 60,
-            viewerRect: { x: 16, y: 60, width: 358, height: 190 },
+            avoidRects: [{ x: 16, y: 60, width: 358, height: 190 }],
         });
         expect(typing.fits).toBe(false);
     });

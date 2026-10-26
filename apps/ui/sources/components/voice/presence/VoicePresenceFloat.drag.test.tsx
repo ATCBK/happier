@@ -44,11 +44,9 @@ function attempt(reconnecting = false): VoiceAttemptControlProjection {
 
 describe('VoicePresenceFloat native drag boundary', () => {
     it('sets normalized geometry through the mounted position owner and begins subsequent drag there', async () => {
-        const rects: (Readonly<{ x: number; y: number; width: number; height: number }> | null)[] = [];
         let positionX = () => 0;
         const screen = await renderScreen(<VoicePresenceFloat width={84} height={84}
-            restingBottomInset={80} edgeInset={14} minimumTop={60} testID="action-float"
-            onRectChange={(rect) => rects.push(rect)}>
+            restingBottomInset={80} edgeInset={14} minimumTop={60} testID="action-float">
             {(render) => { positionX = () => render.translateX.get(); return null; }}
         </VoicePresenceFloat>);
         try {
@@ -56,7 +54,6 @@ describe('VoicePresenceFloat native drag boundary', () => {
             await act(async () => { screen.findByTestId('action-float')!.props.onLayout({ nativeEvent: { layout: { width: 1000, height: 800 } } }); });
             await act(async () => { expect(setVoicePresencePosition({ x: 0.5, y: 0.5 })).toBe(true); });
             expect(positionX()).toBe(458);
-            expect(rects.at(-1)).toEqual({ x: 458, y: 348, width: 84, height: 84 });
             const gesture = screen.tree.root.findByType('GestureDetector').props.gesture as TestGestureChain;
             await act(async () => {
                 gesture.__handlers.onBegin({ absoluteX: 500, absoluteY: 380 });
@@ -66,36 +63,6 @@ describe('VoicePresenceFloat native drag boundary', () => {
         } finally { await screen.unmount(); }
         expect(setVoicePresencePosition({ x: 0, y: 0 })).toBe(false);
     });
-    it('uses current measured viewer obstacles at rest and release without publishing pointer samples', async () => {
-        const rects: (Readonly<{ x: number; y: number; width: number; height: number }> | null)[] = [];
-        const reportRect = (rect: typeof rects[number]) => { rects.push(rect); };
-        const screen = await renderScreen(<VoicePresenceFloat width={84} height={84}
-            restingBottomInset={80} edgeInset={14} minimumTop={60} testID="obstacle-float"
-            viewerRect={{ x: 700, y: 460, width: 286, height: 226 }} onRectChange={reportRect}>
-            {() => null}
-        </VoicePresenceFloat>);
-        await act(async () => {
-            invokeTestInstanceHandler(screen.findByTestId('obstacle-float'), 'onLayout', {
-                nativeEvent: { layout: { x: 0, y: 0, width: 1000, height: 800 } },
-            });
-        });
-        expect(rects.at(-1)).toEqual({ x: 902, y: 376, width: 84, height: 84 });
-        const gesture = screen.tree.root.findByType('GestureDetector').props.gesture as TestGestureChain;
-        const publishedAtRest = rects.length;
-        await act(async () => {
-            gesture.__handlers.onBegin({ absoluteX: 920, absoluteY: 410 });
-            gesture.__handlers.onUpdate({ translationX: 0, translationY: 260 });
-        });
-        expect(rects.length).toBe(publishedAtRest);
-        await act(async () => {
-            gesture.__handlers.onEnd({ translationX: 0, translationY: 260, velocityX: 0, velocityY: 0 });
-            gesture.__handlers.onFinalize();
-        });
-        expect(rects.at(-1)).toEqual({ x: 902, y: 376, width: 84, height: 84 });
-        await screen.unmount();
-        expect(rects.at(-1)).toBeNull();
-    });
-
     it('keeps the Orb mark at its logical dock while enclosing the native options hit area', async () => {
         const width = resolveVoiceOrbContainerWidth('ios', true);
         const padding = (width - VOICE_ORB_BODY_SIZE) / 2;

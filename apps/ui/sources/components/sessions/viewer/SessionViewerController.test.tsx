@@ -7,14 +7,11 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import {
   isSessionViewerPresenting,
   useOptionalSessionViewerController,
-  NO_SESSION_VIEWER_INSET,
   useSessionViewerComposerReserve,
-  useSessionViewerReadingInset,
   type SessionViewerController,
 } from './SessionViewerController';
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
 import {
-  resolveSessionViewerReadingInset,
   SESSION_VIEWER_EDGE,
   SESSION_VIEWER_PHONE_RESERVE,
   SESSION_VIEWER_STATE_MIN_BODY,
@@ -45,7 +42,6 @@ function mountController(
       renderHook(
         () => ({
           controller: useOptionalSessionViewerController()!,
-          inset: useSessionViewerReadingInset(),
           composerReserve: useSessionViewerComposerReserve(),
         }),
         { wrapper: Wrapper },
@@ -271,92 +267,18 @@ describe('SessionViewerController', () => {
     } finally { await hook.unmount(); }
   });
 
-  it('publishes the reading column yield only while a settled viewer floats', async () => {
-    const { render } = mountController({ phone: false });
+  it('docks only on the person\'s Dock and floats again on request, with no placement verdict in between', async () => {
+    const { render, openDocked } = mountController({ phone: false });
     const hook = await render();
-    await act(async () => {
-      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
-    });
-    expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
-    await act(async () => {
-      hook
-        .getCurrent()
-        .controller.port.apply({ kind: 'viewer.open', source: 'browser' });
-    });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
-    await act(async () => {
-      hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
-    });
-    expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
-    await hook.unmount();
-  });
-});
-
-describe('resolveSessionViewerReadingInset', () => {
-  const area = 1200;
-  const column = 760;
-
-  it('stops pushing the column and lets the viewer float over it once yielding would leave less than the main minimum', () => {
-    // A 700-wide transcript area and a 400-wide viewer on the right: yielding would leave 284.
-    const rect = { x: 284, y: 200, width: 400, height: 280 };
-    expect(
-      resolveSessionViewerReadingInset({ areaWidth: 700, columnMaxWidth: column, columnMinWidth: 420, rect }),
-    ).toEqual({ left: 0, right: 0 });
-    // The same viewer still pushes the column while the main minimum holds.
-    const roomy = resolveSessionViewerReadingInset({
-      areaWidth: 900,
-      columnMaxWidth: column,
-      columnMinWidth: 420,
-      rect: { ...rect, x: 484 },
-    });
-    expect(roomy.right).toBeGreaterThan(0);
-    expect(900 - roomy.right).toBeGreaterThanOrEqual(420);
-  });
-
-  it('leaves the column alone when the free margin already clears the viewer', () => {
-    // Column spans 220..980; a viewer from 1000 leaves it untouched.
-    expect(
-      resolveSessionViewerReadingInset({
-        areaWidth: area,
-        columnMaxWidth: column,
-        columnMinWidth: 420,
-        rect: { x: 1000, y: 300, width: 184, height: 150 },
-      }),
-    ).toEqual({ left: 0, right: 0 });
-  });
-
-  it('recentres the column just enough to clear a right-side viewer, then narrows it', () => {
-    const rect = { x: 800, y: 300, width: 384, height: 280 };
-    const inset = resolveSessionViewerReadingInset({
-      areaWidth: area,
-      columnMaxWidth: column,
-      columnMinWidth: 420,
-      rect,
-    });
-    const remaining = area - inset.right;
-    const columnRight = (remaining + Math.min(remaining, column)) / 2;
-    expect(inset.left).toBe(0);
-    expect(columnRight).toBeLessThanOrEqual(rect.x - SESSION_VIEWER_EDGE);
-    expect(remaining).toBeGreaterThanOrEqual(column);
-
-    const wide = { x: 500, y: 300, width: 684, height: 400 };
-    const narrowed = resolveSessionViewerReadingInset({
-      areaWidth: area,
-      columnMaxWidth: column,
-      columnMinWidth: 420,
-      rect: wide,
-    });
-    expect(area - narrowed.right).toBe(wide.x - SESSION_VIEWER_EDGE);
-  });
-
-  it('yields on the left for a left-corner viewer', () => {
-    const inset = resolveSessionViewerReadingInset({
-      areaWidth: area,
-      columnMaxWidth: column,
-      columnMinWidth: 420,
-      rect: { x: 16, y: 300, width: 384, height: 280 },
-    });
-    expect(inset.right).toBe(0);
-    expect(inset.left).toBeGreaterThan(0);
+    try {
+      await act(async () => { hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' }); });
+      await act(async () => { hook.getCurrent().controller.apply({ kind: 'viewer.dock' }); });
+      expect(hook.getCurrent().controller.state).toMatchObject({ mode: 'docked', restore: null });
+      expect(openDocked).toHaveBeenCalledWith('computer');
+      let result: ReturnType<SessionViewerController['apply']> | undefined;
+      await act(async () => { result = hook.getCurrent().controller.apply({ kind: 'viewer.float' }); });
+      expect(result).toEqual({ status: 'applied' });
+      expect(hook.getCurrent().controller.state.mode).toBe('floating');
+    } finally { await hook.unmount(); }
   });
 });

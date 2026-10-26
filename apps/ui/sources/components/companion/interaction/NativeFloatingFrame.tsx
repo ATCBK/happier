@@ -17,7 +17,7 @@ import { useCompanionNativePanGesture } from './useCompanionNativePanGesture';
 export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProps): React.ReactElement {
     const nativeRef = useAnimatedRef<View>();
     const noDragRegions = useCompanionNoDragRegions();
-    const { rect, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth, bodyRect, moveInput } = props;
+    const { rect, availableRect, aspectRatio, chromeHeight, minWidth, bodyRect, moveInput } = props;
     const enabled = props.mode === 'floating';
     const width = useSharedValue(rect.width);
     const height = useSharedValue(rect.height);
@@ -59,17 +59,16 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
         resolveReleaseTarget: ({ released, projected }) => {
             'worklet';
             const placement = resolveFloatingFrameRect({
-                rect: { ...released, width: width.value, height: height.value }, availableRect, avoidRects,
+                rect: { ...released, width: width.value, height: height.value }, availableRect,
                 aspectRatio, chromeHeight, minWidth, projectedPoint: projected,
             });
             return placement.fits ? { x: placement.rect.x, y: placement.rect.y } : released;
         },
         onDragRelease: ({ target }) => {
             const placement = resolveFloatingFrameRect({
-                rect: { ...target, width: width.value, height: height.value }, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
+                rect: { ...target, width: width.value, height: height.value }, availableRect, aspectRatio, chromeHeight, minWidth,
             });
             if (placement.fits) props.onRectChange(placement.rect, { kind: 'settle' });
-            else props.onModeChange('docked');
         },
     });
     const { translateX, translateY, settleToPoint } = pan;
@@ -105,9 +104,9 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
         onDragRelease: () => {
             const placement = resolveFloatingFrameRect({
                 rect: { x: translateX.value, y: translateY.value, width: width.value, height: height.value },
-                availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
+                availableRect, aspectRatio, chromeHeight, minWidth,
             });
-            if (!placement.fits) { props.onModeChange('docked'); return; }
+            if (!placement.fits) return;
             width.value = placement.rect.width;
             height.value = placement.rect.height;
             settleToPoint(placement.rect);

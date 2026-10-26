@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { frameRectsOverlap, type FrameRect } from '@happier-dev/plugin-ui/presentation';
+import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -19,11 +19,10 @@ import {
     useSessionCockpitBottomChromeHeightSetter,
     useSessionCockpitComposerBottomChromeHeight,
     useReportSessionCockpitComposerChromeHeight,
-    useReportSessionCockpitViewerRect,
     useReportSessionCockpitActionRailRect,
-    useSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { VoicePresenceAppShellMount } from './VoicePresenceAppShellMount';
+import { VOICE_ORB_BODY_SIZE } from './voicePresenceAnatomy';
 import { VoiceTopBarPresenceMount } from './VoiceTopBarPresence';
 import { VoiceTopBarPresence } from './VoiceTopBarPresence';
 import { SessionCompanionContent } from '@/components/sessions/companion/SessionCompanionContent';
@@ -93,20 +92,15 @@ function FramedDesktopComposer() {
     return null;
 }
 
-function ViewerObstacle(props: Readonly<{ rect: FrameRect | null }>) {
-    const report = useReportSessionCockpitViewerRect({ sessionId: 'viewer-session', serverId: 'home-a' }, props.rect !== null);
-    React.useEffect(() => { report(props.rect); }, [props.rect, report]);
-    return null;
-}
-
 function ActionRailObstacle(props: Readonly<{ rect: FrameRect | null }>) {
     const report = useReportSessionCockpitActionRailRect(props.rect !== null);
     React.useEffect(() => { report(props.rect); }, [props.rect, report]);
     return null;
 }
 
-function PresenceRectProbe() {
-    return <View testID="presence-rect-probe" accessibilityValue={{ text: JSON.stringify(useSessionCockpitVoicePresenceRect()) }} />;
+/** The orb's resting x, as the float hands it to the mark (the viewport's own coordinates). */
+function orbX(screen: Awaited<ReturnType<typeof renderScreen>>): number {
+    return screen.root.findAll((node) => node.props.sectionOpen !== undefined && node.props.translateX !== undefined)[0]!.props.translateX.get();
 }
 
 describe('phone Island shell clearance', () => {
@@ -131,63 +125,21 @@ describe('phone Island shell clearance', () => {
         registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
         setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: 'voice-shell', status: 'connected', mode: 'listening', canStop: true });
     });
-    it('publishes the measured Island clear of a mounted viewer and removes the obstacle on close', async () => {
-        const viewer = { x: 16, y: 650, width: 358, height: 100 };
-        const scene = (rect: FrameRect | null, visible = true) => <SessionCockpitChromeRegistryProvider>
-            <ComposerClearance /><ViewerObstacle rect={rect} /><PresenceRectProbe />
-            {visible ? <VoicePresenceAppShellMount /> : null}
-        </SessionCockpitChromeRegistryProvider>;
-        const screen = await renderScreen(scene(viewer));
-        try {
-            await layOutPhonePresence(screen);
-            const readRect = (): FrameRect | null => JSON.parse(screen.findByTestId('presence-rect-probe')!.props.accessibilityValue.text);
-            expect(readRect()).not.toBeNull();
-            expect(frameRectsOverlap(readRect()!, viewer)).toBe(false);
-            expect(readRect()!.y + readRect()!.height).toBeLessThanOrEqual(viewer.y);
-            await screen.update(scene(null));
-            expect(readRect()!.y).toBeGreaterThan(viewer.y);
-            await screen.update(scene(null, false));
-            expect(readRect()).toBeNull();
-        } finally { await screen.unmount(); }
-    });
     it('keeps the Orb off the pane action rail at the window edge and returns to the edge when the rail goes', async () => {
         getStorage().setState((state) => ({ localSettings: { ...state.localSettings, voicePresenceContainer: 'orb' } }));
         // The session's right tool rail: a full-height strip against the right edge, where the Orb rests.
         const rail = { x: 346, y: 90, width: 44, height: 700 };
         const scene = (rect: FrameRect | null) => <SessionCockpitChromeRegistryProvider>
-            <ActionRailObstacle rect={rect} /><PresenceRectProbe /><VoicePresenceAppShellMount />
+            <ActionRailObstacle rect={rect} /><VoicePresenceAppShellMount />
         </SessionCockpitChromeRegistryProvider>;
         const screen = await renderScreen(scene(rail));
         try {
             await layOutPhonePresence(screen);
-            const readRect = (): FrameRect => JSON.parse(screen.findByTestId('presence-rect-probe')!.props.accessibilityValue.text);
-            expect(frameRectsOverlap(readRect(), rail)).toBe(false);
-            const clear = readRect();
+            expect(orbX(screen) + VOICE_ORB_BODY_SIZE).toBeLessThanOrEqual(rail.x);
+            const clear = orbX(screen);
             await screen.update(scene(null));
             await layOutPhonePresence(screen);
-            expect(readRect().x).toBeGreaterThan(clear.x);
-        } finally { await screen.unmount(); }
-    });
-    it('retires the Orb measurement callback when the actual shell switches to Island', async () => {
-        getStorage().setState((state) => ({ localSettings: { ...state.localSettings, voicePresenceContainer: 'orb' } }));
-        const screen = await renderScreen(<SessionCockpitChromeRegistryProvider>
-            <VoicePresenceAppShellMount /><PresenceRectProbe />
-        </SessionCockpitChromeRegistryProvider>);
-        try {
-            await layOutPhonePresence(screen);
-            const readRect = (): FrameRect | null => JSON.parse(screen.findByTestId('presence-rect-probe')!.props.accessibilityValue.text);
-            const previous = readRect()!;
-            const retiredReport: (rect: FrameRect | null) => void = screen.root.find((node) =>
-                node.props.testID === 'voice-presence-float-host' && typeof node.props.onRectChange === 'function').props.onRectChange;
-            await act(async () => {
-                getStorage().setState((state) => ({ localSettings: { ...state.localSettings, voicePresenceContainer: 'island' } }));
-            });
-            await layOutPhonePresence(screen);
-            const fresh = readRect()!;
-            expect(fresh.width).toBeGreaterThan(previous.width);
-            await act(async () => { retiredReport(previous); });
-            expect(readRect()).toEqual(fresh);
-            expect(screen.findByTestId('voice-island-transport-mute')).not.toBeNull();
+            expect(orbX(screen)).toBeGreaterThan(clear);
         } finally { await screen.unmount(); }
     });
     it('resolves a stored phone Top bar to one Island without rewriting the local choice', async () => {

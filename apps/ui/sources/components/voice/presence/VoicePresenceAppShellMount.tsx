@@ -9,10 +9,8 @@ import {
     useSessionCockpitComposerChromeHeight,
     useSessionCockpitComposerChromeTop,
     useReportSessionCockpitFloatingBottomChromeHeight,
-    useSessionCockpitViewerRect,
     useSessionCockpitPetRect,
     useSessionCockpitActionRailRect,
-    useReportSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import {
     useVoiceAttemptControl,
@@ -72,7 +70,6 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const composerChromeTop = useSessionCockpitComposerChromeTop();
     const keyboardHeight = useKeyboardHeight();
     const viewport = useWindowDimensions();
-    const viewerRect = useSessionCockpitViewerRect();
     const petRect = useSessionCockpitPetRect();
     const actionRailRect = useSessionCockpitActionRailRect();
     // The Orb rests clear of the pet and of the session's right tool rail.
@@ -103,7 +100,6 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     // measured composer instead of reporting the keyboard height back as composer reservation.
     const reservesComposerSpace = visible && phone && !orb && keyboardHeight === 0;
     const reportBottomReservation = useReportSessionCockpitFloatingBottomChromeHeight(reservesComposerSpace);
-    const reportPresenceRect = useReportSessionCockpitVoicePresenceRect(visible);
     React.useLayoutEffect(() => visible ? registerVoiceGlancePresentation((expanded) => {
         if (!expanded || !revealVoiceCompanionSection()) setOpen(expanded);
     }) : undefined, [visible]);
@@ -145,9 +141,7 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
                 anchors={orb ? 'orb' : 'island'}
                 bottomChromeInset={insets.bottom + bottomChromeHeight}
                 onBottomReservationChange={reservesComposerSpace ? reportBottomReservation : undefined}
-                viewerRect={viewerRect}
                 avoidRects={avoidRects}
-                onRectChange={reportPresenceRect}
             >
                 {(render) => orb ? (
                     <VoiceOrb

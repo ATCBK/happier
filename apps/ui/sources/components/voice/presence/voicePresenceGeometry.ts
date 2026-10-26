@@ -78,7 +78,7 @@ export function resolveVoiceOrbRestingBottomInset(chrome: VoiceOrbBottomChrome):
         + nonNegative(chrome.petOffset);
 }
 
-/** Shared measured shell space for a viewer or presence; chrome custody stays in the shell. */
+/** Shared measured shell space for a presence; chrome custody stays in the shell. */
 export function resolveVoicePresenceAvailableRect(input: Readonly<{
     hostWidth: number;
     hostHeight: number;
@@ -104,8 +104,6 @@ export function resolveVoicePresenceGeometry(input: Readonly<{
     edgeInset?: number;
     minimumTop?: number;
     bottomMargin?: number;
-    /** Current viewer measurement, withdrawn by its owner when docked or closed. */
-    viewerRect?: FrameRect | null;
     /** Other current shell companions, including a floating Island or pet. */
     avoidRects?: readonly FrameRect[];
     restCentred?: boolean;
@@ -125,7 +123,7 @@ export function resolveVoicePresenceGeometry(input: Readonly<{
         rect: { x: input.restCentred ? (minX + maxX) / 2 : maxX, y: maxY,
             width: nonNegative(input.containerWidth), height: nonNegative(input.containerHeight) },
         availableRect,
-        avoidRects: input.viewerRect ? [...(input.avoidRects ?? []), input.viewerRect] : input.avoidRects,
+        avoidRects: input.avoidRects,
     });
     return {
         restingPoint: { x: placement.rect.x, y: placement.rect.y },

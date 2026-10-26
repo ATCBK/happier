@@ -5,7 +5,7 @@ import type { ComputerGrantStatusV1 } from '@happier-dev/protocol';
 
 import type { BrowserStreamedSurfaceRuntime } from '@/components/browser/adapters/BrowserStreamedTarget';
 import { ComputerActionApprovalCard, describeComputerActionApproval } from '@/components/approvals/ComputerActionApprovalCard';
-import { ComputerScreenViewer } from '@/components/computer/ComputerScreenViewer';
+import { ComputerScreenViewer, type ComputerScreenPicture } from '@/components/computer/ComputerScreenViewer';
 import { ComputerTargetPicker, computerTargetKey, type ComputerTargetEntry } from '@/components/computer/ComputerTargetPicker';
 import { computerTargetPickerChrome } from '@/components/computer/showComputerTargetPicker';
 import { LUMEN_LOGIN_FRAME_DARK, LUMEN_LOGIN_FRAME_LIGHT } from '@/components/dev/browser/lumenLoginFrame';
@@ -24,6 +24,8 @@ import {
     usePublishSessionViewerSourceFacts,
 } from '@/components/sessions/viewer/SessionViewerController';
 import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
+import { useReportSessionCockpitComposerChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { SessionViewerHost } from '@/components/sessions/viewer/SessionViewerHost';
 import { SessionViewerControls } from '@/components/sessions/viewer/SessionViewerControls';
 import { SessionViewerPicture } from '@/components/sessions/viewer/SessionViewerPicture';
 import { SessionViewerPresenceFooter } from '@/components/sessions/viewer/SessionViewerPresenceFooter';
@@ -168,13 +170,14 @@ function ViewerFrame(props: Readonly<{ presence: keyof typeof PRESENCE; stream: 
 }
 
 /** The viewer's own facts and presence, as the Computer body publishes them. */
-function WatchSource(props: Readonly<{ presence: keyof typeof PRESENCE }>) {
+function WatchSource(props: Readonly<{ presence: keyof typeof PRESENCE; aspectRatio?: number | null }>) {
     const viewer = useOptionalSessionViewerController();
     const port = viewer?.port;
     React.useEffect(() => { port?.apply({ kind: 'viewer.open', source: 'computer' }); }, [port]);
     const presence = PRESENCE[props.presence];
     usePublishSessionViewerSourceFacts('computer', {
         machineName: MACHINE, personInControl: presence.kind === 'human', watching: presence.kind === 'agent',
+        aspectRatio: props.aspectRatio ?? null,
         chooseTarget: NOOP, stopSharing: NOOP,
     });
     const published = React.useMemo(() => ({
@@ -236,6 +239,73 @@ function WatchFrame(props: Readonly<{ presence: keyof typeof PRESENCE; phone: bo
                         />
                     </SessionViewerPicture>
                 </FloatingFrame>
+            </View>
+        </SessionViewerControllerProvider>
+    );
+}
+
+/**
+ * The real `SessionViewerHost` over a Session-shaped page (reading column, composer band): the
+ * viewer floats above all of it and moves nothing behind it. The specimen Session has no Machine, so
+ * the Session's retained Computer body cannot run; the host takes the fixture picture (the real
+ * `SessionViewerPicture` and `ComputerScreenViewer` over the lab's page) in its place, and the frame,
+ * its controls and presence footer, and every placement are the real ones.
+ */
+/** The composer band, published the way the Session's composer does. */
+function HostComposerMeasure() {
+    const report = useReportSessionCockpitComposerChromeHeight(true);
+    React.useEffect(() => { report(HOST_COMPOSER_BAND); }, [report]);
+    return null;
+}
+const HOST_COMPOSER_BAND = 120;
+
+/** The viewer's picture as the Computer body draws it (framed, chromeless), over the lab's own page. */
+function HostPicture(props: Readonly<{ phone: boolean; onPictureChange: (picture: ComputerScreenPicture) => void }>) {
+    const stream = useStream('live');
+    return (
+        <SessionViewerPicture framed source="computer">
+            <ComputerScreenViewer
+                agent={AGENT}
+                targetTitle={TITLE}
+                targetKind="window"
+                machineName={MACHINE}
+                shared
+                stream={stream}
+                presence={PRESENCE.agent}
+                agentActing
+                onTakeControl={NOOP}
+                onHandBack={NOOP}
+                onCheckAgain={NOOP}
+                onChooseWindow={NOOP}
+                onStopSharing={NOOP}
+                chrome="none"
+                compact={props.phone}
+                onPictureChange={props.onPictureChange}
+            />
+        </SessionViewerPicture>
+    );
+}
+
+function HostFrame(props: Readonly<{ phone: boolean; area?: Readonly<{ width: number; height: number }> }>) {
+    // The picture reports its own shape, as the Computer body does, so the frame takes its aspect.
+    const [aspect, setAspect] = React.useState<number | null>(null);
+    const onPictureChange = React.useCallback((picture: ComputerScreenPicture) => {
+        setAspect(picture.size ? picture.size.width / picture.size.height : null);
+    }, []);
+    const body = React.useMemo(() => <HostPicture phone={props.phone} onPictureChange={onPictureChange} />, [onPictureChange, props.phone]);
+    return (
+        <SessionViewerControllerProvider sessionId="specimen-session" serverId={null} phone={props.phone}
+            canPresentSource={() => true} openDocked={NOOP}>
+            <WatchSource presence="agent" aspectRatio={aspect} />
+            <HostComposerMeasure />
+            <View style={[styles.hostPage, props.area]} testID="specimen-host-page">
+                <View style={styles.hostColumn} testID="specimen-host-column">
+                    {Array.from({ length: 14 }, (_, index) => (
+                        <View key={index} style={[styles.hostLine, { width: `${96 - ((index * 13) % 40)}%` }]} />
+                    ))}
+                </View>
+                <View style={styles.hostComposer} testID="specimen-host-composer" />
+                <SessionViewerHost sessionId="specimen-session" serverId={null} body={body} />
             </View>
         </SessionViewerControllerProvider>
     );
@@ -323,6 +393,9 @@ const FRAMES: readonly Frame[] = [
     { id: 'STn', render: (phone) => <ViewerFrame presence="agent" stream="live" shared={false} phone={phone} /> },
     { id: 'WA', render: (phone) => <WatchFrame presence="agent" phone={phone} /> },
     { id: 'WK', render: (phone) => <WatchFrame presence="human" phone={phone} /> },
+    { id: 'WH', render: (phone) => <HostFrame phone={phone} /> },
+    // A window smaller than the frame (a portrait picture in a short area): it shrinks to fit and stays floating.
+    { id: 'WHt', render: (phone) => <HostFrame phone={phone} area={{ width: 560, height: 260 }} /> },
 ];
 
 export function ComputerSpecimen(props: Readonly<{ only: string | null; phone: boolean }>) {
@@ -356,6 +429,13 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     cards: { padding: theme.space.s16, gap: theme.space.s16 },
+    hostPage: { width: 946, height: 705, overflow: 'hidden', backgroundColor: theme.colors.surface.base },
+    hostColumn: { alignSelf: 'center', width: 640, paddingTop: theme.space.s24, gap: theme.space.s12 },
+    hostLine: { height: 14, borderRadius: 7, backgroundColor: theme.colors.surface.elevated },
+    hostComposer: {
+        position: 'absolute', left: 150, right: 150, bottom: theme.space.s24, height: 96, borderRadius: 18,
+        backgroundColor: theme.colors.surface.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.default,
+    },
     watch: { alignSelf: 'flex-start', padding: theme.space.s24, backgroundColor: theme.colors.surface.base },
     chat: { flex: 1 },
     stripFrame: { padding: theme.space.s12 },

@@ -428,7 +428,7 @@ describe('SessionComputerScreenPane retained source', () => {
             await screen.update(<Harness shell="pane" />);
             await flushHookEffects();
             expect(store.getPortalSnapshot() === settledSlot).toBe(true);
-            phase = 'settling the footer fit threshold across the real pane/viewer handoff';
+            phase = 'keeping the retained body across the real pane/viewer handoff and a short area';
             await act(async () => { viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' }); });
             const layoutHost = async (height: number) => {
                 await act(async () => {
@@ -451,16 +451,9 @@ describe('SessionComputerScreenPane retained source', () => {
                 });
             }
             expect(viewerController!.presence.get('computer')).not.toBeNull();
-            const { resolveFloatingFrameChromeHeight } = await import('@happier-dev/plugin-ui/presentation');
-            const { SESSION_VIEWER_EDGE } = await import('@/components/sessions/viewer/sessionViewerGeometry');
-            const aspect = viewerController!.facts.computer!.aspectRatio!;
-            expect(aspect).toBeGreaterThan(0);
-            const thresholdHeight = 453 / aspect + (
-                resolveFloatingFrameChromeHeight({ footer: false }) + resolveFloatingFrameChromeHeight({ footer: true })
-            ) / 2 + SESSION_VIEWER_EDGE * 2;
-            await layoutHost(thresholdHeight);
-            expect(viewerController!.state.mode).toBe('docked');
-            expect(viewerController!.floatFits).toBe(false);
+            // A short area shrinks the frame; it never docks the viewer, so the retained body stays put.
+            await layoutHost(150);
+            expect(viewerController!.state.mode).toBe('floating');
             await layoutHost(900);
             expect(viewerController!.state.mode).toBe('floating');
             expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);

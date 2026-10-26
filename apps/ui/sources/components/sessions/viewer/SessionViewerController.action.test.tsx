@@ -95,7 +95,6 @@ const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useA
 const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
 const { useOpenSessionComputerScreen } = await import('@/components/computer/useOpenSessionComputerScreen');
 const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
-const { SessionHeaderComputerButton } = await import('../actions/SessionHeaderComputerButton');
 const initialState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let boundarySnapshot: unknown;
@@ -181,7 +180,6 @@ describe('Session viewer semantic Action ingress', () => {
     function Wrapper(props: React.PropsWithChildren) {
       return <AppPaneProvider><SessionViewerScope sessionId="session-a" serverId={serverId}>
         <CurrentSessionPresentationRuntime />
-        <SessionHeaderComputerButton sessionId="session-a" serverId={serverId} />
         <IngressProbe />
         {props.children}
       </SessionViewerScope></AppPaneProvider>;
@@ -199,7 +197,8 @@ describe('Session viewer semantic Action ingress', () => {
     });
     let unmounted = false;
     const pressHeader = async () => {
-      await act(async () => { await hook.tree.root.findByProps({ testID: 'session-header-computer-button' }).props.onPress(); });
+      // The header's ⋯ Computer entry and the rail's launcher call the one opener.
+      await act(async () => { ingress.openFromWatch?.open(); });
       await flushHookEffects();
     };
     const setPresentationPolicy = async (enabled: boolean) => {
@@ -270,8 +269,8 @@ describe('Session viewer semantic Action ingress', () => {
       expect(ingress.pane!.scopeState!.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
       await act(async () => { ingress.pane!.closeDetails(); });
       stage = 'docked transcript Watch source handoff';
-      expect(ingress.openFromWatch).toBeTypeOf('function');
-      await act(async () => { ingress.openFromWatch!(); });
+      expect(ingress.openFromWatch?.open).toBeTypeOf('function');
+      await act(async () => { ingress.openFromWatch!.open(); });
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'docked', source: 'computer' }));
       expect(ingress.pane!.scopeState!.details.isOpen).toBe(true);
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
@@ -312,14 +311,19 @@ describe('Session viewer semantic Action ingress', () => {
         machines: { 'machine-1': offlineMachine }, machineListByServerId: { [serverId]: [offlineMachine] },
       }); });
       const artifactsBefore = home.requestsFor('/v1/artifacts').length;
+      // An offline Machine keeps the launcher, disabled with its presence reason.
+      expect(ingress.openFromWatch?.disabledReason).toEqual(expect.any(String));
       await pressHeader();
       expect(hook.getCurrent().state.mode).toBe('closed');
+      expect(home.requestsFor('/v1/artifacts')).toHaveLength(artifactsBefore);
+      // Launcher availability does not replace the already-mounted viewer's semantic authority.
+      await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'computer' }); });
       await waitForHomeGovernance(() => expect(home.requestsFor('/v1/artifacts').length).toBeGreaterThan(artifactsBefore));
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterApproval);
 
-      stage = 'offline header open and Close without Session RPC';
+      stage = 'offline viewer open and Close without Session RPC';
       await setPresentationPolicy(true);
-      await pressHeader();
+      await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'computer' }); });
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
       let closed!: ActionExecuteResult;
       await act(async () => { closed = await hook.getCurrent().requestSemantic({ kind: 'viewer.close' }); });

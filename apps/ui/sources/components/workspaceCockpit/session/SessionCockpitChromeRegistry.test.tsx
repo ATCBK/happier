@@ -19,28 +19,9 @@ import {
 import type { SessionMobileSurface } from './sessionCockpitState';
 import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
 import {
-    useReportSessionCockpitViewerRect,
-    useSessionCockpitViewerRect,
-    useSessionCockpitVoicePresenceRect,
-    useReportSessionCockpitVoicePresenceRect,
     useSessionCockpitPetRect,
     useReportSessionCockpitPetRect,
 } from './SessionCockpitChromeRegistry';
-
-function ViewerMeasurement(props: Readonly<{
-    sessionId: string; serverId: string; rect: FrameRect | null; enabled: boolean;
-    reports: Array<(rect: FrameRect | null) => void>;
-}>) {
-    const report = useReportSessionCockpitViewerRect({ sessionId: props.sessionId, serverId: props.serverId }, props.enabled);
-    React.useEffect(() => { props.reports.push(report); report(props.rect); }, [props.rect, props.reports, report]);
-    return null;
-}
-
-function PresenceMeasurement(props: Readonly<{ rect: FrameRect | null }>) {
-    const report = useReportSessionCockpitVoicePresenceRect(true);
-    React.useEffect(() => { report(props.rect); }, [props.rect, report]);
-    return null;
-}
 
 function PetMeasurement(props: Readonly<{
     rect: FrameRect | null; enabled?: boolean; reports?: Array<(rect: FrameRect | null) => void>;
@@ -52,7 +33,6 @@ function PetMeasurement(props: Readonly<{
 
 function MeasuredRectsProbe() {
     return React.createElement('MeasuredRectsProbe', {
-        viewerRect: useSessionCockpitViewerRect(), presenceRect: useSessionCockpitVoicePresenceRect(),
         petRect: useSessionCockpitPetRect(),
     });
 }
@@ -180,55 +160,6 @@ function readRegistration(screen: Awaited<ReturnType<typeof renderScreen>>): Ses
 describe('SessionCockpitChromeRegistry', () => {
     afterEach(() => {
         standardCleanup();
-    });
-
-    it('withdraws a viewer obstacle on dock and retires late measurements from the previous Home or Session', async () => {
-        const rect = { x: 700, y: 460, width: 286, height: 226 };
-        const next = { ...rect, x: 400 };
-        const reports: Array<(rect: FrameRect | null) => void> = [];
-        const scene = (sessionId: string, serverId: string, enabled: boolean, measured: FrameRect | null) => (
-            <SessionCockpitChromeRegistryProvider>
-                <ViewerMeasurement sessionId={sessionId} serverId={serverId} enabled={enabled} rect={measured} reports={reports} />
-                <MeasuredRectsProbe />
-            </SessionCockpitChromeRegistryProvider>
-        );
-        const screen = await renderScreen(scene('session-a', 'home-a', true, rect));
-        try {
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect).toEqual(rect);
-            const retiredReport = reports.at(-1)!;
-            await screen.update(scene('session-a', 'home-b', true, next));
-            await act(async () => { retiredReport(rect); });
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect).toEqual(next);
-            await screen.update(scene('session-b', 'home-b', true, rect));
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect).toEqual(rect);
-            await screen.update(scene('session-b', 'home-b', false, rect));
-            await act(async () => { reports.at(-1)!(next); });
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect).toBeNull();
-        } finally { await screen.unmount(); }
-    });
-
-    it('keeps the current measured pair when an outgoing viewer unmounts and clears presence when its shell leaves', async () => {
-        const viewer = { x: 700, y: 460, width: 286, height: 226 };
-        const presence = { x: 16, y: 600, width: 84, height: 84 };
-        const reports: Array<(rect: FrameRect | null) => void> = [];
-        const scene = (outgoing: boolean, incoming: boolean, voice: boolean) => <SessionCockpitChromeRegistryProvider>
-            {outgoing ? <ViewerMeasurement key="outgoing" sessionId="session-a" serverId="home-a" enabled rect={viewer} reports={reports} /> : null}
-            {incoming ? <ViewerMeasurement key="incoming" sessionId="session-b" serverId="home-b" enabled rect={{ ...viewer, x: 400 }} reports={reports} /> : null}
-            {voice ? <PresenceMeasurement rect={presence} /> : null}
-            <MeasuredRectsProbe />
-        </SessionCockpitChromeRegistryProvider>;
-        const screen = await renderScreen(scene(true, false, true));
-        try {
-            const outgoingReport = reports.at(-1)!;
-            await screen.update(scene(true, true, true));
-            await act(async () => { outgoingReport(viewer); });
-            await screen.update(scene(false, true, true));
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect.x).toBe(400);
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.presenceRect).toEqual(presence);
-            await screen.update(scene(false, false, false));
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.viewerRect).toBeNull();
-            expect(screen.findByType('MeasuredRectsProbe' as never).props.presenceRect).toBeNull();
-        } finally { await screen.unmount(); }
     });
 
     it('updates the in-app pet obstacle after settled movement and withdraws it when disabled', async () => {

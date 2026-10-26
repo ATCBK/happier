@@ -79,6 +79,14 @@ export type HappierPresenceCapsuleProps = Readonly<{
   /** Phone and narrow panes: the capsule spans the frame in thumb reach. */
   compact?: boolean;
   /**
+   * The width the capsule's container gives it. Where the words would be squeezed to a sliver in
+   * that width (a floating frame shrunk to a small window), the capsule recomposes rather than clip
+   * a word: the mark and the action alone, the action as its icon with its label for assistive
+   * technology, the words kept as the row's accessible name. It returns to the words once the
+   * container is wide enough for them again. Absent, the capsule never recomposes.
+   */
+  availableWidth?: number;
+  /**
    * `dock` (default) floats it over the bottom of the surface it narrates; `inline` sits in flow as a
    * floating capsule; `strip` is a one-line bordered strip (a session-wide line).
    */
@@ -95,6 +103,8 @@ const CAPSULE_MIN_HEIGHT = HAPPIER_PRESENCE_CAPSULE_HEIGHT;
 const MARK_SIZE = 30;
 const MARK_GLYPH_SIZE = 16;
 const LEADING_GLYPH_SIZE = 14;
+/** The narrowest the words may be squeezed to before they give way: a short word per line. */
+const MIN_WORDS_WIDTH = 96;
 
 const DOCK_STYLE: HappierPortableStyle = {
   position: 'absolute',
@@ -205,6 +215,24 @@ type Shown = Readonly<{ presence: HappierPresence; copy: HappierPresenceCapsuleC
 export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): ReactElement | null {
   const { host, colors } = props;
   const [request, setRequest] = useState<TakeControlRequest | null>(null);
+  // The words' laid-out width, and (while they are given way) the container width that gives them
+  // back their minimum, as measured when they gave way.
+  const [wordsWidth, setWordsWidth] = useState<number | null>(null);
+  const [restoreAt, setRestoreAt] = useState<number | null>(null);
+  const availableWidth = props.availableWidth;
+  const onWordsLayout = useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+    setWordsWidth(event.nativeEvent.layout.width);
+  }, []);
+  useEffect(() => {
+    if (availableWidth === undefined) return;
+    if (restoreAt === null) {
+      if (wordsWidth !== null && wordsWidth < MIN_WORDS_WIDTH) setRestoreAt(availableWidth - wordsWidth + MIN_WORDS_WIDTH);
+    } else if (availableWidth >= restoreAt) {
+      setRestoreAt(null);
+      setWordsWidth(null);
+    }
+  }, [availableWidth, restoreAt, wordsWidth]);
+  const narrow = restoreAt !== null && props.placement !== 'strip';
   const requestRef = useRef<TakeControlRequest | null>(null);
   const docked = props.placement === undefined || props.placement === 'dock';
   const visible = props.presence.kind !== 'idle';
@@ -289,6 +317,8 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
         accessibilityRole="summary"
         accessibilityLiveRegion="polite"
         aria-live="polite"
+        // Recomposed to the mark and its action, the row still says what the words said.
+        accessibilityLabel={narrow ? (detail ? `${title}. ${detail}` : title) : undefined}
         testID={`${testID}-${stateKey}`}
       >
         <View style={strip ? styles.markStrip : styles.mark}>
@@ -306,8 +336,12 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
             <host.Text role="title" color={colors.text} style={TITLE_WRAP}>{title}</host.Text>
             {detail ? <host.Text role="meta" color={detailColor}>{`  ${detail}`}</host.Text> : null}
           </host.Text>
-        ) : (
-          <View style={[styles.text, compact || props.placement !== 'dock' ? styles.textCompact : null]}>
+        ) : narrow ? null : (
+          <View
+            style={[styles.text, compact || props.placement !== 'dock' ? styles.textCompact : null]}
+            onLayout={availableWidth === undefined ? undefined : onWordsLayout}
+            testID={`${testID}-text`}
+          >
             {/* A narrow capsule wraps the sentence rather than clip the Machine or window it names. */}
             <host.Text role="title" color={colors.text} numberOfLines={2} style={TITLE_WRAP}>{title}</host.Text>
             {detail ? (
@@ -318,11 +352,13 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
         )}
         {props.onWatch && !(compact && unconfirmed) ? (
           <host.Button emphasis="plain" title={copy.watch} onPress={props.onWatch}
+            iconOnly={narrow} leading={narrow ? host.renderGlyph('pointer', colors.text, LEADING_GLYPH_SIZE) : undefined}
             disabled={Boolean(props.watchDisabledReason)} accessibilityHint={props.watchDisabledReason ?? undefined}
             testID={`${testID}-watch`} />
         ) : null}
         {human && !observationRecovery && props.onHandBack ? (
-          <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`} />
+          <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`}
+            iconOnly={narrow} leading={narrow ? host.renderGlyph('pointer', colors.text, LEADING_GLYPH_SIZE) : undefined} />
         ) : observationRecovery ? (
           // A fresh look by the person confirms the release; handing back is also safe, because the
           // owner makes the agent look again before its next action.
@@ -332,12 +368,15 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
                 emphasis="secondary"
                 title={copy.checkAgain}
                 loading={props.checking}
+                iconOnly={narrow}
+                leading={narrow ? host.renderGlyph('warning', colors.text, LEADING_GLYPH_SIZE) : undefined}
                 onPress={props.onCheckAgain}
                 testID={`${testID}-check-again`}
               />
             ) : null}
             {props.onHandBack ? (
-              <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`} />
+              <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`}
+                iconOnly={narrow} leading={narrow ? host.renderGlyph('pointer', colors.text, LEADING_GLYPH_SIZE) : undefined} />
             ) : null}
           </View>
         ) : stopping ? (
@@ -349,6 +388,7 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
             emphasis="secondary"
             title={copy.takeControl}
             leading={strip ? undefined : host.renderGlyph('hand', colors.text, LEADING_GLYPH_SIZE)}
+            iconOnly={narrow}
             onPress={takeControl}
             testID={`${testID}-take-control`}
           />

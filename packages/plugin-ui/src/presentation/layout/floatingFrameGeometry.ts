@@ -47,13 +47,14 @@ export function frameRectsOverlap(a: FrameRect, b: FrameRect): boolean {
 /**
  * Nearest usable placement in measured host space. Obstacle edges enumerate every free pocket;
  * no corner preference, fixed size or obstacle registry belongs to the neutral frame.
- * A host that cannot fit its measured content uses its existing dock composition when fits is false.
+ * `fits` is false only for a frame with no usable size (no room, or no body height); a host that
+ * wants no obstacle avoidance passes none and always receives the clamped rectangle.
  *
  * `aspectRatio` is the body's own width ÷ height; `chromeHeight` is the frame's fixed vertical
  * space around the body (its controls band, gaps and footer), so shrinking keeps the picture's
  * shape instead of squeezing one axis. `minWidth` is the host's measured usable minimum (its
- * controls must fit across). Grow to that minimum before fitting available space;
- * positive space narrower than that is not a usable frame.
+ * controls must fit across): the frame grows to it before fitting available space, and available
+ * space narrower than it shrinks the frame to fit.
  */
 export function resolveFloatingFrameRect(input: Readonly<{
     rect: FrameRect;
@@ -89,9 +90,7 @@ export function resolveFloatingFrameRect(input: Readonly<{
         y: clamp(desired.y, available.y, maxY),
         width, height,
     };
-    // A host measures its minimum rounded up to whole pixels, while the room's height limits the
-    // width by a fractional amount: a shortfall below one pixel is that rounding, not an unusable frame.
-    if (width <= 0 || height - chrome <= 0 || Math.ceil(width) < (input.minWidth ?? 0)) return { rect, fits: false };
+    if (width <= 0 || height - chrome <= 0) return { rect, fits: false };
     const obstacles = input.avoidRects ?? [];
     if (!obstacles.some((obstacle) => frameRectsOverlap(rect, obstacle))) return { rect, fits: true };
 

@@ -37,12 +37,11 @@ import { CompanionNoDragRegion, CompanionNoDragRegionProvider } from './Companio
 beforeEach(() => { measurements.pageX = 40; measurements.pageY = 50; springTargets.length = 0; });
 
 describe('native FloatingFrame binding', () => {
-    it('settles an obstacle-displaced resize with the same movement spring, honoring reduced motion', async () => {
+    it('settles a resize with the same movement spring, honoring reduced motion', async () => {
         const onRectChange = vi.fn();
         const frame = (reducedMotion: boolean) => <FloatingFrame
             mode="floating" rect={{ x: 100, y: 50, width: 200, height: 165 }}
             availableRect={{ x: 10, y: 20, width: 800, height: 600 }} aspectRatio={1.6}
-            avoidRects={[{ x: 20, y: 50, width: 80, height: 215 }]}
             moveInput="chrome" nativeBinding={NativeFloatingFrame} controls={<View />} reducedMotion={reducedMotion}
             accessibilityLabel="Viewer" onRectChange={onRectChange} onModeChange={vi.fn()}><View /></FloatingFrame>;
         for (const reduced of [false, true]) {
@@ -55,8 +54,8 @@ describe('native FloatingFrame binding', () => {
                 gesture.__handlers.onEnd({ translationX: -80, translationY: 0 }, true);
                 gesture.__handlers.onFinalize({}, true);
             });
-            expect(onRectChange).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 280, height: 215 }, { kind: 'settle' });
-            expect(springTargets).toEqual(reduced ? [] : [100, 50]);
+            expect(onRectChange).toHaveBeenLastCalledWith({ x: 20, y: 50, width: 280, height: 215 }, { kind: 'settle' });
+            expect(springTargets).toEqual(reduced ? [] : [20, 50]);
             await screen.unmount();
         }
     });
@@ -170,7 +169,7 @@ describe('native FloatingFrame binding', () => {
         expect(mounts).toBe(1);
         await screen.unmount();
     });
-    it('moves the retained picture on shared values and publishes only the obstacle-aware settle', async () => {
+    it('moves the retained picture on shared values and publishes only the clamped settle', async () => {
         const store = createRetainedPresentationSlotsStore();
         const onSettle = vi.fn();
         let mounts = 0;
@@ -184,7 +183,6 @@ describe('native FloatingFrame binding', () => {
             const [rect, setRect] = React.useState<FrameRect>({ x: 40, y: 50, width: 200, height: 165 });
             return <RetainedPresentationSlotsProvider store={store}>
                 <FloatingFrame mode="floating" rect={rect} availableRect={{ x: 10, y: 20, width: 800, height: 600 }}
-                    avoidRects={[{ x: 610, y: 455, width: 200, height: 165 }]}
                     aspectRatio={1.6} minWidth={180} moveInput="surface" nativeBinding={NativeFloatingFrame}
                     reducedMotion controls={<View />} accessibilityLabel="Viewer"
                     onModeChange={vi.fn()} onRectChange={(next, change) => { onSettle(next, change); setRect(next); }}>
@@ -212,9 +210,9 @@ describe('native FloatingFrame binding', () => {
             gesture.__handlers.onEnd({ translationX: 610, translationY: 450, velocityX: 0, velocityY: 0 }, true);
             gesture.__handlers.onFinalize({}, true);
         });
-        expect(onSettle).toHaveBeenCalledWith({ x: 610, y: 290, width: 200, height: 165 }, { kind: 'settle' });
+        expect(onSettle).toHaveBeenCalledWith({ x: 610, y: 455, width: 200, height: 165 }, { kind: 'settle' });
         expect(store.getPortalSnapshot()[0].nativeMotion?.x).toBe(motion.x);
-        expect(store.getPortalSnapshot()[0].geometry).toMatchObject({ x: 610, y: 330 });
+        expect(store.getPortalSnapshot()[0].geometry).toMatchObject({ x: 610, y: 495 });
         expect(mounts).toBe(1);
         await screen.unmount();
     });

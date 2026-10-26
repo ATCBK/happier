@@ -55,6 +55,8 @@ export type BrowserPresenceCapsuleProps = Readonly<{
     agentTitle?: string;
     /** Phone and narrow panes: the capsule spans the frame in thumb reach. */
     compact?: boolean;
+    /** The width its container gives it; narrower than its words need, it recomposes rather than clip (see `HappierPresenceCapsule`). */
+    availableWidth?: number;
     /**
      * `dock` (default) floats it over the surface it narrates; `inline` sits in flow, for the
      * session-wide line that says who is using a shared window wherever the person is in the session.
@@ -74,6 +76,7 @@ export type BrowserPresenceCapsuleProps = Readonly<{
     takeControlLabel?: string;
     /** Opens the surface this capsule narrates (the session-wide line's Watch). */
     onWatch?: () => void;
+    watchDisabledReason?: string | null;
     testID: string;
 }>;
 
@@ -130,7 +133,9 @@ export function BrowserPresenceCapsule(props: BrowserPresenceCapsuleProps): Reac
             onCheckAgain={props.onCheckAgain}
             checking={props.checking}
             onWatch={props.onWatch}
+            watchDisabledReason={props.watchDisabledReason}
             compact={props.compact}
+            availableWidth={props.availableWidth}
             placement={props.placement}
             colors={colors}
             host={CORE_CAPSULE_HOST}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveFloatingFrameRect, resolveFloatingFrameResizeRect } from './floatingFrameGeometry.js';
 
 describe('measured floating frame placement', () => {
-    it('grows to newly measured controls when they fit instead of docking a smaller retained frame', () => {
+    it('grows to newly measured controls when they fit', () => {
         // The real Session Watch frame measures its controls after its first placement.
         const input = {
             rect: { x: 136, y: 397, width: 384, height: 280 },
@@ -23,9 +23,11 @@ describe('measured floating frame placement', () => {
         expect(moved.rect.width).toBe(453);
         expect(moved.rect.x + moved.rect.width).toBeLessThanOrEqual(obstacle.x);
 
-        expect(resolveFloatingFrameRect({ ...input, minWidth: 915 }).fits).toBe(false);
-        expect(resolveFloatingFrameRect({ ...input, minWidth: 453,
-            availableRect: { ...input.availableRect, height: 300 } }).fits).toBe(false);
+        // Room narrower than the controls shrinks the frame to the room; it is never refused.
+        const narrow = resolveFloatingFrameRect({ ...input, minWidth: 915 });
+        expect(narrow.fits).toBe(true);
+        expect(narrow.rect.width).toBe(914);
+        expect(narrow.rect.x + narrow.rect.width).toBeLessThanOrEqual(930);
     });
     it('resizes the leading-bottom grip around the trailing edge with aspect, chrome and measured limits', () => {
         const input = {
@@ -45,7 +47,7 @@ describe('measured floating frame placement', () => {
         expect(short.y + short.height).toBeLessThanOrEqual(220);
         expect(short.x + short.width).toBe(300);
     });
-    it('settles a native or web throw at the projected corner through aspect, obstacle and dock constraints', () => {
+    it('settles a native or web throw at the projected corner through aspect and obstacle constraints', () => {
         const input = {
             rect: { x: 40, y: 50, width: 200, height: 165 },
             availableRect: { x: 10, y: 20, width: 800, height: 600 },
@@ -56,7 +58,6 @@ describe('measured floating frame placement', () => {
         expect(resolveFloatingFrameRect(input)).toEqual({
             rect: { x: 610, y: 290, width: 200, height: 165 }, fits: true,
         });
-        expect(resolveFloatingFrameRect({ ...input, minWidth: 900 }).fits).toBe(false);
     });
     it('keeps the closest unobstructed placement inside the measured available rect', () => {
         const result = resolveFloatingFrameRect({
@@ -94,7 +95,7 @@ describe('measured floating frame placement', () => {
         }).fits).toBe(false);
     });
 
-    it('keeps the body aspect outside the chrome when the space is short, and refuses a frame narrower than its usable minimum', () => {
+    it('keeps the body aspect outside the chrome when the space is short and shrinks below the controls minimum instead of refusing', () => {
         // A 400-wide frame with 40 px of chrome above a 1.6 body asks for 290 px; only 120 px is free.
         const short = resolveFloatingFrameRect({
             rect: { x: 0, y: 0, width: 400, height: 290 },
@@ -105,12 +106,14 @@ describe('measured floating frame placement', () => {
         expect(short.rect.width).toBeCloseTo(128);
         expect(short.rect.width / (short.rect.height - 40)).toBeCloseTo(1.6);
 
-        // Positive space is not usable space: the controls need 240 px across.
-        expect(resolveFloatingFrameRect({
+        // The viewport decides: a minimum the room cannot hold still yields the clamped frame.
+        const squeezed = resolveFloatingFrameRect({
             rect: { x: 0, y: 0, width: 400, height: 290 },
             availableRect: { x: 0, y: 0, width: 600, height: 120 },
             aspectRatio: 1.6, chromeHeight: 40, minWidth: 240,
-        }).fits).toBe(false);
+        });
+        expect(squeezed.fits).toBe(true);
+        expect(squeezed.rect.width).toBeCloseTo(128);
         // No body height at all never fits.
         expect(resolveFloatingFrameRect({
             rect: { x: 0, y: 0, width: 400, height: 290 },

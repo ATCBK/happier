@@ -20,6 +20,8 @@ export function SessionViewerPresenceFooter(
     serverId: string | null;
     source: SessionViewerSource;
     compact?: boolean;
+    /** The frame's width: a frame shrunk to a small window recomposes the capsule instead of clipping it. */
+    frameWidth?: number;
   }>,
 ): React.ReactElement | null {
   const presence = useSessionViewerPresence(props.source);
@@ -37,6 +39,7 @@ export function SessionViewerPresenceFooter(
         : presence.agentTitle}
       placement="inline"
       compact={props.compact}
+      availableWidth={props.frameWidth}
       testID="session-viewer-presence"
     />
     </CompanionNoDragRegion>

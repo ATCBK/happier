@@ -24,7 +24,6 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { CORE_CAPSULE_HOST, useCoreCapsuleColors } from '@/components/ui/status/capsuleHost';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { CompanionNoDragRegion } from '@/components/companion/interaction/CompanionNoDragRegion';
@@ -114,16 +113,13 @@ export function SessionViewerControls(
   if (!controller) return null;
   const { apply, requestSemantic, canPresentSource } = controller;
   const facts = controller.facts[props.source];
-  // A finger gets the platform's touch target height around each drawn button without the capsule
-  // or the controls band growing: the press frame overhangs the capsule (its material is a backing,
+  // Each drawn button's hit area reaches the touch target without the capsule
+  // or the controls band growing: the hit area overhangs the capsule (its material is a backing,
   // not a clip). Sideways each button takes its full share of the capsule, half of each gap and the
   // capsule's padding at the ends, so the targets tile it edge to edge and never overlap.
-  const touchFloor = resolveTouchTargetFloorPx() ?? undefined;
   const { padding: capsuleEnd, gap: capsuleGap } = HAPPIER_CONTROL_CAPSULE_METRICS;
   const buttonTarget = (position: 'first' | 'middle' | 'last') => ({
     size: HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE,
-    minimumInteractiveTargetSize: touchFloor,
-    interactiveTargetLayout: 'overhang' as const,
     interactiveTargetEdgesPx: {
       leading: position === 'first' ? capsuleEnd : capsuleGap / 2,
       trailing: position === 'last' ? capsuleEnd : capsuleGap / 2,

@@ -102,37 +102,11 @@ export type SessionViewerController = Readonly<{
     facts: SessionViewerSourceFacts | null,
   ) => void;
   presence: SessionViewerPresenceStore;
-  /**
-   * The docked desktop viewer would fit as a floating frame where it last rested (the host's own
-   * placement check). `viewer.float` is offered and admitted only while it does.
-   */
-  floatFits: boolean;
-  setFloatFits: (fits: boolean) => void;
-  /** How far the reading column and centred content yield to a settled floating viewer, per side. */
-  setReadingInset: (inset: SessionViewerReadingInset) => void;
 }>;
 
-/**
- * A settled floating viewer's yield: `left`/`right` for the reading column (bounded by the main
- * minimum), `centred` for centred content such as the empty Session state (beside the frame, else above it).
- */
-export type SessionViewerReadingInset = Readonly<{
-  left: number;
-  right: number;
-  centred: Readonly<{ left: number; right: number; bottom: number }>;
-}>;
-
-export const NO_SESSION_VIEWER_INSET: SessionViewerReadingInset = Object.freeze({
-  left: 0,
-  right: 0,
-  centred: Object.freeze({ left: 0, right: 0, bottom: 0 }),
-});
 /** The mounted owner lives in `SessionViewerControllerProvider`; consumers read it through these hooks. */
 export const SessionViewerControllerContext =
   React.createContext<SessionViewerController | null>(null);
-/** Separate, so the transcript layer re-renders only when its yield changes, never on viewer facts. */
-export const SessionViewerReadingInsetContext =
-  React.createContext<SessionViewerReadingInset>(NO_SESSION_VIEWER_INSET);
 
 
 /** Separate for the same reason: the composer re-renders only when a phone viewer starts or stops holding room. */
@@ -141,11 +115,6 @@ export const SessionViewerComposerReserveContext = React.createContext<number>(0
 /** The height a phone viewer holds above the composer (`SESSION_VIEWER_PHONE_RESERVE`), zero when none. */
 export function useSessionViewerComposerReserve(): number {
   return React.useContext(SessionViewerComposerReserveContext);
-}
-
-/** The reading column's and centred content's yield to a settled floating viewer (zero when none). */
-export function useSessionViewerReadingInset(): SessionViewerReadingInset {
-  return React.useContext(SessionViewerReadingInsetContext);
 }
 
 /** Re-provides a captured controller where a retained body renders outside the Session tree. */

@@ -195,11 +195,11 @@ function SessionComputerScreenBody(
   usePublishSessionViewerPresence('computer', presence);
 
   const { resolveChooseWindow: _anchoredPicker, ...viewerModel } = model;
-  // Docked in the desktop pane: float it again while the frame fits beside the composer.
+  // Docked in the desktop pane: the person can float it again.
   const viewerController = useOptionalSessionViewerController();
   const applyViewer = viewerController?.apply;
   const canFloat = !viewer && viewerController !== null && !viewerController.phone
-    && viewerController.state.source === 'computer' && viewerController.state.mode === 'docked' && viewerController.floatFits;
+    && viewerController.state.source === 'computer' && viewerController.state.mode === 'docked';
   const onFloat = React.useCallback(() => { applyViewer?.({ kind: 'viewer.float' }); }, [applyViewer]);
   const screen = (
     <ComputerScreenViewer

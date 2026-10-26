@@ -52,7 +52,7 @@ export type { FloatingFrameCorner } from './floatingFrameGeometry.js';
 
 /** Native libraries belong to the app. This same-realm host component binds the shared pan owner. */
 export type HappierFloatingFrameNativeBindingProps = Pick<FloatingFrameProps,
-  'mode' | 'rect' | 'availableRect' | 'avoidRects' | 'aspectRatio' | 'minWidth' | 'moveInput'
+  'mode' | 'rect' | 'availableRect' | 'aspectRatio' | 'minWidth' | 'moveInput'
   | 'onRectChange' | 'onModeChange' | 'reducedMotion' | 'children'> & Readonly<{
     releaseMotion: CompanionReleaseMotion;
     chromeHeight: number;
@@ -65,8 +65,8 @@ export type FloatingFrameProps = Readonly<{
   mode: FloatingFrameMode;
   /** The whole frame (controls band + body) in the host's measured space. */
   rect: FrameRect;
+  /** The only bound: the frame stays inside it and shrinks to fit it, over whatever is behind. */
   availableRect: FrameRect;
-  avoidRects?: readonly FrameRect[];
   /** The body's width ÷ height (the live picture's own aspect). */
   aspectRatio: number;
   /**
@@ -75,7 +75,7 @@ export type FloatingFrameProps = Readonly<{
    */
   moveInput: 'surface' | 'chrome';
   onRectChange: (rect: FrameRect, change: FloatingFrameRectChange) => void;
-  /** `docked` is requested when no floating placement fits beside the obstacles. */
+  /** The frame asks for `expanded` and `floating` (double-click, Escape); docking is the host's own control. */
   onModeChange: (mode: FloatingFrameMode) => void;
   children: ReactNode;
   /** Floating controls drawn on the host's floating material above the body. */
@@ -87,7 +87,7 @@ export type FloatingFrameProps = Readonly<{
   footer?: ReactNode;
   /**
    * The narrowest usable frame, as the host measured it (its controls must fit across). Resizing
-   * stops there and a placement narrower than it docks.
+   * stops there; a viewport narrower than it still shrinks the frame to fit.
    */
   minWidth?: number;
   accessibilityLabel: string;
@@ -292,8 +292,9 @@ function consume(event: unknown): void {
  * The one neutral floating frame: a controlled rect, a controls band, one retained body. It never
  * knows what the body shows (no target, Session, network or trust facts) and never grants control:
  * the host feeds `moveInput`. Drag, velocity and release come from the shared companion interaction
- * owner; placement around obstacles from `resolveFloatingFrameRect`. When nothing fits, it asks to
- * dock. `closed` renders nothing; `docked` draws the same body in flow.
+ * owner; settling clamps to `availableRect` through `resolveFloatingFrameRect` and nothing else, so
+ * the frame floats over whatever is behind it. `closed` renders nothing; `docked` draws the same
+ * body in flow.
  */
 export function FloatingFrame(props: FloatingFrameProps) {
   const presentationHost = useOptionalPluginUiPresentationHost();
@@ -332,17 +333,12 @@ export function FloatingFrame(props: FloatingFrameProps) {
       const placement = resolveFloatingFrameRect({
         rect: target,
         availableRect: current.availableRect,
-        avoidRects: current.avoidRects,
         aspectRatio: current.aspectRatio,
         chromeHeight: resolveFloatingFrameChromeHeight({ footer: current.footer != null }),
         minWidth: current.minWidth,
         projectedPoint,
       });
-      if (!placement.fits) {
-        current.onModeChange('docked');
-        return;
-      }
-      current.onRectChange(placement.rect, { kind: 'settle' });
+      if (placement.fits) current.onRectChange(placement.rect, { kind: 'settle' });
     },
     [],
   );
@@ -698,7 +694,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
   return NativeBinding ? (
     <NativeBinding
       mode={props.mode} rect={props.mode === 'expanded' ? props.availableRect : props.rect}
-      availableRect={props.availableRect} avoidRects={props.avoidRects}
+      availableRect={props.availableRect}
       aspectRatio={props.aspectRatio} minWidth={props.minWidth} moveInput={props.moveInput}
       onRectChange={props.onRectChange} onModeChange={props.onModeChange}
       reducedMotion={props.reducedMotion} releaseMotion={motion}

@@ -112,7 +112,8 @@ export const CORE_CAPSULE_HOST: HappierCapsuleHost = {
         <RoundButton
             size="small"
             display={BUTTON_DISPLAY[props.emphasis]}
-            title={props.title}
+            title={props.iconOnly && props.leading ? '' : props.title}
+            accessibilityLabel={props.iconOnly && props.leading ? props.title : undefined}
             loading={props.loading}
             leading={props.leading}
             onPress={props.onPress}

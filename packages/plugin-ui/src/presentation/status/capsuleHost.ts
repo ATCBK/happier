@@ -60,6 +60,11 @@ export type HappierCapsuleHost = Readonly<{
     accessibilityHint?: string;
     loading?: boolean;
     leading?: ReactNode;
+    /**
+     * Draw only `leading`, keeping `title` as the accessible name: the capsule asks for this where its
+     * container is too narrow to hold the label. A host that cannot draw it keeps the labelled button.
+     */
+    iconOnly?: boolean;
     testID: string;
   }>>;
   Spinner: ComponentType<Readonly<{ color: string }>>;

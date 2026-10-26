@@ -16,20 +16,15 @@ import {
   type FrameRect,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
 import { COMPANION_WEB_POINTER_BINDING } from '@/components/companion/interaction/useCompanionPointerDragSession';
 import { NativeFloatingFrame } from '@/components/companion/interaction/NativeFloatingFrame';
 import { SessionComputerScreenPane } from '@/components/computer/SessionComputerScreenPane';
 import { SessionRightPanelBrowserView } from '@/components/sessions/panes/browser/SessionRightPanelBrowserView';
-import { layout } from '@/components/ui/layout/layout';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { VOICE_MOTION } from '@/components/voice/light/voiceLightTokens';
 import {
-  useReportSessionCockpitViewerRect,
   useSessionCockpitComposerChromeHeight,
   useSessionCockpitComposerChromeTop,
-  useSessionCockpitPetRect,
-  useSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import type { RetainedPresentationGeometryTransition } from '@/components/ui/presentation/retainedPresentationSlots';
@@ -37,7 +32,6 @@ import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/us
 import { t } from '@/text';
 
 import {
-  NO_SESSION_VIEWER_INSET,
   useOptionalSessionViewerController,
   useSessionViewerHasPresence,
   type SessionViewerController,
@@ -54,8 +48,6 @@ import {
   DEFAULT_WIDTH_SHARE,
   SESSION_VIEWER_EDGE,
   resolveSessionViewerBodyAspect,
-  resolveSessionViewerCentredInset,
-  resolveSessionViewerReadingInset,
 } from './sessionViewerGeometry';
 
 
@@ -95,14 +87,22 @@ function offsetRect(rect: FrameRect, origin: Point): FrameRect {
 
 /**
  * The Session's floating viewer on desktop, and its expanded overlay on every device: one
- * `FloatingFrame` around the retained Computer or Browser body, beside the reading column and clear
- * of the composer and the floating Voice/pet presences. Phone docking is the transcript's sticky slot.
+ * `FloatingFrame` around the retained Computer or Browser body. The floating frame lies above
+ * everything in the Session area (reading column, composer, Voice and pet presences) and moves
+ * nothing behind it; the person places it and only the area's edges bound it. Phone docking is
+ * the transcript's sticky slot.
  */
 export function SessionViewerHost(
   props: Readonly<{
     sessionId: string;
     serverId: string | null;
     pluginProjection?: PluginUiProjectionCurrentness;
+    /**
+     * The picture drawn inside the frame in place of the Session's retained Computer/Browser body.
+     * Only the dev specimen passes one (a fixture stream, so the frame can be judged without a
+     * Machine); the Session never does.
+     */
+    body?: React.ReactNode;
   }>,
 ): React.ReactElement | null {
   const controller = useOptionalSessionViewerController();
@@ -111,9 +111,7 @@ export function SessionViewerHost(
   const shown = Boolean(
     controller &&
     source &&
-    (state?.mode === 'expanded' ||
-      // A docked desktop viewer keeps its host measuring, so the dock can offer to float it again.
-      (!controller.phone && (state?.mode === 'floating' || state?.mode === 'docked'))),
+    (state?.mode === 'expanded' || (!controller.phone && state?.mode === 'floating')),
   );
   if (!controller || !source || !shown) return null;
   return (
@@ -130,6 +128,7 @@ function MountedSessionViewerHost(
     sessionId: string;
     serverId: string | null;
     pluginProjection?: PluginUiProjectionCurrentness;
+    body?: React.ReactNode;
     controller: SessionViewerController;
     source: SessionViewerSource;
   }>,
@@ -144,11 +143,8 @@ function MountedSessionViewerHost(
   const composerHeight = useSessionCockpitComposerChromeHeight();
   const composerTop = useSessionCockpitComposerChromeTop();
   const { height: windowHeight } = useWindowDimensions();
-  const presenceRect = useSessionCockpitVoicePresenceRect();
-  const petRect = useSessionCockpitPetRect();
   const mode: FloatingFrameMode = controller.state.mode;
   const floating = mode === 'floating' && !controller.phone;
-  const docked = mode === 'docked' && !controller.phone;
 
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -166,16 +162,17 @@ function MountedSessionViewerHost(
     });
   }, []);
 
-  // The frame rests above where the composer band starts. On desktop the workspace frame lifts the
-  // band off the area's bottom edge, so its height alone would put the frame over the composer's
-  // status line; the band's measured top (window space) says where it really begins.
+  // Where the composer band starts: the expanded overlay takes over the reading area above it, and
+  // a first placement opens in that area's corner rather than over the send box. On desktop the
+  // workspace frame lifts the band off the area's bottom edge, so its height alone would put either
+  // over the composer's status line; the band's measured top (window space) says where it begins.
   const composerStart = React.useMemo(() => {
     if (!size) return null;
     return composerTop > 0
       ? Math.min(size.height, windowHeight - composerTop - origin.y)
       : size.height - composerHeight;
   }, [composerHeight, composerTop, origin.y, size, windowHeight]);
-  const availableRect = React.useMemo<FrameRect | null>(() => {
+  const readingRect = React.useMemo<FrameRect | null>(() => {
     if (!size || composerStart === null) return null;
     return {
       x: SESSION_VIEWER_EDGE,
@@ -184,65 +181,59 @@ function MountedSessionViewerHost(
       height: Math.max(0, composerStart - SESSION_VIEWER_EDGE * 2),
     };
   }, [composerStart, size]);
-  // The floating presences report window-space rects; the frame works in this area's space.
-  const avoidRects = React.useMemo(
-    () =>
-      [presenceRect, petRect]
-        .filter((rect): rect is FrameRect => rect !== null)
-        .map((rect) => offsetRect(rect, { x: -origin.x, y: -origin.y })),
-    [origin.x, origin.y, petRect, presenceRect],
-  );
+  // The only bound of a floating frame is the area itself (its edges and safe areas).
+  const areaRect = React.useMemo<FrameRect | null>(() => {
+    if (!size) return null;
+    return {
+      x: SESSION_VIEWER_EDGE,
+      y: SESSION_VIEWER_EDGE,
+      width: Math.max(0, size.width - SESSION_VIEWER_EDGE * 2),
+      height: Math.max(0, size.height - SESSION_VIEWER_EDGE * 2),
+    };
+  }, [size]);
+  const availableRect = mode === 'expanded' ? readingRect : areaRect;
 
   const committedRect = controller.state.rect;
-  const { setRect, apply, requestSemantic, setReadingInset } = controller;
+  // The width the person gave the frame (null until they place it, or one was already held). The
+  // area may shrink the frame below it but never rewrites it, so the shape asked for stays stable
+  // while the area clamps, and the frame returns to this width when the area grows back.
+  const placedRef = React.useRef<Readonly<{ width: number }> | null>(committedRect ? { width: committedRect.width } : null);
+  const { setRect, apply, requestSemantic } = controller;
   const facts = controller.facts[source];
   // The narrowest frame whose controls still fit across, as the controls measured themselves.
   const [minWidth, setMinWidth] = React.useState(0);
   // The picture's own shape once its source reports it; until then the lab's 16:10, or taller where a
   // state card needs the room. The frame's width is where it rests, or the first floating width.
-  const frameWidth = Math.max(minWidth, committedRect?.width ?? (availableRect ? Math.round(availableRect.width * DEFAULT_WIDTH_SHARE) : 0));
+  const defaultWidth = readingRect ? Math.round(readingRect.width * DEFAULT_WIDTH_SHARE) : 0;
+  const frameWidth = Math.max(minWidth, placedRef.current?.width ?? defaultWidth);
   const aspectRatio = resolveSessionViewerBodyAspect(facts?.aspectRatio, frameWidth);
   const watching = facts?.watching === true;
   const footer = useSessionViewerHasPresence(source);
   const chromeHeight = resolveFloatingFrameChromeHeight({ footer });
-  // Open, viewport, obstacle, aspect and footer changes revalidate the settled placement at the one
-  // geometry owner; the height always follows the width through the picture's aspect.
-  const { setFloatFits } = controller;
-  React.useEffect(() => () => setFloatFits(false), [setFloatFits]);
+  // Open, viewport, aspect and footer changes revalidate the settled placement at the one geometry
+  // owner: it clamps to the area and shrinks a frame the area cannot hold. The height always follows
+  // the width through the picture's aspect.
   React.useEffect(() => {
-    if (
-      !(floating || docked) ||
-      !availableRect ||
-      availableRect.width <= 0 ||
-      availableRect.height <= 0
-    ) {
-      setFloatFits(false);
-      return;
-    }
-    const width =
-      committedRect?.width ??
-      Math.round(availableRect.width * DEFAULT_WIDTH_SHARE);
-    const sized = {
-      width,
-      height: resolveFloatingFrameHeight(width, aspectRatio, { footer }),
-    };
-    const desired = committedRect
-      ? { ...committedRect, ...sized }
-      : resolveFloatingFrameCornerRect('br', sized, availableRect);
+    if (!floating || !areaRect || !readingRect || areaRect.width <= 0 || areaRect.height <= 0) return;
+    const kept = committedRect !== null && placedRef.current !== null ? committedRect : null;
+    const width = placedRef.current?.width ?? defaultWidth;
+    const sized = { width, height: resolveFloatingFrameHeight(width, aspectRatio, { footer }) };
+    const corner = resolveFloatingFrameCornerRect('br', sized, readingRect);
+    const desired = kept
+      ? { ...kept, ...sized }
+      : (() => {
+          // The default fits the reading area when it can; the area clamp below is then a no-op.
+          const fitted = resolveFloatingFrameRect({ rect: corner, availableRect: readingRect, aspectRatio, chromeHeight, minWidth });
+          return fitted.fits ? fitted.rect : corner;
+        })();
     const placement = resolveFloatingFrameRect({
       rect: desired,
-      availableRect,
-      avoidRects,
+      availableRect: areaRect,
       aspectRatio,
       chromeHeight,
       minWidth,
     });
-    setFloatFits(placement.fits);
-    if (docked) return;
-    if (!placement.fits) {
-      apply({ kind: 'viewer.dock', restoreFloating: true });
-      return;
-    }
+    if (!placement.fits) return;
     const next = placement.rect;
     if (
       !committedRect ||
@@ -252,36 +243,9 @@ function MountedSessionViewerHost(
       next.height !== committedRect.height
     )
       setRect(next);
-  }, [apply, aspectRatio, availableRect, avoidRects, chromeHeight, committedRect, docked, floating, footer, minWidth, setFloatFits, setRect]);
+  }, [areaRect, aspectRatio, chromeHeight, committedRect, defaultWidth, floating, footer, minWidth, readingRect, setRect]);
 
   const rect = liveRect ?? committedRect;
-  // The resting rect: a drag in flight neither reflows the reading column nor moves the obstacle the
-  // floating presences avoid; both follow the frame where it settles.
-  const settledFloatingRect = floating ? committedRect : null;
-  const reportViewerRect = useReportSessionCockpitViewerRect(
-    { sessionId: props.sessionId, serverId: props.serverId },
-    floating,
-  );
-  React.useEffect(() => {
-    reportViewerRect(
-      settledFloatingRect ? offsetRect(settledFloatingRect, origin) : null,
-    );
-  }, [origin, reportViewerRect, settledFloatingRect]);
-  React.useEffect(() => {
-    setReadingInset(
-      settledFloatingRect && size
-        ? {
-            ...resolveSessionViewerReadingInset({
-              areaWidth: size.width,
-              columnMaxWidth: layout.maxWidth,
-              columnMinWidth: PANE_SIZING_DEFAULTS.mainMinPx,
-              rect: settledFloatingRect,
-            }),
-            centred: resolveSessionViewerCentredInset({ areaWidth: size.width, contentBottom: composerStart ?? size.height, rect: settledFloatingRect }),
-          }
-        : NO_SESSION_VIEWER_INSET,
-    );
-  }, [composerStart, setReadingInset, settledFloatingRect, size]);
 
   const onRectChange = React.useCallback(
     (next: FrameRect, change: FloatingFrameRectChange) => {
@@ -289,23 +253,25 @@ function MountedSessionViewerHost(
         setLiveRect(next);
         return;
       }
+      placedRef.current = { width: next.width };
       setLiveRect(null);
       setRect(next);
     },
     [setRect],
   );
   // Menu geometry goes through the mounted owner's local validator, then the one placement owner.
-  const geometryRef = React.useRef({ rect: committedRect, availableRect, avoidRects, aspectRatio, chromeHeight, footer, minWidth });
-  geometryRef.current = { rect: committedRect, availableRect, avoidRects, aspectRatio, chromeHeight, footer, minWidth };
+  const geometryRef = React.useRef({ rect: committedRect, availableRect: areaRect, aspectRatio, chromeHeight, footer, minWidth });
+  geometryRef.current = { rect: committedRect, availableRect: areaRect, aspectRatio, chromeHeight, footer, minWidth };
   const frameCommands = React.useMemo<SessionViewerFrameCommands>(() => {
     const place = (next: FrameRect) => {
-      const { availableRect: available, avoidRects: avoid, aspectRatio: aspect, chromeHeight: chrome, minWidth: min } = geometryRef.current;
+      const { availableRect: available, aspectRatio: aspect, chromeHeight: chrome, minWidth: min } = geometryRef.current;
       if (!available) return;
       const placement = resolveFloatingFrameRect({
-        rect: next, availableRect: available, avoidRects: avoid, aspectRatio: aspect, chromeHeight: chrome, minWidth: min,
+        rect: next, availableRect: available, aspectRatio: aspect, chromeHeight: chrome, minWidth: min,
       });
-      if (placement.fits) setRect(placement.rect);
-      else apply({ kind: 'viewer.dock', restoreFloating: true });
+      if (!placement.fits) return;
+      placedRef.current = { width: placement.rect.width };
+      setRect(placement.rect);
     };
     return {
       moveToCorner: (corner) => {
@@ -327,12 +293,11 @@ function MountedSessionViewerHost(
   }, [apply, setRect]);
   const onModeChange = React.useCallback(
     (next: FloatingFrameMode) => {
-      if (next === 'docked') apply({ kind: 'viewer.dock', restoreFloating: true });
-      else if (next === 'expanded') void requestSemantic({ kind: 'viewer.expand' });
+      if (next === 'expanded') void requestSemantic({ kind: 'viewer.expand' });
       else if (next === 'floating') void requestSemantic({ kind: 'viewer.restore' });
       else void requestSemantic({ kind: 'viewer.close' });
     },
-    [apply, requestSemantic],
+    [requestSemantic],
   );
 
   // Android's hardware Back leaves the deliberate expanded overlay for where the viewer was.
@@ -376,13 +341,12 @@ function MountedSessionViewerHost(
           style={{ position: 'absolute', left: 0, top: 0, right: 0, height: composerStart, backgroundColor: theme.colors.surface.base }}
         />
       ) : null}
-      {docked ? null : availableRect && frameRect ? (
+      {availableRect && frameRect ? (
         <FloatingFrame
           testID="session-viewer-frame"
           mode={mode === 'expanded' ? 'expanded' : 'floating'}
           rect={frameRect}
           availableRect={availableRect}
-          avoidRects={avoidRects}
           aspectRatio={aspectRatio}
           minWidth={minWidth}
           // The retained body paints in the route-stable portal above this frame. While it is only
@@ -422,21 +386,24 @@ function MountedSessionViewerHost(
                 serverId={props.serverId}
                 source={source}
                 compact={controller.phone}
+                frameWidth={frameRect.width}
               />
             ) : undefined
           }
         >
-          <SessionViewerBody
-            sessionId={props.sessionId}
-            serverId={props.serverId}
-            source={source}
-            pluginProjection={props.pluginProjection}
-            windowGeometry={windowGeometry}
-            transition={transition}
-            inputPassthrough={watching}
-          />
+          {props.body ?? (
+            <SessionViewerBody
+              sessionId={props.sessionId}
+              serverId={props.serverId}
+              source={source}
+              pluginProjection={props.pluginProjection}
+              windowGeometry={windowGeometry}
+              transition={transition}
+              inputPassthrough={watching}
+            />
+          )}
         </FloatingFrame>
-      ) : (
+      ) : props.body ? null : (
         // Claim the same retained slot while this replacement host awaits layout.
         // The portal keeps its last valid placement until the frame can supply a new one.
         <SessionViewerBody

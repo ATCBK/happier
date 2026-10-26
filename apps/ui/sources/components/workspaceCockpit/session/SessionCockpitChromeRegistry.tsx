@@ -119,25 +119,20 @@ const SessionCockpitComposerChromeReporterContext = React.createContext<SessionC
 const SessionCockpitDismissingSessionIdContext = React.createContext<string | null>(null);
 const SessionCockpitDismissControllerContext = React.createContext<SessionCockpitDismissController>(NOOP_DISMISS_CONTROLLER);
 
-export type SessionCockpitViewerScope = Readonly<{ sessionId: string; serverId?: string | null }>;
-type MeasuredRectScope = SessionCockpitViewerScope | null;
-type MeasuredRectBinding = Readonly<{ scope: MeasuredRectScope }>;
+/** One mounted lifetime of a reporter; its identity retires that lifetime's late measurements. */
+type MeasuredRectBinding = Readonly<Record<never, never>>;
 type MountedMeasuredRect = Readonly<{ binding: MeasuredRectBinding; rect: FrameRect | null }>;
 type MeasuredRectReporter = Readonly<{
     mount: (binding: MeasuredRectBinding) => () => void;
     report: (binding: MeasuredRectBinding, rect: FrameRect | null) => void;
 }>;
 const NOOP_MEASURED_RECT_REPORTER: MeasuredRectReporter = { mount: () => () => {}, report: () => {} };
-const SessionCockpitViewerRectContext = React.createContext<FrameRect | null>(null);
-const SessionCockpitViewerRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
-const SessionCockpitVoicePresenceRectContext = React.createContext<FrameRect | null>(null);
-const SessionCockpitVoicePresenceRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
 const SessionCockpitPetRectContext = React.createContext<FrameRect | null>(null);
 const SessionCockpitPetRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
 const SessionCockpitActionRailRectContext = React.createContext<FrameRect | null>(null);
 const SessionCockpitActionRailRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
 
-/** A named mounted shell fact; viewer, Voice, in-app pet and the pane action rail each have one slot. */
+/** A named mounted shell fact; the in-app pet and the pane action rail each have one slot. */
 function useMountedMeasuredRect(): Readonly<{ rect: FrameRect | null; reporter: MeasuredRectReporter }> {
     const [mounted, setMounted] = React.useState<MountedMeasuredRect | null>(null);
     const mount = React.useCallback((binding: MeasuredRectBinding) => {
@@ -159,10 +154,10 @@ function useMountedMeasuredRect(): Readonly<{ rect: FrameRect | null; reporter: 
     return { rect: mounted?.rect ?? null, reporter };
 }
 
-function useMountedMeasuredRectReporter(reporter: MeasuredRectReporter, scope: MeasuredRectScope, enabled: boolean) {
+function useMountedMeasuredRectReporter(reporter: MeasuredRectReporter, enabled: boolean) {
     // The callback captures this mounted lifetime, rather than reading a latest ref: reopening
     // the same component must not give its retired asynchronous measurements authority again.
-    const binding = React.useMemo<MeasuredRectBinding | null>(() => enabled ? { scope } : null, [enabled, scope]);
+    const binding = React.useMemo<MeasuredRectBinding | null>(() => enabled ? {} : null, [enabled]);
     React.useEffect(() => {
         if (binding) return reporter.mount(binding);
     }, [binding, reporter]);
@@ -176,8 +171,6 @@ function roundedNonNegative(value: number): number {
 }
 
 export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children: React.ReactNode }>) {
-    const viewer = useMountedMeasuredRect();
-    const voicePresence = useMountedMeasuredRect();
     const pet = useMountedMeasuredRect();
     const actionRail = useMountedMeasuredRect();
     const [bottomChromeHeight, setBottomChromeHeightState] = React.useState(0);
@@ -304,23 +297,15 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                                     <SessionCockpitDismissControllerContext.Provider value={dismissController}>
                                         <SessionCockpitDismissingSessionIdContext.Provider value={dismissingSessionId}>
                                             <SessionCockpitChromeRegistrationContext.Provider value={registration}>
-                                                <SessionCockpitViewerRectReporterContext.Provider value={viewer.reporter}>
-                                                    <SessionCockpitViewerRectContext.Provider value={viewer.rect}>
-                                                        <SessionCockpitVoicePresenceRectReporterContext.Provider value={voicePresence.reporter}>
-                                                            <SessionCockpitVoicePresenceRectContext.Provider value={voicePresence.rect}>
-                                                                <SessionCockpitPetRectReporterContext.Provider value={pet.reporter}>
-                                                                    <SessionCockpitPetRectContext.Provider value={pet.rect}>
-                                                                        <SessionCockpitActionRailRectReporterContext.Provider value={actionRail.reporter}>
-                                                                            <SessionCockpitActionRailRectContext.Provider value={actionRail.rect}>
-                                                                                {props.children}
-                                                                            </SessionCockpitActionRailRectContext.Provider>
-                                                                        </SessionCockpitActionRailRectReporterContext.Provider>
-                                                                    </SessionCockpitPetRectContext.Provider>
-                                                                </SessionCockpitPetRectReporterContext.Provider>
-                                                            </SessionCockpitVoicePresenceRectContext.Provider>
-                                                        </SessionCockpitVoicePresenceRectReporterContext.Provider>
-                                                    </SessionCockpitViewerRectContext.Provider>
-                                                </SessionCockpitViewerRectReporterContext.Provider>
+                                                <SessionCockpitPetRectReporterContext.Provider value={pet.reporter}>
+                                                    <SessionCockpitPetRectContext.Provider value={pet.rect}>
+                                                        <SessionCockpitActionRailRectReporterContext.Provider value={actionRail.reporter}>
+                                                            <SessionCockpitActionRailRectContext.Provider value={actionRail.rect}>
+                                                                {props.children}
+                                                            </SessionCockpitActionRailRectContext.Provider>
+                                                        </SessionCockpitActionRailRectReporterContext.Provider>
+                                                    </SessionCockpitPetRectContext.Provider>
+                                                </SessionCockpitPetRectReporterContext.Provider>
                                             </SessionCockpitChromeRegistrationContext.Provider>
                                         </SessionCockpitDismissingSessionIdContext.Provider>
                                     </SessionCockpitDismissControllerContext.Provider>
@@ -335,34 +320,13 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
     );
 }
 
-/** Settled floating measurement only. Dock, Close and Session/Home retirement withdraw it. */
-export function useSessionCockpitViewerRect(): FrameRect | null {
-    return React.useContext(SessionCockpitViewerRectContext);
-}
-
-export function useReportSessionCockpitViewerRect(scope: SessionCockpitViewerScope, enabled: boolean): (rect: FrameRect | null) => void {
-    const reporter = React.useContext(SessionCockpitViewerRectReporterContext);
-    const serverId = scope.serverId ?? null;
-    const binding = React.useMemo(() => ({ sessionId: scope.sessionId, serverId }), [scope.sessionId, serverId]);
-    return useMountedMeasuredRectReporter(reporter, binding, enabled);
-}
-
-/** Actual measured Island/Orb rectangle, shared with the current viewer constraints. */
-export function useSessionCockpitVoicePresenceRect(): FrameRect | null {
-    return React.useContext(SessionCockpitVoicePresenceRectContext);
-}
-
-export function useReportSessionCockpitVoicePresenceRect(enabled: boolean): (rect: FrameRect | null) => void {
-    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitVoicePresenceRectReporterContext), null, enabled);
-}
-
 /** In-app pet geometry only; an external desktop mascot window is a separate surface. */
 export function useSessionCockpitPetRect(): FrameRect | null {
     return React.useContext(SessionCockpitPetRectContext);
 }
 
 export function useReportSessionCockpitPetRect(enabled: boolean): (rect: FrameRect | null) => void {
-    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitPetRectReporterContext), null, enabled);
+    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitPetRectReporterContext), enabled);
 }
 
 /** The pane action rail's window rectangle (the session's tool rail): a floating companion keeps clear of it. */
@@ -371,7 +335,7 @@ export function useSessionCockpitActionRailRect(): FrameRect | null {
 }
 
 export function useReportSessionCockpitActionRailRect(enabled: boolean): (rect: FrameRect | null) => void {
-    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitActionRailRectReporterContext), null, enabled);
+    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitActionRailRectReporterContext), enabled);
 }
 
 export function useSessionCockpitChromeRegistration(): SessionCockpitChromeRegistration | null {
