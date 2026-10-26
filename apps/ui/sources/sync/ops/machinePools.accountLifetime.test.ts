@@ -125,26 +125,29 @@ describe('machine pool Account lifetime', () => {
     });
 
     it('does not admit an Alice intent after an Account switch before the Action executor loads', async () => {
-        // Hold Alice's admission-settings read so the switch lands before the executor loads.
-        let releaseSettings!: () => void;
-        const settingsHeld = new Promise<void>((resolve) => { releaseSettings = resolve; });
-        let settingsRequested!: () => void;
-        const settingsReached = new Promise<void>((resolve) => { settingsRequested = resolve; });
+        // Alice's focused admission settings are already in storage, so the capture's credential
+        // read is the pre-executor boundary: hold it so Bob signs in while Alice's Account is captured.
+        let releaseCredentials!: () => void;
+        const credentialsHeld = new Promise<void>((resolve) => { releaseCredentials = resolve; });
+        let credentialsRequested!: () => void;
+        const credentialsReached = new Promise<void>((resolve) => { credentialsRequested = resolve; });
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async () => {
+            credentialsRequested();
+            await credentialsHeld;
+            return { token: `e30.${btoa(JSON.stringify({ sub: 'alice' }))}.signature` };
+        });
         setRuntimeFetch(async (url) => {
             const pathname = new URL(String(url)).pathname;
             if (pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-            if (pathname === '/v2/account/settings') { settingsRequested(); await settingsHeld; return Response.json({ content: null, version: 0 }); }
+            if (pathname === '/v2/account/settings') return Response.json({ content: null, version: 0 });
             if (pathname === '/v1/auth/ping') return Response.json({ ok: true });
             boundary.pendingResponses.push({ url: String(url), resolve: () => {} });
             return Response.json({ pools: [alicePool] });
         });
-        const credentialReads = vi.mocked(TokenStorage.getCredentialsForServerUrl).mock.calls.length;
         const pending = refreshMachinePools(boundary.activeServerId);
-        // Alice's Account is captured (its credential read and settings read are in flight) before Bob signs in.
-        await vi.waitFor(() => expect(vi.mocked(TokenStorage.getCredentialsForServerUrl).mock.calls.length).toBeGreaterThan(credentialReads));
-        await settingsReached;
+        await credentialsReached;
         await switchActiveHomeToBob();
-        releaseSettings();
+        releaseCredentials();
 
         await expect(pending).rejects.toMatchObject({ code: 'action_account_scope_changed' });
         expect(boundary.pendingResponses).toHaveLength(0);

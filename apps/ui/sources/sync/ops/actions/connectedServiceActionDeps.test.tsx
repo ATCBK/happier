@@ -18,6 +18,7 @@ import { configureConnectedServerSocketBoundary, installDisconnectedServerSocket
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { storage } from '@/sync/domains/state/storage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -32,6 +33,16 @@ vi.mock('socket.io-client', async importOriginal => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
+
+/**
+ * A captured Action Account retires on a credential replacement for its Home (af4706f44d), not on a
+ * focused display-scope change. Sign the same Home in as its successor the way sign-in does.
+ */
+async function signInSuccessor(home: Readonly<{ id: string; serverUrl: string }>): Promise<void> {
+    storage.setState({ profileScope: { serverId: home.id, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+    expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id },
+        { token: `e30.${Buffer.from(JSON.stringify({ sub: 'successor' })).toString('base64url')}.signature` })).toBe(true);
+}
 
 it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 'cancelled-after-ack'] as const)(
     'keeps reset-credit custody at actual issuance while preserving an acknowledged receipt (%s)', async disposition => {
@@ -59,9 +70,11 @@ it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 
         storage.getState().applyMachines([createMachineFixture({ id: 'controller', activeAt: Date.now() })], true, { sourceServerId: scope.serverId });
         const controller = new AbortController();
         const account = await captureLazyActionAccountContext(scope.serverId, controller.signal);
+        let retirement: Promise<void> | undefined;
         const retire = () => {
             if (disposition.startsWith('cancelled')) controller.abort();
-            else storage.setState({ profileScope: { ...scope, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+            else retirement = signInSuccessor(connection.home);
+            return retirement;
         };
         let issued = false;
         const receipt = { ok: true, receipt: { idempotencyKey: 'acknowledged-reset', status: 'consumed' }, snapshot: null };
@@ -103,9 +116,10 @@ it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 
             await Promise.race([ready, operation.then(result => {
                 throw new Error(`Reset settled before socket setup: ${JSON.stringify(result)}`);
             })]);
-            if (disposition.endsWith('before-issue')) retire();
+            if (disposition.endsWith('before-issue')) await retire();
             releaseSetup();
             const result = await operation;
+            await retirement;
             if (disposition.endsWith('before-issue')) {
                 expect(issued).toBe(false);
                 expect(result).toMatchObject({ ok: false, errorCode: 'machine_rpc_failed' });
@@ -138,7 +152,7 @@ it('routes admitted authentication to the captured Home and refuses retired Acco
         expect(request.accountId).toBe('authentication');
         expect(request.method).toBe(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD);
         expect(ConnectedAccountAuthenticationCommandRequestSchema.parse(request.payload)).toEqual({ v: 1, machineId: 'controller', command });
-        if (retireBeforeIssuance) storage.setState({ profileScope: { serverId: connection.home.id, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+        if (retireBeforeIssuance) await signInSuccessor(connection.home);
         request.onIssued?.();
         issued = true;
         return { status: 'awaitingManual', attemptId: 'attempt-1' };
@@ -230,7 +244,7 @@ it.each(['cancelled', 'retired', 'unreadable'] as const)('preserves the default 
             const receipt: unknown = await consume();
             if (disposition === 'unreadable') throw new SyntaxError('Unreadable transport acknowledgement');
             if (disposition === 'cancelled') controller.abort();
-            else storage.setState({ profileScope: { ...scope, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+            else await signInSuccessor(connection.home);
             return receipt;
         };
         return response;

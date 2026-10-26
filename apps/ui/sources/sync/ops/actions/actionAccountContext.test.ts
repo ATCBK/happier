@@ -88,7 +88,9 @@ it.each(['inventory', 'launcher'] as const)('publishes %s catalog replies only i
         })).toBe(true);
         reply.resolve();
         expect((await stale)[0]).toMatchObject({ status: 'rejected', reason: { code: 'action_account_scope_changed' } });
-        expect(readVersion()).toBe(expectedInitial);
+        // Actual credential retirement drops the old qualified cache; a late
+        // captured reply must neither resurrect it nor start another read.
+        expect(readVersion()).toBeNull();
         expect(cacheReads).toBe(readsBeforeReply);
         release();
         const current = await invoke();

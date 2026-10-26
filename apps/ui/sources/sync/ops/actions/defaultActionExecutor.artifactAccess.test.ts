@@ -406,13 +406,15 @@ describe('UI Artifact sharing Action front door', () => {
         } finally { f.account.dispose(); }
     });
 
-    it('does not report successful sharing when the resulting encrypted Artifact cannot open', async () => {
+    it('keeps a committed grant receipt with pending preparation when the resulting encrypted Artifact cannot open', async () => {
         const f = await fixture('e2ee');
         try {
             f.makeMutationUnreadable();
+            // The grant is committed; an unreadable result keeps recipient key preparation pending
+            // instead of claiming the mutation failed or that the recipient can already open it.
             await expect(f.executor.execute('artifact.access.grants.set', {
                 artifactId: 'document', principal: { kind: 'account', accountId: 'recipient' }, accessLevel: 'view',
-            }, f.context)).resolves.toMatchObject({ ok: false, errorCode: 'action_failed' });
+            }, f.context)).resolves.toMatchObject({ ok: true, result: { changed: true, preparation: { status: 'pending' } } });
             expect(f.envelopes).toEqual([]);
         } finally { f.account.dispose(); }
     });

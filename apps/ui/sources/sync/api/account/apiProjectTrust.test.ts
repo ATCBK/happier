@@ -159,7 +159,7 @@ describe('Project Trust captured UI Account API', () => {
             .mockResolvedValueOnce({ kind: 'found', operation: { ...operation.snapshot, setupReview: undefined,
                 domainRef: { ...operation.snapshot.domainRef!, cwd: '/worker-checkout/setup-subdirectory' } } });
         expect(await decideProjectSetupConsent({ decision: 'untilChanged', scope, workspace: address, operation, reviewedEffectDigest: value.reviewedEffectDigest }))
-            .toEqual({ kind: 'remembered' });
+            .toEqual({ kind: 'remembered', operation: expect.objectContaining({ operationId: operation.snapshot.operationId }) });
         expect(homes.requestsFor(mutatePath).map(request => ProjectTrustMutationRequestV1Schema.parse(request.input)))
             .toEqual([{ project: { serverId: workspace.serverId, projectId: 'project' }, expectedRevision: 'absent',
                 content: { t: 'plain', v: { project: { serverId: workspace.serverId, projectId: 'project' },
@@ -193,7 +193,7 @@ describe('Project Trust captured UI Account API', () => {
         machineTransport.read.mockResolvedValueOnce({ kind: 'found', operation: operation.snapshot })
             .mockResolvedValueOnce({ kind: 'found', operation: { ...operation.snapshot, setupReview: undefined } });
         expect(await decideProjectSetupConsent({ decision: 'untilChanged', scope: captured, workspace, operation, reviewedEffectDigest: value.reviewedEffectDigest }))
-            .toEqual({ kind: 'remembered' });
+            .toEqual({ kind: 'remembered', operation: expect.objectContaining({ operationId: operation.snapshot.operationId }) });
         expect(homes.requestsFor(mutatePath).map(request => ProjectTrustMutationRequestV1Schema.parse(request.input)))
             .toEqual([{ project: { serverId, projectId: 'project' }, expectedRevision: 'absent',
                 content: { t: 'plain', v: { project: { serverId, projectId: 'project' },

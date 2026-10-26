@@ -17,12 +17,11 @@ const settingsState = vi.hoisted(() => ({
 vi.mock('@/sync/runtime/getSyncSingleton', () => ({
     getSyncSingleton: () => ({ mutateAccountSettingsOnce, applyAuthoringMemoryDelta }),
 }));
-vi.mock('@/sync/domains/state/storageStore', () => {
-    const store = Object.assign(
-        (selector: (value: typeof settingsState) => unknown) => selector(settingsState),
-        { getState: () => settingsState },
-    );
-    return { getStorage: () => store };
+vi.mock('@/sync/domains/state/storageStore', async () => {
+    // Store-binding modules (voice Machine naming) read storage at import, so the stub is a complete store.
+    const { createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+    const store = createLiveStorageStoreMock(() => settingsState);
+    return { storage: store, getStorage: () => store };
 });
 
 import {
