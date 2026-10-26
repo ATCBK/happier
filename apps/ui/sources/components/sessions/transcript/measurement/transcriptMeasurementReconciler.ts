@@ -35,7 +35,7 @@ export type TranscriptMeasurementReconciler = Readonly<{
     /** R1. Sole recycle-type authority. Pure function of the row's shape signature. */
     resolveRecycleType(signature: TranscriptItemHeightValiditySignature): string;
 
-    /** R2. Sole reservation producer. Exact for stable rows; monotonic per-item floor for non-stable; undefined if unknown. */
+    /** R2. Exact for stable rows; per-item floor otherwise, re-seeded by natural layouts after structural change. */
     resolveReservation(signature: TranscriptItemHeightValiditySignature): TranscriptRowHeightReservation | undefined;
 
     /**
@@ -58,7 +58,7 @@ export type TranscriptMeasurementReconciler = Readonly<{
      */
     resolveLastMeasuredHeight(signature: TranscriptItemHeightValiditySignature): number | undefined;
 
-    /** Record a committed measurement (from onLayout). Updates exact (stable) or the monotonic per-item floor. */
+    /** Record a committed natural measurement (from onLayout). Structural shrinks release non-growing peaks. */
     recordMeasuredHeight(input: Readonly<{
         signature: TranscriptItemHeightValiditySignature;
         heightPx: number;
@@ -122,11 +122,13 @@ export type TranscriptMeasurementReconcilerOptions = Readonly<{
 
 type FloorState = Readonly<{
     /**
-     * Monotonic floor for this item+geometry WITHIN the provenance recorded below, or null while
-     * reset-pending. For a growing row that provenance is the growth episode (the floor is a
-     * deliberate cross-shape peak); for every other row it is one content shape.
+     * Reserved height for this item+geometry WITHIN the provenance recorded below, or null while
+     * reset-pending. Growing rows retain their growth-episode peak. After a structural change,
+     * shrink-capable rows follow natural layouts, including a delayed viewport shrink.
      */
     minHeight: number | null;
+    /** A structural reset ends the old peak hold; growing rows keep their growth-episode hold. */
+    retainPeak: boolean;
     /**
      * The row's own last real onLayout height — no monotonic max, no aggregation. Kept apart from
      * {@link FloorState.minHeight} because a growth-episode peak is not a size the row still paints
@@ -364,10 +366,15 @@ export function createTranscriptMeasurementReconciler(
                 cache.set(signature, { heightPx: measured });
             }
 
-            // Floor path: monotonic per item+geometry, WITHIN the provenance this measurement is
+            // Floor path: per item+geometry, WITHIN the provenance this measurement is
             // taken under. A reset-pending (null) floor, or a floor recorded under a different
             // provenance, re-seeds from this measurement (taking the new, possibly smaller, height);
-            // otherwise it only grows. Carrying a floor across a provenance change is what let the
+            // a shrink-capable row can report an
+            // intermediate old viewport height AFTER its structural reset (the pending ScrollView
+            // settles onContentSizeChange separately). Its next natural measurement is authoritative;
+            // carrying that intermediate peak would strand the reservation under the new shape.
+            // Preserve the original same-shape hold until a structural change ends it.
+            // Carrying a floor across a provenance change is what let the
             // tallest historical height leak back in after the row had already re-measured shorter.
             //
             // The carried value keeps growing across `structuralKey` churn WHILE the row grows, and
@@ -377,13 +384,19 @@ export function createTranscriptMeasurementReconciler(
             // prediction consumer.
             const floorKey = buildFloorKey(signature);
             const existing = floorsByKey.get(floorKey);
+            const retainPeak = isGrowingRowState(signature.rowState)
+                || existing === undefined
+                || (isFloorShapeValid(existing, signature) && existing.retainPeak);
             const carriedPeak = existing !== undefined
                 && existing.minHeight !== null
                 && isFloorShapeValid(existing, signature)
                 ? existing.minHeight
                 : null;
             floorsByKey.set(floorKey, {
-                minHeight: carriedPeak === null ? measured : Math.max(carriedPeak, measured),
+                minHeight: carriedPeak !== null && retainPeak
+                    ? Math.max(carriedPeak, measured)
+                    : measured,
+                retainPeak,
                 lastMeasuredHeight: measured,
                 structuralKey: signature.structuralKey,
                 kind: signature.kind,
@@ -424,6 +437,7 @@ export function createTranscriptMeasurementReconciler(
             // floor from the next real onLayout (so a collapse never reserves the pre-collapse height).
             floorsByKey.set(floorKey, {
                 minHeight: null,
+                retainPeak: isGrowingRowState(input.signature.rowState),
                 lastMeasuredHeight: null,
                 structuralKey: input.signature.structuralKey,
                 kind: input.signature.kind,

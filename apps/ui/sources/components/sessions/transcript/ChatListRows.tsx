@@ -160,7 +160,7 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
     // layouts are ignored for reservation purposes until the row remounts in its collapsed state.
     const [hasRowLocalLayoutMutation, setHasRowLocalLayoutMutation] = React.useState(false);
     const [hasContentLayoutMutation, setHasContentLayoutMutation] = React.useState(false);
-    // The signature whose cached exact height the row's own content has contradicted (see
+    // The signature whose reservation the reconciler corrected from natural content (see
     // `handleContentLayout`): reserving it again would only repaint the stale gap.
     const [contradictedSignatureKey, setContradictedSignatureKey] = React.useState<string | null>(null);
     const latestSignatureRef = React.useRef(props.signature);
@@ -227,11 +227,13 @@ export const TranscriptRowShell = React.memo(function TranscriptRowShell(props: 
         if (layoutArrived) {
             props.reconciler.recordMeasuredHeight({ signature: props.signature, heightPx: naturalLayout.heightPx });
         }
-        // A cached exact height claims the row is exactly that tall at this geometry. Natural content that is
-        // shorter refutes it (a height can be cached from a transient layout), and the content does not lay
-        // out again to say so when the signature settles on a width it already fits: reserving it would only
-        // repaint the blank band under the row.
-        if (reservation?.kind === 'exact' && naturalLayout.heightPx < reservation.minHeight) {
+        // Natural content refutes a taller exact cache entry. Also release a floor the measurement
+        // owner just corrected downward after a structural reset. Content need not emit another
+        // layout, so apply that correction in this commit too. Legitimate peak holds stay owned
+        // by the reconciler; the shell does not independently decide when they end.
+        if (reservation && naturalLayout.heightPx < reservation.minHeight
+            && (reservation.kind === 'exact'
+                || props.reconciler.resolveReservation(props.signature)?.minHeight === naturalLayout.heightPx)) {
             setContradictedSignatureKey(signatureKey);
         }
     }, [hasRowLocalLayoutMutation, naturalLayout, props.reconciler, props.signature, reservation, signatureKey]);
