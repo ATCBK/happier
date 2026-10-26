@@ -4,12 +4,12 @@ import * as privacyKit from "privacy-kit";
 import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { type ArtifactAccessErrorCodeV1, type ArtifactAccessGrantSetStorageInputV1, type ArtifactAccessGrantRemoveInputV1, type ArtifactAccessGrantsListResponseV1, type ArtifactAccessGrantMutationResponseV1, type ArtifactAccessRecipientCensusResponseV1, type ArtifactCallerAccessV1, type ArtifactRecipientKeyEnvelopeCommitInputV1, type ArtifactRecipientKeyEnvelopeCommitResponseV1, type ArtifactRecipientKeyEnvelopeInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
-import { getDbProviderFromEnv } from "@/storage/prisma";
+import { getDbProviderFromEnv, prismaRuntime } from "@/storage/prisma";
 import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
 import type { AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
-import { artifactVisibleWhere } from "./artifactClassification";
+import { artifactOrdinarySqlPredicate, artifactVisibleWhere } from "./artifactClassification";
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes, artifactProvenanceMatchesAccountMode } from "./artifactStoredContent";
 import { deriveAccountRecipientEnvelopeReadinessFromRow, type AccountRecipientEnvelopeReadiness } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { RECIPIENT_READINESS_SELECT, type RecipientReadinessRow } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
@@ -24,11 +24,12 @@ import { ACCOUNT_DISPLAY_PROFILE_SELECT, resolveAccountDisplayLabelV1 } from "@/
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactBodyEnvelopeV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { ARTIFACT_BROWSER_NON_LISTED_KINDS_V1, type ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { ArtifactCoarseKindV1Schema, decodeArtifactKindV1, type ArtifactCoarseKindV1, type ArtifactKindCoverageV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
-import { resourceGrantAccessWhere } from '@/app/teams/resourceGrantAccess';
+import { resourceGrantAccessWhere, resourceGrantAccessSqlPredicate } from '@/app/teams/resourceGrantAccess';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { artifactAccessFactsSelect, artifactGrantFacts, artifactGrantStorageAdapter, type ArtifactAccessFacts } from './artifactGrantStorageAdapter';
+import { APPROVAL_ARTIFACT_KINDS_V1, type ApprovalArtifactStateV1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
 
 export type ArtifactAccess = ResourceGrantAccess;
 
@@ -294,6 +295,40 @@ function artifactContentAdmissionMatches(current: ArtifactHeaderForCaller, captu
         && isDeepStrictEqual(current.provenanceDataEncryptionKey, captured.provenanceDataEncryptionKey);
 }
 
+const browserNonListedStoredKinds = ARTIFACT_BROWSER_NON_LISTED_KINDS_V1.flatMap(kind =>
+    ArtifactCoarseKindV1Schema.options.map(coarse => `v1:${coarse}:${kind}`));
+
+const approvalStoredKinds = Object.values(APPROVAL_ARTIFACT_KINDS_V1).flatMap(kind =>
+    ArtifactCoarseKindV1Schema.options.map(coarse => `v1:${coarse}:${kind}`));
+const approvalKindWhere: Prisma.ArtifactWhereInput = { OR: [
+    { kind: { in: approvalStoredKinds } },
+    ...ArtifactCoarseKindV1Schema.options.map(coarse => ({ kind: { startsWith: `v1:${coarse}:${APPROVAL_ARTIFACT_KINDS_V1.builtIn}#managed-delete:` } })),
+] };
+
+function artifactApprovalSelectionWhere(input: Readonly<{ approvalStates?: readonly ApprovalArtifactStateV1[]; approvalSessionIds?: readonly string[] }>): Prisma.ArtifactWhereInput[] {
+    return [
+        ...(input.approvalSessionIds === undefined ? [] : [{ approvalSessionId: { in: [...input.approvalSessionIds] } }]),
+        ...(input.approvalStates === undefined ? [] : [{ OR: [
+            { NOT: approvalKindWhere }, { approvalState: { in: [...new Set(input.approvalStates)] } },
+        ] }]),
+    ];
+}
+
+function artifactListFixedBindings(input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): number {
+    // Access/lifecycle/recipient/keyset/LIMIT operands, then the optional selectors.
+    return 4 + 5 + 4 + 3 + 2 + (input.ownerAccountId === undefined ? 0 : 1)
+        + (input.kind === undefined || input.kind === null ? 0 : 2)
+        + (input.browserListed ? browserNonListedStoredKinds.length : 0)
+        + (input.approvalStates === undefined ? 0
+            : approvalStoredKinds.length + ArtifactCoarseKindV1Schema.options.length + new Set(input.approvalStates).size)
+        + (input.kinds?.includes(APPROVAL_ARTIFACT_KINDS_V1.builtIn) ? ArtifactCoarseKindV1Schema.options.length : 0);
+}
+
+function mergeArtifactHeaderPages(rows: readonly ArtifactListItemForCaller[], limit: number): ArtifactListItemForCaller[] {
+    return [...new Map(rows.map(row => [row.id, row])).values()].sort((left, right) =>
+        right.updatedAt.getTime() - left.updatedAt.getTime() || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0)).slice(0, limit);
+}
+
 /** Batch list projection preserves the endpoint's existing keyset and page size without per-row queries. */
 export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; limit: number; cursor: Readonly<{ updatedAt: Date; id: string }> | null;
@@ -301,23 +336,48 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     ownerAccountId?: string;
     kind?: ArtifactCoarseKindV1 | null;
     kinds?: readonly string[];
-    unclassified?: boolean | 'coarse';
+    approvalStates?: readonly ApprovalArtifactStateV1[];
+    approvalSessionIds?: readonly string[];
+    browserListed?: true;
+    unclassified?: boolean | 'coarse' | 'approval';
 }>): Promise<ArtifactListItemForCaller[]> {
+    if (input.approvalSessionIds !== undefined && !input.unclassified) {
+        const selected: ArtifactListItemForCaller[] = [];
+        // Both sets can be unbounded. Reserve an equal bind share for kinds when
+        // present; each physical query still uses the canonical portable ceiling.
+        for (const sessionIds of portableQueryChunks({ values: [...new Set(input.approvalSessionIds)],
+            bindingsPerValue: input.kinds === undefined ? 1 : 2, fixedBindings: artifactListFixedBindings(input) })) {
+            selected.push(...await listArtifactHeaderQueryInTx(tx, { ...input, approvalSessionIds: sessionIds }));
+        }
+        return mergeArtifactHeaderPages(selected, input.limit);
+    }
+    return listArtifactHeaderQueryInTx(tx, input);
+}
+
+async function listArtifactHeaderQueryInTx(tx: Tx, input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<ArtifactListItemForCaller[]> {
+    if (input.browserListed) {
+        // MySQL's retained text collation folds unknown case/accent/space variants.
+        // Byte-exact candidate paging preserves the kind policy's ordinary documents.
+        if (getDbProviderFromEnv(process.env, 'postgres') === 'mysql') return listBrowserArtifactHeadersMysqlInTx(tx, input);
+        return listArtifactHeaderSelectionInTx(tx, input, { OR: [
+            { kind: null }, { kind: { notIn: browserNonListedStoredKinds } },
+        ] });
+    }
     if (input.kinds !== undefined) {
         // Exact strings use indexed equality over every existing family. Chunk at
         // the DB transport boundary, merging only selected page-sized projections.
         const exactKinds = new Set(input.kinds);
-        const values = [...exactKinds].flatMap(kind => ArtifactCoarseKindV1Schema.options
-            .map(coarse => `v1:${coarse}:${kind}`));
+        const values = [...exactKinds].flatMap(kind => ArtifactCoarseKindV1Schema.options.map(coarse => `v1:${coarse}:${kind}`));
         const selected: ArtifactListItemForCaller[] = [];
-        // Four candidate Account operands and five lifecycle operands, four caller-filtered relation operands,
-        // three keyset operands when present, and LIMIT/OFFSET in the joined provider plan.
-        for (const kinds of portableQueryChunks({ values, bindingsPerValue: 1, fixedBindings: 4 + 5 + 4 + 3 + 2
-            + (input.ownerAccountId === undefined ? 0 : 1) })) {
-            selected.push(...await listArtifactHeaderSelectionInTx(tx, input, { kind: { in: [...kinds] } }, new Set(kinds)));
+        for (const kinds of portableQueryChunks({ values, bindingsPerValue: 1,
+            fixedBindings: artifactListFixedBindings(input) + (input.approvalSessionIds?.length ?? 0) })) {
+            const annotations = exactKinds.has(APPROVAL_ARTIFACT_KINDS_V1.builtIn)
+                ? kinds.filter(kind => kind.endsWith(`:${APPROVAL_ARTIFACT_KINDS_V1.builtIn}`)) : [];
+            selected.push(...await listArtifactHeaderSelectionInTx(tx, input, { OR: [
+                { kind: { in: [...kinds] } }, ...annotations.map(kind => ({ kind: { startsWith: `${kind}#managed-delete:` } })),
+            ] }, new Set(kinds), annotations));
         }
-        return selected.sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()
-            || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0)).slice(0, input.limit);
+        return mergeArtifactHeaderPages(selected, input.limit);
     }
     const selection: Prisma.ArtifactWhereInput = input.unclassified
         ? artifactUnclassifiedWhere(input.unclassified === 'coarse')
@@ -326,13 +386,42 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     return listArtifactHeaderSelectionInTx(tx, input, selection);
 }
 
-function artifactUnclassifiedWhere(coarseOnly = false): Prisma.ArtifactWhereInput {
+/** Only page-sized identities cross the MySQL bytewise-query/Prisma-content boundary. */
+async function listBrowserArtifactHeadersMysqlInTx(tx: Tx, input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<ArtifactListItemForCaller[]> {
+    const sql = prismaRuntime.sql;
+    const access = resourceGrantAccessSqlPredicate({ actorAccountId: input.actorAccountId,
+        resourceTablePrefix: 'Artifact', resourceIdColumn: 'artifactId' });
+    const listed = browserNonListedStoredKinds.length === 0 ? sql`TRUE`
+        : sql`(a.\`kind\` IS NULL OR CAST(a.\`kind\` AS BINARY) NOT IN
+            (${prismaRuntime.join(browserNonListedStoredKinds.map(kind => sql`CAST(${kind} AS BINARY)`))}))`;
+    const result: ArtifactListItemForCaller[] = [];
+    let cursor = input.cursor;
+    while (result.length < input.limit) {
+        const positions = await tx.$queryRaw<Array<{ id: string; updatedAt: Date }>>(sql`
+            SELECT a.\`id\`, a.\`updatedAt\` FROM \`Artifact\` a
+            WHERE a.\`deletedAt\` IS NULL AND ${prismaRuntime.raw(artifactOrdinarySqlPredicate(true))}
+                AND ${access} AND ${listed}
+                ${input.ownerAccountId === undefined ? prismaRuntime.empty : sql`AND a.\`accountId\` = ${input.ownerAccountId}`}
+                ${cursor ? sql`AND (a.\`updatedAt\` < ${cursor.updatedAt}
+                    OR (a.\`updatedAt\` = ${cursor.updatedAt} AND a.\`id\` < ${cursor.id}))` : prismaRuntime.empty}
+            ORDER BY a.\`updatedAt\` DESC, a.\`id\` DESC LIMIT ${input.limit}`);
+        if (positions.length === 0) break;
+        result.push(...await listArtifactHeaderSelectionInTx(tx, { ...input, cursor, limit: input.limit - result.length },
+            { id: { in: positions.map(row => row.id) } }));
+        if (positions.length < input.limit) break;
+        cursor = positions[positions.length - 1];
+    }
+    return result;
+}
+
+function artifactUnclassifiedWhere(coarseOnly = false, includeApprovalState = true): Prisma.ArtifactWhereInput {
     if (coarseOnly) return { kind: null };
-    return { OR: [{ kind: null }, { kind: { in: [...ArtifactCoarseKindV1Schema.options] } }] };
+    return { OR: [{ kind: null }, { kind: { in: [...ArtifactCoarseKindV1Schema.options] } },
+        ...(includeApprovalState ? [{ AND: [approvalKindWhere, { approvalState: null }] }] : [])] };
 }
 
 async function listArtifactHeaderSelectionInTx(tx: Tx, input: Parameters<typeof listArtifactHeadersForCallerInTx>[1],
-    selection: Prisma.ArtifactWhereInput, storedKinds?: ReadonlySet<string>): Promise<ArtifactListItemForCaller[]> {
+    selection: Prisma.ArtifactWhereInput, storedKinds?: ReadonlySet<string>, annotations: readonly string[] = []): Promise<ArtifactListItemForCaller[]> {
     const result: ArtifactListItemForCaller[] = [];
     let cursor = input.cursor;
     while (result.length < input.limit) {
@@ -345,7 +434,8 @@ async function listArtifactHeaderSelectionInTx(tx: Tx, input: Parameters<typeof 
                 ...artifactVisibleWhere,
                 ...selection,
                 ...(input.ownerAccountId === undefined ? {} : { accountId: input.ownerAccountId }),
-                AND: [artifactCandidateWhere(input.actorAccountId), ...(cursor ? [{ OR: [
+                AND: [artifactCandidateWhere(input.actorAccountId),
+                    ...(input.unclassified ? [] : artifactApprovalSelectionWhere(input)), ...(cursor ? [{ OR: [
                     { updatedAt: { lt: cursor.updatedAt } },
                     { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
                 ] }] : [])],
@@ -357,7 +447,8 @@ async function listArtifactHeaderSelectionInTx(tx: Tx, input: Parameters<typeof 
         for (const row of rows) {
             // MySQL's retained column collation is case-insensitive. Indexed SQL
             // narrows candidates; exact literal membership precedes private opening.
-            if (storedKinds && (row.kind === null || !storedKinds.has(row.kind))) continue;
+            if (storedKinds && (row.kind === null || (!storedKinds.has(row.kind)
+                && !annotations.some(kind => row.kind?.startsWith(`${kind}#managed-delete:`))))) continue;
             if (input.kind !== undefined && input.kind !== null && row.kind !== input.kind
                 && !row.kind?.startsWith(`v1:${input.kind}:`)) continue;
             const access = resolveArtifactAccessFromFacts(row, input.actorAccountId);
@@ -385,9 +476,9 @@ async function listArtifactHeaderSelectionInTx(tx: Tx, input: Parameters<typeof 
 
 /** Completeness is an access fact, never a reason to open unrelated private content. */
 async function countUnclassifiedArtifactsInTx(tx: Tx, input: Readonly<{
-    actorAccountId: string; ownerAccountId?: string; coarseOnly: boolean;
+    actorAccountId: string; ownerAccountId?: string; coarseOnly: boolean; includeApprovalState?: boolean;
 }>): Promise<number> {
-    return tx.artifact.count({ where: { ...artifactVisibleWhere, ...artifactUnclassifiedWhere(input.coarseOnly),
+    return tx.artifact.count({ where: { ...artifactVisibleWhere, ...artifactUnclassifiedWhere(input.coarseOnly, input.includeApprovalState),
         ...(input.ownerAccountId === undefined ? {} : { accountId: input.ownerAccountId }),
         AND: [artifactCandidateWhere(input.actorAccountId)],
     } });
@@ -397,8 +488,11 @@ async function countUnclassifiedArtifactsInTx(tx: Tx, input: Readonly<{
 export async function listArtifactHeaderPageForCaller(input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<{
     items: ArtifactListItemForCaller[]; hasUnclassified: boolean; coverage: ArtifactKindCoverageV1;
 }> {
-    const readCount = async (tx: Tx) => input.kind !== undefined || input.kinds !== undefined || input.unclassified
-        ? await countUnclassifiedArtifactsInTx(tx, { ...input, coarseOnly: input.kind !== undefined || input.unclassified === 'coarse' }) : 0;
+    if (input.approvalSessionIds?.length === 0) return { items: [], hasUnclassified: false, coverage: { status: 'complete', unclassifiedCount: 0 } };
+    const readCount = async (tx: Tx) => input.kind !== undefined || input.kinds !== undefined || input.browserListed || input.unclassified
+        || input.approvalStates !== undefined || input.approvalSessionIds !== undefined
+        ? await countUnclassifiedArtifactsInTx(tx, { ...input, coarseOnly: input.kind !== undefined || input.unclassified === 'coarse',
+            includeApprovalState: !input.browserListed }) : 0;
     const capture = async (tx: Tx, currentCount?: number) => {
         const items = await listArtifactHeadersForCallerInTx(tx, input);
         const unclassifiedCount = currentCount ?? await readCount(tx);

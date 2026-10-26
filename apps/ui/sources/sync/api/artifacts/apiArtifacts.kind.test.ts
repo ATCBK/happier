@@ -1,18 +1,46 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createArtifact, fetchArtifactListPage, restoreArtifactRevision, updateArtifact } from './apiArtifacts';
 import { decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
+
+// This HTTP boundary consumes browser Blob bodies, not native file-URI bodies.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
 
 const row = { id: 'skill', ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
     header: 'header', headerVersion: 2, body: 'body', bodyVersion: 3,
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 0, createdAt: 1, updatedAt: 1 } as const;
 
 describe('Artifact coarse-kind transport', () => {
+    it('requires the typed witness for browser selection instead of accepting an unfiltered array', async () => {
+        const selection = { browserListed: true as const };
+        await expect(fetchArtifactListPage({ token: 'browser-witness' }, { ...selection, retry: 'none',
+            request: async () => Response.json([]) })).rejects.toMatchObject({ code: 'artifact_content_unavailable' });
+    });
+    it('carries browser selection and its typed witness through the existing list transport', async () => {
+        const paths: string[] = [];
+        const selection = { browserListed: true as const };
+        const page = await fetchArtifactListPage({ token: 'browser-selection' }, { ...selection, retry: 'none',
+            request: async path => { paths.push(path); return Response.json({ items: [{ ...row, kind: 'other', kindHint: null }],
+                hasUnclassified: false, coverage: { status: 'complete', unclassifiedCount: 0 } }); } });
+        expect(paths).toEqual(['/v1/artifacts?browserListed=true']);
+        expect(page).toMatchObject({ items: [{ kindHint: null }], kindCoverage: { status: 'complete', unclassifiedCount: 0 } });
+    });
+    it.each([false, true])('rejects exact-kind HTTP without typed coverage with hasUnclassified=%s', async hasUnclassified => {
+        let requests = 0;
+        await expect(fetchArtifactListPage({ token: 't' }, { kinds: ['prompt_doc.v2'],
+            request: async () => { requests++; return Response.json({ items: [], hasUnclassified }); } }))
+            .rejects.toMatchObject({ code: 'artifact_content_unavailable', retryable: false });
+        expect(requests).toBe(1);
+    });
     it('selects exact kind sets and owner repair headers without losing the classification witness', async () => {
         const paths: string[] = [];
         const request = async (path: string) => {
             paths.push(path);
-            return Response.json({ items: [{ ...row, kind: 'other', kindHint: null }], hasUnclassified: false });
+            return Response.json({ items: [{ ...row, kind: 'other', kindHint: null }], hasUnclassified: false,
+                coverage: { status: 'complete', unclassifiedCount: 0 } });
         };
         const selected = await fetchArtifactListPage({ token: 't' }, { request, retry: 'none', kinds: ['role.v1', 'account_notice.v1'] });
         await fetchArtifactListPage({ token: 't' }, { request, retry: 'none', unclassified: true, limit: 500 });

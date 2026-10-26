@@ -9,22 +9,35 @@ import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import { createDeferred } from '@/dev/testkit';
-import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
-
-const fs = await vi.hoisted(async () => {
-  const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
-  return createExpoFileSystemFileMock();
-});
-vi.mock('expo-file-system', () => fs.module);
-
-async function readUploadBody(body: BodyInit | null | undefined): Promise<Uint8Array> {
-  const uri = body && typeof body === 'object' && 'uri' in body ? (body as { uri: unknown }).uri : undefined;
-  if (typeof uri === 'string') return new Uint8Array(fs.files.get(uri) ?? []);
-  return new Uint8Array(await new Response(body).arrayBuffer());
-}
+import { projectArtifactBoundaryReadRow, projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 describe('createArtifactWithHeaderViaApi', () => {
-  it('derives coarse kind from the actual header for create and update', async () => {
+  it('preserves valid long private kinds on create and update without an unrepresentable public hint', async () => {
+    const writes: Record<string, unknown>[] = [];
+    let current: DecryptedArtifact | undefined;
+    const longKind = 'custom.'.repeat(40);
+    const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      const wire = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push(wire);
+      return Response.json(path === '/v1/artifacts'
+        ? { ...wire, kind: null, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }
+        : { success: true, headerVersion: 2, bodyVersion: 2 });
+    };
+    const { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi } = await import('./syncArtifacts');
+    const shared = { credentials: { token: 't' }, encryption: null, artifactDataKeys: new Map(), request };
+    const artifactId = await createArtifactWithHeaderViaApi({ ...shared,
+      header: { kind: longKind, title: 'Custom' }, body: 'created', addArtifact: artifact => { current = artifact; } });
+    expect(current).toMatchObject({ rawHeader: { kind: longKind }, body: 'created' });
+    await updateArtifactWithHeaderViaApi({ ...shared, artifactId, header: { kind: `${longKind}updated`, title: 'Changed' },
+      body: 'updated', getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
+    expect(current).toMatchObject({ rawHeader: { kind: `${longKind}updated` }, body: 'updated' });
+    expect(writes).toHaveLength(2);
+    for (const write of writes) expect(write).not.toHaveProperty('kind');
+  });
+
+  it('derives the indexed kind from the actual header for create and update', async () => {
     const writes: Record<string, unknown>[] = [];
     let current: DecryptedArtifact | undefined;
     const request = async (path: string, init?: RequestInit) => {
@@ -45,8 +58,29 @@ describe('createArtifactWithHeaderViaApi', () => {
     await updateArtifactWithHeaderViaApi({ ...shared, artifactId,
       header: { kind: 'prompt_doc.v2', title: 'Prompt' }, body: 'prompt',
       getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
-    // The wire kind column carries the exact kind hint beside its coarse kind (90558ca59e).
-    expect(writes.map(write => projectArtifactStoredKind(write.kind).kind)).toEqual(['skill', 'prompt']);
+    expect(writes.map(write => write.kind)).toEqual(['v1:skill:prompt_bundle.v2', 'v1:prompt:prompt_doc.v2']);
+  });
+  it('writes approval state and Session hints in the same header revision on creation and settlement', async () => {
+    const writes: Record<string, unknown>[] = [];
+    let current: DecryptedArtifact | undefined;
+    const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      const wire = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push(wire);
+      return Response.json(path === '/v1/artifacts'
+        ? { ...wire, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }
+        : { success: true, headerVersion: 2, bodyVersion: 2 });
+    };
+    const { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi } = await import('./syncArtifacts');
+    const shared = { credentials: { token: 't' }, encryption: null, artifactDataKeys: new Map(), request };
+    const header = { kind: 'approval_request.v1', approvalStatus: 'open', sessionId: 'requesting-session' };
+    const artifactId = await createArtifactWithHeaderViaApi({ ...shared, header, body: 'request',
+      addArtifact: artifact => { current = artifact; } });
+    await updateArtifactWithHeaderViaApi({ ...shared, artifactId, header: { ...header, approvalStatus: 'executed' }, body: 'receipt',
+      getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
+    expect(writes).toMatchObject([{ approvalState: 'open', approvalSessionId: 'requesting-session', header: expect.any(String) },
+      { approvalState: 'executed', approvalSessionId: 'requesting-session', header: expect.any(String), expectedHeaderVersion: 1 }]);
   });
   it('carries the exact decision source to Home on lazy create and existing-document correction', async () => {
     const { CoordinationMessageRefV1Schema } = await import('@happier-dev/protocol/discussions/references');
@@ -93,7 +127,7 @@ describe('createArtifactWithHeaderViaApi', () => {
       }
       if (!stored) throw new Error('Read before create');
       if (path === '/v1/artifacts/read') return Response.json({ items: [{ artifactId: stored.id, ok: true,
-        artifact: { ...stored, publicAudience: 'none' }, recipientCensus: { artifactId: stored.id,
+        artifact: { ...projectArtifactBoundaryReadRow(stored), publicAudience: 'none' }, recipientCensus: { artifactId: stored.id,
           ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, dataEncryptionKey: stored.dataEncryptionKey,
           callerDataEncryptionKey: stored.dataEncryptionKey, provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
           callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] } }] });
@@ -202,9 +236,10 @@ describe('createArtifactWithHeaderViaApi', () => {
     const request = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === '/v1/account/encryption') return new Response(JSON.stringify({ mode, updatedAt: 0 }));
       if (path === ARTIFACT_UPLOAD_PATH_V1) {
-        // The upload body is one finite frame: a staged cache file on native, a Blob on web (41e7017938).
-        const frame = await readUploadBody(init?.body);
-        if (frame.indexOf(10) < 0) throw new Error('Expected canonical Artifact upload frame');
+        const body = init?.body;
+        const frame = body && typeof body === 'object' && 'uri' in body && typeof body.uri === 'string'
+          ? await new (await import('expo-file-system')).File(body.uri).bytes()
+          : new Uint8Array(await new Response(body).arrayBuffer());
         const separator = frame.indexOf(10);
         const metadata = decodeArtifactUploadMetadataV1(frame.subarray(0, separator));
         if (metadata.kind !== 'create') throw new Error('Expected create destination');

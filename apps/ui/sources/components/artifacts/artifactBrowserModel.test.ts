@@ -24,6 +24,16 @@ function artifact(id: string, header: Record<string, unknown> | null, extra: Par
 }
 
 describe('artifactBrowserModel', () => {
+    it('excludes proven private opaque hints while retaining unresolved and readable unknown documents', () => {
+        const locked = (id: string, kindHint?: string): DecryptedArtifact => ({ id, title: null, header: null, rawHeader: null,
+            isDecrypted: false, storageMode: 'plain', headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+            ...(kindHint === undefined ? {} : { kindHint }), availability: { kind: 'locked', reason: 'invalid_stored_content' } });
+        const rows = [locked('private', 'approval_request.v1'), locked('unknown'), locked('future-opaque', 'future.document.v9'),
+            artifact('future-readable', { kind: 'future.document.v9' }), artifact('untyped', {})];
+        expect(projectArtifactBrowserRows(rows, { query: '', kind: 'all', sort: 'title_asc' }).map(row => row.key))
+            .toEqual(['unknown', 'future-opaque', 'future-readable', 'untyped']);
+        expect(countArtifactBrowserKinds(rows).get('document')).toBe(4);
+    });
     it.each(['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1'])(
         'opens %s in the existing Home-qualified Inbox presenter and never previews replay custody', kind => {
         const header = { kind, title: 'Review request', serverId: 'local-profile', serverIdentityId: 'home:identity',
@@ -140,6 +150,14 @@ describe('artifactBrowserModel', () => {
             mode: 'canvas', source: { picked: [] }, snap: true, positionsByItemRef: {}, pinnedInSessions: false }) })))
             .toEqual({ kind: 'board', layout: { mode: 'canvas', source: { sections: [], hasFilter: false, pickedCount: 0 }, widgets: [] } });
         expect(readArtifactPreview(artifact('old', { kind: 'work-board.v1', v: 1, title: 'Old' }))).toEqual({ kind: 'none' });
+    });
+    it('shows a saved Widget by its kind mark, never its stored definition as text', () => {
+        const definition = JSON.stringify({ v: 1, id: 'daily-focus', sizeDeclaration: { default: 'wide' } });
+        expect(classifyArtifactBrowserKind(artifact('widget', { kind: 'widget-definition.v1', title: 'Daily focus' }))).toBe('widget');
+        for (const candidate of [
+            artifact('widget', { kind: 'widget-definition.v1', title: 'Daily focus', excerpt: definition }),
+            artifact('widget-loaded', { kind: 'widget-definition.v1', title: 'Daily focus' }, { body: definition }),
+        ]) expect(readArtifactPreview(candidate)).toEqual({ kind: 'none' });
     });
     it('previews Workflow step labels from its saved header without fetching a body', () => {
         expect(readArtifactPreview(artifact('workflow', { kind: 'workflow-definition.v1', title: 'Morning triage',

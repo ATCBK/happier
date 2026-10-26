@@ -11,6 +11,7 @@ import type { Tx } from '@/storage/inTx';
 import type { AccountStatus, TeamMembershipStatus } from '@/storage/enums.generated';
 import { EFFECTIVE_TEAM_MEMBERSHIP_WHERE, isEffectiveTeamMembership } from './memberships/effectiveMembership';
 import { EFFECTIVE_TEAM_GROUP_MEMBERSHIP_WHERE, isEffectiveTeamGroupMembership } from './groups/effectiveGroupMembership';
+import { getDbProviderFromEnv, prismaRuntime } from '@/storage/prisma';
 
 type Member = Readonly<{ accountId: string; status: TeamMembershipStatus; account: Readonly<{ status: AccountStatus }> }>;
 
@@ -69,6 +70,56 @@ export function resourceGrantAccessWhere(actorAccountId: string) {
             ...EFFECTIVE_TEAM_GROUP_MEMBERSHIP_WHERE, teamMembership: member,
         } } } } } },
     ] };
+}
+
+/** SQL projection for bounded candidate queries that Prisma cannot express.
+ * The resource adapter supplies its table names; `a` is the resource alias.
+ * Readers still re-admit the captured content through the ordinary access owner.
+ */
+export function resourceGrantAccessSqlPredicate(input: Readonly<{
+    actorAccountId: string; resourceTablePrefix: string; resourceIdColumn: string;
+}>): ReturnType<typeof prismaRuntime.sql> {
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
+    const mysql = provider === 'mysql';
+    const sql = prismaRuntime.sql;
+    const identifier = (name: string) => prismaRuntime.raw(mysql
+        ? `\`${name.replaceAll('`', '``')}\`` : `"${name.replaceAll('"', '""')}"`);
+    const column = (alias: string, name: string) => sql`${identifier(alias)}.${identifier(name)}`;
+    const account = identifier('Account');
+    const team = identifier('Team');
+    const membership = identifier('TeamMembership');
+    const member = EFFECTIVE_TEAM_MEMBERSHIP_WHERE;
+    // PostgreSQL enum columns do not compare to Prisma's text parameters.
+    const status = (value: AccountStatus | TeamMembershipStatus, enumName: 'AccountStatus' | 'TeamMembershipStatus') =>
+        provider === 'postgres' || provider === 'pglite' ? sql`CAST(${value} AS ${identifier(enumName)})` : sql`${value}`;
+    const activeAccount = status(member.account.status, 'AccountStatus');
+    const activeMember = status(member.status, 'TeamMembershipStatus');
+    const actor = input.actorAccountId;
+    const resourceId = column('a', 'id');
+    const memberMatches = sql`${column('m', 'accountId')} = ${actor}
+        AND ${column('m', 'status')} = ${activeMember}
+        AND ${column('c', 'status')} = ${activeAccount}
+        AND ${column('t', 'archivedAt')} IS NULL`;
+    return sql`(${column('a', 'accountId')} = ${actor}
+        OR EXISTS (SELECT 1 FROM ${identifier(`${input.resourceTablePrefix}AccountGrant`)} g
+            JOIN ${account} c ON ${column('c', 'id')} = ${column('g', 'accountId')}
+            WHERE ${column('g', input.resourceIdColumn)} = ${resourceId}
+            AND ${column('g', 'accountId')} = ${actor} AND ${column('c', 'status')} = ${activeAccount})
+        OR EXISTS (SELECT 1 FROM ${identifier(`${input.resourceTablePrefix}TeamGrant`)} g
+            JOIN ${membership} m ON ${column('m', 'teamId')} = ${column('g', 'teamId')}
+            JOIN ${account} c ON ${column('c', 'id')} = ${column('m', 'accountId')}
+            JOIN ${team} t ON ${column('t', 'id')} = ${column('m', 'teamId')}
+            WHERE ${column('g', input.resourceIdColumn)} = ${resourceId} AND ${memberMatches})
+        OR EXISTS (SELECT 1 FROM ${identifier(`${input.resourceTablePrefix}GroupGrant`)} g
+            JOIN ${identifier('TeamGroup')} r ON ${column('r', 'id')} = ${column('g', 'teamGroupId')}
+            JOIN ${identifier('TeamGroupMembership')} gm ON ${column('gm', 'teamGroupId')} = ${column('r', 'id')}
+                AND ${column('gm', 'teamId')} = ${column('r', 'teamId')}
+            JOIN ${membership} m ON ${column('m', 'id')} = ${column('gm', 'teamMembershipId')}
+                AND ${column('m', 'teamId')} = ${column('gm', 'teamId')}
+            JOIN ${account} c ON ${column('c', 'id')} = ${column('m', 'accountId')}
+            JOIN ${team} t ON ${column('t', 'id')} = ${column('m', 'teamId')}
+            WHERE ${column('g', input.resourceIdColumn)} = ${resourceId}
+            AND ${column('r', 'archivedAt')} IS NULL AND ${memberMatches}))`;
 }
 
 /** Ownership or the highest live direct/Team/Group grant, independent of key readiness. */

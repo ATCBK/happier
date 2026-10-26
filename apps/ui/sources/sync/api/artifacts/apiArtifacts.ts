@@ -1,5 +1,7 @@
 import { pick } from 'zod/mini';
 import { ArtifactKindCoverageV1Schema, type ArtifactCoarseKindV1, type ArtifactKindCoverageV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { requireArtifactKindCoverageV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import type { ApprovalArtifactStateV1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
 import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
@@ -109,8 +111,11 @@ export type ArtifactApiOptions = Readonly<{
     serverId?: string;
     coarseKind?: ArtifactCoarseKindV1;
     kinds?: readonly string[];
+    approvalStates?: readonly ApprovalArtifactStateV1[];
+    approvalSessionIds?: readonly string[];
+    browserListed?: true;
     /** Owner-only legacy header repair, mutually exclusive with kind selectors. */
-    unclassified?: boolean | 'coarse';
+    unclassified?: boolean | 'coarse' | 'approval';
     includeBody?: boolean;
     retry?: 'default' | 'none';
     request?: ServerFetch;
@@ -425,13 +430,17 @@ export async function fetchArtifacts(
 export async function fetchArtifactListPage(credentials: AuthCredentials, opts: ArtifactApiOptions = {}): Promise<ArtifactListPage> {
     throwIfAborted(opts.signal);
     const binding = captureArtifactReadBinding(opts);
-    const filtered = opts.coarseKind !== undefined || opts.kinds !== undefined || Boolean(opts.unclassified);
+    const approvalSelected = opts.approvalStates !== undefined || opts.approvalSessionIds !== undefined;
+    const filtered = opts.coarseKind !== undefined || opts.kinds !== undefined || opts.browserListed === true || Boolean(opts.unclassified) || approvalSelected;
     const query = new URLSearchParams();
     if (opts.limit !== undefined) query.set('limit', String(opts.limit));
     if (opts.cursor !== undefined) query.set('cursor', opts.cursor);
     if (opts.includeBody) query.set('includeBody', 'true');
     if (opts.coarseKind) query.set('kind', opts.coarseKind);
     if (opts.kinds !== undefined) query.set('kinds', JSON.stringify(opts.kinds));
+    if (opts.approvalStates !== undefined) query.set('approvalStates', JSON.stringify(opts.approvalStates));
+    if (opts.approvalSessionIds !== undefined) query.set('approvalSessionIds', JSON.stringify(opts.approvalSessionIds));
+    if (opts.browserListed) query.set('browserListed', 'true');
     if (opts.unclassified) query.set('unclassified', String(opts.unclassified));
     if (opts.ownerAccountId !== undefined) query.set('ownerAccountId', opts.ownerAccountId);
     const search = query.toString();
@@ -459,6 +468,7 @@ export async function fetchArtifactListPage(credentials: AuthCredentials, opts: 
                 const hasUnclassified: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'hasUnclassified') : undefined;
                 const rawCoverage: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'coverage') : undefined;
                 const kindCoverage = rawCoverage === undefined ? undefined : ArtifactKindCoverageV1Schema.parse(rawCoverage);
+                if (opts.kinds !== undefined || opts.browserListed || approvalSelected) requireArtifactKindCoverageV1(kindCoverage);
                 if (!Array.isArray(items) || (filtered && typeof hasUnclassified !== 'boolean')) {
                     throw new HappyError('Artifact content is unavailable', false, { code: 'artifact_content_unavailable' });
                 }

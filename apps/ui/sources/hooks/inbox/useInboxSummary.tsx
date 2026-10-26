@@ -6,18 +6,19 @@ import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityRe
 import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
 import { readAccountNoticeArtifactHeader, isUnreadAccountNotice } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useInboxActionOperationSummary } from '@/sync/domains/actionOperations/useActionOperations';
-import { useArtifacts, useFriendRequestCount, useInboxApprovalBodyHydration } from '@/sync/domains/state/storage';
+import { useFriendRequestCount } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { StorageState } from '@/sync/store/types';
 import { countInboxDiscussionItems, countInboxItems } from '@/components/inbox/inboxCounts';
 import { useInboxDiscussionAttention } from './useInboxDiscussionSource';
 import { InboxExecutionRunSourceBoundary, useInboxExecutionRunCount } from './useInboxExecutionRunSource';
+import { InboxArtifactSourceBoundary, useInboxArtifactSource } from './useInboxArtifactSource';
 
 import { useAutomationAttentionSource, useWorkflowAttentionSource, WorkflowAttentionSourceBoundary } from './useWorkflowAttentionSource';
 
 export type InboxSummary = Readonly<{
-    count: number;
-    hasContent: boolean;
+    count: number | null;
+    hasContent: boolean | null;
 }>;
 
 export function createOpenApprovalInboxCountSelector(): (state: StorageState) => number {
@@ -62,9 +63,8 @@ const selectOpenApprovalInboxCount = createOpenApprovalInboxCountSelector();
 
 export function useInboxSummary(): InboxSummary {
     const activity = useActivityOverviewSummary();
-    const artifacts = useArtifacts();
+    const artifactSource = useInboxArtifactSource();
     const serverId = storage(state => state.profileScope?.serverId ?? null);
-    useInboxApprovalBodyHydration(artifacts, serverId);
     const openApprovalCount = storage(selectOpenApprovalInboxCount);
     const friendsEnabled = useFriendsEnabled();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
@@ -93,7 +93,8 @@ export function useInboxSummary(): InboxSummary {
         discussions: discussionCount,
     });
 
-    return React.useMemo(() => ({ count, hasContent: count > 0 }), [count]);
+    return React.useMemo(() => artifactSource.phase === 'current' ? { count, hasContent: count > 0 }
+        : { count: null, hasContent: null }, [count, artifactSource.phase]);
 }
 
 const InboxSummaryContext = React.createContext<InboxSummary | null>(null);
@@ -110,9 +111,9 @@ function InboxSummaryContextProvider(props: Readonly<{ children: React.ReactNode
 /** The app shell's one Inbox summary owner; it also mounts the one workflow attention loader. */
 export function InboxSummaryProvider(props: Readonly<{ children: React.ReactNode }>) {
     return (
-        <WorkflowAttentionSourceBoundary>
+        <InboxArtifactSourceBoundary><WorkflowAttentionSourceBoundary>
             <InboxExecutionRunSourceBoundary><InboxSummaryContextProvider>{props.children}</InboxSummaryContextProvider></InboxExecutionRunSourceBoundary>
-        </WorkflowAttentionSourceBoundary>
+        </WorkflowAttentionSourceBoundary></InboxArtifactSourceBoundary>
     );
 }
 

@@ -206,6 +206,11 @@ const kindPolicies: readonly Readonly<ArtifactKindPolicyV1 & {
   { ...privatePolicy, kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: true },
 ];
 
+/** Indexed browser selection is the complement of this policy, including unknown kinds. */
+export const ARTIFACT_BROWSER_NON_LISTED_KINDS_V1: readonly string[] = Object.freeze(
+  kindPolicies.filter(policy => !policy.browserListed).map(policy => policy.kind),
+);
+
 /** Unknown and untyped ordinary documents retain generic document behavior. */
 export function getArtifactKindPolicyV1(kind: unknown): ArtifactKindPolicyV1 {
   return kindPolicies.find(policy => policy.kind === kind) ?? documentPolicy;

@@ -1,6 +1,8 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { ArtifactInventoryPublication } from '@/sync/domains/artifacts/artifactInventory';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { deriveArtifactKindV1, tryDeriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { deriveApprovalArtifactQueryHintsV1, isApprovalArtifactKindV1, type ApprovalArtifactStateV1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
 import { areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -21,7 +23,7 @@ import {
     createArtifact as createArtifactApi,
     createArtifactAccessApi,
     fetchArtifact as fetchArtifactApi,
-    fetchArtifacts as fetchArtifactsApi,
+    fetchArtifactListPage,
     fetchArtifactReadBatch,
     encodeArtifactListCursor,
     updateArtifact as updateArtifactApi,
@@ -31,6 +33,7 @@ import {
     restoreArtifactRevision,
 } from '@/sync/api/artifacts/apiArtifacts';
 import type { Encryption } from '@/sync/encryption/encryption';
+import type { CryptoWorkerWorkClass } from '@/sync/encryption/nativeCryptoWorker/types';
 import { ArtifactEncryption, projectArtifactHeaderForDisplay } from '@/sync/encryption/artifactEncryption';
 import { HappyError } from '@/utils/errors/errors';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -52,8 +55,7 @@ import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactE
 import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, prepareArtifactHeaderForBodyV1 } from '@happier-dev/protocol/artifacts/artifactHeaderRestorationV1';
 import { ArtifactPublicAudienceV1ReadSchema, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { isArtifactHtmlHeaderV1, artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
-import { readAccountNoticeArtifactHeaderV1, readUsageNoticeArtifactHeaderV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { listArtifactHeadersV1, selectArtifactHeaderPageV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { hashArtifactBinaryContent, openArtifactBinaryContent, sealArtifactBinaryContent } from '@/sync/domains/artifacts/artifactBinaryContent';
 import { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import type { ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
@@ -92,16 +94,19 @@ async function requireArtifactHtmlWriteContent(params: Readonly<{
     }
 }
 
-function artifactStorageIdentity(artifact: Pick<Artifact, 'dataEncryptionKey' | 'provenanceDataEncryptionKey'>) {
+function artifactStorageIdentity(artifact: Pick<Artifact, 'dataEncryptionKey' | 'provenanceDataEncryptionKey' | 'header'>) {
     return { contentKeyEnvelope: artifact.dataEncryptionKey,
-        provenanceKeyEnvelope: artifact.provenanceDataEncryptionKey ?? null };
+        provenanceKeyEnvelope: artifact.provenanceDataEncryptionKey ?? null, header: artifact.header };
 }
 
-function artifactAccessProjection(artifact: Artifact) {
+function artifactAccessProjection(artifact: Artifact, previous?: DecryptedArtifact) {
+    const identity = previous?.storageIdentity;
     return { kind: artifact.kind, ...(Object.hasOwn(artifact, 'kindHint') ? { kindHint: artifact.kindHint } : {}),
         access: artifact.access, ownerAccountId: artifact.ownerAccountId,
         publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
-        storageIdentity: artifactStorageIdentity(artifact) };
+        storageIdentity: identity?.contentKeyEnvelope === artifact.dataEncryptionKey
+            && identity.provenanceKeyEnvelope === (artifact.provenanceDataEncryptionKey ?? null)
+            && identity.header === artifact.header ? identity : artifactStorageIdentity(artifact) };
 }
 
 async function sharedArtifactWriteContext(params: Readonly<{
@@ -167,6 +172,7 @@ async function resolveArtifactDataKeys(params: {
     artifacts: readonly Pick<Artifact, 'id' | 'dataEncryptionKey'>[];
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    workClass?: CryptoWorkerWorkClass;
 }): Promise<Map<string, Uint8Array | null>> {
     const { artifacts, encryption, artifactDataKeys } = params;
 
@@ -204,7 +210,7 @@ async function resolveArtifactDataKeys(params: {
     } else {
         // Runtime/worker failures must reach InvalidateSync. Only a completed
         // cryptographic refusal (null) establishes a locked row.
-        decryptedKeys = await encryption.decryptEncryptionKeys(pendingEnvelopes);
+        decryptedKeys = await encryption.decryptEncryptionKeys(pendingEnvelopes, { workClass: params.workClass });
     }
 
     for (let index = 0; index < pendingArtifactIds.length; index += 1) {
@@ -230,11 +236,13 @@ async function resolveArtifactDataKey(params: {
     artifact: Pick<Artifact, 'id' | 'dataEncryptionKey'>;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    workClass?: CryptoWorkerWorkClass;
 }): Promise<Uint8Array | null> {
     const resolved = await resolveArtifactDataKeys({
         artifacts: [params.artifact],
         encryption: params.encryption,
         artifactDataKeys: params.artifactDataKeys,
+        workClass: params.workClass,
     });
     return resolved.get(params.artifact.id) ?? null;
 }
@@ -279,12 +287,13 @@ function artifactRevisionProvenance(credentials: AuthCredentials, savedBy?: Arti
 async function resolveArtifactProvenanceDataKey(params: Readonly<{
     artifact: Pick<Artifact, 'id' | 'provenanceDataEncryptionKey'>;
     encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache;
+    workClass?: CryptoWorkerWorkClass;
 }>): Promise<Uint8Array | null> {
     const envelope = params.artifact.provenanceDataEncryptionKey;
     const cached = params.artifactDataKeys.get(params.artifact.id);
     if (!envelope) return null;
     if (cached?.provenanceEnvelope === envelope && cached.provenanceDataKey) return cached.provenanceDataKey;
-    const dataKey = params.encryption ? await params.encryption.decryptEncryptionKey(envelope) : null;
+    const dataKey = params.encryption ? await params.encryption.decryptEncryptionKey(envelope, { workClass: params.workClass }) : null;
     if (cached) params.artifactDataKeys.set(params.artifact.id, { ...cached, provenanceEnvelope: envelope,
         provenanceDataKey: dataKey ?? undefined });
     return dataKey;
@@ -294,6 +303,7 @@ async function openArtifactProvenance(params: Readonly<{
     artifact: Pick<Artifact, 'id' | 'provenance' | 'provenanceDataEncryptionKey' | 'bodyVersion'>;
     mode: 'plain' | 'e2ee'; encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache;
     resolvedProvenanceDataKey?: Uint8Array | null;
+    workClass?: CryptoWorkerWorkClass;
 }>) {
     const dataKey = params.mode === 'e2ee' ? params.resolvedProvenanceDataKey !== undefined
         ? params.resolvedProvenanceDataKey : await resolveArtifactProvenanceDataKey(params) : null;
@@ -373,17 +383,20 @@ async function acknowledgeArtifactProvenanceWrite(params: Readonly<{
 }
 
 function createLockedArtifactView(params: Readonly<{
-    artifact: ArtifactContentProjection;
+    artifact: ArtifactContentProjection | DecryptedArtifact;
     reason: ArtifactLockedReason;
     storageMode?: 'plain' | 'e2ee';
 }>): DecryptedArtifact {
     const { artifact, reason } = params;
     return {
+        ...(!('sourceServerId' in artifact) || artifact.sourceServerId === undefined ? {} : { sourceServerId: artifact.sourceServerId }),
         kind: artifact.kind,
         ...(Object.hasOwn(artifact, 'kindHint') ? { kindHint: artifact.kindHint } : {}),
         ...(artifact.ownerAccountId === undefined ? {} : { ownerAccountId: artifact.ownerAccountId }),
         ...(artifact.access === undefined ? {} : { access: artifact.access }),
-        publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
+        ...(artifact.publicAudience === undefined ? {} : {
+            publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
+        }),
         id: artifact.id,
         header: null,
         title: null,
@@ -407,7 +420,7 @@ export async function decryptArtifactListItem(params: {
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
 }): Promise<DecryptedArtifact | null> {
-    const opened = await decryptArtifactListItems({ ...params, artifacts: [params.artifact] });
+    const opened = await decryptArtifactListItems({ ...params, artifacts: [params.artifact], workClass: 'interactive' });
     return opened[0] ?? null;
 }
 
@@ -416,8 +429,11 @@ export async function decryptArtifactListItems(params: {
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
     includeBody?: boolean;
+    workClass?: CryptoWorkerWorkClass;
     /** Background indexes do not consume private attribution. Exact readers keep it by default. */
     includeProvenance?: boolean;
+    /** Captured by the scoped producer before its read; never a second inventory. */
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
 }): Promise<Array<DecryptedArtifact | null>> {
     const keys = await resolveArtifactDataKeys(params);
     return await Promise.all(params.artifacts.map(async (artifact) => {
@@ -425,12 +441,14 @@ export async function decryptArtifactListItems(params: {
         if (params.includeBody) {
             const opened = await decryptArtifactWithBody({
                 artifact, encryption: params.encryption, artifactDataKeys: params.artifactDataKeys, resolvedDataKey: dataKey,
+                previousArtifacts: params.previousArtifacts,
+                workClass: params.workClass ?? 'bulk',
             });
             if (opened?.isDecrypted) return opened;
         }
         // A bad body must not erase its readable identity or the other list rows.
         return await buildDecryptedArtifactListItem({ artifact, encryption: params.encryption, artifactDataKeys: params.artifactDataKeys,
-            dataKey, includeProvenance: params.includeProvenance });
+            dataKey, includeProvenance: params.includeProvenance, previousArtifacts: params.previousArtifacts, workClass: params.workClass });
     }));
 }
 
@@ -449,25 +467,62 @@ async function openArtifactListHeader(params: Readonly<{
     return raw;
 }
 
+function readReusableArtifactHeader(params: Readonly<{
+    artifact: Artifact;
+    previous: DecryptedArtifact | undefined;
+    storageMode: 'plain' | 'e2ee';
+    encryption: Encryption | null;
+    dataKey: Uint8Array | null;
+    artifactDataKeys: ArtifactDataKeyCache;
+}>): Readonly<{ rawHeader: Readonly<Record<string, unknown>>; header: ArtifactHeader }> | null {
+    const { artifact, previous, storageMode } = params;
+    if (!previous?.isDecrypted || !previous.rawHeader || !previous.header
+        || previous.storageMode !== storageMode || previous.access !== artifact.access
+        || previous.ownerAccountId !== artifact.ownerAccountId
+        || previous.storageIdentity?.contentKeyEnvelope !== artifact.dataEncryptionKey
+        || previous.storageIdentity.header !== artifact.header) return null;
+    if (storageMode === 'e2ee') {
+        const key = params.artifactDataKeys.get(artifact.id);
+        // Fresh invocation-local keys may reopen the same envelope. The current
+        // unwrap plus the row's exact header/envelope evidence proves reuse;
+        // another reader's key map or retained decrypt result is not required.
+        if (!params.encryption || !params.dataKey || key?.dataKey !== params.dataKey
+            || key.envelope !== artifact.dataEncryptionKey) return null;
+    }
+    return { rawHeader: previous.rawHeader, header: previous.header };
+}
+
+/** Retain the producer's immutable row after reusing its admitted content slices. */
+function retainArtifactListProjection(previous: DecryptedArtifact | undefined, next: DecryptedArtifact): DecryptedArtifact {
+    if (!previous) return next;
+    const keys = Object.keys(next);
+    return keys.length === Object.keys(previous).length
+        && keys.every(key => Reflect.get(previous, key) === Reflect.get(next, key)) ? previous : next;
+}
+
 async function buildDecryptedArtifactListItem(params: {
     artifact: Artifact;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
     dataKey: Uint8Array | null;
     includeProvenance?: boolean;
+    workClass?: CryptoWorkerWorkClass;
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
 }): Promise<DecryptedArtifact | null> {
     const { artifact, encryption, dataKey } = params;
+    const previous = params.previousArtifacts?.[artifact.id];
 
     if (isPlainArtifactDataKeyMarker(artifact.dataEncryptionKey)) {
         try {
-            const rawHeader = decodePlainArtifactHeaderRaw(artifact.header);
-            const header = projectArtifactHeaderForDisplay(rawHeader);
-            return {
+            const retained = readReusableArtifactHeader({ ...params, previous, storageMode: 'plain' });
+            const rawHeader = retained?.rawHeader ?? decodePlainArtifactHeaderRaw(artifact.header);
+            const header = retained?.header ?? projectArtifactHeaderForDisplay(rawHeader);
+            return retainArtifactListProjection(previous, {
                 id: artifact.id,
                 header,
                 rawHeader,
                 title: header.title,
-                sessions: header.sessions,
+                sessions: previous?.header === header ? previous.sessions : header.sessions,
                 draft: header.draft,
                 body: undefined,
                 ...(params.includeProvenance === false ? {} : { provenance: await openArtifactProvenance({ ...params, mode: 'plain' }) }),
@@ -478,8 +533,8 @@ async function buildDecryptedArtifactListItem(params: {
                 updatedAt: artifact.updatedAt,
                 isDecrypted: true,
                 storageMode: 'plain',
-                ...artifactAccessProjection(artifact),
-            };
+                ...artifactAccessProjection(artifact, previous),
+            });
         } catch {
             return createLockedArtifactView({
                 artifact,
@@ -506,8 +561,9 @@ async function buildDecryptedArtifactListItem(params: {
             });
         }
 
-        const rawHeader = await openArtifactListHeader({ artifact, dataKey, artifactDataKeys: params.artifactDataKeys });
-        const header = rawHeader ? projectArtifactHeaderForDisplay(rawHeader) : null;
+        const retained = readReusableArtifactHeader({ ...params, previous, storageMode: 'e2ee' });
+        const rawHeader = retained?.rawHeader ?? await openArtifactListHeader({ artifact, dataKey, artifactDataKeys: params.artifactDataKeys });
+        const header = retained?.header ?? (rawHeader ? projectArtifactHeaderForDisplay(rawHeader) : null);
 
         if (!header) {
             return createLockedArtifactView({
@@ -516,12 +572,12 @@ async function buildDecryptedArtifactListItem(params: {
             });
         }
 
-        return {
+        return retainArtifactListProjection(previous, {
             id: artifact.id,
             header,
             rawHeader,
             title: header.title || null,
-            sessions: header.sessions,
+            sessions: previous?.header === header ? previous.sessions : header.sessions,
             draft: header.draft,
             body: undefined, // Body not loaded in list
             ...(params.includeProvenance === false ? {} : { provenance: await openArtifactProvenance({ ...params,
@@ -533,8 +589,8 @@ async function buildDecryptedArtifactListItem(params: {
             updatedAt: artifact.updatedAt,
             isDecrypted: true,
             storageMode: 'e2ee',
-            ...artifactAccessProjection(artifact),
-        };
+            ...artifactAccessProjection(artifact, previous),
+        });
     } catch (err) {
         log.log(`Failed to decrypt artifact ${artifact.id}: ${err}`);
         return createLockedArtifactView({
@@ -548,15 +604,19 @@ export async function decryptArtifactWithBody(params: {
     artifact: Artifact;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    workClass?: CryptoWorkerWorkClass;
     /** The list's batch result, including a failed unwrap; never retry it per record. */
     resolvedDataKey?: Uint8Array | null;
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
 }): Promise<DecryptedArtifact | null> {
     const { artifact, encryption, artifactDataKeys } = params;
+    const previous = params.previousArtifacts?.[artifact.id];
 
     if (isPlainArtifactDataKeyMarker(artifact.dataEncryptionKey)) {
         try {
-            const rawHeader = decodePlainArtifactHeaderRaw(artifact.header);
-            const header = projectArtifactHeaderForDisplay(rawHeader);
+            const retained = readReusableArtifactHeader({ ...params, previous, dataKey: null, storageMode: 'plain' });
+            const rawHeader = retained?.rawHeader ?? decodePlainArtifactHeaderRaw(artifact.header);
+            const header = retained?.header ?? projectArtifactHeaderForDisplay(rawHeader);
             const body = artifact.body ? decodePlainArtifactBody(artifact.body) : null;
             requireArtifactBodyKind(rawHeader, body?.body ?? null);
             return {
@@ -564,7 +624,7 @@ export async function decryptArtifactWithBody(params: {
                 header,
                 rawHeader,
                 title: header.title,
-                sessions: header.sessions,
+                sessions: previous?.header === header ? previous.sessions : header.sessions,
                 draft: header.draft,
                 body: body?.body ?? null,
                 provenance: await openArtifactProvenance({ ...params, mode: 'plain' }),
@@ -575,7 +635,7 @@ export async function decryptArtifactWithBody(params: {
                 updatedAt: artifact.updatedAt,
                 isDecrypted: true,
                 storageMode: 'plain',
-                ...artifactAccessProjection(artifact),
+                ...artifactAccessProjection(artifact, previous),
             };
         } catch {
             return createLockedArtifactView({
@@ -595,9 +655,10 @@ export async function decryptArtifactWithBody(params: {
 
     // Opening custody can fail transiently. Do not turn an interrupted worker
     // operation into an authenticated refusal or publish a locked replacement.
+    const workClass = params.workClass ?? 'interactive';
     const decryptedKey = params.resolvedDataKey !== undefined ? params.resolvedDataKey
-        : await resolveArtifactDataKey({ artifact, encryption, artifactDataKeys });
-    const resolvedProvenanceDataKey = decryptedKey ? await resolveArtifactProvenanceDataKey(params) : null;
+        : await resolveArtifactDataKey({ artifact, encryption, artifactDataKeys, workClass });
+    const resolvedProvenanceDataKey = decryptedKey ? await resolveArtifactProvenanceDataKey({ ...params, workClass }) : null;
     try {
         if (!decryptedKey) {
             return createLockedArtifactView({
@@ -609,9 +670,11 @@ export async function decryptArtifactWithBody(params: {
         // Create artifact encryption instance
         const artifactEncryption = new ArtifactEncryption(decryptedKey);
 
-        // Decrypt header and body
-        const rawHeader = await artifactEncryption.decryptHeaderRaw(artifact.header);
-        const header = rawHeader ? projectArtifactHeaderForDisplay(rawHeader) : null;
+        // Reuse only admitted header bytes; body and private attribution still
+        // pass through their current selected-read admission below.
+        const retained = readReusableArtifactHeader({ ...params, previous, dataKey: decryptedKey, storageMode: 'e2ee' });
+        const rawHeader = retained?.rawHeader ?? await artifactEncryption.decryptHeaderRaw(artifact.header);
+        const header = retained?.header ?? (rawHeader ? projectArtifactHeaderForDisplay(rawHeader) : null);
         const body = artifact.body ? await artifactEncryption.decryptBody(artifact.body) : null;
 
         if (!header || (artifact.body && !body)) {
@@ -626,7 +689,7 @@ export async function decryptArtifactWithBody(params: {
             id: artifact.id,
             header,
             title: header.title || null,
-            sessions: header.sessions,
+            sessions: previous?.header === header ? previous.sessions : header.sessions,
             draft: header.draft,
             body: body?.body ?? null,
             provenance: await openArtifactProvenance({ ...params, resolvedProvenanceDataKey, mode: 'e2ee' }),
@@ -638,7 +701,7 @@ export async function decryptArtifactWithBody(params: {
             updatedAt: artifact.updatedAt,
             isDecrypted: true,
             storageMode: 'e2ee',
-            ...artifactAccessProjection(artifact),
+            ...artifactAccessProjection(artifact, previous),
         };
     } catch (error) {
         log.log(`Failed to decrypt artifact ${artifact.id}: ${error}`);
@@ -681,9 +744,14 @@ export async function fetchAndApplyArtifactsList(params: {
     readTransport?: ArtifactApiOptions['readTransport'];
     serverId?: string;
     signal?: AbortSignal;
+    /** Exact header demand shares decoding/publication with the full inventory, without its checkpoint. */
+    kinds?: readonly string[];
+    approvalStates?: readonly ApprovalArtifactStateV1[];
+    approvalSessionIds?: readonly string[];
+    browserListed?: true;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
-    applyArtifacts: (artifacts: DecryptedArtifact[], source?: 'inventory') => void;
+    applyArtifacts: (artifacts: DecryptedArtifact[], source?: ArtifactInventoryPublication) => void;
     shouldContinue?: () => boolean;
     /** Supplied only by the scoped ambient inventory writer. */
     inventoryScope?: ServerAccountScope | null;
@@ -691,8 +759,7 @@ export async function fetchAndApplyArtifactsList(params: {
     hydrateArtifacts?: (artifacts: DecryptedArtifact[]) => void;
     /** Same scoped snapshot used by the store's inventory reconciliation. */
     inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>;
-    /** Read the reconciled projection after publishing headers, including raced body arrivals. */
-    readCurrentArtifacts?: () => Readonly<Record<string, DecryptedArtifact>>;
+    getCurrentArtifacts?: () => Readonly<Record<string, DecryptedArtifact>>;
     changesPageLimit?: number;
     /** The open Artifact browser consumes attribution; background indexes do not. */
     includeProvenance?: boolean;
@@ -708,7 +775,9 @@ export async function fetchAndApplyArtifactsList(params: {
     if (!shouldContinue()) return;
 
     let finishInventory = () => {};
-    if (params.inventoryScope) {
+    const selected = params.kinds !== undefined || params.browserListed === true
+        || params.approvalStates !== undefined || params.approvalSessionIds !== undefined;
+    if (params.inventoryScope && !selected) {
         let complete!: () => void;
         const completion = new Promise<void>(resolve => { complete = resolve; });
         const pending = { scope: params.inventoryScope, credentials, completion };
@@ -722,7 +791,7 @@ export async function fetchAndApplyArtifactsList(params: {
     try {
         // The binding invalidates opened headers when credential authority or Account key material changes.
         // Persist only its digest; neither credentials nor content keys enter the cache.
-        const scope = params.inventoryScope;
+        const scope = selected ? null : params.inventoryScope;
         const binding = scope ? encodeBase64(await digest('SHA-256', new TextEncoder().encode(JSON.stringify(credentials)))) : null;
         if (!shouldContinue()) return;
         let cursor: string | null = null;
@@ -785,7 +854,8 @@ export async function fetchAndApplyArtifactsList(params: {
                     throw new HappyError(item.error, item.retryable, { code: item.error, status: item.status });
                 }
                 const opened = await decryptArtifactListItems({ artifacts: reads.flatMap(item => item.ok ? [item.artifact] : []),
-                    encryption, artifactDataKeys, includeProvenance: params.includeProvenance === true });
+                    encryption, artifactDataKeys, previousArtifacts: params.inventoryReadStartedWith,
+                    includeProvenance: params.includeProvenance === true });
                 if (!shouldContinue()) return;
                 const byId = new Map(rows.map(row => [row.id, row]));
                 const changedHeaders = new Map<string, ArtifactInventoryWarmCache['artifacts'][number]>();
@@ -821,30 +891,93 @@ export async function fetchAndApplyArtifactsList(params: {
                 cursor = current.status === 'ok' ? current.cursor : null;
             }
             log.log('📦 fetchArtifactsList: Fetching artifacts from server');
+            const unreadable: DecryptedArtifact[] = [];
+            const selectionOptions = { signal: params.signal, ...(params.kinds ? { kinds: params.kinds } : {}),
+                ...(params.approvalStates ? { approvalStates: params.approvalStates } : {}),
+                ...(params.approvalSessionIds !== undefined ? { approvalSessionIds: params.approvalSessionIds } : {}),
+                ...(params.browserListed ? { browserListed: true as const } : {}) };
             const complete = await listArtifactHeadersV1({
-                options: { signal: params.signal },
+                options: selectionOptions,
                 encodeCursor: encodeArtifactListCursor,
                 readPage: async (options) => {
                     if (!shouldContinue()) return { items: [] };
-                    const page = await fetchArtifactsApi(credentials, { ...options, request: params.request,
+                    const page = await fetchArtifactListPage(credentials, { ...options, request: params.request,
                         readTransport: params.readTransport, signal: params.signal, retry: 'none' });
                     if (!shouldContinue()) return { items: [] };
                     // The decoder batches changed envelopes, retaining locked structural rows.
-                    const opened = await decryptArtifactListItems({ artifacts: page, encryption, artifactDataKeys,
+                    const opened = await decryptArtifactListItems({ artifacts: page.items, encryption, artifactDataKeys,
+                        previousArtifacts: params.inventoryReadStartedWith,
                         includeProvenance: params.includeProvenance === true });
                     if (!shouldContinue()) return { items: [] };
-                    const items = opened.filter((artifact): artifact is DecryptedArtifact => artifact !== null)
+                    // Preserve the same locked structural observations as the full read.
+                    // The selector still owns which readable rows match and whether legacy discovery is required.
+                    if (selected) for (const artifact of opened)
+                        if (artifact && !artifact.isDecrypted) unreadable.push(artifact);
+                    const items = opened.filter((artifact): artifact is DecryptedArtifact => artifact !== null && (!selected || artifact.isDecrypted))
                         .map(artifact => ({ artifactId: artifact.id, header: artifact.rawHeader ?? {},
                             createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, artifact }));
-                    const last = page.at(-1);
-                    return { items, ...(last && page.length === options?.limit
+                    // A readable positive does not depend on exhausting historical pages.
+                    // Keep filtering at the canonical selector and publish without certifying
+                    // completeness, retiring absent rows or advancing the warm checkpoint.
+                    const last = page.items.at(-1);
+                    if (last && page.items.length === options?.limit) {
+                        const admitted = selectArtifactHeaderPageV1({ items, options: selectionOptions,
+                            encodeCursor: encodeArtifactListCursor }).items;
+                        if (admitted.length > 0) applyArtifacts(admitted.map(item => item.artifact), 'partial');
+                    }
+                    return { items, ...(page.kindCoverage ? { kindCoverage: page.kindCoverage } : {}),
+                        ...(page.hasUnclassified !== undefined ? { hasUnclassified: page.hasUnclassified } : {}),
+                        ...(opened.some(artifact => !artifact?.isDecrypted) ? { coverage: 'partial' as const } : {}),
+                        ...(last && page.items.length === options?.limit
                         ? { nextCursor: encodeArtifactListCursor({ artifactId: last.id, updatedAt: last.updatedAt }) } : {}) };
                 },
             });
             if (!shouldContinue()) return;
             decryptedArtifacts = complete.items.map(item => item.artifact);
+            // Exhausted typed selection can render like a full read with locked rows,
+            // reconciling structural absence without certifying readable classification.
+            if (selected && complete.coverage !== 'complete') {
+                if (complete.kindCoverage && unreadable.length > 0) {
+                    applyArtifacts([...decryptedArtifacts, ...unreadable], 'unreadable');
+                    if (params.browserListed) throw new HappyError('Artifact header membership is unavailable', false,
+                        { code: 'artifact_content_unavailable' });
+                    return;
+                }
+                applyArtifacts(decryptedArtifacts, 'partial');
+                throw new HappyError('Artifact header membership is unavailable', false, { code: 'artifact_content_unavailable' });
+            }
         }
         if (!shouldContinue()) return;
+        if (params.approvalStates !== undefined && params.inventoryReadStartedWith) {
+            // A state-filtered absence can mean settlement, not deletion. Refresh
+            // only formerly matching approvals through the existing exact header
+            // batch; never acquire settled bodies or revive an intervening delete.
+            const members = new Set(decryptedArtifacts.map(row => row.id));
+            const current = params.getCurrentArtifacts?.();
+            const approvalStates = params.approvalStates;
+            const missing = Object.values(params.inventoryReadStartedWith).filter(row => {
+                if (members.has(row.id) || (current && current[row.id] !== row)) return false;
+                const header = row.rawHeader ?? row.header;
+                if (!header || typeof header.kind !== 'string' || !isApprovalArtifactKindV1(header.kind)
+                    || (params.kinds && !params.kinds.includes(header.kind))) return false;
+                const state = deriveApprovalArtifactQueryHintsV1(header).approvalState;
+                return state !== null && approvalStates.includes(state);
+            });
+            if (missing.length > 0) {
+                const reads = await fetchArtifactReadBatch(credentials, missing.map(row => row.id), {
+                    request: params.request, readTransport: params.readTransport, signal: params.signal, projection: 'headers',
+                });
+                if (!shouldContinue()) return;
+                for (const item of reads) if (!item.ok && item.error !== 'artifact_not_found') {
+                    throw new HappyError(item.error, item.retryable, { code: item.error, status: item.status });
+                }
+                const opened = await decryptArtifactListItems({ artifacts: reads.flatMap(item => item.ok ? [item.artifact] : []),
+                    encryption, artifactDataKeys, previousArtifacts: params.getCurrentArtifacts?.() ?? params.inventoryReadStartedWith,
+                    includeProvenance: params.includeProvenance === true });
+                if (!shouldContinue()) return;
+                decryptedArtifacts.push(...opened.filter((row): row is DecryptedArtifact => row !== null));
+            }
+        }
         if (scope && binding && cursor !== null) {
             try {
                 const artifacts = persistedHeaders ?? decryptedArtifacts.map(row => projectInventoryHeader(row));
@@ -859,26 +992,8 @@ export async function fetchAndApplyArtifactsList(params: {
         finishInventory();
         log.log(`📦 fetchArtifactsList: Applied ${decryptedArtifacts.length} artifact headers`);
 
-        // The always-mounted Inbox badge consumes strict open approval bodies and
-        // private Account notices. Settled receipts are demanded by their transcript;
-        // Launch Profiles have their own scoped catalog read owner.
-        const currentArtifacts = params.readCurrentArtifacts?.();
-        const detailHeads = decryptedArtifacts.filter(candidate => {
-            const decrypted = currentArtifacts ? currentArtifacts[candidate.id] : candidate;
-            if (!decrypted || decrypted.body !== undefined) return false;
-            const header = decrypted.header;
-            const isApprovalIndex = header?.kind === 'approval_request.v1'
-                || header?.kind === 'target_action_approval.v1'
-                || header?.kind === 'execution_run_host_action_approval.v1';
-            const noticeHeader = decrypted.rawHeader ?? header;
-            const notice = readAccountNoticeArtifactHeaderV1(noticeHeader);
-            const isOpenNotice = notice ? notice.status === 'open' && !notice.resolved
-                : readUsageNoticeArtifactHeaderV1(noticeHeader)?.status === 'open';
-            return decrypted.isDecrypted && ((isApprovalIndex && header?.approvalStatus === 'open') || isOpenNotice);
-        });
-        const bodyResults = await fetchAndApplyArtifactBodies({ ...params, credentials, artifactIds: detailHeads.map(artifact => artifact.id) });
-        for (const result of bodyResults) if (result.status === 'rejected') throw result.reason;
-        log.log('📦 fetchArtifactsList: Artifacts applied to storage');
+        // Inbox and transcript consumers demand actionable bodies through the existing Sync
+        // hydration owner. Inventory membership never starts a second body acquisition.
     } catch (error) {
         // A background sync failure is recorded here and settled by the sync owner (retry, the one
         // Home-unreachable state). It is never a console error, which dev builds surface as a toast.
@@ -953,22 +1068,84 @@ export async function fetchAndApplyArtifactChanges(params: Readonly<{
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    getCurrentArtifacts: () => Readonly<Record<string, DecryptedArtifact>>;
     applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
     deleteArtifact: (artifactId: string) => void;
     shouldContinue?: () => boolean;
 }>): Promise<void> {
     const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
     if (params.artifactIds.length === 0 || !shouldContinue()) return;
-    const details = await fetchArtifactsWithBodiesFromApi(params);
+    const reads = await fetchArtifactReadBatch(params.credentials, params.artifactIds, {
+        request: params.request,
+        readTransport: params.readTransport,
+        signal: params.signal,
+        projection: 'headers',
+    });
     if (!shouldContinue()) return;
-    const rejected = details.find((detail): detail is PromiseRejectedResult => detail.status === 'rejected');
-    if (rejected) throw rejected.reason;
+    const retryable = reads.find(item => !item.ok && item.retryable);
+    if (retryable && !retryable.ok) {
+        throw new HappyError(retryable.error, true, { code: retryable.error, status: retryable.status });
+    }
+    const current = params.getCurrentArtifacts();
+    const opened = await decryptArtifactListItems({
+        artifacts: reads.flatMap(item => item.ok ? [item.artifact] : []),
+        encryption: params.encryption,
+        artifactDataKeys: params.artifactDataKeys,
+        previousArtifacts: current,
+        workClass: 'bulk',
+    });
+    if (!shouldContinue()) return;
+    const openedById = new Map(opened.flatMap(artifact => artifact ? [[artifact.id, artifact] as const] : []));
+    const approvalIds = opened.flatMap(artifact => {
+        const kind = artifact?.rawHeader?.kind ?? artifact?.header?.kind;
+        return artifact?.isDecrypted && typeof kind === 'string' && isApprovalArtifactKindV1(kind) ? [artifact.id] : [];
+    });
+    const missingAfterHeader = new Set<string>();
+    if (approvalIds.length > 0) {
+        try {
+            // Approval bodies are the lifecycle authority. The header batch isolates
+            // unreadable rows first; this one bounded body batch then preserves terminal
+            // receipts without making another Artifact's refusal block the publication.
+            const details = await fetchArtifactsWithBodiesFromApi({ ...params, artifactIds: approvalIds,
+                previousArtifacts: current, prepareRecipientKeys: false, workClass: 'bulk' });
+            if (!shouldContinue()) return;
+            for (const [index, detail] of details.entries()) {
+                const artifactId = approvalIds[index]!;
+                if (detail.status !== 'fulfilled') continue;
+                if (detail.value) openedById.set(artifactId, detail.value);
+                else {
+                    openedById.delete(artifactId);
+                    missingAfterHeader.add(artifactId);
+                }
+            }
+        } catch (error) {
+            // A readable current header still settles membership. Open requests keep
+            // their normal explicit body demand; terminal headers fail closed until a
+            // detail/transcript reader can acquire the receipt.
+            log.log(`Approval change body read unavailable: ${error instanceof Error ? error.name : 'unknown'}`);
+        }
+    }
     const artifacts: DecryptedArtifact[] = [];
-    const missingIds: string[] = [];
-    for (const [index, detail] of details.entries()) {
-        if (detail.status !== 'fulfilled') continue;
-        if (detail.value) artifacts.push(detail.value);
-        else missingIds.push(params.artifactIds[index]!);
+    const missingIds: string[] = [...missingAfterHeader];
+    for (const read of reads) {
+        if (missingAfterHeader.has(read.artifactId)) continue;
+        if (read.ok) {
+            const artifact = openedById.get(read.artifactId);
+            if (artifact) artifacts.push(artifact);
+            continue;
+        }
+        if (read.error === 'artifact_not_found') {
+            missingIds.push(read.artifactId);
+            continue;
+        }
+        const previous = current[read.artifactId];
+        if (!previous) continue;
+        params.artifactDataKeys.delete(read.artifactId);
+        artifacts.push(createLockedArtifactView({
+            artifact: previous,
+            reason: 'invalid_stored_content',
+            storageMode: previous.storageMode ?? 'e2ee',
+        }));
     }
     if (!shouldContinue()) return;
     if (artifacts.length > 0) params.applyArtifacts(artifacts);
@@ -988,8 +1165,10 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
     prepareRecipientKeys?: boolean;
     shouldContinue?: () => boolean;
+    workClass?: CryptoWorkerWorkClass;
 }>): Promise<PromiseSettledResult<DecryptedArtifact | null>[]> {
     throwIfAborted(params.signal);
     const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
@@ -998,7 +1177,7 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     const detailReads = await fetchArtifactReadBatch(credentials, params.artifactIds, params);
     if (!shouldContinue()) return [];
     const artifacts = detailReads.flatMap(item => item.ok ? [item.artifact] : []);
-    await resolveArtifactDataKeys({ artifacts, encryption, artifactDataKeys });
+    await resolveArtifactDataKeys({ artifacts, encryption, artifactDataKeys, workClass: params.workClass });
     throwIfAborted(params.signal);
     if (!shouldContinue()) return [];
     return Promise.allSettled(detailReads.map(async item => {
@@ -1007,7 +1186,7 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
             if (item.error === 'artifact_not_found') return null;
             throw new HappyError(item.error, item.retryable, { code: item.error, status: item.status });
         }
-        return openArtifactWithRecipientKeyPreparation({ ...params, artifact: item.artifact,
+        return openArtifactWithRecipientKeyPreparation({ ...params, workClass: params.workClass ?? 'bulk', artifact: item.artifact,
             recipientCensus: item.recipientCensus });
     }));
 }
@@ -1020,6 +1199,7 @@ export async function fetchArtifactWithBodyFromApi(params: {
     artifactId: string;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
     signal?: AbortSignal;
     /** Signed decision preparation may read current content, never repair its audience. */
     prepareRecipientKeys?: boolean;
@@ -1031,15 +1211,17 @@ export async function fetchArtifactWithBodyFromApi(params: {
         try {
             throwIfAborted(params.signal);
             const artifact = await fetchArtifactApi(params.credentials, params.artifactId, params);
-            return await openArtifactWithRecipientKeyPreparation({ ...params, artifact });
+            return await openArtifactWithRecipientKeyPreparation({ ...params, artifact, workClass: 'interactive' });
         } catch (error) {
             if (error instanceof HappyError && error.status === 404) return null;
             throw error;
         }
     }
+    // A selected single-Artifact opening is a user/control demand, not Home
+    // inventory hydration. Preserve that class through batched key opening.
     // The authenticated batch owner returns the exact row and its matching
     // recipient census together, including for a one-row content demand.
-    const [result] = await fetchArtifactsWithBodiesFromApi({ ...params, artifactIds: [params.artifactId] });
+    const [result] = await fetchArtifactsWithBodiesFromApi({ ...params, artifactIds: [params.artifactId], workClass: 'interactive' });
     throwIfAborted(params.signal);
     if (!result) return null;
     if (result.status === 'rejected') throw result.reason;
@@ -1051,12 +1233,14 @@ async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
     serverId?: string; readTransport?: ArtifactApiOptions['readTransport'];
     artifact: Artifact; encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache;
+    previousArtifacts?: Readonly<Record<string, DecryptedArtifact>>;
     recipientCensus?: ArtifactAccessRecipientCensusResponseV1 | null;
     prepareRecipientKeys?: boolean;
+    workClass?: CryptoWorkerWorkClass;
 }>): Promise<DecryptedArtifact | null> {
     const { artifact, encryption, artifactDataKeys } = params;
     throwIfAborted(params.signal);
-    const opened = await decryptArtifactWithBody({ artifact, encryption, artifactDataKeys });
+    const opened = await decryptArtifactWithBody({ artifact, encryption, artifactDataKeys, previousArtifacts: params.previousArtifacts, workClass: params.workClass });
     throwIfAborted(params.signal);
     if (opened?.isDecrypted && opened.storageMode === 'e2ee' && params.prepareRecipientKeys !== false) {
         const key = artifactDataKeys.get(artifact.id);
@@ -1365,6 +1549,7 @@ export async function createArtifactWithHeaderViaApi(params: {
         const kind = tryDeriveArtifactStoredKindV1(rawHeader);
         const request: ArtifactCreateRequest = {
             ...(kind === undefined ? {} : { kind }),
+            ...deriveApprovalArtifactQueryHintsV1(rawHeader),
             id: artifactId,
             header: storedHeader,
             body: storedBody,
@@ -1516,6 +1701,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
                 artifact: fullArtifact,
                 encryption: requireArtifactEncryption(encryption),
                 artifactDataKeys,
+                workClass: 'interactive',
             });
             if (!decryptedKey) {
                 throw new Error('Failed to decrypt encryption key');
@@ -1550,6 +1736,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
             ? encodePlainArtifactStoredContent(rawHeader)
             : await artifactEncryption!.encryptHeader(rawHeader);
         updateRequest.expectedHeaderVersion = headerVersion;
+        Object.assign(updateRequest, deriveApprovalArtifactQueryHintsV1(rawHeader));
     }
 
     // Strict refs are schema-cloned on input; equal file metadata is not a body edit.
@@ -1619,6 +1806,8 @@ export async function updateArtifactWithHeaderViaApi(params: {
         isDecrypted: true,
         availability: { kind: 'available' },
         storageMode,
+        ...(updateRequest.header !== undefined && currentArtifact.storageIdentity
+            ? { storageIdentity: { ...currentArtifact.storageIdentity, header: updateRequest.header } } : {}),
     };
 
     updateArtifact(updatedArtifact);
@@ -1867,6 +2056,7 @@ export async function applySocketArtifactUpdate(params: {
         updatedArtifact.sessions = decryptedHeader?.sessions;
         updatedArtifact.draft = decryptedHeader?.draft;
         updatedArtifact.headerVersion = header.version;
+        if (updatedArtifact.storageIdentity) updatedArtifact.storageIdentity = { ...updatedArtifact.storageIdentity, header: header.value };
     }
 
     // Decrypt and update body if provided

@@ -27,12 +27,19 @@ import { InboxSummaryProvider, useSharedInboxSummary, type InboxSummary } from '
 import { useWorkflowAttentionSource } from './useWorkflowAttentionSource';
 import { createUsageNoticeArtifactFixture, createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { InboxModelProvider, useInboxModel, type InboxModel } from './useInboxModel';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { readAccountNoticeArtifactV1, readUsageNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { InboxContent, type InboxView } from '@/components/inbox/InboxContent';
 import { Text } from '@/components/ui/text/Text';
+import { OtherAccountFollowV1Schema, type OtherAccountFollowV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { RunFollowOccurrenceV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SetOtherAccountFollowRequestV1Schema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
+import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
+import { createArtifactStoreBoundary, createPlainArtifactHttpFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -52,6 +59,24 @@ let artifactWrites: Array<Record<string, unknown>> = [];
 let refuseArtifactRead = false;
 const noticeAlert = vi.hoisted(() => vi.fn());
 let disposeActionLoader: (() => void) | undefined;
+let runFollows: OtherAccountFollowV1[] = [];
+let runFollowWrites: unknown[] = [];
+let artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+function seedArtifacts(artifacts: Record<string, DecryptedArtifact>) {
+    artifactStore.clear();
+    for (const artifact of Object.values(artifacts)) {
+        if (!artifact.isDecrypted) throw new Error('Seed opaque HTTP bytes explicitly for a locked fixture');
+        const stored = createPlainArtifactHttpFixture(artifact, 'account-a');
+        artifactStore.replaceStoredRow(stored);
+        if (stored.ownerAccountId !== 'account-a' && stored.access !== 'owner') {
+            artifactStore.seedAccountGrant(stored.id, 'account-a', stored.access);
+        }
+    }
+    storage.setState({ artifacts });
+}
+const followCensusPath = new URL(resolveSessionFollowActionRequest('follow.list', {
+    receiver: { kind: 'account' }, direction: 'following',
+}).path, 'https://inbox-summary.example.test').pathname;
 
 installDisconnectedServerSocketBoundary();
 vi.mock('socket.io-client', async (importOriginal) =>
@@ -74,6 +99,7 @@ vi.mock('expo-image', () => ({ Image: 'Image' }));
 function features() {
     return createRootLayoutFeaturesResponse({ features: {
         workflows: { enabled: workflowsEnabled }, automations: { enabled: true }, social: { friends: { enabled: false } },
+        sessions: { following: { enabled: true } },
     } });
 }
 
@@ -109,6 +135,7 @@ function DirectInboxRows(props: Readonly<{ view: InboxView; observe: (model: Inb
 async function renderSummary() {
     const screen = await renderScreen(<InboxSummaryProvider><Probe /></InboxSummaryProvider>);
     await act(async () => {});
+    await vi.waitFor(() => expect(latest?.count).not.toBeNull());
     return screen;
 }
 
@@ -129,8 +156,11 @@ describe('useInboxSummary workflow source', () => {
         workflowsEnabled = true;
         artifactRead = createUsageNoticeArtifactFixture();
         artifactWrites = [];
+        artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
         refuseArtifactRead = false;
         noticeAlert.mockClear();
+        runFollows = [];
+        runFollowWrites = [];
         storage.setState(initialState, true);
         connection = await restoreServerAccountForTest({ serverUrl: 'https://inbox-summary.example.test', accountId: 'account-a', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
@@ -143,6 +173,20 @@ describe('useInboxSummary workflow source', () => {
                 content: { t: 'plain', v: { experiments: true, featureToggles: { automations: true } } }, version: 1,
             });
             if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+            if (path === followCensusPath) return Response.json({ follows: runFollows });
+            if (path === SESSION_FOLLOW_HTTP_PATHS_V1.otherSource) {
+                const source: unknown = JSON.parse(new URL(String(url)).searchParams.get('sourceRef') ?? 'null');
+                const index = runFollows.findIndex(follow => JSON.stringify(follow.source) === JSON.stringify(source));
+                const follow = runFollows[index] ?? null;
+                if (init?.method !== 'PUT') return Response.json({ follow });
+                if (!follow) return Response.json({ error: 'source_not_found' }, { status: 404 });
+                const write = SetOtherAccountFollowRequestV1Schema.parse(JSON.parse(String(init.body)));
+                runFollowWrites.push(write);
+                const updated = OtherAccountFollowV1Schema.parse({ ...follow, once: write.once ?? follow.once,
+                    onceDeliveries: write.clearOnceDeliveries ? [] : follow.onceDeliveries });
+                runFollows[index] = updated;
+                return Response.json({ changed: true, follow: updated });
+            }
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v3/automations/runs') return Response.json(await listAutomationRuns());
             if (path === '/v3/automations/runs/workflow-storage') {
@@ -155,16 +199,11 @@ describe('useInboxSummary workflow source', () => {
                 if (refuseArtifactRead) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
                 if (init?.method === 'POST') {
                     artifactWrites.push(JSON.parse(String(init.body)));
-                    return Response.json({ success: true, headerVersion: 4, bodyVersion: 3 });
                 }
-                return Response.json({ id: artifactRead.id, ownerAccountId: artifactRead.ownerAccountId,
-                    access: artifactRead.access, publicAudience: artifactRead.publicAudience, encryptionMode: 'plain',
-                    dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-                    header: encodePlainArtifactStoredContent(artifactRead.rawHeader),
-                    body: encodePlainArtifactStoredContent({ body: artifactRead.body }),
-                    headerVersion: artifactRead.headerVersion, bodyVersion: artifactRead.bodyVersion,
-                    seq: 1, createdAt: 1000, updatedAt: 2000 });
             }
+            const artifactUrl = new URL(String(url));
+            const artifactResponse = artifactStore.handle(`${artifactUrl.pathname}${artifactUrl.search}`, init);
+            if (artifactResponse) return artifactResponse;
             return new Response('{}', { status: 404 });
         } });
         primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: features() } });
@@ -205,6 +244,71 @@ describe('useInboxSummary workflow source', () => {
         expect(request.request.projection).toBe('membership');
         expect(latest).toEqual({ count: 2, hasContent: true });
         expect(storage.getState().workflowRunListWindows.attention?.runIds).toEqual(['run-held', 'run-interrupted']);
+    });
+
+    it('joins one-shot Workflow receipts to the native attention lifetime and demanded Run row', async () => {
+        let run = createWorkflowRunSummaryFixture({ id: 'followed-workflow', ownerAccountId: 'account-a', state: 'running', revision: 1,
+            attentionRequired: true, invocationAttentionRequired: true, failureUnseen: false });
+        const source = { kind: 'workflow_run', runId: run.id } as const;
+        const needs = RunFollowOccurrenceV1Schema.parse({ original: { source, revision: 1 }, event: { kind: 'needs_you', type: 'decision' } });
+        runFollows = [OtherAccountFollowV1Schema.parse({ source, following: true, persistent: false,
+            policy: { preset: 'quiet' }, once: [{ kind: 'run_settled' }], onceDeliveries: [needs] })];
+        listRuns.mockImplementation(async input => ({ runs: input.request.attention && !run.attentionRequired ? [] : [run],
+            acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} }));
+        let setOpen: (open: boolean) => void = () => {};
+        let inbox: InboxModel | null = null;
+        function ModelProbe() { inbox = useInboxModel(); return null; }
+        function Journey() {
+            const [open, update] = React.useState(false); setOpen = update;
+            return <InboxSummaryProvider><Probe />{open ? <InboxModelProvider><ModelProbe /></InboxModelProvider> : null}</InboxSummaryProvider>;
+        }
+        await renderScreen(<Journey />);
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(1));
+        await act(async () => setOpen(true));
+        await waitForHomeGovernance(() => expect(inbox!.items.filter(item => item.source.id === run.id)).toHaveLength(1));
+        expect(inbox!.items.find(item => item.source.id === run.id)).toMatchObject({ view: 'needs_you', type: 'decision',
+            source: { kind: 'workflow_run', onceDeliveries: [needs] } });
+        run = createWorkflowRunSummaryFixture({ ...run, revision: 2, attentionRequired: false, invocationAttentionRequired: false });
+        await act(async () => publishHomeAccountChange(connection!.home.id, [`workflow-run:${run.id}`]));
+        await waitForHomeGovernance(() => expect(inbox!.items.filter(item => item.source.id === run.id)).toEqual([]));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(0));
+        expect(runFollows[0]?.onceDeliveries).toEqual([needs]);
+        expect(runFollowWrites).toEqual([]);
+
+        await act(async () => setOpen(false));
+        const exactReads = () => listRuns.mock.calls.filter(([input]) => !input.request.attention).length;
+        const beforeReceipt = exactReads();
+        run = createWorkflowRunSummaryFixture({ ...run, revision: 3, state: 'succeeded', attentionRequired: false, invocationAttentionRequired: false });
+        const finished = RunFollowOccurrenceV1Schema.parse({ original: { source, revision: 3 }, event: { kind: 'finished' } });
+        const remaining = { kind: 'first_needs_you' } as const;
+        runFollows = [OtherAccountFollowV1Schema.parse({ ...runFollows[0], once: [remaining], onceDeliveries: [finished] })];
+        await act(async () => publishHomeAccountChange(connection!.home.id, [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID], { changeKinds: ['account'] }));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(1));
+        expect(exactReads()).toBe(beforeReceipt);
+        await act(async () => setOpen(true));
+        await waitForHomeGovernance(() => expect(inbox!.items.find(item => item.source.id === run.id)).toMatchObject({ view: 'updates',
+            source: { kind: 'workflow_run', onceDeliveries: [finished] } }));
+        expect(inbox!.items.filter(item => item.source.id === run.id)).toHaveLength(1);
+        listRuns.mockResolvedValue(page([]));
+        await act(async () => publishHomeAccountChange(connection!.home.id, [`workflow-run:${run.id}`]));
+        await waitForHomeGovernance(() => expect(inbox!.items.filter(item => item.source.id === run.id)).toEqual([]));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(0));
+        expect(runFollows[0]?.onceDeliveries).toEqual([finished]);
+        expect(runFollowWrites).toEqual([]);
+        await act(async () => setOpen(false));
+        expect(latest?.count).toBe(0);
+        listRuns.mockImplementation(async input => ({ runs: input.request.attention ? [] : [run],
+            acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} }));
+        await act(async () => setOpen(true));
+        await act(async () => publishHomeAccountChange(connection!.home.id, [`workflow-run:${run.id}`]));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(1));
+        await waitForHomeGovernance(() => expect(inbox!.items.find(item => item.source.id === run.id)).toMatchObject({ view: 'updates' }));
+        const item = inbox!.items.find(item => item.source.id === run.id)!;
+        await act(async () => inbox!.markItemOpened(item));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(0));
+        expect(inbox!.items.filter(item => item.source.id === run.id)).toEqual([]);
+        expect(runFollowWrites).toEqual([{ once: [remaining], clearOnceDeliveries: true }]);
+        expect(runFollows[0]).toMatchObject({ persistent: false, policy: { preset: 'quiet' }, once: [remaining], onceDeliveries: [] });
     });
 
     it('promotes the shell window only while Inbox rows are open, then removes cleared membership on the next wake', async () => {
@@ -296,21 +400,21 @@ describe('useInboxSummary workflow source', () => {
     it('counts unread private plugin notices while leaving read, resolved and foreign notices quiet', async () => {
         listRuns.mockResolvedValue(page([]));
         const notice = createAccountNoticeArtifactFixture();
-        storage.setState({ artifacts: { [notice.id]: notice,
+        seedArtifacts({ [notice.id]: notice,
             read: createAccountNoticeArtifactFixture({ id: 'read', header: { ...notice.header!, readAt: 2_000 } }),
             resolved: createAccountNoticeArtifactFixture({ id: 'resolved', header: { ...notice.header!, resolved: true } }),
             foreign: createAccountNoticeArtifactFixture({ id: 'foreign', ownerAccountId: 'account-b' }),
-        } });
+        });
         await renderSummary();
         expect(latest).toEqual({ count: 1, hasContent: true });
-        await act(async () => { storage.setState({ artifacts: {} }); });
+        await act(async () => { seedArtifacts({}); });
         expect(latest).toEqual({ count: 0, hasContent: false });
     });
 
     it('marks an opened informational plugin notice read through Artifact CAS once without dismissing it', async () => {
         listRuns.mockResolvedValue(page([]));
         artifactRead = createAccountNoticeArtifactFixture();
-        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        seedArtifacts({ [artifactRead.id]: artifactRead });
         let inbox: InboxModel | null = null;
         function ModelProbe() { inbox = useInboxModel(); return null; }
         await renderScreen(<InboxModelProvider><ModelProbe /></InboxModelProvider>);
@@ -335,7 +439,7 @@ describe('useInboxSummary workflow source', () => {
     it('opening a plugin Needs-you item leaves its source request open and unread', async () => {
         listRuns.mockResolvedValue(page([]));
         artifactRead = createAccountNoticeArtifactFixture({ header: { type: 'decision' } });
-        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        seedArtifacts({ [artifactRead.id]: artifactRead });
         let inbox: InboxModel | null = null;
         function ModelProbe() { inbox = useInboxModel(); return null; }
         await renderScreen(<InboxModelProvider><ModelProbe /></InboxModelProvider>);
@@ -350,7 +454,7 @@ describe('useInboxSummary workflow source', () => {
     it.each(['update', 'mention', 'decision'] as const)('directly opens a generic %s on a phone through its notice read owner', async type => {
         listRuns.mockResolvedValue(page([]));
         artifactRead = createAccountNoticeArtifactFixture({ header: { type } });
-        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        seedArtifacts({ [artifactRead.id]: artifactRead });
         let inbox: InboxModel | null = null;
         const observe = (model: InboxModel) => { inbox = model; };
         const screen = await renderScreen(<InboxModelProvider><DirectInboxRows
@@ -379,7 +483,7 @@ describe('useInboxSummary workflow source', () => {
         listRuns.mockResolvedValue(page([]));
         artifactRead = createAccountNoticeArtifactFixture();
         refuseArtifactRead = true;
-        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        seedArtifacts({ [artifactRead.id]: artifactRead });
         let inbox: InboxModel | null = null;
         const screen = await renderScreen(<InboxModelProvider><DirectInboxRows view="updates"
             observe={value => { inbox = value; }} /></InboxModelProvider>);
@@ -396,10 +500,10 @@ describe('useInboxSummary workflow source', () => {
     it('counts private open usage notices and retires them when the Account changes', async () => {
         listRuns.mockResolvedValue(page([]));
         const notice = createUsageNoticeArtifactFixture();
-        storage.setState({ artifacts: { [notice.id]: notice,
+        seedArtifacts({ [notice.id]: notice,
             shared: { ...notice, id: 'shared', ownerAccountId: 'account-b', access: 'view' },
             closed: createUsageNoticeArtifactFixture({ id: 'closed', header: { ...notice.header!, status: 'dismissed' } }),
-        } });
+        });
         await renderSummary();
         expect(latest).toEqual({ count: 1, hasContent: true });
         await act(async () => { storage.setState({ profileScope: {
@@ -410,7 +514,7 @@ describe('useInboxSummary workflow source', () => {
 
     it('dismisses a usage notice through the Account Artifact CAS preserving its exact body, and refuses changed revisions or privacy', async () => {
         listRuns.mockResolvedValue(page([]));
-        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        seedArtifacts({ [artifactRead.id]: artifactRead });
         let inbox: InboxModel | null = null;
         function ModelProbe() { inbox = useInboxModel(); return null; }
         await renderScreen(<InboxModelProvider><ModelProbe /></InboxModelProvider>);
@@ -438,9 +542,11 @@ describe('useInboxSummary workflow source', () => {
             .toEqual(expectedHeader);
         expect(readModel().openUsageNotices).toEqual([]);
         artifactRead = { ...artifactRead, headerVersion: 4 };
+        artifactStore.replaceStoredRow(createPlainArtifactHttpFixture(artifactRead, 'account-a'));
         await act(async () => { await expect(readModel().dismissUsageNotice(entry)).rejects.toThrow(); });
         expect(artifactWrites).toHaveLength(1);
         artifactRead = { ...artifactRead, publicAudience: 'retained' };
+        artifactStore.replaceStoredRow(createPlainArtifactHttpFixture(artifactRead, 'account-a'));
         await act(async () => { await expect(readModel().dismissUsageNotice(entry)).rejects.toThrow(); });
         expect(artifactWrites).toHaveLength(1);
     });

@@ -9,6 +9,7 @@ import { resetMmkvStoresForTests } from '@/dev/reactNativeMmkvStub';
 import { CurrentCursorResponseSchema, ChangesResponseSchema } from '@happier-dev/protocol/changes';
 import { ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 // Load the real graph before the shared per-test reachability reset. Cold source
 // transforms belong to collection, outside the hook's finite cleanup budget.
@@ -24,37 +25,114 @@ function head(id: string, version = 1): Artifact {
         seq: version, createdAt: 1, updatedAt: version };
 }
 
+const inventoryOperations = new Map<AbortController, Promise<void>>();
+async function retireInventoryOperations() {
+    while (inventoryOperations.size > 0) {
+        const operations = [...inventoryOperations];
+        for (const [controller] of operations) controller.abort();
+        await Promise.allSettled(operations.map(([, completion]) => completion));
+    }
+}
+
 async function load(request: (path: string, init?: RequestInit) => Promise<Response>, options: {
-    scope?: typeof scope; credentials?: AuthCredentials; store?: StoreApi<ArtifactsDomain>;
+    scope?: typeof scope; credentials?: AuthCredentials; store?: StoreApi<ArtifactsDomain>; kinds?: readonly string[]; controller?: AbortController;
 } = {}) {
-    const { prepareWarmCacheStorage } = await import('@/sync/domains/state/warmCachePersistence');
-    await prepareWarmCacheStorage();
-    const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
     const store = options.store ?? createStore<ArtifactsDomain>((set, get) => createArtifactsDomain({ set, get }));
-    let startedWith = store.getState().artifacts;
-    const completion = fetchAndApplyArtifactsList({ credentials: options.credentials ?? { token: 'test-bearer' },
-        encryption: null, artifactDataKeys: new Map(), inventoryScope: options.scope ?? scope, request,
-        inventoryReadStartedWith: startedWith,
-        hydrateArtifacts: rows => { store.getState().applyArtifacts(rows); startedWith = store.getState().artifacts; },
-        applyArtifacts: (rows, source) => {
-            store.getState().applyArtifacts(rows, source === 'inventory' ? startedWith : undefined);
-        } });
+    const controller = options.controller ?? new AbortController();
+    const started = createDeferred<void>();
+    const completion = (async () => {
+        try {
+            const { prepareWarmCacheStorage } = await import('@/sync/domains/state/warmCachePersistence');
+            await prepareWarmCacheStorage();
+            const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
+            throwIfAborted(controller.signal);
+            let startedWith = store.getState().artifacts;
+            const inventory = fetchAndApplyArtifactsList({ credentials: options.credentials ?? { token: 'test-bearer' },
+                encryption: null, artifactDataKeys: new Map(), inventoryScope: options.scope ?? scope,
+                request, signal: controller.signal, kinds: options.kinds,
+                inventoryReadStartedWith: startedWith,
+                hydrateArtifacts: rows => { store.getState().applyArtifacts(rows); startedWith = store.getState().artifacts; },
+                applyArtifacts: (rows, source) => {
+                    store.getState().applyArtifacts(rows, source !== undefined ? startedWith : undefined, options.kinds, source);
+                } });
+            started.resolve();
+            await inventory;
+            // A timed-out body's await must not resume as success and start another read.
+            throwIfAborted(controller.signal);
+        } finally { started.resolve(); }
+    })();
+    inventoryOperations.set(controller, completion);
+    const settled = () => { inventoryOperations.delete(controller); };
+    void completion.then(settled, settled);
+    await started.promise;
     return { store, completion };
 }
 
 describe('device-persisted Artifact inventory through the real writer and store', () => {
     beforeEach(async () => {
+        await retireInventoryOperations();
         // Test-only MMKV boundary: all domain, storage placement, serialization and HTTP admission remain real.
         resetMmkvStoresForTests();
         vi.resetModules();
     });
-    afterEach(() => vi.resetModules());
+    afterEach(async () => {
+        await retireInventoryOperations();
+        vi.resetModules();
+    });
 
     async function seed(credentials?: AuthCredentials) {
         const first = await load(async path => path === '/v2/cursor' ? currentCursor(10) : json([head('retained'), head('deleted')]), { credentials });
         await first.completion;
         vi.resetModules(); // A new app process retains only device storage.
     }
+
+    it('settles a retired real inventory before the next device-store boundary', async () => {
+        const entered = createDeferred<void>(), release = createDeferred<Response>();
+        const controller = new AbortController();
+        const read = await load(async path => {
+            if (path === '/v2/cursor') return currentCursor(10);
+            entered.resolve(); return release.promise;
+        }, { controller });
+        try {
+            await entered.promise;
+            let settled = false;
+            const retirement = retireInventoryOperations().then(() => { settled = true; });
+            expect(controller.signal.aborted).toBe(true);
+            await Promise.resolve();
+            expect(settled).toBe(false);
+            release.resolve(json([head('retired')]));
+            await retirement;
+            await expect(read.completion).rejects.toMatchObject({ name: 'AbortError' });
+        } finally { release.resolve(json([head('retired')])); await read.completion.catch(() => undefined); }
+        expect(read.store.getState().artifacts).toEqual({});
+        vi.resetModules();
+        const paths: string[] = [];
+        const next = await load(async path => { paths.push(path); return path === '/v2/cursor' ? currentCursor(10) : json([]); });
+        await next.completion;
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(true);
+        expect(next.store.getState().artifacts.retired).toBeUndefined();
+    });
+
+    it('does not consume or replace the full-inventory checkpoint for a narrow Context read', async () => {
+        await seed();
+        const { createArtifactListHttpResponse } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const selected = { ...head('context-doc'), kindHint: 'prompt_doc.v2' };
+        const narrowed = await load(async path => {
+            expect(path).toContain('/v1/artifacts?');
+            return createArtifactListHttpResponse(new URL(path, 'https://context-checkpoint.test'), [selected]);
+        }, { kinds: ['prompt_doc.v2'] });
+        await narrowed.completion;
+        expect(Object.keys(narrowed.store.getState().artifacts)).toEqual(['context-doc']);
+        expect(narrowed.store.getState().artifactsLoaded).toBe(false);
+        expect(narrowed.store.getState().artifactInventoryKindsLoaded).toEqual(['prompt_doc.v2']);
+        const full = await load(async path => {
+            expect(path).toBe('/v2/cursor');
+            return currentCursor(10);
+        });
+        await full.completion;
+        expect(Object.keys(full.store.getState().artifacts).sort()).toEqual(['deleted', 'retained']);
+        expect(full.store.getState().artifactsLoaded).toBe(true);
+    });
 
     it('retains the admitted persistence carrier across unchanged hydration and projects only changed headers', async () => {
         const persistence = await import('@/sync/domains/state/warmCachePersistence');
@@ -236,7 +314,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(repeated.store.getState().artifactsLoaded).toBe(true);
     });
 
-    it('acquires an approval absent from the device headers through the retained change cursor', async () => {
+    it('catches up an approval header through the retained cursor and acquires its body only on reader demand', async () => {
         await seed();
         const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
@@ -245,7 +323,8 @@ describe('device-persisted Artifact inventory through the real writer and store'
             header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }) };
         const paths: string[] = [];
-        const next = await load(async (path, init) => {
+        let bodyReads = 0;
+        const request = async (path: string, init?: RequestInit) => {
             paths.push(path);
             if (path === '/v2/cursor') return currentCursor(11);
             if (path.startsWith('/v2/changes?after=10&')) return json(ChangesResponseSchema.parse({ changes: [
@@ -258,15 +337,32 @@ describe('device-persisted Artifact inventory through the real writer and store'
             if (input.projection === 'headers') return json({ projection: 'headers', items: [
                 { artifactId: artifact.id, ok: true, artifact: { ...artifact, body: undefined } },
             ] });
+            bodyReads += 1;
             return json(ArtifactReadBatchResponseV1Schema.parse({ items: [
                 { artifactId: artifact.id, ok: true, artifact, recipientCensus: null },
             ] }));
-        });
+        };
+        const next = await load(request);
         await next.completion;
         expect(next.store.getState().artifacts[artifact.id]?.header?.kind).toBe('approval_request.v1');
-        expect(next.store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify(approval));
+        expect(next.store.getState().artifacts[artifact.id]?.body).toBeUndefined();
+        expect(bodyReads).toBe(0);
         expect(next.store.getState().artifactsLoaded).toBe(true);
         expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
+
+        const { listInboxArtifactBodyHydrationRequests } = await import('@/sync/domains/artifacts/inboxArtifacts');
+        const demand = listInboxArtifactBodyHydrationRequests(Object.values(next.store.getState().artifacts), scope.serverId, scope.accountId);
+        expect(demand.map(item => item.artifactId)).toEqual([artifact.id]);
+        const { fetchAndApplyArtifactBodies } = await import('./syncArtifacts');
+        const results = await fetchAndApplyArtifactBodies({ credentials: { token: 'test-bearer' },
+            artifactIds: demand.map(item => item.artifactId), request, encryption: null, artifactDataKeys: new Map(),
+            applyArtifacts: rows => next.store.getState().applyArtifacts(rows) });
+        expect(results).toEqual([{ status: 'fulfilled', value: undefined }]);
+        expect(bodyReads).toBe(1);
+        expect(next.store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify(approval));
+        const { isOpenApprovalInboxArtifact } = await import('@/sync/domains/artifacts/approvalArtifacts');
+        expect(isOpenApprovalInboxArtifact(next.store.getState().artifacts[artifact.id]!)).toBe(true);
+        expect(listInboxArtifactBodyHydrationRequests(Object.values(next.store.getState().artifacts), scope.serverId, scope.accountId)).toEqual([]);
     });
 
     it('settles at the captured change frontier while unrelated Account writes continue', async () => {
@@ -285,64 +381,33 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(next.store.getState().artifactsLoaded).toBe(true);
     });
 
-    it('backfills retained unclassified headers after Home upgrade without delaying inventory publication', async () => {
-        const first = await load(async (path, init) => init?.method === 'POST' ? json({ error: 'unavailable' }, 503)
-            : path === '/v2/cursor' ? currentCursor(10)
-                : json([head('known'), { ...head('unclassified'), kind: null }]));
-        await first.completion;
-        vi.resetModules();
-        const writeStarted = createDeferred<void>();
-        const acknowledgement = createDeferred<Response>();
-        const writes: unknown[] = [];
-        const reloaded = await load(async (path, init) => {
-            if (path === '/v2/cursor') return currentCursor(10);
-            if (path.startsWith('/v2/changes?after=10&')) return json({ changes: [], nextCursor: 10 });
-            expect(path).toBe('/v1/artifacts/unclassified');
-            writes.push(JSON.parse(String(init?.body)));
-            writeStarted.resolve();
-            return acknowledgement.promise;
-        });
-        try {
-            await reloaded.completion;
-            expect(reloaded.store.getState().artifactsLoaded).toBe(true);
-            expect(reloaded.store.getState().artifacts.known?.kind).toBe('prompt');
-            await writeStarted.promise;
-            expect(writes).toEqual([{ kind: 'prompt', expectedHeaderVersion: 1 }]);
-        } finally { acknowledgement.resolve(json({ success: true })); }
-    });
-
-    it('repairs null and stale kinds from opened headers, skips locked rows and stops writing after the server echo', async () => {
+    it('retains legacy and locked headers across cold and warm inventories without read-side hint writes', async () => {
         const rows: Artifact[] = [head('known'), { ...head('unclassified'), kind: null },
             { ...head('board'), kind: 'other', header: encodePlainArtifactStoredContent({ kind: 'work-board.v1', title: 'Board' }) },
             { ...head('locked'), kind: null, encryptionMode: 'e2ee', dataEncryptionKey: 'unavailable-key', header: 'ciphertext' }];
         rows.push({ ...head('layout'), kind: 'other', header: encodePlainArtifactStoredContent({ kind: 'widget-area-layout.v1', title: 'My view' }) });
         const before = rows.map(row => ({ ...row }));
-        const writes: unknown[] = [];
+        const requests: string[] = [];
         const request = async (path: string, init?: RequestInit) => {
+            requests.push(path);
+            expect(init?.method ?? 'GET').toBe('GET');
             if (path === '/v2/cursor') return currentCursor(10);
-            if (init?.method !== 'POST') return json(rows);
-            const write = JSON.parse(String(init.body));
-            writes.push({ path, write });
-            const row = rows.find(row => path === `/v1/artifacts/${row.id}`);
-            if (!row) throw new Error(`Unexpected Artifact write: ${path}`);
-            row.kind = write.kind;
-            return json({ success: true });
+            expect(path).toContain('/v1/artifacts?');
+            return json(rows);
         };
         const first = await load(request);
         await first.completion;
-        await vi.waitFor(() => expect(writes).toEqual(expect.arrayContaining([
-            { path: '/v1/artifacts/unclassified', write: { kind: 'prompt', expectedHeaderVersion: 1 } },
-            { path: '/v1/artifacts/board', write: { kind: 'work_board', expectedHeaderVersion: 1 } },
-            { path: '/v1/artifacts/layout', write: { kind: 'widget_area_layout', expectedHeaderVersion: 1 } },
-        ])));
         expect(first.store.getState().artifacts.locked?.isDecrypted).toBe(false);
-        expect(rows.map(({ kind: _kind, ...row }) => row)).toEqual(before.map(({ kind: _kind, ...row }) => row));
-        // A fresh inventory observes the repaired metadata; it neither rewrites
-        // already-correct rows nor makes unreadable ciphertext classification guesses.
-        const next = await load(request, { scope: { ...scope, serverId: 'fresh-inventory' } });
+        expect(first.store.getState().artifacts.unclassified?.rawHeader?.kind).toBe('prompt_doc.v2');
+        requests.length = 0;
+        vi.resetModules();
+        const next = await load(request);
         await next.completion;
-        expect(writes).toHaveLength(3);
-        expect(next.store.getState().artifacts.board?.kind).toBe('work_board');
+        expect(requests).toEqual(['/v2/cursor']);
+        expect(next.store.getState().artifactsLoaded).toBe(true);
+        expect(next.store.getState().artifacts.unclassified?.kind).toBeNull();
+        expect(next.store.getState().artifacts.locked?.isDecrypted).toBe(false);
+        expect(rows).toEqual(before);
     });
 
     it('hydrates stale rows before catch-up, then refreshes changed and deleted headers without reading bodies', async () => {
@@ -462,7 +527,8 @@ describe('device-persisted Artifact inventory through the real writer and store'
         const retained = first.store.getState().artifacts.retained;
         if (!retained?.isDecrypted) throw new Error('Expected an opened inventory header');
         const opened = { ...retained, access: 'view' as const, body: 'demanded body',
-            storageIdentity: { contentKeyEnvelope: 'test-only-envelope', provenanceKeyEnvelope: null } };
+            storageIdentity: { contentKeyEnvelope: 'test-only-envelope', provenanceKeyEnvelope: null,
+                header: 'test-only-stored-header-evidence' } };
         first.store.getState().updateArtifact(opened);
         const persistence = await import('@/sync/domains/state/warmCachePersistence');
         const saves = vi.spyOn(persistence, 'saveArtifactInventoryWarmCache');
@@ -480,6 +546,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
                 .toEqual(checkpoint);
             expect(checkpoint.artifacts[0]).not.toHaveProperty('body');
             expect(checkpoint.artifacts[0]).not.toHaveProperty('storageIdentity');
+            expect(JSON.stringify(checkpoint)).not.toContain('test-only-stored-header-evidence');
         } finally { saves.mockRestore(); }
     });
 

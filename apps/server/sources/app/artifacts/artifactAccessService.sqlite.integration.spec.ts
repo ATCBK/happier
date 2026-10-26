@@ -10,6 +10,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { artifactsRoutes } from "@/app/api/routes/artifacts/artifactsRoutes";
+import { eventRouter } from '@/app/events/connectionEventRouter';
 import { publicShareRoutes } from "@/app/api/routes/share/publicShareRoutes";
 import { auth } from "@/app/auth/auth";
 import { artifactUpdateHandler } from "@/app/api/socket/artifactUpdateHandler";
@@ -49,6 +50,127 @@ describe("Artifact document grants (real SQLite)", () => {
     }
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+
+    it('wakes the exact owned Session approval inventory after committed create, settlement and deletion, never stale writes or foreign bindings', async () => {
+        const owner = await plainAccount();
+        const other = await plainAccount();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        const foreign = await db.session.create({ data: { accountId: other.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        // Call through the real event router; only observe its network publication intent.
+        const emitted = vi.spyOn(eventRouter, 'emitUpdate');
+        const wakes = () => emitted.mock.calls.map(([value]) => value).filter(value =>
+            value.recipientFilter?.type === 'all-interested-in-session');
+        try {
+            await withAuthenticatedTestApp(artifactsRoutes, async app => {
+                const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+                const id = crypto.randomUUID();
+                const header = (sessionId: string, approvalStatus: string) => encodePlainArtifactStoredContent({
+                    kind: 'target_action_approval.v1', sessionId, approvalStatus, title: 'Approval',
+                });
+                const create = async (artifactId: string, sessionId: string) => app.inject({ method: 'POST', url: '/v1/artifacts', headers, payload: {
+                    id: artifactId, header: header(sessionId, 'open'), body: encodePlainArtifactStoredContent({ receipt: true }),
+                    dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                } });
+                expect((await create(id, session.id)).statusCode).toBe(200);
+                expect(await db.accountChange.findFirst({ where: { accountId: owner.id, kind: 'session', entityId: session.id } }))
+                    .toMatchObject({ sessionId: session.id });
+                expect(wakes()).toHaveLength(1);
+                expect(wakes()[0]).toMatchObject({ userId: owner.id,
+                    recipientFilter: { type: 'all-interested-in-session', sessionId: session.id },
+                    payload: { body: { t: 'account-change', changeKinds: ['session'], entityIds: [session.id] } } });
+                const stale = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}`, headers,
+                    payload: { header: header(session.id, 'executed'), expectedHeaderVersion: 0 } });
+                expect(stale.json()).toMatchObject({ success: false, error: 'version-mismatch' });
+                expect(wakes()).toHaveLength(1);
+                const settled = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}`, headers,
+                    payload: { header: header(session.id, 'executed'), expectedHeaderVersion: 1 } });
+                expect(settled.json()).toMatchObject({ success: true });
+                expect(wakes()).toHaveLength(2);
+                expect((await deleteArtifact({ actorUserId: owner.id, artifactId: id })).ok).toBe(true);
+                expect(wakes()).toHaveLength(3);
+                expect((await create(crypto.randomUUID(), foreign.id)).statusCode).toBe(200);
+                expect(wakes()).toHaveLength(3);
+                expect(await db.accountChange.findFirst({ where: { accountId: owner.id, kind: 'session', entityId: foreign.id } })).toBeNull();
+                expect(await db.session.findUniqueOrThrow({ where: { id: session.id } }))
+                    .toMatchObject({ updatedAt: session.updatedAt, seq: session.seq, metadataVersion: session.metadataVersion });
+            });
+        } finally { emitted.mockRestore(); }
+    });
+
+    it('derives Plain approval selectors at the header CAS and resolves retained unknown state without read repair', async () => {
+        const owner = await plainAccount();
+        const id = crypto.randomUUID();
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const created = await app.inject({ method: 'POST', url: '/v1/artifacts', headers, payload: {
+                id, header: encodePlainArtifactStoredContent({ kind: 'approval_request.v1', approvalStatus: 'open', sessionId: 'session' }),
+                body: encodePlainArtifactStoredContent({ receipt: true }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                approvalState: 'executed', approvalSessionId: 'forged-session',
+            } });
+            expect(created.statusCode, created.body).toBe(200);
+            expect(await db.artifact.findUniqueOrThrow({ where: { id } })).toMatchObject({ approvalState: 'open', approvalSessionId: 'session' });
+            const stale = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}`, headers, payload: {
+                header: encodePlainArtifactStoredContent({ kind: 'approval_request.v1', approvalStatus: 'executed', sessionId: 'session' }),
+                expectedHeaderVersion: 0, approvalState: 'executed',
+            } });
+            expect(stale.json()).toMatchObject({ success: false, error: 'version-mismatch' });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id } })).toMatchObject({ approvalState: 'open', headerVersion: 1 });
+            await db.artifact.update({ where: { id }, data: { approvalState: null, body: new Uint8Array([0xff]) } });
+            const unknown = await app.inject({ method: 'GET', url: '/v1/artifacts?' + new URLSearchParams({
+                kinds: '["approval_request.v1"]', approvalStates: '["open"]' }), headers });
+            expect(unknown.json()).toMatchObject({ items: [], coverage: { status: 'partial', unclassifiedCount: 1 } });
+            const legacy = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=approval', headers });
+            expect(legacy.json().items.map((row: { id: string }) => row.id)).toEqual([id]);
+            const before = await db.artifact.findUniqueOrThrow({ where: { id } });
+            for (let iteration = 0; iteration < 2; iteration++) {
+                const classified = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers, payload: { items: [{
+                    artifactId: id, kind: 'v1:other:approval_request.v1', approvalState: 'executed', approvalSessionId: 'forged-session', expectedHeaderVersion: 1,
+                }] } });
+                expect(classified.json()).toEqual({ items: [{ artifactId: id, success: true }] });
+            }
+            expect(await db.artifact.findUniqueOrThrow({ where: { id } })).toMatchObject({ approvalState: 'open', approvalSessionId: 'session',
+                headerVersion: 1, bodyVersion: 1, body: before.body, updatedAt: before.updatedAt, seq: before.seq });
+            const stateOnly = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}`, headers,
+                payload: { approvalState: 'executed', expectedHeaderVersion: 1 } });
+            expect(stateOnly.json()).toEqual({ success: true });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id } })).toMatchObject({ approvalState: 'open', approvalSessionId: 'session',
+                updatedAt: before.updatedAt, seq: before.seq });
+            const known = await app.inject({ method: 'GET', url: '/v1/artifacts?' + new URLSearchParams({
+                kinds: '["approval_request.v1"]', approvalStates: '["open"]' }), headers });
+            expect(known.json().items.map((row: { id: string }) => row.id)).toEqual([id]);
+            expect(known.json().coverage).toEqual({ status: 'complete', unclassifiedCount: 0 });
+        });
+    });
+
+    it('keeps opaque approval hints atomic with header CAS, preserves body-only writes and invalidates absent replacement hints', async () => {
+        const ownerKeys = tweetnacl.box.keyPair();
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
+        const key = tweetnacl.randomBytes(32);
+        const header = await sealSessionDataKeyBundleV0({ kind: 'approval_request.v1', approvalStatus: 'open', sessionId: 'session' }, key);
+        const body = await sealSessionDataKeyBundleV0({ receipt: true }, key);
+        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id,
+            kind: 'v1:other:approval_request.v1', approvalState: 'open', approvalSessionId: 'session', header, body, headerVersion: 1, bodyVersion: 1,
+            dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ recipientPublicKey: ownerKeys.publicKey, dataKey: key, randomBytes: tweetnacl.randomBytes })) } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const bodyOnly = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { body: privacyKit.encodeBase64(body), expectedBodyVersion: 1 } });
+            expect(bodyOnly.json()).toMatchObject({ success: true });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ approvalState: 'open', approvalSessionId: 'session' });
+            const next = { header: privacyKit.encodeBase64(header), expectedHeaderVersion: 1,
+                kind: 'v1:other:approval_request.v1', approvalState: 'executed', approvalSessionId: 'session' };
+            const changed = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers, payload: next });
+            expect(changed.json()).toMatchObject({ success: true, headerVersion: 2 });
+            const stale = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers,
+                payload: { items: [{ artifactId: artifact.id, kind: next.kind, approvalState: 'open', expectedHeaderVersion: 1 }] } });
+            expect(stale.json()).toMatchObject({ items: [{ success: false, error: 'version-mismatch' }] });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ approvalState: 'executed', approvalSessionId: 'session', headerVersion: 2 });
+            const unknown = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { header: privacyKit.encodeBase64(header), expectedHeaderVersion: 2 } });
+            expect(unknown.json()).toMatchObject({ success: true, headerVersion: 3 });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: null, approvalState: null, approvalSessionId: null, bodyVersion: 2 });
+        });
+    });
 
     it.each(['create', 'update'] as const)('preserves private content with an oversized optional kind during plain %s', async operation => {
         const owner = await plainAccount();
@@ -227,11 +349,13 @@ describe("Artifact document grants (real SQLite)", () => {
         } });
         try {
             await withAuthenticatedTestApp(artifactsRoutes, async app => {
+                const started = performance.now();
                 const response = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch',
                     headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { items: ids.map(artifactId => ({
                         artifactId, kind: 'v1:other:account_notice.v1', expectedHeaderVersion: 1 })) } });
                 expect(response.statusCode, response.body).toBe(200);
                 expect(response.json().items).toEqual(ids.map(artifactId => ({ artifactId, success: true })));
+                console.info(JSON.stringify({ operation: 'artifact-kind-batch', items: ids.length, elapsedMs: Math.round(performance.now() - started), bodyReads }));
             }, { bodyLimit: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 });
             expect(bodyReads).toBe(0);
             expect(await db.artifact.count({ where: { accountId: owner.id, kind: 'v1:other:account_notice.v1' } })).toBe(1001);

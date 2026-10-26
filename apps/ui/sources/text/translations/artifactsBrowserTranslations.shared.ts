@@ -83,6 +83,9 @@ export type ArtifactsBrowserTranslations = Readonly<{
     loadFailedTitle: string;
     loadFailedBody: string;
     retainedBody: string;
+    loadingBody: string;
+    countSoFar: (params: Readonly<{ count: number }>) => string;
+    noMatchSoFar: (params: Readonly<{ query: string }>) => string;
     quota: Readonly<{
         accountTitle: string;
         documentTitle: string;
@@ -275,6 +278,9 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         loadFailedTitle: 'Couldn’t load your artifacts',
         loadFailedBody: 'Check your connection, then try again. Nothing was lost.',
         retainedBody: "Couldn’t refresh. Showing the last loaded artifacts.",
+        loadingBody: 'Still loading the rest.',
+        countSoFar: ({ count }) => `${count} loaded so far`,
+        noMatchSoFar: ({ query }) => `Nothing matches “${query}” yet`,
         quota: {
             accountTitle: 'Artifact storage is full',
             documentTitle: 'Too large to save',

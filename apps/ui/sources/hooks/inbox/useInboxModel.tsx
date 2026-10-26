@@ -27,11 +27,10 @@ import {
 import type { InboxActionOperationEntry } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { actionOperationAddress } from '@/sync/domains/actionOperations/qualifiedActionOperation';
-import { useArtifacts, useFriendsLoaded, useInboxApprovalBodyHydration, useSessionDisplayNameProjections, useWorkflowRunRows } from '@/sync/domains/state/storage';
+import { useArtifacts, useFriendsLoaded, useSessionDisplayNameProjections, useWorkflowRunRows } from '@/sync/domains/state/storage';
 
 import {
     buildInboxWorkGroups,
-    type InboxPullRequestLink,
     type InboxWorkGroup,
 } from '@/activity/presentation/buildInboxWorkGroups';
 import type { InboxSessionAttentionEntry } from '@/activity/presentation/buildInboxSessionPresentation';
@@ -45,11 +44,8 @@ import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRout
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
-import { registerMountedInboxReadOwner } from '@/sync/ops/actions/mountedWorkReadAction';
-import { useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
-import { readActiveSessionPullRequestLinks } from '@/sync/api/plugins/data/sessionPullRequestLinks';
-import { watchActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { registerMountedInboxReadOwner } from '@/sync/ops/actions/mountedWorkReadAction';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { resolveApprovalHomeServerId } from '@/components/approvals/approvalHomeServerId';
 import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
@@ -57,8 +53,11 @@ import { useSessionContentDemand } from '@/sync/domains/session/useSessionConten
 import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
 
 import { useInboxFriendRequests } from './useInboxFriendRequests';
+import { useInboxPluginSessionRows } from './useInboxPluginSessionRows';
+import type { InboxPluginSessionControlInvoker } from './useInboxPluginSessionControls';
 import { useInboxDiscussionSource } from './useInboxDiscussionSource';
 import { InboxExecutionRunSourceBoundary, useInboxExecutionRunSource } from './useInboxExecutionRunSource';
+import { InboxArtifactSourceBoundary, useInboxArtifactSource, type InboxArtifactSource } from './useInboxArtifactSource';
 import {
     useFullWorkflowAttentionSource,
     useAutomationAttentionSource,
@@ -76,6 +75,8 @@ export type AutomationInboxItem = Readonly<{
 }>;
 
 export type InboxModel = Readonly<{
+    artifactSource: InboxArtifactSource;
+    invokePluginSessionControl: InboxPluginSessionControlInvoker;
     source: ReturnType<typeof useActivityOverview>['source'];
     openApprovals: ReturnType<typeof useArtifacts>;
     openUsageNotices: readonly OpenUsageNoticeArtifact[];
@@ -88,6 +89,7 @@ export type InboxModel = Readonly<{
     /** Current canonical Activity facts, including Sessions that no longer need an answer. */
     sessionCandidates: readonly SessionActivityAttention[];
     discussionAttention: ReturnType<typeof useInboxDiscussionSource>;
+    executionRunAttention: Pick<ReturnType<typeof useInboxExecutionRunSource>, 'loading' | 'failed'>;
     markItemOpened: (item: InboxItem) => Promise<void>;
     friendRequests: ReturnType<typeof useInboxFriendRequests>['requests'];
     sessionPresentation: InboxSessionPresentation;
@@ -115,7 +117,6 @@ export type InboxModel = Readonly<{
     setReminder: (session: Session, remindAt: number | null) => Promise<void>;
 }>;
 
-const EMPTY_PULL_REQUEST_LINKS: readonly InboxPullRequestLink[] = Object.freeze([]);
 
 /**
  * The server origin link of a step session (ORC §3.1: awareness `origin?: {kind, runId?}`). U4 has
@@ -163,6 +164,7 @@ function useCreateInboxModel(): InboxModel {
     const { source, overview } = useActivityOverview();
     const friends = useInboxFriendRequests();
     const artifacts = useArtifacts();
+    const artifactSource = useInboxArtifactSource();
     const profileScope = storage((state) => state.profileScope);
     const appPlugins = useAppShellPluginUiProjection();
     const pluginPackages = appPlugins.accountLifetime?.isCurrent()
@@ -173,54 +175,7 @@ function useCreateInboxModel(): InboxModel {
         .map(plugin => [plugin.id, plugin.displayName] as const)), [pluginPackages]);
     const discussionAttention = useInboxDiscussionSource(profileScope?.serverId ?? null);
     const executionRuns = useInboxExecutionRunSource();
-    const pluginAvailability = useActivePluginAccountAvailabilityReader();
-    const pullRequestReadAvailable = pluginAvailability?.readCurrentCollectionContract({
-        pluginId: 'happier.channels', collectionId: 'channel-state',
-    }).kind === 'available';
-    const [pullRequestRead, setPullRequestRead] = React.useState<Readonly<{
-        lifetime: NonNullable<ReturnType<typeof captureActiveServerAccountScopeLifetime>>;
-        phase: 'loading' | 'loaded' | 'failed';
-        links: readonly InboxPullRequestLink[];
-    }> | null>(null);
-    React.useEffect(() => {
-        const lifetime = captureActiveServerAccountScopeLifetime();
-        if (!lifetime || !profileScope || !areServerAccountScopesEqual(lifetime.scope, profileScope)
-            || !pluginAvailability || !pullRequestReadAvailable) {
-            setPullRequestRead(null);
-            return;
-        }
-        let controller: AbortController | undefined;
-        const refresh = () => {
-            controller?.abort();
-            const request = new AbortController();
-            controller = request;
-            setPullRequestRead(previous => ({ lifetime, phase: 'loading',
-                links: previous?.lifetime === lifetime ? previous.links : EMPTY_PULL_REQUEST_LINKS }));
-            void readActiveSessionPullRequestLinks({ accountLifetime: lifetime,
-                readAvailability: () => pluginAvailability, signal: request.signal,
-            }).then(outcome => {
-                if (request.signal.aborted || !lifetime.isCurrent()) return;
-                setPullRequestRead(previous => ({ lifetime,
-                    phase: outcome.status === 'ready' ? 'loaded' : 'failed',
-                    links: outcome.status === 'ready' ? outcome.sessions.flatMap(session => session.pullRequestLinks.map(link => ({
-                        sessionId: session.sessionId, serverId: lifetime.scope.serverId, number: link.number, url: link.url,
-                        state: link.state, observedAt: link.observedAt,
-                    }))) : previous?.lifetime === lifetime ? previous.links : EMPTY_PULL_REQUEST_LINKS,
-                }));
-            }).catch(() => {
-                if (request.signal.aborted || !lifetime.isCurrent()) return;
-                setPullRequestRead(previous => ({ lifetime, phase: 'failed',
-                    links: previous?.lifetime === lifetime ? previous.links : EMPTY_PULL_REQUEST_LINKS }));
-            });
-        };
-        const watch = watchActivePluginCollectionChanges({ pluginId: 'happier.channels', collectionId: 'channel-state',
-            accountLifetime: lifetime, onInvalidated: refresh });
-        const retirement = lifetime.onRetire(() => controller?.abort());
-        refresh();
-        return () => { controller?.abort(); watch?.dispose(); retirement.dispose(); };
-    }, [pluginAvailability, pullRequestReadAvailable, profileScope?.accountId, profileScope?.serverId]);
-    const currentPullRequestRead = pullRequestReadAvailable && pullRequestRead?.lifetime.isCurrent()
-        && areServerAccountScopesEqual(pullRequestRead.lifetime.scope, profileScope) ? pullRequestRead : null;
+    const pluginSessionInbox = useInboxPluginSessionRows();
     const friendsLoaded = useFriendsLoaded();
     const actionOperationEntries = useInboxActionOperations();
     const [pendingReadKeys, setPendingReadKeys] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -231,7 +186,6 @@ function useCreateInboxModel(): InboxModel {
         () => artifacts.filter(isOpenApprovalInboxArtifact),
         [artifacts],
     );
-    useInboxApprovalBodyHydration(artifacts, profileScope?.serverId);
     const approvalSourceAddresses = React.useMemo(() => openApprovals.flatMap(artifact => {
         const serverId = resolveApprovalHomeServerId(artifact.header);
         const sessionId = typeof artifact.header?.sessionId === 'string' ? artifact.header.sessionId.trim() : '';
@@ -253,7 +207,15 @@ function useCreateInboxModel(): InboxModel {
     }), [artifacts, profileScope?.accountId]);
     const openAccountNotices = React.useMemo(() => accountNotices.filter(entry => isOpenAccountNotice(entry.header)), [accountNotices]);
     const workflowAttention = useFullWorkflowAttentionSource();
-    const workflowRuns = useWorkflowRunRows(workflowAttention.runIds);
+    const workflowRunOnceDeliveries = React.useMemo(() => new Map(executionRuns.workflowFollows.map(follow =>
+        [follow.source.runId, follow.onceDeliveries ?? []] as const)), [executionRuns.workflowFollows]);
+    const workflowRunIds = React.useMemo(() => [...new Set([...workflowAttention.runIds, ...workflowRunOnceDeliveries.keys()])],
+        [workflowAttention.runIds, workflowRunOnceDeliveries]);
+    const loadedWorkflowRuns = useWorkflowRunRows(workflowRunIds);
+    const workflowRuns = React.useMemo(() => loadedWorkflowRuns.filter(row => workflowAttention.runIds.includes(row.id)
+        || workflowRunOnceDeliveries.get(row.id)?.some(delivery => delivery.event.kind !== 'needs_you')
+        || row.summary?.attentionRequired === true && workflowRunOnceDeliveries.has(row.id)),
+    [loadedWorkflowRuns, workflowAttention.runIds, workflowRunOnceDeliveries]);
     const automationAttention = useAutomationAttentionSource();
     const automationRuns = useWorkflowRunRows(automationAttention.runIds);
     const automations = storage((state) => state.automations);
@@ -286,17 +248,6 @@ function useCreateInboxModel(): InboxModel {
                 : [];
         });
     }, [attentionStandings, sessionsById]);
-    const pullRequestLinks = currentPullRequestRead?.links ?? EMPTY_PULL_REQUEST_LINKS;
-    const landings = React.useMemo(() => pullRequestLinks.flatMap((link) => {
-        const session = sessionsById[link.sessionId];
-        const standing = session
-            ? attentionStandings[buildSessionOrganizationSessionKey(session.serverId ?? '', session.id)]
-            : undefined;
-        // The Channels observation lifecycle owns remote state and automatic settlement.
-        return session && session.serverId && link.serverId
-            && areServerProfileIdentifiersEquivalent(session.serverId, link.serverId)
-            && link.state !== 'merged' && link.state !== 'closed' && standing?.standing !== false ? [{ session, link }] : [];
-    }), [attentionStandings, pullRequestLinks, sessionsById]);
     const previousWorkGroups = React.useRef<readonly InboxWorkGroup[]>([]);
     const workGroups = React.useMemo(() => {
         const next = buildInboxWorkGroups({
@@ -306,23 +257,27 @@ function useCreateInboxModel(): InboxModel {
         automationServerId: automationAttention.serverId,
         openApprovals,
         stalledSessions,
-        landings,
+        landings: [],
         snoozed,
         resolveSession: (sessionId) => sessionsById[sessionId],
         resolveOriginRunId: readAwarenessOriginRunId,
         }, previousWorkGroups.current);
         previousWorkGroups.current = next;
         return next;
-    }, [automationAttention.serverId, automationRuns, landings, openApprovals, sessionPresentation.sessionsNeedingAttention, sessionsById, snoozed, stalledSessions, workflowRuns]);
+    }, [automationAttention.serverId, automationRuns, openApprovals, sessionPresentation.sessionsNeedingAttention, sessionsById, snoozed, stalledSessions, workflowRuns]);
     const previousItems = React.useRef<readonly InboxItem[]>([]);
     const items = React.useMemo(() => {
         const next = buildInboxItems({ workGroups, sessionPresentation, workflowServerId: workflowAttention.serverId,
+            workflowRunOnceDeliveries,
             accountServerId: profileScope?.serverId ?? null, notices: openAccountNotices,
             executionRuns: executionRuns.entries,
+            pluginSessionRows: pluginSessionInbox.rows,
+            sessionsById, sessionListRowsByServerId: source.sessionListRowsByServerId,
+            sessionMessagesById: source.sessionMessagesById, attentionStandings,
             discussions: discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames }, previousItems.current);
         previousItems.current = next;
         return next;
-    }, [workGroups, sessionPresentation, workflowAttention.serverId, profileScope?.serverId, openAccountNotices, executionRuns.entries, discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames]);
+    }, [workGroups, sessionPresentation, workflowAttention.serverId, workflowRunOnceDeliveries, profileScope?.serverId, openAccountNotices, executionRuns.entries, discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames, pluginSessionInbox.rows, sessionsById, source.sessionListRowsByServerId, source.sessionMessagesById, attentionStandings]);
 
     const spansHomes = React.useMemo(
         () => new Set(overview.candidates.map((candidate) => candidate.address?.serverId ?? candidate.serverId ?? '')).size > 1,
@@ -336,12 +291,13 @@ function useCreateInboxModel(): InboxModel {
     );
     const isLoading = (
         (friends.visible && !friendsLoaded)
+        || artifactSource.phase === 'loading'
         || discussionAttention.loading
         || executionRuns.loading
         || (!source.isDataReady && overview.candidates.length === 0)
         || (workflowAttention.available && workflowAttention.phase === 'loading')
         || (automationAttention.available && automationAttention.phase === 'loading')
-        || (pullRequestReadAvailable && (!currentPullRequestRead || currentPullRequestRead.phase === 'loading'))
+        || pluginSessionInbox.loading
     );
     const hasPrimaryAttention = openApprovals.length > 0
         || items.length > 0
@@ -354,9 +310,10 @@ function useCreateInboxModel(): InboxModel {
         || friends.requests.length > 0
         || actionOperationEntries.length > 0;
     const showCaughtUp = !isLoading && !hasPrimaryAttention
+        && artifactSource.phase === 'current'
         && !executionRuns.failed
         && (!discussionAttention.available || discussionAttention.coverage === 'complete')
-        && currentPullRequestRead?.phase !== 'failed'
+        && !pluginSessionInbox.failed
         && ![workflowAttention, automationAttention].some((attention) => attention.available
             && (attention.phase === 'failed' || attention.refreshFailed));
     const markAllPending = markAllReadTargets.length > 0
@@ -451,12 +408,18 @@ function useCreateInboxModel(): InboxModel {
                 if (entry) await updateNotice(entry, 'read');
             } else if (item.source.kind === 'discussion') {
                 await discussionAttention.markOpened(item);
+            } else if (item.source.onceDeliveries?.length && (item.focus.kind === 'execution_run' || item.focus.kind === 'workflow_run')) {
+                const source = item.focus.kind === 'workflow_run' ? { kind: 'workflow_run' as const, runId: item.focus.id }
+                    : item.focus.machineId !== undefined ? { kind: 'execution_run' as const, machineId: item.focus.machineId, runId: item.focus.id }
+                        : { kind: 'execution_run' as const, sessionId: item.focus.sessionId, runId: item.focus.id };
+                if (!profileScope || !areServerProfileIdentifiersEquivalent(item.focus.serverId, profileScope.serverId)) throw new Error('action_account_scope_changed');
+                await executionRuns.markOpened(source);
             } else if (item.view === 'updates' && item.source.kind === 'session') {
                 const target = targetBySessionAddress.get(buildSessionOrganizationSessionKey(item.source.serverId, item.source.id));
                 if (target) await markRead([target]);
             }
         } catch { Modal.alert(t('common.error'), t('errors.unknownError')); }
-    }, [accountNotices, markRead, targetBySessionAddress, updateNotice, discussionAttention.markOpened]);
+    }, [accountNotices, markRead, targetBySessionAddress, updateNotice, discussionAttention.markOpened, executionRuns.markOpened, profileScope]);
 
     const settle = React.useCallback(async (session: Session) => {
         const serverId = session.serverId ?? null;
@@ -476,6 +439,8 @@ function useCreateInboxModel(): InboxModel {
     }, []);
 
     const model = React.useMemo(() => ({
+        artifactSource,
+        invokePluginSessionControl: pluginSessionInbox.invokeControl,
         source,
         openApprovals,
         openUsageNotices,
@@ -502,11 +467,14 @@ function useCreateInboxModel(): InboxModel {
         workGroups,
         spansHomes,
         workflowAttention,
+        executionRunAttention: executionRuns,
         automationAttention,
         automationAttentionItems,
         settle,
         setReminder,
     }), [
+        artifactSource,
+        pluginSessionInbox.invokeControl,
         spansHomes,
         actionOperationEntries,
         friends.requests,
@@ -534,6 +502,7 @@ function useCreateInboxModel(): InboxModel {
         targetBySessionAddress,
         workGroups,
         workflowAttention,
+        executionRuns,
         automationAttention,
         automationAttentionItems,
     ]);
@@ -548,9 +517,9 @@ function useCreateInboxModel(): InboxModel {
 /** Mount at an open Inbox screen or popover boundary. */
 export function InboxModelProvider(props: Readonly<{ children: React.ReactNode }>) {
     return (
-        <WorkflowAttentionSourceBoundary>
+        <InboxArtifactSourceBoundary><WorkflowAttentionSourceBoundary>
             <InboxExecutionRunSourceBoundary><InboxModelContextProvider>{props.children}</InboxModelContextProvider></InboxExecutionRunSourceBoundary>
-        </WorkflowAttentionSourceBoundary>
+        </WorkflowAttentionSourceBoundary></InboxArtifactSourceBoundary>
     );
 }
 

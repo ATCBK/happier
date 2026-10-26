@@ -1,5 +1,5 @@
 import { deriveArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
-import { getArtifactUseTargetV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { getArtifactKindPolicyV1, getArtifactUseTargetV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { ArtifactWorkspaceSourceV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { WorkflowDefinitionArtifactBodyV1ReadSchema, WorkflowDefinitionArtifactHeaderV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
@@ -41,17 +41,21 @@ const USE_TARGET_TO_BROWSER_KIND = {
     workflow: 'workflow', role: 'role', launch_profile: 'launchProfile', approval: 'document',
 } as const satisfies Readonly<Record<ReturnType<typeof getArtifactUseTargetV1>['kind'], ArtifactBrowserKind>>;
 
-/** The browser kind, or `null` for a row the browser does not list. Locked rows stay listed as documents. */
+/** The browser kind, or `null` for a row the browser does not list. Unresolved locked rows remain visible. */
 export type ArtifactBrowserArtifact = Readonly<{
     id: string; title?: string | null; header?: Readonly<Record<string, unknown>> | null;
-    rawHeader?: Readonly<Record<string, unknown>> | null; draft?: boolean;
+    rawHeader?: Readonly<Record<string, unknown>> | null; kindHint?: string | null; draft?: boolean;
     access?: DecryptedArtifact['access']; ownerAccountId?: string; createdAt?: number; updatedAt?: number;
 }>;
 
 export function classifyArtifactBrowserKind(artifact: ArtifactBrowserArtifact): ArtifactBrowserKind | null {
     if (artifact.draft === true) return null;
+    const header = artifact.rawHeader ?? artifact.header;
+    // An admitted private hint can exclude an opaque row, but cannot give an
+    // unopened header a domain meaning or turn unknown classification into fact.
+    if (!header && !getArtifactKindPolicyV1(artifact.kindHint).browserListed) return null;
     const target = getArtifactUseTargetV1({ artifactId: artifact.id,
-        header: artifact.rawHeader ?? artifact.header ?? {}, body: null });
+        header: header ?? {}, body: null });
     return target.browserListed ? USE_TARGET_TO_BROWSER_KIND[target.kind] : null;
 }
 
@@ -200,8 +204,8 @@ export function readArtifactPreview(artifact: Pick<DecryptedArtifact, 'id' | 'he
         }
         return labels ? { kind: 'workflow', steps: labels.map((title) => ({ title })) } : { kind: 'none' };
     }
-    // A launch profile is settings, not prose: its card shows the kind's mark, never the stored envelope.
-    if (header?.kind === 'launch-profile.v1') return { kind: 'none' };
+    // A launch profile or a saved widget is configuration, not prose: its card shows the kind's mark, never the stored envelope.
+    if (header?.kind === 'launch-profile.v1' || header?.kind === 'widget-definition.v1') return { kind: 'none' };
     if (isArtifactHtmlHeaderV1(artifact.rawHeader ?? artifact.header)) return { kind: 'html', name: artifact.title ?? '' };
     if (artifact.body !== null && typeof artifact.body === 'object') {
         const reference = artifact.body;

@@ -3,31 +3,29 @@ import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
-import { ExecutionRunPublicStateSchema, ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunPublicStateSchema, ExecutionRunListResponseSchema, ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { PluginProjectedResourceV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginDynamicResourceContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/v2';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
-import { notifyExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
+import { notifyExecutionRunActivity, notifyExecutionRunActivityReconnect } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
 import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
+import { SessionQuestionContextV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 
 import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, createSessionViewerFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, compilePluginJsonSchema, encodePlainArtifactStoredContent,
-    encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
-    normalizePluginAccountCollectionContractV1, PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol';
-import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
-import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
-import { resetActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
-import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
+import { clearPluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { createActionExecutor } from '@happier-dev/protocol/actions';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { invokeMountedWorkRead } from '@/sync/ops/actions/mountedWorkReadAction';
@@ -40,7 +38,7 @@ import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccou
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { projectWork, resolveWorkReadPresentation } from '@/components/sessions/work/workProjection';
-import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import type { Artifact, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createAccountNoticeArtifactFixture, createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { createAutomationDefinitionSummary } from '@/sync/domains/automations/automationDefinitionProjection';
@@ -67,6 +65,12 @@ import type { InboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
 import { readAccountNoticeArtifactHeader } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { InboxPluginSessionLines } from '@/components/inbox/InboxPluginSessionLines';
+import { InboxContent } from '@/components/inbox/InboxContent';
+import { createArtifactReadBatchHttpResponse, createArtifactStoreBoundary, createPlainArtifactHttpFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { isArtifactInventoryReady } from '@/sync/domains/artifacts/artifactInventory';
+
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -77,10 +81,28 @@ import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 const listRuns = vi.hoisted(() => vi.fn<(params: { filter?: Record<string, unknown> }) => Promise<WorkflowRunListPage>>());
 const executed = vi.hoisted(() => [] as Array<{ actionId: string; input: unknown }>);
 const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
-const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
+const resourceBoundary = vi.hoisted(() => ({ request: vi.fn() }));
+// The daemon network is the boundary; Resource admission, shared stores and Inbox remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (request: unknown) => resourceBoundary.request(request),
+}));
 const discussionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const artifactReadBoundary = vi.hoisted(() => ({ request: vi.fn() }));
-const executionRunBoundary = vi.hoisted(() => ({ list: vi.fn(), follows: vi.fn(), rules: vi.fn() }));
+const executionRunBoundary = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), follows: vi.fn(), rules: vi.fn() }));
+let artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+function seedArtifacts(artifacts: Record<string, DecryptedArtifact>, opaqueRows: readonly Artifact[] = []) {
+    artifactStore.clear();
+    for (const artifact of Object.values(artifacts)) {
+        const stored = artifact.isDecrypted ? createPlainArtifactHttpFixture(artifact, 'account-a')
+            : opaqueRows.find(row => row.id === artifact.id);
+        if (!stored) throw new Error('Seed opaque HTTP bytes explicitly for a locked fixture');
+        artifactStore.replaceStoredRow(stored);
+        if (stored.ownerAccountId !== 'account-a' && stored.access !== 'owner') {
+            artifactStore.seedAccountGrant(stored.id, 'account-a', stored.access);
+        }
+    }
+    storage.setState({ artifacts });
+}
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let disposeActionLoader: (() => void) | undefined;
@@ -103,6 +125,17 @@ function Probe(): null {
     return null;
 }
 
+function MountedInboxContent(props: Readonly<{ view?: 'updates' }>) {
+    return <InboxContent model={useInboxModel()} view={props.view} />;
+}
+
+function MountedPluginSessionControls(): React.ReactNode {
+    const inbox = useInboxModel();
+    const row = inbox.items.find(item => item.focus.id === 'external-session-0');
+    return <InboxPluginSessionLines rows={row?.pluginSessionRows ?? []}
+        invoke={inbox.invokePluginSessionControl} testID="external-plugin-controls" />;
+}
+
 function BriefRows(props: Readonly<{ onOpen: (item: VoiceBriefItem) => void }>) {
     const inbox = useInboxModel();
     const brief = buildVoiceBrief({ inbox, settings: storage.getState().settings });
@@ -112,6 +145,8 @@ function BriefRows(props: Readonly<{ onOpen: (item: VoiceBriefItem) => void }>) 
 async function renderModel(children?: React.ReactNode) {
     const screen = await renderScreen(<InboxModelProvider><Probe />{children}</InboxModelProvider>);
     await act(async () => {});
+    // These legacy scenarios vary other producers; the real HTTP inventory still has to settle.
+    await vi.waitFor(() => expect(isArtifactInventoryReady(storage.getState(), 'inboxOpen')).toBe(true));
     return screen;
 }
 
@@ -124,6 +159,422 @@ function enableDiscussionReads() {
 }
 
 describe('useInboxModel work groups (ORC R-10)', () => {
+    it('keeps a list-only lead title current and private without reading transcript bodies on unrelated arrivals', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const lead = createSessionListRenderableSessionFixture({ id: 'list-only-lead', serverId,
+            metadata: { name: 'Payments rollout', path: '/project', host: 'qa-host' } });
+        const worker = createSessionFixture({ id: 'list-only-worker', serverId, active: true,
+            manager: { sessionId: lead.id }, pendingPermissionRequestCount: 1, pendingRequestObservedAt: Date.now() });
+        storage.setState({ sessions: { [worker.id]: worker }, sessionMessages: {},
+            sessionListRowsByServerId: { [serverId]: {
+                [lead.id]: lead,
+                [worker.id]: createSessionListRenderableSessionFixture({ ...worker, hasPendingPermissionRequests: true }),
+            } }, ordinarySessionListMembershipByServerId: { [serverId]: [lead.id, worker.id] } });
+        const screen = await renderModel(<MountedInboxContent />);
+        try {
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)?.reportsTo)
+                .toEqual({ address: { serverId, sessionId: lead.id }, title: 'Payments rollout' }));
+            expect(screen.getTextContent()).toContain('Reports to Payments rollout');
+            const row = model!.items.find(item => item.focus.id === worker.id);
+            let bodyReads = 0;
+            const messages = Array.from({ length: 1_000 }, (_, index): import('@happier-dev/session-core/raw').NormalizedMessage => ({
+                id: `unrelated-${index}`, seq: index + 1, localId: null, createdAt: index + 1, role: 'user', isSidechain: false,
+                content: { type: 'text', text: 'Unrelated work' },
+            }));
+            await act(async () => { storage.getState().applyMessages('unrelated-session', messages); });
+            const transcript = storage.getState().sessionMessages['unrelated-session']!;
+            for (const message of Object.values(transcript.messagesById)) {
+                const kind = message.kind;
+                Object.defineProperty(message, 'kind', { configurable: true, enumerable: true,
+                    get: () => { bodyReads++; return kind; } });
+            }
+            await act(async () => storage.setState(state => ({ sessionMessages: { ...state.sessionMessages,
+                'unrelated-session': { ...transcript, messagesVersion: transcript.messagesVersion + 1 },
+            } })));
+            expect(model!.items.find(item => item.focus.id === worker.id)).toBe(row);
+            expect(bodyReads).toBe(0);
+            await act(async () => storage.setState(state => ({ sessionListRowsByServerId: {
+                ...state.sessionListRowsByServerId, [serverId]: { ...state.sessionListRowsByServerId[serverId],
+                    [lead.id]: { ...lead, metadata: { ...lead.metadata!, name: 'Revised lead' } },
+                },
+            } })));
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)?.reportsTo?.title).toBe('Revised lead'));
+            await act(async () => storage.setState(state => ({ sessionListRowsByServerId: {
+                ...state.sessionListRowsByServerId, [serverId]: { ...state.sessionListRowsByServerId[serverId],
+                    [lead.id]: { ...lead, encryptedContentAvailability: 'encrypted_content_unavailable' },
+                },
+            } })));
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)?.reportsTo?.title).toBeNull());
+            expect(screen.getTextContent()).not.toContain('Payments rollout');
+            expect(screen.getTextContent()).not.toContain('Revised lead');
+        } finally { await screen.unmount(); }
+    });
+
+    it('carries loaded lead and WorkerUpdate facts through message-only updates', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const lead = createSessionFixture({ id: 'report-lead', serverId,
+            metadata: { name: 'Payments rollout', path: '/project', host: 'qa-host' } });
+        const worker = createSessionFixture({ id: 'report-worker', serverId, active: true,
+            manager: { sessionId: lead.id }, pendingPermissionRequestCount: 1, pendingRequestObservedAt: Date.now() });
+        const otherLead = createSessionFixture({ id: 'other-report-lead', serverId,
+            metadata: { name: 'Next lead', path: '/project', host: 'qa-host' } });
+        const notice = (seq: number, headline: string): import('@happier-dev/session-core/raw').NormalizedMessage => ({
+            id: `worker-update-${seq}`, seq, localId: null, createdAt: seq, role: 'event', isSidechain: false,
+            content: { type: 'worker-update', update: { v: 1, workerKind: 'session', workerId: worker.id,
+                ownerState: 'settled', wake: 'finished', headline, canInspect: true } },
+        });
+        storage.setState({ sessions: { [lead.id]: lead, [worker.id]: worker, [otherLead.id]: otherLead },
+            sessionListRowsByServerId: { [serverId]: {
+                [lead.id]: createSessionListRenderableSessionFixture(lead),
+                [worker.id]: createSessionListRenderableSessionFixture({ ...worker, hasPendingPermissionRequests: true }),
+            } }, ordinarySessionListMembershipByServerId: { [serverId]: [lead.id, worker.id] }, sessionMessages: {} });
+        storage.getState().applyMessages(lead.id, [notice(1, 'Runbook drafted')]);
+        const screen = await renderModel();
+        try {
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)).toMatchObject({
+                reportsTo: { address: { serverId, sessionId: lead.id }, title: 'Payments rollout' },
+                workerUpdateHeadline: 'Runbook drafted',
+            }));
+            await act(async () => { storage.getState().applyMessages(lead.id, [notice(2, 'Runbook revised')]); });
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)?.workerUpdateHeadline)
+                .toBe('Runbook revised'));
+            const row = model!.items.find(item => item.focus.id === worker.id);
+            await act(async () => { storage.getState().applyMessages(otherLead.id, [
+                { id: 'unrelated-prompt', seq: 1, localId: null, createdAt: 1, role: 'user', isSidechain: false,
+                    content: { type: 'text', text: 'Unrelated work' } },
+            ]); });
+            expect(model!.items.find(item => item.focus.id === worker.id)).toBe(row);
+            await act(async () => storage.setState(state => ({ sessions: { ...state.sessions,
+                [worker.id]: { ...state.sessions[worker.id]!, manager: { sessionId: otherLead.id } },
+            } })));
+            await vi.waitFor(() => expect(model?.items.find(item => item.focus.id === worker.id)?.reportsTo)
+                .toEqual({ address: { serverId, sessionId: otherLead.id }, title: 'Next lead' }));
+        } finally { await screen.unmount(); }
+    });
+
+    it('keeps one Triage PR landing through the public Channels Watch Action, dedupes requests and honors settled standing until unlinked', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const lifetime = captureActiveServerAccountScopeLifetime()!;
+        const serverId = lifetime.scope.serverId;
+        const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-triage/manifest');
+        const { activate } = await import('@happier-dev/plugins-triage/happier-plugin-ui/triage-account-runtime');
+        const { CHANNELS_PLUGIN } = await import('@happier-dev/plugins-channels/manifest');
+        const { createPluginTestkit } = await import('@happier-dev/plugin-sdk/testing');
+        const { observeSessionPullRequestWatchAction } = await import('../../../../../packages/plugins/channels/src/sessionPullRequestWatch');
+        const { MemoryCollection } = await import('../../../../../packages/plugins/channels/src/testkit/memoryCollection');
+        const { CHANNEL_STATE_COLLECTION } = await import('../../../../../packages/plugins/channels/src/collections');
+        const { withChannelStateSessionIdentity } = await import('../../../../../packages/plugins/channels/src/collectionMigrations');
+        const { sessionPullRequestBindingFixture } =
+            await import('../../../../../packages/plugins/channels/src/testkit/sessionPullRequestBindingFixture');
+        const state = new MemoryCollection();
+        for (const [id, number] of [['one', 1], ['two', 2]] as const) {
+            const binding = sessionPullRequestBindingFixture(id, 'linked-session', number);
+            await state.put(withChannelStateSessionIdentity(binding, binding.payload.target), { expectedRevision: 'absent' });
+        }
+        // Only persistent Data, Settings IO and host Session discovery are boundaries; both plugin owners stay real.
+        const services = {
+            storage: {
+                // The real testkit accepts the full host service; this fixture admits Account Data only.
+                get ephemeral(): never { throw new Error('Watch metadata must not acquire ephemeral storage'); },
+                get daemonSession(): never { throw new Error('Watch metadata must not acquire daemon Session storage'); },
+                get daemon(): never { throw new Error('Watch metadata must not acquire daemon storage'); },
+                ...({ account: { collection: (definition: { id: string }) => {
+                    if (definition.id !== CHANNEL_STATE_COLLECTION.id) throw new Error('Unexpected Collection');
+                    return state;
+                } } } as unknown as import('@happier-dev/plugin-sdk/actions').PluginAccountActionContext['services']['storage']),
+            },
+            actions: { execute: async (id: string, input: unknown) => {
+                if (id !== 'session.targets.resolve' || !input || typeof input !== 'object' || !('target' in input)
+                    || typeof input.target !== 'string') {
+                    throw new Error('Watch metadata must not acquire native status');
+                }
+                return { coverage: 'complete', addresses: [{ sessionId: input.target, serverId }], error: null };
+            } } as unknown as import('@happier-dev/plugin-sdk').PluginServices['actions'],
+            settings: { forScope: () => ({ snapshot: async () => ({ scope: { kind: 'account' as const }, revision: '1', values: {} }),
+                get: async () => null, describe: () => [], watch: () => ({ dispose() {} }),
+                set: async () => { throw new Error('Read only'); }, reset: async () => { throw new Error('Read only'); } }) },
+        } satisfies Pick<import('@happier-dev/plugin-sdk').PluginServices, 'storage' | 'actions' | 'settings'>;
+        const channels = await createPluginTestkit({ manifest: CHANNELS_PLUGIN.manifest, module: CHANNELS_PLUGIN, services });
+        const session = createSessionFixture({ id: 'linked-session', serverId, updatedAt: 123 });
+        storage.setState({ sessions: { [session.id]: session },
+            sessionListRowsByServerId: { [serverId]: { [session.id]: createSessionListRenderableSessionFixture(session) } },
+            ordinarySessionListMembershipByServerId: { [serverId]: [session.id] } });
+        const pluginId = PLUGIN_MANIFEST.id;
+        const resources = (PLUGIN_MANIFEST.contributes?.resources ?? [])
+            .filter(resource => resource.source === 'dynamic').map(resource => PluginDynamicResourceContributionV2Schema.parse(resource));
+        const index = resources.find(resource => resource.sessionInbox);
+        expect(index).toBeDefined();
+        if (!index) throw new Error('Expected the Triage Session Inbox index');
+        const detailId = index.sessionInbox!.detailResourceId;
+        const hostAccountOrigin = { ...lifetime.scope, custodyId: 'triage-inbox-custody',
+            sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: {
+                kind: 'source_declaration' as const, packageName: '@happier-dev/plugins-triage' } } };
+        const declarations = resources.filter(resource => resource.id === index.id || resource.id === detailId)
+            .map(resource => ({ ...PluginProjectedResourceV2Schema.parse({ id: resource.id, pluginId,
+                occurrenceId: hostAccountOrigin.custodyId, resourceKind: resource.kind, scope: resource.scope,
+                contentType: resource.contentType, execution: resource.execution,
+                ...(resource.sessionInbox ? { sessionInbox: resource.sessionInbox } : {}) }), hostAccountOrigin }));
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION, installedPackagesById: { [pluginId]: {
+            id: pluginId, displayName: 'Triage', enabled: true, occurrenceId: hostAccountOrigin.custodyId,
+            source: { kind: 'local', locator: '/triage/inbox' } } },
+            resourcesById: Object.fromEntries(declarations.map(resource => [`${pluginId}/${resource.id}`, resource])) };
+        const { publishCommittedAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
+        const unpublish = publishCommittedAppShellPluginUiProjection(() => projection);
+        const { createPluginReactNativeBundleCache } = await import('@/components/plugins/reactNative/bundleCache');
+        const { getInstalledPluginUiClientExecutableComposition } = await import('@/components/plugins/reactNative/clientExecutableContributions');
+        const composition = getInstalledPluginUiClientExecutableComposition();
+        if (index.execution?.target !== 'account') throw new Error('Expected the portable Triage index');
+        const target = { realm: 'account' as const, ...index.execution.account, platform: 'web' as const };
+        const cache = createPluginReactNativeBundleCache();
+        const identity = { pluginId, contributionId: `resources/${index.id}`, artifactId: target.artifactId,
+            artifactDigest: `sha256:${'a'.repeat(64)}` as const, platform: 'web' as const };
+        cache.putInstalledArtifact({ identity, format: 'plainJs', bytes: new TextEncoder().encode('exports.activate = function() {};') });
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        const queries = vi.spyOn(state, 'query');
+        const watchReads: import('@happier-dev/plugin-sdk').JsonValue[] = [];
+        const activationErrors: string[] = [];
+        try {
+            const attempts = await composition.reconcile([{ pluginId, contributes: PLUGIN_MANIFEST.contributes ?? {},
+                target, executionOrigin: null,
+                occurrenceId: hostAccountOrigin.custodyId, pluginVersion: PLUGIN_MANIFEST.version, accountLifetime: lifetime,
+                hostUiApiRange: '^1.0.0', cache, identity, moduleReference: { exportName: 'activate' },
+                // Cross-plugin transport invokes the real registered Channels Action; no metadata assembler is mocked.
+                backend: { backendId: 'commonJs', available: true, diagnostics: [], loadInstalledBundle: async () =>
+                    (api: import('@happier-dev/plugin-sdk').PluginAccountApi) => {
+                        try { return activate({ ...api, resources: {
+                        registerDynamicResource: (id, runtime) => api.resources.registerDynamicResource(id, {
+                            read: options => runtime.read({ ...options, readAction: async (ref, input, readOptions) => {
+                                if (ref.pluginId !== 'happier.channels' || ref.localId !== 'session-pull-request-watch-v1') {
+                                    throw new Error('Index must only read the public Watch metadata Action');
+                                }
+                                watchReads.push(input);
+                                return { ok: true, result: await channels.invokeAction(ref.localId, input,
+                                    { surface: 'ui', signal: readOptions?.signal }) };
+                            } }),
+                            observe: (invalidate, options) => runtime.observe(invalidate, { ...options,
+                                observeAction: async (ref, input, notify, readOptions) => {
+                                    if (ref.pluginId !== 'happier.channels' || ref.localId !== 'session-pull-request-watch-v1') {
+                                        throw new Error('Index must only observe the public Watch metadata Action');
+                                    }
+                                    return observeSessionPullRequestWatchAction(input, notify,
+                                        { services, invokedAtMs: Date.now(), signal: readOptions?.signal ?? options.signal });
+                                } }),
+                        }),
+                        } }); } catch (error) {
+                            activationErrors.push(error instanceof Error ? `${error.name}: ${error.message}` : 'Unknown activation exception');
+                            throw error;
+                        }
+                    },
+                }, authority: { kind: 'account', ...lifetime.scope, custodyId: hostAccountOrigin.custodyId },
+                isCurrent: lifetime.isCurrent }]);
+            expect(activationErrors).toEqual([]);
+            expect(attempts.map(attempt => attempt.result)).toEqual([{ ok: true }]);
+            const value: AppShellPluginUiProjectionValue = { pluginUiProjection: projection, pluginBrowserProjection: null,
+                phase: 'current', interactionEnabled: true, machineId: null, serverId, platform: 'web', accountLifetime: lifetime,
+                reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {} };
+            const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+            const view = (active: boolean) => <PluginSurfaceFocusEligibilityProvider active={active}>
+                <AppShellPluginUiProjectionValueProvider value={value}><InboxModelProvider><Probe /></InboxModelProvider>
+                </AppShellPluginUiProjectionValueProvider></PluginSurfaceFocusEligibilityProvider>;
+            screen = await renderScreen(view(false));
+            expect(queries).not.toHaveBeenCalled();
+            await screen.update(view(true));
+            await vi.waitFor(() => expect(model?.items.filter(item => item.focus.kind === 'session')).toHaveLength(1));
+            expect(model!.items[0]).toMatchObject({ producer: 'live', type: 'update', createdAt: 123,
+                focus: { kind: 'session', id: session.id, serverId }, pluginSessionRows: [expect.objectContaining({ pluginId })] });
+            expect(model!.items[0]!.pluginSessionRows![0]!.detailBinding).toMatchObject({ machineId: null,
+                context: { kind: 'session', sessionId: session.id }, accountResource: { id: detailId } });
+            expect(watchReads.length).toBeGreaterThan(0);
+            expect(watchReads.every(input => input !== null && typeof input === 'object' && 'kind' in input && input.kind === 'list')).toBe(true);
+            const initialReads = watchReads.length;
+            const now = Date.now();
+            const requested = createSessionFixture({ ...session, active: true, pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: now, agentState: { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action',
+                    arguments: { questions: [{ question: 'Continue?' }] }, createdAt: now,
+                    questionV1: SessionQuestionContextV1Schema.parse({ mode: 'continue', assumption: 'Keep working', lasting: false, type: 'blocked' }) } } } });
+            await act(async () => { storage.setState({ sessions: { [session.id]: requested },
+                sessionListRowsByServerId: { [serverId]: { [session.id]: createSessionListRenderableSessionFixture({ ...requested,
+                    hasPendingUserActionRequests: true }) } }, sessionOrganizationAttentionStandingsBySessionKey: {
+                    [buildSessionOrganizationSessionKey(serverId, session.id)]: { sessionId: session.id, standing: false, updatedAt: now },
+                } }); });
+            await vi.waitFor(() => expect(model?.items.filter(item => item.focus.id === session.id))
+                .toEqual([expect.objectContaining({ type: 'blocked', pluginSessionRows: [expect.objectContaining({ pluginId })] })]));
+            await act(async () => { storage.setState({ sessions: { [session.id]: session },
+                sessionListRowsByServerId: { [serverId]: { [session.id]: createSessionListRenderableSessionFixture(session) } } }); });
+            await vi.waitFor(() => expect(model?.items.filter(item => item.focus.id === session.id)).toEqual([]));
+            await act(async () => { storage.setState({ sessionOrganizationAttentionStandingsBySessionKey: {} }); });
+            await vi.waitFor(() => expect(model?.items.filter(item => item.focus.id === session.id)).toHaveLength(1));
+            expect(watchReads).toHaveLength(initialReads); // Session/request/standing changes never reread retained PR metadata.
+            await act(async () => { for (const id of ['one', 'two']) await state.delete(id, { expectedRevision: 1 }); });
+            await vi.waitFor(() => expect(model?.items.filter(item => item.focus.id === session.id)).toEqual([]));
+            expect(resourceBoundary.request).not.toHaveBeenCalled();
+        } finally { await screen?.unmount(); unpublish(); await composition.invalidatePlugin(pluginId); await channels.dispose(); }
+    });
+
+    it('derives external Resource Session rows without Channels, hidden reads or unrelated-arrival rereads', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const lifetime = captureActiveServerAccountScopeLifetime()!;
+        const serverId = lifetime.scope.serverId;
+        const pluginId = 'acme.live-inbox';
+        const question = SessionQuestionContextV1Schema.parse({ mode: 'continue', assumption: 'Keep working',
+            lasting: false, type: 'blocked' });
+        const observedAt = Date.now();
+        const session = createSessionFixture({ id: 'external-session-0', serverId, active: true,
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1, pendingRequestObservedAt: observedAt,
+            agentState: { requests: { 'external-question': { tool: 'AskUserQuestion', kind: 'user_action',
+                arguments: { questions: [{ question: 'Which direction?' }] }, createdAt: observedAt, questionV1: question } } } });
+        storage.setState({ sessions: { [session.id]: session },
+            sessionListRowsByServerId: { [serverId]: { [session.id]: createSessionListRenderableSessionFixture({ ...session,
+                hasPendingUserActionRequests: true }) } },
+            ordinarySessionListMembershipByServerId: { [serverId]: [session.id] } });
+        const index = PluginProjectedResourceV2Schema.parse({ id: 'inbox', pluginId, occurrenceId: 'external-1',
+            resourceKind: 'config', scope: 'surface', contentType: 'application/json', sessionInbox: { detailResourceId: 'detail' } });
+        const detail = PluginProjectedResourceV2Schema.parse({ id: 'detail', pluginId, occurrenceId: 'external-1',
+            resourceKind: 'config', scope: 'session', contentType: 'application/json' });
+        const rows = Array.from({ length: 1_000 }, (_, i) => ({ id: `row-${i}`,
+            session: { serverId, sessionId: `external-session-${i}` }, title: `External ${i}`, detail: null,
+            detailResource: { pluginId, resourceId: 'detail' }, ...(i < 2 ? { controls: [
+                { id: 'See / details', label: { key: 'details', fallback: 'See details' },
+                    effect: { kind: 'open', page: { pageId: 'review', subPath: 'items/42' } } },
+                ...['review', 'disabled', 'absent'].map(localId => ({ id: localId, label: 'Review this',
+                    effect: { kind: 'action', invocation: { action: { pluginId: 'acme.other', localId }, input: { expectedRevision: 1 } } } })),
+            ] } : {}) }));
+        const { PluginProjectedActionV2Schema, formatQualifiedPluginActionId, normalizeActionsSettingsV1 } = await import('@happier-dev/protocol');
+        const reviewAction = PluginProjectedActionV2Schema.parse({ id: 'review', pluginId: 'acme.other', occurrenceId: 'other-1',
+            title: 'Current catalog title', icon: 'checkmark', scopes: ['global'], surfaces: ['ui'],
+            execution: { target: 'daemon' }, dangerLevel: 'safe', available: true });
+        const reads: unknown[] = [];
+        const detailReads: unknown[] = [];
+        const watches: string[] = [];
+        let indexUnavailable = false;
+        let indexChanged = false;
+        resourceBoundary.request.mockImplementation(async (request: { method: string; payload: Record<string, unknown>; signal?: AbortSignal }) => {
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ) {
+                const ref = request.payload.resource as { localId: string };
+                const context = request.payload.context as { kind: string; sessionId?: string; launchInput?: { cursor: string | null } };
+                if (ref.localId === 'detail') {
+                    detailReads.push(context);
+                    return { ok: true, resource: request.payload.resource, kind: 'config', contentType: 'application/json',
+                        digest: `sha256:${'b'.repeat(64)}`, bytesBase64: Buffer.from(JSON.stringify({ sessionId: context.sessionId })).toString('base64') };
+                }
+                reads.push(request.payload);
+                const second = context.launchInput?.cursor === 'second';
+                return { ok: true, resource: request.payload.resource, kind: 'config', contentType: 'application/json',
+                    digest: `sha256:${(indexUnavailable ? 'c' : indexChanged ? 'd' : 'a').repeat(64)}`, bytesBase64: Buffer.from(JSON.stringify(indexUnavailable
+                        ? { kind: 'unavailable', reason: 'denied' }
+                        : { kind: 'ready', rows: second ? rows.slice(500) : rows.slice(0, 500), nextCursor: second ? null : 'second' })).toString('base64') };
+            }
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_OPEN) {
+                const ref = request.payload.resource as { localId: string };
+                watches.push(ref.localId);
+                return { ok: true, subscriptionId: request.payload.subscriptionId,
+                    digest: `sha256:${(ref.localId === 'detail' ? 'b' : 'a').repeat(64)}` };
+            }
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_CLOSE) return { ok: true };
+            return new Promise((_resolve, reject) => request.signal?.addEventListener('abort',
+                () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
+        });
+        const value: AppShellPluginUiProjectionValue = { pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION,
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'External Inbox', enabled: true,
+                occurrenceId: 'external-1', source: { kind: 'local', locator: '/external/inbox' } } },
+            resourcesById: { [`${pluginId}/inbox`]: index, [`${pluginId}/detail`]: detail },
+            actionsById: { 'acme.other/review': reviewAction,
+                'acme.other/disabled': { ...reviewAction, id: 'disabled', available: false } } },
+            pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: 'external-machine',
+            serverId, platform: 'web', accountLifetime: lifetime,
+            reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {} };
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const navigation = { push: vi.fn(), replace: vi.fn(), back: vi.fn() };
+        const render = (active: boolean, projected = value, children?: React.ReactNode) => <DestinationInstanceHost
+            tabId="external-inbox" ref={{ kind: 'inbox', params: {} }} pathname="/inbox" focused visible navigation={navigation}>
+            <PluginSurfaceFocusEligibilityProvider active={active}>
+            <AppShellPluginUiProjectionValueProvider value={projected}><InboxModelProvider><Probe />{children}</InboxModelProvider>
+            </AppShellPluginUiProjectionValueProvider></PluginSurfaceFocusEligibilityProvider></DestinationInstanceHost>;
+        const screen = await renderScreen(render(false));
+        expect(reads).toEqual([]);
+        expect(watches).toEqual([]);
+        await screen.update(render(true));
+        await vi.waitFor(() => expect(model?.items.filter(item => item.source.kind === 'session')).toHaveLength(1_000));
+        expect(reads).toHaveLength(2);
+        expect(detailReads).toEqual([]);
+        expect(reads[0]).toMatchObject({ context: { kind: 'surface',
+            launchInput: { serverId, cursor: null } } });
+        await vi.waitFor(() => expect(watches).toEqual(['inbox', 'inbox']));
+        const first = model!.items.find(item => item.focus.id === 'external-session-0');
+        expect(first?.pageRoute).toContain('external-session-0');
+        expect(model!.items.filter(item => item.focus.id === session.id)).toHaveLength(1);
+        expect(first).toMatchObject({ type: 'blocked', question: { requestId: 'external-question' },
+            pluginSessionRows: [expect.objectContaining({ pluginId })] });
+        const controlRow = first!.pluginSessionRows![0]!;
+        expect(controlRow.controls?.map(control => control.id)).toEqual(['See / details', 'review']);
+        expect(controlRow.controls?.[1]?.action).toMatchObject({ title: 'Current catalog title', icon: 'checkmark', enabled: true,
+            identity: { pluginId: 'acme.other', localId: 'review' }, occurrenceId: 'other-1' });
+        await screen.update(render(true, value, <MountedPluginSessionControls />));
+        const { router } = await import('expo-router');
+        vi.mocked(router.push).mockClear();
+        await screen.pressByTestIdAsync('external-plugin-controls.control.See / details');
+        expect(vi.mocked(router.push).mock.calls.length + navigation.push.mock.calls.length).toBe(1);
+        expect(navigation.push).toHaveBeenCalledExactlyOnceWith(`/plugins/${pluginId}/review/items/42?serverId=${encodeURIComponent(serverId)}`);
+        expect(router.push).not.toHaveBeenCalled();
+        for (let i = 0; i < 20; i++) await act(async () => publishHomeAccountChange(
+            serverId, [`unrelated-${i}`], { changeKinds: ['artifact'] }));
+        expect(reads).toHaveLength(2);
+        expect(model!.items.find(item => item.focus.id === 'external-session-0')).toBe(first);
+        await act(async () => storage.setState(state => ({ settingsScope: lifetime.scope, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                [formatQualifiedPluginActionId({ pluginId: 'acme.other', localId: 'review' })]: { enabled: false },
+            } }),
+        } })));
+        const disabledControlRow = model!.items.find(item => item.focus.id === 'external-session-0')!.pluginSessionRows![0]!;
+        expect(disabledControlRow.controls?.map(control => control.id)).toEqual(['See / details']);
+        await expect(model!.invokePluginSessionControl(controlRow, 'review')).resolves.toEqual({ kind: 'unavailable' });
+        expect(reads).toHaveLength(2);
+        expect(detailReads).toEqual([]);
+        const { acquirePluginContextualResourceStore, PluginContextualResourceState, PluginContextualResourceStoreProvider } = await import('@/components/plugins/surfaces/PluginContextualResourceStoreProvider');
+        const binding = first!.pluginSessionRows![0]!.detailBinding!;
+        const detailValues: unknown[] = [];
+        const detailBody = (active: boolean) => <PluginContextualResourceStoreProvider>{[0, 1].map(key =>
+            <PluginContextualResourceState key={key} binding={binding} resource="detail" active={active}>
+                {snapshot => { if (snapshot?.value) detailValues.push(JSON.parse(new TextDecoder().decode(snapshot.value.bytes))); return null; }}
+            </PluginContextualResourceState>)}</PluginContextualResourceStoreProvider>;
+        await screen.update(render(true, value, detailBody(false)));
+        expect(detailReads).toEqual([]);
+        await screen.update(render(true, value, detailBody(true)));
+        await vi.waitFor(() => expect(detailValues).toContainEqual({ sessionId: 'external-session-0' }));
+        expect(detailReads).toEqual([{ kind: 'session', sessionId: 'external-session-0' }]);
+        expect(watches.filter(id => id === 'detail')).toHaveLength(1);
+        expect(reads).toHaveLength(2);
+        await act(async () => { storage.setState({ sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} }); });
+        const indexLease = acquirePluginContextualResourceStore({ pluginId, machineId: 'external-machine', serverId,
+            expectedCallerOccurrenceId: 'external-1', accountLifetime: lifetime,
+            context: { kind: 'surface', mountInstanceKey: 'happier:session-inbox', launchInput: { cursor: null, serverId } } })!;
+        try {
+            const unchanged = model!.items.find(item => item.focus.id === 'external-session-1')!.pluginSessionRows![0]!;
+            rows[0]!.title = 'Updated external 0';
+            indexChanged = true;
+            await act(async () => { await indexLease.store.getEntry('inbox').refresh(); });
+            expect(model!.items.find(item => item.focus.id === 'external-session-1')!.pluginSessionRows![0]).toBe(unchanged);
+            indexUnavailable = true;
+            await act(async () => { await indexLease.store.getEntry('inbox').refresh(); });
+            expect(model!.items.some(item => item.focus.id.startsWith('external-session-'))).toBe(false);
+            expect(model!.showCaughtUp).toBe(false); // A denied producer is not a successful empty page.
+            indexUnavailable = false;
+            await act(async () => { await indexLease.store.getEntry('inbox').refresh(); });
+            await vi.waitFor(() => expect(model?.items.filter(item => item.source.kind === 'session')).toHaveLength(1_000));
+        } finally { indexLease.dispose(); }
+        await screen.update(render(true, { ...value, pluginUiProjection: { ...value.pluginUiProjection!, resourcesById: {} } }));
+        expect(model!.items.some(item => item.focus.id.startsWith('external-session-'))).toBe(false);
+        await screen.update(render(true, { ...value, pluginUiProjection: { ...value.pluginUiProjection!,
+            resourcesById: { [`${pluginId}/inbox`]: index } } }));
+        expect(model!.showCaughtUp).toBe(false); // Missing declared detail is unavailable, not an empty producer.
+        await act(async () => (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime());
+        expect(model!.items.some(item => item.focus.id.startsWith('external-session-'))).toBe(false);
+        await screen.unmount();
+    });
+
     beforeAll(async () => {
         await loadSyncSingletonForTests();
         disposeActionLoader = await installRealActionExecutorModuleLoader();
@@ -138,10 +589,11 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         executed.length = 0;
         listRuns.mockReset();
         automationBoundary.request.mockReset();
-        collectionBoundary.request.mockReset().mockResolvedValue(null);
         discussionBoundary.request.mockReset().mockResolvedValue(null);
         artifactReadBoundary.request.mockReset().mockResolvedValue(null);
+        artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
         executionRunBoundary.list.mockReset().mockResolvedValue({ runs: [] });
+        executionRunBoundary.get.mockReset();
         executionRunBoundary.follows.mockReset().mockResolvedValue({ follows: [] });
         executionRunBoundary.rules.mockReset().mockResolvedValue({ rules: [] });
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
@@ -160,6 +612,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
                         throw new Error('Expected Session RPC wire request');
                     }
                     const request = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, payload.params, payload.method);
+                    if (payload.method.endsWith(SESSION_RPC_METHODS.EXECUTION_RUN_GET)) return { ok: true,
+                        result: await socketRpcCodec.encodeResponse({ mode: 'plain' },
+                            ExecutionRunGetResponseSchema.parse(await executionRunBoundary.get()), request.callId) };
                     if (!payload.method.endsWith(SESSION_RPC_METHODS.EXECUTION_RUN_LIST)) throw new Error('Unexpected Session RPC');
                     return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' },
                         ExecutionRunListResponseSchema.parse(await executionRunBoundary.list(payload.method)), request.callId) };
@@ -203,9 +658,14 @@ describe('useInboxModel work groups (ORC R-10)', () => {
                     state: request.state, lastViewedSessionSeq: 1, didChange: true,
                 }) });
             }
-            if (path.startsWith('/v1/plugins/data')) return collectionBoundary.request(path, init);
             if (path.startsWith('/v1/discussions')) return discussionBoundary.request(path, init);
-            if (path === '/v1/artifacts/read') return artifactReadBoundary.request(path, init);
+            if (path === '/v1/artifacts/read') {
+                const response = await artifactReadBoundary.request(path, init);
+                if (response) return response;
+            }
+            const artifactUrl = new URL(String(url));
+            const artifactResponse = artifactStore.handle(`${artifactUrl.pathname}${artifactUrl.search}`, init);
+            if (artifactResponse) return artifactResponse;
             return null;
         }) });
         publishAppliedActiveServerSnapshot(appliedSnapshot());
@@ -234,6 +694,40 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         deleteServerFeaturesSnapshot();
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
         (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
+    });
+
+    it('keeps Inbox readiness truthful while a followed Run baseline or empty refresh is unavailable', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const base = createRootLayoutFeaturesResponse();
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ ...base,
+            features: { ...base.features, sessions: { ...base.features.sessions, enabled: true, following: { enabled: true } } },
+        }) } });
+        executionRunBoundary.follows.mockResolvedValue({ follows: [{
+            source: { kind: 'execution_run', sessionId: 'run-session', runId: 'followed-run' },
+            following: true, persistent: true, policy: { preset: 'important' },
+        }] });
+        const baseline = createDeferred<{ runs: [] }>();
+        executionRunBoundary.list.mockReturnValueOnce(baseline.promise);
+        await renderModel();
+        await vi.waitFor(() => expect(executionRunBoundary.list).toHaveBeenCalledTimes(1));
+        expect(model!.isLoading).toBe(true);
+        expect(model!.showCaughtUp).toBe(false);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'loading' } });
+
+        await act(async () => { baseline.reject(new Error('offline')); });
+        await vi.waitFor(() => expect(model!.isLoading).toBe(false));
+        expect(model!.showCaughtUp).toBe(false);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
+
+        const serverId = appliedSnapshot().serverId;
+        executionRunBoundary.list.mockResolvedValue({ runs: [] });
+        await act(async () => notifyExecutionRunActivityReconnect(serverId));
+        await vi.waitFor(() => expect(model!.showCaughtUp).toBe(true));
+        executionRunBoundary.list.mockRejectedValue(new Error('offline again'));
+        await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }));
+        await vi.waitFor(() => expect(executionRunBoundary.list).toHaveBeenCalledTimes(3));
+        await vi.waitFor(() => expect(model!.showCaughtUp).toBe(false));
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
     });
 
     it('derives one followed Execution Run row from live Run facts and clears it on settle without notices', async () => {
@@ -269,6 +763,12 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(summary.current!.count).toBe(1);
         expect(executionRunBoundary.follows).toHaveBeenCalledTimes(1);
         expect(executionRunBoundary.rules).not.toHaveBeenCalled();
+        executionRunBoundary.list.mockRejectedValueOnce(new Error('offline refresh'));
+        await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }));
+        await vi.waitFor(() => expect(executionRunBoundary.list).toHaveBeenCalledTimes(2));
+        expect(model!.items.find(item => item.source.kind === 'execution_run')).toBe(row);
+        expect(model!.executionRunAttention.failed).toBe(true);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', refreshFailed: true } });
         await act(async () => {
             for (let index = 0; index < 1_000; index++) publishHomeAccountChange(serverId, undefined, { source: 'catch-up-pending' });
         });
@@ -297,6 +797,37 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await act(async () => publishHomeAccountChange(serverId, [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID], { changeKinds: ['account'] }));
         await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toEqual([]));
         expect(summary.current!.count).toBe(0);
+    });
+
+    it('displays one consumed terminal Run receipt in Updates despite an unreadable neighboring notice', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const run = ExecutionRunPublicStateSchema.parse({ runId: 'settled-run', callId: 'call', sidechainId: 'sidechain',
+            intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, display: { title: 'Review changes' },
+            permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+            status: 'succeeded', startedAtMs: 100, finishedAtMs: 200 });
+        const source = { kind: 'execution_run', sessionId: 'run-session', runId: run.runId } as const;
+        executionRunBoundary.follows.mockResolvedValue({ follows: [{ source, following: false, persistent: false,
+            policy: { preset: 'custom', events: {} }, once: null,
+            onceDeliveries: [{ original: { source, terminalEventId: 'terminal-one' }, event: { kind: 'finished' } }],
+        }] });
+        executionRunBoundary.get.mockResolvedValue({ run });
+        const malformed = createUsageNoticeArtifactFixture({ id: 'unreadable-notice', body: '{}' });
+        seedArtifacts({ [malformed.id]: malformed });
+        const screen = await renderModel(<MountedInboxContent view="updates" />);
+        await vi.waitFor(() => expect(model!.items.filter(item => item.focus.id === run.runId)).toHaveLength(1));
+        expect(screen.findByTestId(`inbox.run.${run.runId}`)).not.toBeNull();
+        expect(model!.artifactSource.phase).toBe('partial');
+        expect(model!.openAccountNotices).toEqual([]);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial', refreshFailed: true,
+            items: [expect.objectContaining({ producer: 'live', view: 'updates', read: false,
+                focus: { kind: 'execution_run', serverId, sessionId: source.sessionId, id: run.runId } })] } });
+        const reads = executionRunBoundary.get.mock.calls.length;
+        await act(async () => { for (let index = 0; index < 100; index++)
+            storage.getState().addArtifact({ ...malformed, id: `unrelated-${index}`, header: { kind: 'markdown', title: 'Document' } }); });
+        expect(executionRunBoundary.get).toHaveBeenCalledTimes(reads);
+        expect(model!.items.filter(item => item.focus.id === run.runId)).toHaveLength(1);
+        await screen.unmount();
     });
 
     it.each(['retirement', 'unmount'] as const)('quietly cancels an Inbox Discussion refresh on %s', async reason => {
@@ -456,7 +987,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const artifact: DecryptedArtifact = { id: 'approval-source', isDecrypted: true, title: request.summary,
             header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-        storage.setState({ sessions: { [bot.id]: bot }, artifacts: { [artifact.id]: artifact } });
+        storage.setState({ sessions: { [bot.id]: bot } });
+        seedArtifacts({ [artifact.id]: artifact });
         const screen = await renderModel();
         expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBe('Payments coordinator');
         await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, serverId: 'another-home' } } }); });
@@ -478,10 +1010,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 2, updatedAt: 2 };
         const next = { ...open, id: 'next-approval', createdAt: 1, updatedAt: 1 };
-        storage.setState({ artifacts: { [open.id]: open, [next.id]: next } });
+        seedArtifacts({ [open.id]: open, [next.id]: next });
         // A real body demand may remain pending during the missing projection; it is not an answer.
         const hydration = createDeferred<Response>();
-        artifactReadBoundary.request.mockImplementation(() => hydration.promise);
         let focus: InboxItemFocus | null = null;
         function SelectedApproval() {
             const inbox = useInboxModel();
@@ -498,7 +1029,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}>
             <InboxModelProvider><Probe /><SelectedApproval /></InboxModelProvider>
         </KeyboardShortcutProvider>);
-        expect(model!.items.some(item => item.focus.id === open.id)).toBe(true);
+        await vi.waitFor(() => expect(model!.items.some(item => item.focus.id === open.id)).toBe(true));
+        artifactReadBoundary.request.mockImplementation(() => hydration.promise);
         await act(async () => storage.setState({ artifacts: { [open.id]: { ...open, body: undefined }, [next.id]: next } }));
         expect(model!.items.some(item => item.focus.id === open.id)).toBe(false);
         expect(focus).toMatchObject({ id: open.id });
@@ -545,13 +1077,15 @@ describe('useInboxModel work groups (ORC R-10)', () => {
 
     it('uses the selected retained workflow row after it leaves attention, never a missing row', async () => {
         const serverId = appliedSnapshot().serverId;
-        const summary = createWorkflowRunSummaryFixture({ id: 'selected-run', state: 'waiting_for_review' });
+        const summary = createWorkflowRunSummaryFixture({ id: 'selected-run', state: 'waiting_for_review',
+            attentionRequired: true, invocationAttentionRequired: true });
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
         const focus: InboxItemFocus = { kind: 'workflow_run', id: summary.id, serverId };
         const hook = await renderHook(() => useInboxItemResolved(focus,
             { sessionCandidates: [], accountNotices: [], isDataReady: true }));
         expect(hook.getCurrent()).toBe(false);
-        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...summary, revision: summary.revision + 1, state: 'running' }, null)]));
+        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...summary, revision: summary.revision + 1,
+            state: 'running', attentionRequired: false, invocationAttentionRequired: false }, null)]));
         expect(hook.getCurrent()).toBe(true);
         await act(async () => storage.getState().removeWorkflowRun(summary.id));
         expect(hook.getCurrent()).toBe(false);
@@ -601,28 +1135,31 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const header = buildApprovalRequestArtifactHeaderV1(request);
         const artifact: DecryptedArtifact = { id: 'delete-ask', isDecrypted: true, title: request.summary, header,
             body: undefined, headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-        storage.setState({ artifacts: { [artifact.id]: artifact } });
+        seedArtifacts({ [artifact.id]: artifact });
         artifactReadBoundary.request.mockImplementation(async (_path: string, init?: RequestInit) => {
-            expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [artifact.id] });
-            return Response.json({ items: [{ artifactId: artifact.id, ok: true, recipientCensus: null, artifact: {
+            const input: unknown = JSON.parse(String(init?.body));
+            return createArtifactReadBatchHttpResponse(input, () => ({ artifactId: artifact.id, ok: true, recipientCensus: null, artifact: {
                 id: artifact.id, kind: deriveArtifactCoarseKindV1(header), ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
                 publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                 header: encodePlainArtifactStoredContent(header),
                 body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }),
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-            } }] });
+            } }));
         });
         const screen = await renderModel();
         await expect.poll(() => model?.openApprovals.map(row => row.id)).toEqual([artifact.id]);
         expect(model?.items.filter(item => item.source.kind === 'approval')).toHaveLength(1);
-        expect(artifactReadBoundary.request).toHaveBeenCalledTimes(1);
+        expect(artifactReadBoundary.request.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+            { artifactIds: [artifact.id] },
+            { artifactIds: [artifact.id], projection: 'headers' },
+        ]);
         await screen.unmount();
     });
 
     it('names plugin notices from the existing Account-scoped package projection and withdraws unavailable names', async () => {
         listRuns.mockResolvedValue(page([]));
         const notice = createAccountNoticeArtifactFixture({ header: { body: 'Review the change' } });
-        storage.setState({ artifacts: { [notice.id]: notice } });
+        seedArtifacts({ [notice.id]: notice });
         const value: AppShellPluginUiProjectionValue = {
             pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, installedPackagesById: { 'acme.review': {
                 id: 'acme.review', displayName: 'Acme Review', version: '1.0.0', enabled: true,
@@ -647,7 +1184,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const owned = createUsageNoticeArtifactFixture();
         const rows: DecryptedArtifact[] = [owned,
             { ...owned, id: 'foreign', ownerAccountId: 'account-b' },
-            { ...owned, id: 'shared', access: 'view' },
+            { ...owned, id: 'shared', ownerAccountId: 'account-b', access: 'view' },
             { ...owned, id: 'published', publicAudience: 'retained' },
             { ...owned, id: 'unknown-audience', publicAudience: 'unknown' },
             createUsageNoticeArtifactFixture({ id: 'dismissed', header: { ...owned.header!, status: 'dismissed' }, body: undefined }),
@@ -656,9 +1193,14 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             createUsageNoticeArtifactFixture({ id: 'header-only', body: undefined }),
             { ...owned, id: 'locked', isDecrypted: false, title: null, header: null,
                 rawHeader: null, body: undefined, sessions: undefined, draft: undefined,
-                storageMode: 'e2ee', availability: { kind: 'locked', reason: 'decryption_failed' } },
+                storageMode: 'plain', availability: { kind: 'locked', reason: 'invalid_stored_content' } },
         ];
-        storage.setState({ artifacts: Object.fromEntries(rows.map(row => [row.id, row])) });
+        seedArtifacts(Object.fromEntries(rows.map(row => [row.id, row])), [{
+            id: 'locked', kind: 'other', kindHint: 'usage_notice.v1', ownerAccountId: 'account-a',
+            access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+            header: 'unopenable-header', body: encodePlainArtifactStoredContent({ body: null }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: 3, bodyVersion: 2, seq: 1, createdAt: 1_000, updatedAt: 2_000,
+        }]);
 
         await renderModel();
 
@@ -666,7 +1208,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             hasPrimaryAttention: true, showCaughtUp: false });
         expect(model?.workGroups).toEqual([]);
         expect(storage.getState().sessions).toEqual({});
-        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', usageNoticeIds: ['notice-owned'] } });
+        // The admitted owned row remains readable; malformed/locked neighbors disclose incomplete coverage.
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial', refreshFailed: true,
+            usageNoticeIds: ['notice-owned'] } });
 
         await act(async () => { storage.setState({ artifacts: {
             ...storage.getState().artifacts,
@@ -677,9 +1221,10 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await act(async () => { storage.setState({ profileScope: {
             ...storage.getState().profileScope!, accountId: 'account-b',
         } }); });
-        expect(model).toMatchObject({ openUsageNotices: [{ artifact: rows[1] }], hasPrimaryAttention: true });
+        expect(model?.openUsageNotices).toEqual([]);
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
-        expect(await readInbox('account-b')).toMatchObject({ ok: true, result: { status: 'ready', usageNoticeIds: ['foreign'] } });
+        expect(readAccountNoticeArtifactHeader(rows[1]!, 'account-b')).not.toBeNull();
+        expect(await readInbox('account-b')).toMatchObject({ ok: true, result: { status: 'unavailable' } });
     });
 
     it('reads started and recovered machine notices beside Connected notices through the same private Account artifact owner', async () => {
@@ -692,16 +1237,17 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const recoveredHeader = { ...header, notice: recovered };
         const recovery = createUsageNoticeArtifactFixture({ id: 'machine-recovered', header: recoveredHeader, rawHeader: recoveredHeader, body: JSON.stringify({ v: 1, notice: recovered }) });
         const connected = createUsageNoticeArtifactFixture();
-        storage.setState({ artifacts: { [owned.id]: owned, [recovery.id]: recovery, [connected.id]: connected,
+        seedArtifacts({ [owned.id]: owned, [recovery.id]: recovery, [connected.id]: connected,
             foreign: { ...owned, id: 'foreign', ownerAccountId: 'account-b' },
-            shared: { ...owned, id: 'shared', access: 'view' },
-            mismatch: { ...owned, id: 'mismatch', body: JSON.stringify({ v: 1, notice: recovered }) } } });
+            shared: { ...owned, id: 'shared', ownerAccountId: 'account-b', access: 'view' },
+            mismatch: { ...owned, id: 'mismatch', body: JSON.stringify({ v: 1, notice: recovered }) } });
         await renderModel();
         expect(model?.openUsageNotices.map(entry => entry.artifact.id)).toEqual(['machine-notice', 'machine-recovered', 'notice-owned']);
         expect(model?.openUsageNotices.map(entry => entry.header.notice)).toEqual([notice, recovered, usageNoticeFixture]);
         expect(model?.workGroups).toEqual([]);
         expect(storage.getState().sessions).toEqual({});
-        expect(await readInbox()).toMatchObject({ ok: true, result: { usageNoticeIds: ['machine-notice', 'machine-recovered', 'notice-owned'] } });
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial', refreshFailed: true,
+            usageNoticeIds: ['machine-notice', 'machine-recovered', 'notice-owned'] } });
     });
 
     it('retries an initially unreadable Work window through the same Action and distinguishes proven empty work', async () => {
@@ -764,7 +1310,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
                 event: { kind: 'update_posted' } } } };
         const header = { ...content, kind: 'account_notice.v1', title: 'Run updated', status: 'open' };
         const retiredNotice = createUsageNoticeArtifactFixture({ header, rawHeader: header, body: JSON.stringify(content) });
-        storage.setState({ artifacts: { [retiredNotice.id]: retiredNotice } });
+        seedArtifacts({ [retiredNotice.id]: retiredNotice });
         listRuns
             .mockResolvedValueOnce(page([createWorkflowRunSummaryFixture({ id: 'run-held', state: 'interrupted' })]))
             .mockResolvedValueOnce(page([]));
@@ -777,10 +1323,11 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(model?.items).toEqual([expect.objectContaining({ producer: 'live', source: {
             kind: 'workflow_run', id: 'run-held', serverId: appliedSnapshot().serverId, displayName: expect.any(String),
         } })]);
-        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', groups: [
-            { key: model?.workGroups[0]?.key, root: { kind: 'run', runId: 'run-held' },
-                items: [{ kind: 'workflow_run', key: model?.workGroups[0]?.items[0]?.key, runId: 'run-held' }] },
-        ] } });
+        // An unreadable historical notice cannot hide current rows from another owner.
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial',
+            isLoading: false, refreshFailed: true, items: [expect.objectContaining({
+                source: expect.objectContaining({ kind: 'workflow_run', id: 'run-held' }),
+            })] } });
         expect(await readInbox('different-account')).toMatchObject({ ok: true, result: { status: 'unavailable' } });
 
         await act(async () => {
@@ -790,9 +1337,42 @@ describe('useInboxModel work groups (ORC R-10)', () => {
 
         expect(model?.workGroups).toEqual([]);
         expect(model?.items).toEqual([]);
-        expect(storage.getState().artifacts[retiredNotice.id]).toBe(retiredNotice);
+        expect(storage.getState().artifacts[retiredNotice.id]).toMatchObject(retiredNotice);
         await screen.unmount();
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
+    });
+
+    it('keeps ready rows readable while notice bodies load, fail and recover without automatic re-polls', async () => {
+        listRuns.mockResolvedValue(page([createWorkflowRunSummaryFixture({ id: 'ready-work', state: 'interrupted' })]));
+        const notice = createUsageNoticeArtifactFixture();
+        seedArtifacts({ [notice.id]: notice });
+        const screen = await renderModel();
+        const hydration = createDeferred<Response>();
+        artifactReadBoundary.request.mockImplementation(() => hydration.promise);
+        await act(async () => storage.setState({ artifacts: { [notice.id]: { ...notice, body: undefined } } }));
+        await vi.waitFor(() => expect(model!.artifactSource.phase).toBe('loading'));
+        expect(model!.showCaughtUp).toBe(false);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial', isLoading: true,
+            coverage: { sources: [{ source: 'notices', status: 'partial' }] },
+            items: [expect.objectContaining({ source: expect.objectContaining({ kind: 'workflow_run', id: 'ready-work' }) })] } });
+
+        await act(async () => hydration.resolve(Response.json({ error: 'content_unavailable' }, { status: 403 })));
+        await vi.waitFor(() => expect(model!.artifactSource.phase).toBe('failed'));
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'partial', isLoading: false, refreshFailed: true,
+            coverage: { sources: [{ source: 'notices', status: 'partial', reason: 'content_unavailable' }] },
+            items: [expect.objectContaining({ source: expect.objectContaining({ kind: 'workflow_run', id: 'ready-work' }) })] } });
+        const reads = artifactReadBoundary.request.mock.calls.length;
+        await act(async () => {});
+        await readInbox();
+        await readInbox();
+        expect(artifactReadBoundary.request).toHaveBeenCalledTimes(reads);
+
+        artifactReadBoundary.request.mockResolvedValue(null);
+        await act(async () => model!.artifactSource.retry());
+        await vi.waitFor(() => expect(model!.artifactSource.phase).toBe('current'));
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', isLoading: false, refreshFailed: false } });
+        expect(model!.openUsageNotices.map(entry => entry.artifact.id)).toEqual([notice.id]);
+        await screen.unmount();
     });
 
     it('reads a valid single-Home missing lead and refuses the real mixed-Home model rather than filtering it empty', async () => {
@@ -817,93 +1397,6 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             } }); });
         expect(model?.workGroups.flatMap(group => group.items)).toHaveLength(2);
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
-    });
-
-    it('projects retained Channel PR bindings into Landing and refreshes through the existing Account collection', async () => {
-        listRuns.mockResolvedValue(page([]));
-        const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-channels/manifest');
-        const contribution = PLUGIN_MANIFEST.contributes?.accountCollections?.find(entry => entry.id === 'channel-state');
-        const contract = normalizePluginAccountCollectionContractV1({ pluginId: 'happier.channels',
-            contribution: PluginAccountCollectionContributionV1Schema.parse(contribution) });
-        const validate = compilePluginJsonSchema(contract.schema);
-        const binding = ConversationBindingV1Schema.parse({
-            v: 1, id: 'binding-1', connectionId: 'connection-1', createdAt: 1, updatedAt: 1,
-            endpoint: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-1',
-                pullRequest: { repository: 'acme/widgets', number: 1 }, pullRequestState: { state: 'open', observedAt: 100 } },
-            target: { kind: 'session', sessionId: 'session-1', pullRequestLink: { repository: 'acme/widgets', number: 1 },
-                policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
-            allowedPrincipalIds: ['principal-1'], allowBotSenders: false, inputMode: 'directMentionsOnly', inboundDebounceMs: 0,
-            linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: false, deletionState: 'none',
-        });
-        const { v, id, connectionId, createdAt, updatedAt, ...payload } = binding;
-        const encoded = encodePluginCollectionLogicalValueV1({ contract,
-            isValidLogicalValue: value => isValidPluginJsonSchemaValue(validate, value),
-            value: { id, 'record-kind': 'binding', v, 'connection-id': connectionId, 'binding-id': id,
-                'created-at': createdAt, 'updated-at': updatedAt, payload },
-            encryptionMode: 'plain', material: null, randomBytes: length => new Uint8Array(length).fill(9),
-        });
-        if (encoded.status !== 'encoded') throw new Error(encoded.reason);
-        let rows = [{ rowId: encoded.rowId, revision: 1, projection: encoded.projection, content: encoded.content }];
-        collectionBoundary.request.mockImplementation(async (path: string) => new Response(JSON.stringify(
-            path === '/v1/account/encryption/currentness' ? createPlainAccountEncryptionCurrentnessFixture()
-                : path === '/v1/plugins/data/contract' ? { access: 'readOnly', contract }
-                    : { rows, changeCursor: 18 },
-        ), { status: 200 }));
-        const scope = storage.getState().profileScope!;
-        recordAccountStoredContentServerRequirements({ serverUrl: appliedSnapshot().serverUrl,
-            requirements: { v: 1, minimumProtocolVersion: 2, currentProtocolVersion: 3,
-                declarationTransport: 'http-header-and-socket-auth-v1' } });
-        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
-            availabilityCursor: 7, materializations: [], snapshots: [], intentReads: [{ pluginId: contract.pluginId,
-                response: { availabilityCursor: 7, packageAssets: [],
-                    hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
-                    intent: { pluginId: contract.pluginId, desiredVersion: null, enabled: true, offlineUiHosting: 'enabled',
-                        writableCollections: [{ pluginId: contract.pluginId, collectionId: contract.collectionId,
-                            schemaVersion: contract.schemaVersion, contractDigest: contract.contractDigest }], revision: 'intent-7' },
-                    release: null, uiArtifacts: [] },
-            }],
-        } });
-        const session = createSessionFixture({ id: 'session-1', serverId: scope.serverId, active: false, seq: 0 });
-        storage.setState({ sessions: { [session.id]: session } });
-        await renderModel();
-        expect(model?.workGroups.flatMap(group => group.items).filter(item => item.kind === 'landing'))
-            .toMatchObject([{ kind: 'landing', session, link: { sessionId: session.id, serverId: scope.serverId, number: 1,
-                url: 'https://github.com/acme/widgets/pull/1', state: 'open', observedAt: 100 } }]);
-        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', groups: [{ items: [{
-            kind: 'landing', sessionId: session.id, pullRequestNumber: 1, pullRequestUrl: 'https://github.com/acme/widgets/pull/1',
-            pullRequestState: 'open', pullRequestObservedAt: 100,
-        }] }] } });
-        expect(executed).toEqual([]); // Reading never takes over the producer's settlement lifecycle.
-        for (const state of ['unknown', 'merged'] as const) {
-            const revision = state === 'unknown' ? 2 : 3;
-            const refreshed = encodePluginCollectionLogicalValueV1({ contract,
-                isValidLogicalValue: value => isValidPluginJsonSchemaValue(validate, value),
-                value: { id, 'record-kind': 'binding', v, 'connection-id': connectionId, 'binding-id': id,
-                    'created-at': createdAt, 'updated-at': updatedAt, payload: { ...payload,
-                        endpoint: { ...payload.endpoint, pullRequestState: { state, observedAt: revision * 100 } } } },
-                encryptionMode: 'plain', material: null, randomBytes: length => new Uint8Array(length).fill(9),
-            });
-            if (refreshed.status !== 'encoded') throw new Error(refreshed.reason);
-            await act(async () => {
-                rows = [{ rowId: refreshed.rowId, revision, projection: refreshed.projection, content: refreshed.content }];
-                resetActivePluginCollectionChanges();
-            });
-            const landingItems = model?.workGroups.flatMap(group => group.items).filter(item => item.kind === 'landing');
-            if (state === 'unknown') {
-                expect(landingItems).toMatchObject([{ link: { state: 'unknown', observedAt: 200 } }]);
-                expect(await readInbox()).toMatchObject({ ok: true, result: { groups: [{ items: [{
-                    kind: 'landing', pullRequestState: 'unknown', pullRequestObservedAt: 200,
-                }] }] } });
-            } else {
-                expect(landingItems).toEqual([]);
-            }
-            expect(executed).toEqual([]);
-        }
-        await act(async () => {
-            rows = [];
-            resetActivePluginCollectionChanges();
-        });
-        expect(model?.workGroups.flatMap(group => group.items).filter(item => item.kind === 'landing')).toEqual([]);
     });
 
     it('settles through the one attention Action and the read-state Action, in that order', async () => {

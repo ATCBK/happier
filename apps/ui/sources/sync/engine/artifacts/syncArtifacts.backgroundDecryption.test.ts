@@ -153,7 +153,8 @@ describe('background artifact decryption', () => {
             envelopeInputs: openKeys.mock.calls.reduce((sum, [values]) => sum + values.length, 0),
             headerDecrypts: openHeader.mock.calls.length, bodyDecrypts: openBody.mock.calls.length, detailReads };
         console.info('FX-26 1500 artifact first-load measurement', measurement);
-        expect(applied.flat()).toHaveLength(1500);
+        // Earlier admitted pages may be visible before the complete inventory.
+        expect(applied.at(-1)).toHaveLength(1500);
         expect(measurement).toMatchObject({ envelopeInputs: 1500, headerDecrypts: 1500, bodyDecrypts: 0, detailReads: 0 });
         expect(applied.flat().every(row => row.body === undefined && !Object.hasOwn(row, 'provenance'))).toBe(true);
     });

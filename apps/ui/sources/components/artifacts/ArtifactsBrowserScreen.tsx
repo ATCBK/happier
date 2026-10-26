@@ -1,13 +1,16 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Collection, useHappierCollection, type CollectionAnatomy, type CollectionRowActions } from '@happier-dev/plugin-ui';
+import { DetailsPaneOpenAsPageButton } from '@happier-dev/plugin-ui/components';
+import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
 import type { ArtifactStorageUsageV1, PromptFoldersV1 } from '@happier-dev/protocol';
 
 import { DetailsPaneHost } from '@/components/appShell/panes/details/DetailsPaneHost';
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { FAB } from '@/components/ui/buttons/FAB';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
@@ -15,6 +18,9 @@ import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
+import { DefaultBackButton } from '@/components/navigation/Header';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -27,7 +33,6 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useArtifacts, useArtifactsLoaded, useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { sync } from '@/sync/sync';
 import { useArtifactInventoryRead } from './useArtifactInventoryRead';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { t } from '@/text';
@@ -54,7 +59,7 @@ import {
 import { ArtifactCardPreview } from './ArtifactCardPreview';
 import { ArtifactFolderTree, useArtifactFolderCommands, type ArtifactFolderTreeHandle } from './ArtifactFolderTree';
 import { ARTIFACT_KIND_ICONS, artifactKindFact, artifactKindFilterLabel } from './artifactKindPresentation';
-import { ArtifactProvenanceLabel } from './ArtifactProvenance';
+import { ArtifactProvenanceLabel, readArtifactProvenanceFallback } from './ArtifactProvenance';
 import { ArtifactQuotaNotice } from './ArtifactQuotaNotice';
 import { ArtifactView } from './ArtifactView';
 import { useArtifactOperations } from './useArtifactOperations';
@@ -97,13 +102,11 @@ function countSavedToday(artifacts: readonly DecryptedArtifact[], nowMs: number)
  */
 export function ArtifactsBrowserScreen(): React.ReactElement {
     const artifacts = useArtifacts();
-    const loaded = useArtifactsLoaded();
+    const loaded = useArtifactsLoaded('browserListed');
     const usage = useArtifactStorageUsage();
     const { value: folders } = usePromptLibraryCatalogValue('folders');
-    // Provenance is observed before the read starts, so the opening read already carries it.
-    React.useEffect(() => sync.observeArtifactProvenance(), []);
     // The browser opening is the intent to read the list; the sync owner keeps it fresh after that.
-    const { failed: loadFailed, retry } = useArtifactInventoryRead(true);
+    const { failed: loadFailed, retry } = useArtifactInventoryRead(true, 'browserListed', { includeProvenance: true });
     return <ArtifactsBrowser artifacts={artifacts} folders={folders} loaded={loaded} loadFailed={loadFailed} onRetry={retry} usage={usage} />;
 }
 
@@ -119,12 +122,23 @@ export function ArtifactsBrowser(props: Readonly<{
     initialOpenId?: string;
 }>): React.ReactElement {
     const router = useRouter();
+    const { theme } = useUnistyles();
+    // The phone's browser has no native header (its PageHeader owns the identity), so its Back sits on the title line
+    // and never strands a direct load: with no history it goes Home.
+    const deviceType = useDeviceType();
+    const phoneLayout = deviceType === 'phone';
+    const inheritedBack = useNavigationBackControl();
+    const phoneBack = React.useCallback(({ style }: Readonly<{ style: StyleProp<ViewStyle> }>) => (
+        <View style={style}>
+            <DefaultBackButton testID="artifacts:back" tintColor={theme.colors.text.primary}
+                onPress={() => safeRouterBack({ router, fallbackHref: '/' })} />
+        </View>
+    ), [router, theme.colors.text.primary]);
     const { artifacts, loaded, loadFailed, usage } = props;
     const [query, setQuery] = React.useState('');
     const [kind, setKind] = React.useState<ArtifactBrowserKind | 'all'>('all');
     const [sort, setSort] = React.useState<ArtifactBrowserSort>('updated_desc');
     const view = useLocalSetting('artifactsBrowserViewV1');
-    const deviceType = useDeviceType();
     // A phone lists by default (one card per screen hides the collection); wider screens show cards.
     const presentation: BrowserPresentation = view?.presentation ?? (deviceType === 'phone' ? 'list' : 'grid');
     const setPresentation = React.useCallback((next: BrowserPresentation) => getStorage().getState().applyLocalSettings({ artifactsBrowserViewV1: { presentation: next } }, { source: 'ui' }), []);
@@ -156,15 +170,23 @@ export function ArtifactsBrowser(props: Readonly<{
         openKey: paneOpen ? openId : null,
         onOpenChange: openArtifact,
     });
-    const collectionPresentation = presentation === 'grid' ? 'grid' : 'table';
+    // Opening beside the grid narrows it and re-flows the cards, which carries the opened one out of view: bring it back and keep it ringed.
+    const requestFocus = model.actions.requestFocus;
+    React.useEffect(() => { if (openId !== null && paneOpen) requestFocus(openId); }, [openId, paneOpen, requestFocus]);
+    // A phone's list is the page's one sheet of rows (lab A1p); wider layouts keep the table that recomposes by width.
+    const collectionPresentation = presentation === 'grid' ? 'grid' : phoneLayout ? 'list' : 'table';
     const anatomy = useBrowserAnatomy(presentation === 'grid' ? 'grid' : 'list');
     const newDocument = React.useCallback(() => router.push('/artifacts/new' as never), [router]);
 
+    const viewSwitch = <ArtifactViewSwitch presentation={presentation} onPresentationChange={setPresentation} />;
     const firstVisit = loaded && total === 0 && !loadFailed;
+    // Rows another surface already admitted (Context's Prompt kinds) are a part of the library, not all of it.
+    const partial = !loaded && !loadFailed && total > 0;
     const header = (
         <>
             <BrowserHeader
                 total={total}
+                partial={!loaded}
                 savedToday={savedToday}
                 usage={usage}
                 // A count is a fact about a list that has been read: never "0 artifacts" over the skeleton. The
@@ -172,6 +194,8 @@ export function ArtifactsBrowser(props: Readonly<{
                 showPresent={total > 0}
                 reservePresent={!loaded && !loadFailed}
                 onNewDocument={newDocument}
+                // A phone's view switch sits with the count, below the choices (lab A1p keeps the search a full row).
+                viewSwitch={firstVisit ? null : viewSwitch}
                 toolbar={firstVisit ? null : (
                     <BrowserToolbar
                         query={query}
@@ -182,7 +206,7 @@ export function ArtifactsBrowser(props: Readonly<{
                         sort={sort}
                         onSortChange={setSort}
                         presentation={presentation}
-                        onPresentationChange={setPresentation}
+                        viewSwitch={viewSwitch}
                         onNewFolder={() => folderTree.current?.createFolder(null)}
                     />
                 )}
@@ -193,6 +217,7 @@ export function ArtifactsBrowser(props: Readonly<{
                 reason={t('artifacts.browser.retainedBody')}
                 action={{ label: t('common.retry'), onPress: props.onRetry }}
             /> : null}
+            {partial ? <SurfaceFreshnessLine testID="artifacts:pending" busy reason={t('artifacts.browser.loadingBody')} /> : null}
         </>
     );
 
@@ -215,6 +240,9 @@ export function ArtifactsBrowser(props: Readonly<{
             subtitle={t('artifacts.browser.loadFailedBody')}
             primaryAction={{ label: t('common.retry'), onPress: props.onRetry }}
         />
+    ) : partial ? (
+        // The unread remainder could still match: not a definitive answer until the full list has been read.
+        <EmptyState testID="artifacts:noMatchSoFar" layout="line" title={t('artifacts.browser.noMatchSoFar', { query: query.trim() || artifactKindFilterLabel(kind) })} />
     ) : (
         <EmptyState testID="artifacts:noMatch" layout="line" title={t('artifacts.browser.noMatch', { query: query.trim() || artifactKindFilterLabel(kind) })} />
     );
@@ -267,6 +295,8 @@ export function ArtifactsBrowser(props: Readonly<{
     );
 
     return (
+        <NavigationBackChromeProvider control={phoneLayout ? phoneBack : inheritedBack}>
+        <View style={stylesheet.screen}>
         <DetailsPaneHost
             testID="artifacts:detailPane"
             mainColumn={{
@@ -281,19 +311,20 @@ export function ArtifactsBrowser(props: Readonly<{
                 header: {
                     title: openRow.title || t('artifacts.untitled'),
                     actions: (
-                        <IconButton
+                        <CorePluginUiPresentationScope><DetailsPaneOpenAsPageButton
                             testID="artifacts:detailPane:openAsPage"
-                            iconName="arrow-square-out"
                             accessibilityLabel={t('artifacts.browser.openAsPage')}
-                            tooltip={t('artifacts.browser.openAsPage')}
-                            variant="plain"
                             onPress={() => router.push(artifactViewRoute(openRow.id) as never)}
-                        />
+                        /></CorePluginUiPresentationScope>
                     ),
                 },
                 content: <ArtifactView key={openRow.id} artifactId={openRow.id} artifact={openRow} presentation="pane" onDeleted={() => setOpenId(null)} />,
             } : null}
         />
+        {/* A phone starts a document from the floating + (lab A1p); the first-visit page leads with its own. */}
+        {phoneLayout && !firstVisit ? <FAB onPress={newDocument} accessibilityLabel={t('artifacts.browser.newDocument')} /> : null}
+        </View>
+        </NavigationBackChromeProvider>
     );
 }
 
@@ -302,7 +333,9 @@ const ArtifactRowCommandsContext = React.createContext<Readonly<{ open: (key: st
 function useArtifactRowActions(row: ArtifactBrowserRow): CollectionRowActions {
     const commands = React.useContext(ArtifactRowCommandsContext);
     const operations = useArtifactOperations(row.artifact, () => commands?.deleted(row.key));
-    if (!operations.canRead) return {};
+    // A phone's row opens the artifact, whose own page carries Share, History and Delete (lab A1p: no ⋯ on every row).
+    const phone = useDeviceType() === 'phone';
+    if (phone || !operations.canRead) return {};
     return {
         busy: operations.deleting,
         secondaryActions: [
@@ -339,11 +372,15 @@ function renderBrowserPageScroller(children: React.ReactNode): React.ReactNode {
 /** The page's one hero, its purpose and the present line: count, today, and the meter when there is a budget. */
 function BrowserHeader(props: Readonly<{
     total: number;
+    /** The rows shown are only what is loaded so far: the count is not a final total. */
+    partial: boolean;
     savedToday: number;
     usage: ArtifactStorageUsageV1 | null;
     showPresent: boolean;
     reservePresent: boolean;
     onNewDocument: () => void;
+    /** A phone shows the Grid | List | Folders switch on the line with the count. */
+    viewSwitch: React.ReactNode;
     toolbar: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
@@ -351,17 +388,18 @@ function BrowserHeader(props: Readonly<{
     const limit = props.usage?.limitBytes ?? null;
     const phone = useDeviceType() === 'phone';
     const present = props.showPresent ? (
-        <View style={[styles.present, phone ? styles.phonePresent : null]} testID="artifacts:present">
+        <View style={styles.present} testID="artifacts:present">
             <Text style={styles.presentText}>
-                {props.total === 1 ? t('artifacts.countSingular') : t('artifacts.countPlural', { count: props.total })}
+                {props.partial ? t('artifacts.browser.countSoFar', { count: props.total })
+                    : props.total === 1 ? t('artifacts.countSingular') : t('artifacts.countPlural', { count: props.total })}
             </Text>
-            {props.savedToday > 0 ? (
+            {props.savedToday > 0 && !props.partial ? (
                 <Text style={styles.presentText}>{`· ${t('artifacts.browser.savedToday', { count: props.savedToday })}`}</Text>
             ) : null}
             {props.usage !== null && limit !== null ? <StorageMeter usedBytes={props.usage.usedBytes} limitBytes={limit} /> : null}
         </View>
     ) : props.reservePresent ? (
-        <View style={[styles.present, phone ? styles.phonePresent : null]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={styles.present} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
             <Text style={styles.presentText}>{' '}</Text>
         </View>
     ) : undefined;
@@ -373,7 +411,8 @@ function BrowserHeader(props: Readonly<{
                 alwaysShowTitle
                 description={phone && (props.showPresent || props.reservePresent) ? undefined : t('artifacts.browser.description')}
                 details={phone ? undefined : present}
-                actions={(
+                // A phone starts a document from the floating +, so its header stays the title.
+                actions={phone ? undefined : (
                     <RoundButton
                         testID="artifacts:new"
                         size="small"
@@ -390,7 +429,12 @@ function BrowserHeader(props: Readonly<{
                     <ArtifactQuotaNotice testID="artifacts:quota" placement="inline" quota={{ budget: 'account', usedBytes: props.usage.usedBytes, limitBytes: limit }} />
                 </View>
             ) : null}
-            {phone ? present : null}
+            {phone && (present || props.viewSwitch) ? (
+                <View style={styles.phoneStatusRow}>
+                    <View style={styles.phonePresentSlot}>{present}</View>
+                    {props.viewSwitch}
+                </View>
+            ) : null}
         </View>
     );
 }
@@ -420,6 +464,29 @@ function StorageMeter(props: Readonly<{ usedBytes: number; limitBytes: number }>
     );
 }
 
+/** Grid | List | Folders: icons only, the same three presentations of the library everywhere it is drawn. */
+function ArtifactViewSwitch(props: Readonly<{
+    presentation: BrowserPresentation;
+    onPresentationChange: (presentation: BrowserPresentation) => void;
+}>) {
+    const { theme } = useUnistyles();
+    const viewTabs = React.useMemo(() => [
+        { id: 'grid' as const, label: t('artifacts.browser.view.grid'), icon: <Icon name="squares-four" size={16} color={theme.colors.text.secondary} /> },
+        { id: 'list' as const, label: t('artifacts.browser.view.list'), icon: <Icon name="list" size={16} color={theme.colors.text.secondary} /> },
+        { id: 'folders' as const, label: t('artifacts.browser.view.folders'), icon: <Icon name="folder" size={16} color={theme.colors.text.secondary} /> },
+    ], [theme.colors.text.secondary]);
+    return (
+        <SegmentedTabBar
+            tabs={viewTabs}
+            activeTabId={props.presentation}
+            onSelectTab={props.onPresentationChange}
+            testIDPrefix="artifacts:view"
+            accessibilityLabel={t('artifacts.browser.view.label')}
+            segmentSizing="content"
+        />
+    );
+}
+
 function BrowserToolbar(props: Readonly<{
     query: string;
     onQueryChange: (query: string) => void;
@@ -429,13 +496,13 @@ function BrowserToolbar(props: Readonly<{
     sort: ArtifactBrowserSort;
     onSortChange: (sort: ArtifactBrowserSort) => void;
     presentation: BrowserPresentation;
-    onPresentationChange: (presentation: BrowserPresentation) => void;
+    viewSwitch: React.ReactNode;
     onNewFolder: () => void;
 }>) {
     const { theme } = useUnistyles();
     const phone = useDeviceType() === 'phone';
     // A phone's Folders view is one compact row under the search (lab `c-art Tp`): kind, then New folder
-    // as its glyph and the view switch. The order choice is made in List or Grid and still orders items here.
+    // as its glyph. The order choice is made in List or Grid and still orders items here.
     const compactFolders = phone && props.presentation === 'folders';
     const styles = stylesheet;
     const folders = useArtifactFolderCommands();
@@ -450,22 +517,6 @@ function BrowserToolbar(props: Readonly<{
             })),
     ], [props.counts, props.kind, theme.colors.text.secondary]);
     const sortItems = React.useMemo(() => SORTS.map((candidate) => ({ id: candidate, title: sortLabel(candidate) })), []);
-    const viewTabs = React.useMemo(() => [
-        { id: 'grid' as const, label: t('artifacts.browser.view.grid'), icon: <Icon name="squares-four" size={16} color={theme.colors.text.secondary} /> },
-        { id: 'list' as const, label: t('artifacts.browser.view.list'), icon: <Icon name="list" size={16} color={theme.colors.text.secondary} /> },
-        { id: 'folders' as const, label: t('artifacts.browser.view.folders'), icon: <Icon name="folder" size={16} color={theme.colors.text.secondary} /> },
-    ], [theme.colors.text.secondary]);
-    const viewSwitch = (
-        <SegmentedTabBar
-            tabs={viewTabs}
-            activeTabId={props.presentation}
-            onSelectTab={props.onPresentationChange}
-            testIDPrefix="artifacts:view"
-            accessibilityLabel={t('artifacts.browser.view.label')}
-            segmentSizing="content"
-            targetSize="platform"
-        />
-    );
     const search = (
         <CompactSearchField
             testID="artifacts:search"
@@ -477,9 +528,8 @@ function BrowserToolbar(props: Readonly<{
     );
     return (
         <View style={styles.toolbar} testID="artifacts:toolbar">
-            {/* A phone keeps the view switch beside the search, so the filters below stay one calm row
-                instead of the switch taking a row of its own (the platform's touch targets do not fit three). */}
-            {phone ? <View style={styles.phoneSearchRow}>{search}{viewSwitch}</View> : search}
+            {/* A phone gives the search its own full row (lab A1p); the choices and the view switch share the row below. */}
+            {phone ? <View style={styles.phoneSearchRow}>{search}</View> : search}
             <View style={styles.toolbarChoices}>
                 <ToolbarSelect
                     testID="artifacts:kind"
@@ -519,7 +569,7 @@ function BrowserToolbar(props: Readonly<{
                         onPress={props.onNewFolder}
                     />
                 ) : null}
-                {phone ? null : viewSwitch}
+                {phone ? null : props.viewSwitch}
             </View>
         </View>
     );
@@ -533,14 +583,14 @@ function useBrowserAnatomy(presentation: 'grid' | 'list'): CollectionAnatomy<Art
     return React.useMemo((): CollectionAnatomy<ArtifactBrowserRow> => ({
         glyph: (row) => <Icon name={row.artifact.isDecrypted === false ? 'lock' : rowKindFact(row).icon} size={18} color={theme.colors.text.secondary} />,
         title: (row) => (row.artifact.isDecrypted === false ? t('settingsAccount.restoreRequiredTitle') : rowTitle(row)),
-        where: (row) => (
-            <ArtifactProvenanceLabel
-                provenance={readArtifactProvenance(row.artifact)}
-                fallback={row.artifact.access && row.artifact.access !== 'owner' ? t('artifacts.browser.provenance.sharedWithYou') : t('artifacts.browser.provenance.savedByYou')}
-                presentation="line"
-                testID={`artifacts:row:${row.key}:provenance`}
-            />
-        ),
+        // A source, or who shared it; nothing when it is simply the viewer's own.
+        where: (row) => {
+            const provenance = readArtifactProvenance(row.artifact);
+            const fallback = readArtifactProvenanceFallback(row.artifact);
+            if (provenance === null && fallback === null) return undefined;
+            return <ArtifactProvenanceLabel provenance={provenance} fallback={fallback ?? ''} presentation="line"
+                testID={`artifacts:row:${row.key}:provenance`} />;
+        },
         // A grid card's footer draws the age in its own right-aligned column (lab A1), so the kind stands alone.
         ...(phone && presentation === 'list' ? {} : { reason: (row: ArtifactBrowserRow) => <Text style={stylesheet.reason}>{rowKindFact(row).label}</Text> }),
         // The "Edited" column is a narrow tabular one: the bare age ("45m") fits where "45m ago" was cut off (lab A2).
@@ -562,6 +612,9 @@ function useBrowserAnatomy(presentation: 'grid' | 'list'): CollectionAnatomy<Art
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    screen: {
+        flex: 1,
+    },
     present: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -569,7 +622,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s6,
         marginTop: theme.space.s8,
     },
-    phonePresent: {
+    phonePresentSlot: {
+        flex: 1,
+        minWidth: 0,
+    },
+    phoneStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: theme.space.s8,
         paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
         marginBottom: theme.space.s12,
     },

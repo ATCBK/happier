@@ -6,11 +6,16 @@ import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
-import { useActiveServerAccountScope, useArtifacts } from '@/sync/domains/state/storage';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { useArtifactInventoryRead } from '@/components/artifacts/useArtifactInventoryRead';
+import { useActiveServerAccountScope, useArtifacts, useArtifactsLoaded } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { promptStackDocumentChoices } from './promptStackDocumentChoices';
 import { t } from '@/text';
 const EMPTY_ATTACHED_REFS: readonly PromptArtifactRefV1[] = Object.freeze([]);
+const INSTRUCTION_KINDS: readonly string[] = Object.freeze(['prompt_doc.v2']);
+const CONTEXT_KINDS: readonly string[] = Object.freeze(['memory_doc.v1', 'prompt_doc.v2']);
+const NO_KINDS: readonly string[] = Object.freeze([]);
 
 /**
  * "Add document" for every Context layer (Settings, a Project, a Session's Work › Context): the
@@ -35,6 +40,13 @@ export function PromptStackDocumentMenu(props: Readonly<{
     const { attachedRefs = EMPTY_ATTACHED_REFS, onPick, serverId, purpose } = props;
     const scope = useActiveServerAccountScope(serverId);
     const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [scope?.serverId, scope?.accountId]);
+    const admitted = Boolean(scope && lifetime?.isCurrent());
+    const kinds = purpose === 'instructions' ? INSTRUCTION_KINDS : CONTEXT_KINDS;
+    const loaded = useArtifactsLoaded(kinds);
+    // The picker is the demand boundary. Reuse Sync's selected inventory, including recovery and
+    // cancellation; a snapshot with no rows is not evidence that the requested library is empty.
+    const inventory = useArtifactInventoryRead(admitted && !loaded, admitted ? kinds : NO_KINDS);
+    const unavailable = !admitted || inventory.failed;
     const choices = React.useMemo(() => !scope || !lifetime?.isCurrent() ? [] : promptStackDocumentChoices({
         artifacts, attachedRefs, purpose, serverId: scope.serverId, untitled: t('promptLibrary.untitledPrompt'),
     }), [artifacts, attachedRefs, purpose, scope, lifetime]);
@@ -50,9 +62,17 @@ export function PromptStackDocumentMenu(props: Readonly<{
             onOpenChange={(next) => { if (!next) props.onClose(); }}
             items={items}
             selectedId={null}
+            header={unavailable || !loaded ? <SurfaceStateCard
+                testID={`${props.testID}.readState`}
+                size="line"
+                lineDensity="menu"
+                kind={unavailable ? 'unavailable' : 'loading'}
+                title={t(unavailable ? 'common.error' : 'common.loading')}
+                action={unavailable && admitted ? { label: t('common.retry'), onPress: inventory.retry } : undefined}
+            /> : undefined}
             search
             searchPlaceholder={props.searchPlaceholder ?? t('contextPages.addDocument')}
-            emptyLabel={t('contextPages.addDocumentEmpty')}
+            emptyLabel={admitted && loaded && !unavailable ? t('contextPages.addDocumentEmpty') : null}
             popoverAnchorRef={props.anchorRef}
             popoverPhonePresentation="sheet"
             popoverAccessibilityLabel={props.searchPlaceholder ?? t('contextPages.addDocument')}

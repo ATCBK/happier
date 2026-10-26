@@ -4,10 +4,11 @@ import { readSessionOrganizationWorkspaceLabel } from '@/sync/domains/session/or
 import { requireSessionOrganizationMutationScope, writeSessionOrganizationWorkspaceLabels } from '@/sync/ops/sessionOrganization';
 import { registerSyncRuntime } from './sync';
 import { type SessionMessageV1, type SessionMessagesPageV1 } from '@happier-dev/protocol';
+import { MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1, isMachineProjectionChangeKindV1 } from '@happier-dev/protocol/changes';
 import { projectSessionMetadataForWire } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 import { parsePermissionIntentAlias, resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
-import { projectComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
-import { MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1 } from '@happier-dev/protocol/changes';
+import { applyComposerControlAcknowledgementV1, projectComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
+import type { ApiTokenGrantV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { EMPTY_PROJECT_AUTHORING_SESSION_INPUTS } from '@/sync/store/domains/projectAuthoringSessions';
 import {
@@ -37,7 +38,7 @@ import {
     isTokenOnlyAuthCredentials,
     type AuthCredentials,
 } from '@/auth/storage/tokenStorage';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { resolveScopedAccountEncryption } from '@/sync/encryption/scopedAccountEncryption';
 import { Encryption, captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { getRandomBytes } from '@/platform/cryptoRandom';
@@ -124,11 +125,13 @@ import { captureSessionListRetirementFence, wasSessionRetiredSinceFence } from '
 import type { OrdinarySessionListLifecycle } from '@/sync/domains/session/listing/ordinarySessionListHomeState';
 import {
     resolveOrdinarySessionListCoverage,
+    areSessionListHomeObservationsEqual,
     type SessionListHomeObservationPhase,
 } from '@/sync/domains/session/listing/sessionListHomeObservation';
+import { classifySessionListFailure, type SessionListFailure } from '@/sync/domains/session/listing/sessionListFailure';
 import { createSessionSystemRecordRepository, type SessionSystemRecordRepository } from '@/sync/domains/sessionSystemRecords/repository';
 import type { SessionSystemRecordFetchResult } from '@/sync/domains/sessionSystemRecords/transport';
-import { invalidateSessionSystemRecordsFromChanges } from '@/sync/domains/sessionSystemRecords/changeWatch';
+import { invalidateSessionSystemRecordsFromChanges, invalidateSessionSystemRecordsFromTargets, isSessionSystemRecordChangeKind } from '@/sync/domains/sessionSystemRecords/changeWatch';
 import type { SessionStoredContentContext } from '@happier-dev/sync-client';
 import {
     buildSessionOrganizationProjection,
@@ -187,11 +190,9 @@ import {
     resetSessionMessagesWindowForSessionSwitch,
     type SessionMessagesWindowState,
 } from '@/sync/runtime/sessionMessagesWindowState';
-import { ActivityUpdateAccumulator } from '@/sync/engine/activity/activityUpdateAccumulator';
-import {
-    MachineActivityAccumulator,
-    type MachineActivityUpdate,
-} from '@/sync/engine/activity/machineActivityAccumulator';
+import { ActivityUpdateAccumulator, type ActivityUpdateFlushOptions } from '@/sync/engine/activity/activityUpdateAccumulator';
+import { sessionRuntimeObservations } from '@/sync/domains/session/sessionRuntimeObservation';
+import type { MachineActivityUpdate } from '@/sync/domains/machines/machineActivity';
 import { randomUUID } from '@/platform/randomUUID';
 import {
     Platform,
@@ -275,10 +276,10 @@ import {
 } from './domains/state/warmCachePersistence';
 import {
     buildMachineDisplayCacheEntriesFromRenderables,
-    buildMachineDisplayRenderableFromCacheEntry,
     buildSessionListCacheEntriesFromRenderables,
     buildSessionListRenderableFromCacheEntry,
 } from './domains/state/warmCacheAdapters';
+import { readWarmMachineDisplays } from './domains/state/machineDisplayWarmCacheAdapters';
 import {
     initializeTracking,
     tracking,
@@ -530,6 +531,7 @@ import {
     type ArtifactViewRead,
 } from './engine/artifacts/syncArtifacts';
 import { runWithServerAccountScopeRequestGuard } from './runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import { artifactInventorySelectionOptions, doesArtifactInventorySelectionCover, isApprovalSessionInventorySelection, isApprovalStateInventorySelection, isArtifactInventoryLoaded, type ArtifactInventorySelection } from './domains/artifacts/artifactInventory';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { fetchAndApplyFeed, handleNewFeedPostUpdate, handleRelationshipUpdatedSocketUpdate, handleTodoKvBatchUpdate } from './engine/social/syncFeed';
 import { fetchAndApplyFriends } from './engine/social/syncFriends';
@@ -538,8 +540,8 @@ import {
     handleUpdateAccountSocketUpdate,
     schedulePushTokenReconciliation,
 } from './engine/account/syncAccount';
-import { buildMachineFromMachineActivityEphemeralUpdate, buildUpdatedMachineFromSocketUpdate, fetchAndApplyMachines, type MachineDataKeyCacheEntry } from './engine/machines/syncMachines';
-import { fetchAndApplyAutomationRuns, fetchAndApplyAutomations } from './engine/automations/syncAutomations';
+import { buildUpdatedMachineFromSocketUpdate, fetchAndApplyMachines, type MachineDataKeyCacheEntry } from './engine/machines/syncMachines';
+import { fetchAndApplyAutomationRuns, fetchAndApplyAutomations, type AutomationRefreshOptions } from './engine/automations/syncAutomations';
 import { createPendingQueueRequest } from './engine/pending/createPendingQueueRequest';
 import {
     applyAutomationDefinitionDetail,
@@ -560,6 +562,7 @@ import {
     planSyncActionsFromChanges,
     plannedChangesAffectSessionListQuery,
     plannedChangesAffectProfileCatalog,
+    plannedChangesAffectWorkflowTriggers,
     plannedChangesAffectUsageQuery,
 } from './runtime/orchestration/changesPlanner';
 import { applyPlannedChangeActions } from './runtime/orchestration/changesApplier';
@@ -627,6 +630,7 @@ import { createServerFetchAtEndpoint, StaleServerGenerationError, type ServerFet
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { clearEmbedMemoryStorage } from '@/sync/domains/state/persistenceStorage';
 import { clearEmbedBrowserRecords } from '@/sync/domains/state/browserRecordStorage';
+import { fetchEmbedSessionApprovalArtifacts } from '@/sync/domains/artifacts/embedSessionApprovalArtifacts';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { createSessionAttachmentTransferRouting, type SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
@@ -670,7 +674,8 @@ import {
 import { resolveSessionMessageRouteId } from '@happier-dev/session-core/messages';
 import type { SessionListQueryPageRequest } from './domains/session/listing/sessionListQueryController';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
-import { readSessionOwnerMetadataView } from './domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from './domains/session/readSessionOwnerMetadataView';
+import { buildSessionOwnerMetadataUnavailableShell, projectSessionLayout1OwnerMetadata, readSessionLayout1OwnerMetadata } from './engine/sessions/readSessionLayout1OwnerProjection';
 import { fetchAndApplySessionById, type SessionListRowPublication } from './engine/sessions/sessionById';
 import { looksLikeCurrentV2SessionNotFound404 } from './engine/sessions/sessionHttpCompat';
 import { getForkedTranscriptSnapshotCached } from './domains/sessionFork/forkedTranscriptSnapshot';
@@ -713,7 +718,7 @@ import {
 import {
     getServerFeaturesSnapshot,
     refreshAuthenticatedServerFeaturesSnapshot,
-    observeAuthenticatedServerFeaturesFresh,
+    observePublicServerFeaturesFresh,
     primeServerFeaturesSnapshot,
     type ServerFeaturesSnapshot,
 } from './api/capabilities/serverFeaturesClient';
@@ -769,6 +774,13 @@ function isRetryableTargetWindowLoadError(error: unknown): boolean {
 }
 
 class ExternalSessionTranscriptRpcError extends Error {
+    // Agent/source availability is a settled typed load issue, not transient
+    // connectivity. Existing Machine/authority changes (or explicit user retry)
+    // invalidate the transcript again; elapsed time cannot make it available.
+    get retryable(): boolean {
+        return this.code !== 'agent_unavailable';
+    }
+
     constructor(readonly code: ExternalSessionsRpcErrorCode, message: string) {
         super(message);
         this.name = 'ExternalSessionTranscriptRpcError';
@@ -945,6 +957,7 @@ function createDefaultMessageTransport(): SyncMessageTransport {
 
 function shouldRetrySyncInvalidation(error: unknown): boolean {
     if (isDemoModeActive()) return false;
+    if (error instanceof ExternalSessionTranscriptRpcError && !error.retryable) return false;
     return shouldRetryError(error);
 }
 
@@ -1341,9 +1354,12 @@ class Sync {
         anonID!: string;
         private credentials: AuthCredentials | null = null;
         private appliedServerTarget: SyncServerTarget | null = null;
-        private embedSessionScope: (SyncEmbedSessionOptions & Readonly<{
+        private embedSessionScope: (Omit<SyncEmbedSessionOptions, 'composerOptionsInput'> & {
+            composerOptionsInput?: ComposerOptionsInputV1 | null;
+        } & Readonly<{
             request: ServerResponseRequest;
             controller: AbortController;
+            approvalsSync: InvalidateSync;
         }>) | null = null;
         private embedFeaturesSnapshot: ServerFeaturesSnapshot = { status: 'unsupported', reason: 'endpoint_missing' };
         private readonly requestViaConfiguredSocket: ServerFetch = async (path, init, options) => {
@@ -1363,7 +1379,7 @@ class Sync {
       public encryptionCache = new EncryptionCache();
       private sessionDraftSyncEnabled = false;
       private sessionDraftFlushSync: InvalidateSync | null = null;
-      private sessionDraftOfflineCatchUpPending = false;
+      private sessionDraftSnapshotIncomplete = false;
       private sessionDraftRepositoryConfiguredScope: ServerAccountScope | null = null;
       private authoringMemoryRuntime: Promise<ReturnType<typeof createAuthoringMemorySync>> | null = null;
       private projectAccountRowsRuntime: Promise<ReturnType<typeof createProjectAccountRowsSync>> | null = null;
@@ -1393,6 +1409,7 @@ class Sync {
     private serverScopeGeneration = 0;
     private sessionListSnapshotGeneration = 0;
     private bootstrapForegroundReady: Promise<void> | null = null;
+    private managedTargetBackfillLifetime: ServerAccountScopeLifetime | null = null;
       private sessionByIdHydrationInFlight = new Map<string, Readonly<{
           sessionId: string;
           serverId: string | undefined;
@@ -1458,7 +1475,15 @@ class Sync {
     private machinesSync: InvalidateSync;
     private nativeUpdateSync: InvalidateSync;
     private artifactsSync: InvalidateSync;
-    private artifactProvenanceConsumers = 0;
+    private artifactInventoryConsumers = new Set<Readonly<{
+        scope: ServerAccountScope;
+        selection?: ArtifactInventorySelection;
+        includeProvenance: boolean;
+        onSettled?: (outcome: 'success' | 'failed') => void;
+    }>>();
+    private artifactInventoryRefreshes: readonly Readonly<{
+        controller: AbortController; selection: ArtifactInventorySelection | undefined;
+    }>[] = [];
     private friendsSync: InvalidateSync;
     private friendRequestsSync: InvalidateSync;
     private feedSync: InvalidateSync;
@@ -1466,6 +1491,8 @@ class Sync {
     private pendingOutboxOperationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private todosSync: InvalidateSync;
     private automationsSync: InvalidateSync;
+    // Stronger demand survives status-only arrivals, awaits and the queue's retry.
+    private automationRunRefreshPending = false;
     // Traversal identity is only an in-process write fence. The store owns the
     // corresponding acceptance check; this owner keeps the token alongside
     // each in-flight reader so an older response cannot overwrite it later.
@@ -1476,7 +1503,6 @@ class Sync {
     private readonly pluginAvailabilityProjectionHydrator =
         createActivePluginAccountAvailabilityProjectionHydrator();
     private activityAccumulator: ActivityUpdateAccumulator;
-    private machineActivityAccumulator: MachineActivityAccumulator;
     private pendingSettings: Partial<Settings> = {};
     private pendingSettingsScope: AccountSettingsScope | null = null;
     private pendingSettingsFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1525,17 +1551,40 @@ class Sync {
         installSyncPerformanceTelemetryGlobal(syncPerformanceTelemetry);
         installSyncReliabilityTelemetryGlobal(syncReliabilityTelemetry);
         if (!isEmbedWindowContext()) subscribeHomeAccountChange(event => {
+            if (event.sessionSystemRecords !== undefined) {
+                for (const repository of this.sessionSystemRecordRepositories.values()) {
+                    if (!areServerProfileIdentifiersEquivalent(repository.scope.serverId, event.serverId)) continue;
+                    invalidateSessionSystemRecordsFromTargets({ scope: repository.scope, repository, targets: event.sessionSystemRecords });
+                    // Released/predecessor workflow transports have no addressed publisher.
+                    if (event.changeKinds?.includes('session')) for (const sessionId of event.entityIds ?? []) {
+                        repository.invalidateLegacyWorkflows({ serverId: event.serverId, sessionId });
+                    }
+                }
+                return;
+            }
+            // A focused content-free wake starts the canonical feed read; it
+            // does not identify a Session record or an access change. Repeated
+            // unrelated wakes must not invalidate that read's admitted Board
+            // on every arrival. The feed applier owns exact invalidation once
+            // it answers; known access/record wakes still withdraw immediately.
+            if (event.source === 'catch-up-pending' && event.changeKinds === undefined) return;
             // Detailed focused pages already invalidate their exact Session/share
-            // ids. Concurrent Home wakes and blocked catch-up have no such page:
+            // ids. Advisory Home wakes and blocked catch-up have no such page:
             // revalidate observed records now, and leave hidden records stale for
             // their next subscriber, through the same repository refresh owner.
-            if (event.entityIds !== undefined) return;
+            if (event.feedPageConsumed === true && event.entityIds !== undefined && event.changeKinds !== undefined) return;
+            if (event.changeKinds && !event.changeKinds.some(isSessionSystemRecordChangeKind)) return;
             for (const repository of this.sessionSystemRecordRepositories.values()) {
-                if (areServerProfileIdentifiersEquivalent(repository.scope.serverId, event.serverId)) repository.invalidateAll();
+                if (!areServerProfileIdentifiersEquivalent(repository.scope.serverId, event.serverId)) continue;
+                if (event.entityIds) {
+                    for (const sessionId of event.entityIds) repository.invalidate({ serverId: event.serverId, sessionId });
+                } else {
+                    repository.invalidateAll();
+                }
             }
         }, { includeCatchUpPending: true });
         if (!isEmbedWindowContext()) subscribeHomeAccountChange(event => {
-            if (event.changeKinds && !event.changeKinds.includes('machine')) return;
+            if (event.changeKinds && !event.changeKinds.some(isMachineProjectionChangeKindV1)) return;
             const state = storage.getState();
             for (const session of Object.values(state.sessions)) {
                 if (!areServerProfileIdentifiersEquivalent(session.serverId, event.serverId)
@@ -1698,7 +1747,7 @@ class Sync {
             this.purchasesSync = new InvalidateSync(this.syncPurchases, { onError, onSuccess, onRetry, pause, backoff, shouldRetry });
             this.machinesSync = new InvalidateSync(this.fetchMachines, { onError, onSuccess, onRetry, pause, backoff, shouldRetry });
             this.nativeUpdateSync = new InvalidateSync(this.fetchNativeUpdate, { pause, backoff, shouldRetry });
-            this.artifactsSync = new InvalidateSync(this.fetchArtifactsList, { pause, backoff, shouldRetry });
+            this.artifactsSync = new InvalidateSync(this.refreshDemandedArtifactInventories, { pause, backoff, shouldRetry });
             this.friendsSync = new InvalidateSync(this.fetchFriends, { pause, backoff, shouldRetry });
             this.friendRequestsSync = new InvalidateSync(this.fetchFriendRequests, { pause, backoff, shouldRetry });
             this.feedSync = new InvalidateSync(this.fetchFeed, { pause, backoff, shouldRetry });
@@ -1714,8 +1763,8 @@ class Sync {
             this.activityAccumulator = new ActivityUpdateAccumulator(
                 this.flushActivityUpdates.bind(this),
                 this.syncTuning.activityUpdateDebounceMs,
+                sessionRuntimeObservations,
             );
-            this.machineActivityAccumulator = new MachineActivityAccumulator(this.flushMachineActivityUpdates.bind(this), 300);
 
           // Listen for app state changes to pause sync + run a single centralized resume pipeline.
           if (!isEmbedWindowContext()) AppState.addEventListener('change', (nextAppState) => {
@@ -2578,10 +2627,11 @@ class Sync {
                 && previousScope.accountId === options.accountId
                 && previousScope.endpointUrl === options.endpointUrl
                 && previousScope.accountMode === options.accountMode;
-            const renewalCursor = sameSessionScope && storage.getState().isDataReady ? this.changesCursor : null;
+            const renewalCursor = sameSessionScope && previousScope.approvalGranted === options.approvalGranted
+                && storage.getState().isDataReady ? this.changesCursor : null;
             this.disposeEmbedSession({ preserveSessionState: sameSessionScope });
             if (Object.keys(storage.getState().sessions).some((sessionId) => sessionId !== options.scope.sessionId)) {
-                storage.setState({ sessions: {}, projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS, sessionMessages: {}, sessionPending: {}, isDataReady: false, isSessionDraftsReady: false });
+                storage.setState({ sessions: {}, projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS, sessionMessages: {}, sessionUserMessageHistory: {}, sessionPending: {}, isDataReady: false, isSessionDraftsReady: false });
                 this.sessionViewport.clear();
             }
             const controller = new AbortController();
@@ -2599,7 +2649,7 @@ class Sync {
                 const method = (init?.method ?? 'GET').toUpperCase();
                 const read = method === 'GET';
                 const permitted = url.origin === new URL(embedOptions.endpointUrl).origin && (
-                    read && (url.pathname === '/v1/features/authenticated' || url.pathname === '/v2/cursor'
+                    read && (url.pathname === '/v1/features' || url.pathname === '/v2/cursor'
                         || url.pathname === `/v2/sessions/${sessionPath}`
                         || url.pathname === `/v1/sessions/${sessionPath}/messages`
                         || url.pathname.startsWith(`/v2/sessions/${sessionPath}/messages/by-local-id/`)
@@ -2624,6 +2674,12 @@ class Sync {
                 ...options,
                 controller,
                 request,
+                approvalsSync: new InvalidateSync(async () => {
+                    if (this.embedSessionScope?.controller !== controller || !options.isCurrent()) return;
+                    await this.refreshEmbedSessionApprovals();
+                }, { pause: this.pauseController, onError: error => {
+                    if (this.embedSessionScope?.controller === controller && options.isCurrent()) this.reportSyncError(error);
+                } }),
             };
             this.embedSessionScope = scope;
             this.appliedServerTarget = { serverId: options.endpointUrl, serverUrl: options.endpointUrl, generation: this.serverScopeGeneration };
@@ -2714,6 +2770,7 @@ class Sync {
         const scope = this.embedSessionScope;
         if (!scope) return;
         this.embedSessionScope = null;
+        scope.approvalsSync.stop();
         scope.controller.abort('embed-session-retired');
         this.serverScopeGeneration += 1;
         this.userRequestLeaseOwner.crossHardBoundary(() => this.disconnectSocketIntentionally());
@@ -2747,7 +2804,7 @@ class Sync {
             clearEmbedBrowserRecords();
             this.resetSessionTranscriptState(scope.scope.sessionId);
             this.sessionViewport.clear();
-            storage.setState({ sessions: {}, projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS, sessionMessages: {}, sessionPending: {}, isDataReady: false, isSessionDraftsReady: false });
+            storage.setState({ sessions: {}, projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS, sessionMessages: {}, sessionUserMessageHistory: {}, sessionPending: {}, isDataReady: false, isSessionDraftsReady: false });
         }
     }
 
@@ -2824,6 +2881,16 @@ class Sync {
         return { serverId: scope.endpointUrl, accountId: scope.accountId, sessionId: scope.scope.sessionId,
             credentials, request: scope.request,
             revision, isCurrent,
+            onActionAcknowledged: (actionId: string, result: unknown) => {
+                if (!isCurrent()) return;
+                const session = storage.getState().sessions[scope.scope.sessionId];
+                if (!session) return;
+                const previous = session.composerOptionsInput ?? scope.composerOptionsInput ?? {};
+                const next = applyComposerControlAcknowledgementV1({ sessionId: session.id, options: previous, actionId, result });
+                if (next === previous) return;
+                scope.composerOptionsInput = projectComposerOptionsInputV1(next, scope.composerOptionsGrant ?? null);
+                this.applySessions([{ ...session, composerOptionsInput: scope.composerOptionsInput }]);
+            },
             onRetire: (cancel: () => void) => {
                 if (!isCurrent()) {
                     cancel();
@@ -2849,6 +2916,25 @@ class Sync {
             if (this.embedSessionScope !== scope || !scope.isCurrent()) return;
             await this.fetchPendingMessages(sessionId);
         }
+    }
+
+    private async refreshEmbedSessionApprovals(): Promise<void> {
+        const scope = this.embedSessionScope;
+        if (!scope || !scope.isCurrent()) return;
+        const inventoryReadStartedWith = storage.getState().artifacts;
+        const artifacts = scope.approvalGranted === true ? await fetchEmbedSessionApprovalArtifacts({
+            request: scope.request,
+            serverId: scope.endpointUrl,
+            accountId: scope.accountId,
+            sessionId: scope.scope.sessionId,
+        }) : [];
+        if (this.embedSessionScope !== scope || !scope.isCurrent()) return;
+        storage.getState().applyArtifacts(
+            artifacts,
+            inventoryReadStartedWith,
+            { approvalSessionIds: [scope.scope.sessionId] },
+            'inventory',
+        );
     }
 
     async restore(credentials: AuthCredentials, encryption: Encryption | null, target?: SyncServerTarget) {
@@ -2941,12 +3027,9 @@ class Sync {
         const shouldHydrateMachineDisplays = options?.preserveFetchedState !== true
             || Object.keys(currentState.machineDisplayById).length === 0;
         if (shouldHydrateMachineDisplays) {
-            const machineEntries = loadMachineDisplayWarmCacheEntries(serverId, accountId);
-            if (Object.keys(machineEntries).length > 0) {
-                storage.getState().replaceMachineDisplays(
-                    Object.values(machineEntries).map((entry) => buildMachineDisplayRenderableFromCacheEntry(entry)),
-                );
-            }
+            const machineDisplays = readWarmMachineDisplays({ profile: getServerProfileById(serverId),
+                serverIdentityId: serverId, accountId, loadWarmEntries: loadMachineDisplayWarmCacheEntries });
+            if (machineDisplays.length > 0) storage.getState().replaceMachineDisplays([...machineDisplays]);
         }
 
         const shouldHydrateSessionList = options?.preserveFetchedState !== true
@@ -3274,10 +3357,11 @@ class Sync {
                 await this.prepareSessionDraftRepositoryRuntime(params);
                 if (generation !== this.serverScopeGeneration
                     || !areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) return false;
-                await ensureSessionDraftRepositoryHydrated(scope);
+                this.sessionDraftSnapshotIncomplete = true;
+                const complete = await ensureSessionDraftRepositoryHydrated(scope);
                 if (generation !== this.serverScopeGeneration
                     || !areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) return false;
-                if (params.forceSnapshotHydration === true) this.sessionDraftOfflineCatchUpPending = false;
+                this.sessionDraftSnapshotIncomplete = !complete;
                 return true;
             },
         });
@@ -3357,12 +3441,13 @@ class Sync {
         storage.getState().resetAuthoringMemory();
         apiSocket.invalidateRequests('server-switch');
         this.automationRunTraversalTokensByAutomationId.clear();
+        this.automationRunRefreshPending = false;
         this.changesCatchUpQueuedAfterResume = false;
         this.postSubscriptionChangesCatchUpPending = false;
         this.sessionDraftSyncEnabled = false;
         this.sessionDraftFlushSync?.stop();
         this.sessionDraftFlushSync = null;
-        this.sessionDraftOfflineCatchUpPending = false;
+        this.sessionDraftSnapshotIncomplete = false;
         this.sessionDraftRepositoryConfiguredScope = null;
         this.sessionDraftRuntimeHydrationGate.reset();
         this.sessionDraftRuntimePreparationGate.reset();
@@ -3392,7 +3477,6 @@ class Sync {
         this.clearActiveAccountSettingsScope();
         this.userRequestLeaseOwner.crossHardBoundary(() => this.disconnectSocketIntentionally());
         this.activityAccumulator.reset();
-        this.machineActivityAccumulator.reset();
 
         for (const timer of this.pendingMessageCommitRetryTimers.values()) {
             clearTimeout(timer);
@@ -3526,12 +3610,19 @@ class Sync {
             machineDisplayById: {},
             machinePresenceById: {},
             sessionMessages: {},
+            sessionUserMessageHistory: {},
             sessionMessagesHistoryStartLoaded: {},
             sessionPending: {},
             artifacts: {},
+            artifactOpenWorkflowPublicationArtifacts: [],
             artifactSkillRevisions: {},
             artifactInventoryUnreadyCount: 0,
             artifactsLoaded: false,
+            artifactBrowserLoaded: false,
+            artifactInboxLoaded: false,
+            artifactInboxPartial: false,
+            artifactInventoryKindsLoaded: [],
+            artifactInventoryKindsPartial: [],
             automations: {},
             automationDefinitionNextCursor: null,
             automationDefinitionWindowExtended: false,
@@ -3566,9 +3657,10 @@ class Sync {
     };
 
     public async switchServer(credentials: AuthCredentials, target?: SyncServerTarget): Promise<void> {
-        const encryption = isTokenOnlyAuthCredentials(credentials)
-            ? null
-            : await createEncryptionFromAuthCredentials(credentials);
+        const encryptionTarget = target ?? getActiveServerSnapshot();
+        const encryption = await resolveScopedAccountEncryption({
+            serverId: encryptionTarget.serverId, serverUrl: encryptionTarget.serverUrl, credentials,
+        });
 
         assertSyncServerTargetCurrent(target);
 
@@ -3973,6 +4065,7 @@ class Sync {
                 /** Keep a wake reconciliation open until its queued messages have applied. */
                 awaitMessageHydration?: boolean;
                 authority?: ServerAccountRequestAuthority;
+                accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;
                 /** Exact captured Account-scope currentness for a qualified caller. */
                 scopeCurrentness?: () => boolean;
                 /** Exact record observers use the reader initialized by a coalesced hydration. */
@@ -4123,6 +4216,7 @@ class Sync {
                         activeCredentials: credentials,
                         ...(embedScope ? { sessionKey: embedScope.sessionKey ?? null,
                             composerOptionsInput: embedScope.composerOptionsInput ?? null,
+                            composerOptionsGrant: embedScope.composerOptionsGrant ?? null,
                             accountMode: embedScope.accountMode } : {}),
                         activeEncryption: this.encryption,
                         sessionDataKeys: this.sessionDataKeys,
@@ -4134,6 +4228,7 @@ class Sync {
                         log,
                         includeTurnsProjection,
                         authority: options?.authority,
+                        accountCurrentnessSource: options?.accountCurrentnessSource,
                         isCurrent: isHydrationCurrent,
                     });
                     if (!result.ok) {
@@ -4253,7 +4348,11 @@ class Sync {
         });
     };
 
-    private refreshSessionListRowProjection = async (serverId: string, sessionId: string): Promise<void> => {
+    private refreshSessionListRowProjection = async (
+        serverId: string,
+        sessionId: string,
+        suppliedCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>,
+    ): Promise<void> => {
         const target = this.getAppliedTransportTarget();
         const credentials = this.credentials;
         const encryption = this.encryption;
@@ -4263,7 +4362,8 @@ class Sync {
         }
         const retirementFence = captureSessionListRetirementFence();
         const request = this.createAppliedTransportRequest(target);
-        const accountCurrentnessSource = createOperationAccountCurrentnessSource({ credentials, request, serverId });
+        const accountCurrentnessSource = suppliedCurrentnessSource
+            ?? createOperationAccountCurrentnessSource({ credentials, request, serverId });
         const isCurrent = () => this.serverScopeGeneration === generation
             && this.isAppliedTransportTargetCurrent(target)
             && this.credentials === credentials
@@ -4304,7 +4404,7 @@ class Sync {
             }
             if (!result.sessionListRenderable) throw new Error('Session projection refresh returned no row');
             if (readExistingSession(sessionId)) this.markSessionStateHydrationDeferred(sessionId);
-        } finally { accountCurrentnessSource.dispose(); }
+        } finally { if (!suppliedCurrentnessSource) accountCurrentnessSource.dispose(); }
     };
 
     /**
@@ -4315,22 +4415,49 @@ class Sync {
      * Unreadable demanded rows retain the existing list-refresh repair.
      */
     private refreshListedSessionRows = async (serverId: string, sessionIds: readonly string[]): Promise<void> => {
+        if (sessionIds.length === 0) return;
+        const target = this.getAppliedTransportTarget();
+        const credentials = this.credentials;
+        if (!target || !credentials || !areServerProfileIdentifiersEquivalent(serverId, target.serverId)) {
+            throw new Error('Session projection AccountChange scope is unavailable');
+        }
+        // Server-admitted list projections borrow the connected identity. Keep
+        // one lazy exact source for demanded hydration or an unbound transport;
+        // every borrower retains this pass's semantic invalidation fence.
+        const accountCurrentnessSource = createOperationAccountCurrentnessSource({
+            credentials, request: this.createAppliedTransportRequest(target), serverId,
+        });
         const unreadable: string[] = [];
-        await runTasksWithLimit(
-            sessionIds.map((sessionId) => async () => {
+        try {
+            const projectionReads: Promise<void>[] = [];
+            const demandedHydrations: Array<() => Promise<void>> = [];
+            for (const sessionId of sessionIds) {
                 if (!this.isSessionHydrationDemanded(sessionId, serverId)) {
-                    await this.refreshSessionListRowProjection(serverId, sessionId);
-                    return;
+                    // Submit the logical set before awaiting admission. The shared
+                    // parts reader owns physical batching and its HTTP body budget;
+                    // a crypto worker window here fragments it into serial reads.
+                    projectionReads.push(this.refreshSessionListRowProjection(serverId, sessionId, accountCurrentnessSource));
+                } else {
+                    demandedHydrations.push(async () => {
+                        const result = await this.ensureSessionVisibleForMessageRoute(sessionId, {
+                            forceRefresh: true,
+                            hydrateMessages: false,
+                            accountCurrentnessSource,
+                            ...(serverId ? { serverId } : {}),
+                        });
+                        if (result.kind !== 'available') unreadable.push(sessionId);
+                    });
                 }
-                const result = await this.ensureSessionVisibleForMessageRoute(sessionId, {
-                    forceRefresh: true,
-                    hydrateMessages: false,
-                    ...(serverId ? { serverId } : {}),
-                });
-                if (result.kind !== 'available') unreadable.push(sessionId);
-            }),
-            this.syncTuning.sessionListHydrationConcurrencyLimit,
-        );
+            }
+            // Keep the finite witness alive for every admitted borrower, including
+            // siblings still completing after a row fails. A failure still holds
+            // the containing Account-change cursor for recovery.
+            const outcomes = await Promise.allSettled([
+                ...projectionReads,
+                runTasksWithLimit(demandedHydrations, this.syncTuning.sessionListHydrationConcurrencyLimit),
+            ]);
+            for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+        } finally { accountCurrentnessSource.dispose(); }
         if (unreadable.length === 0) return;
         await this.fetchSessions({
             awaitSessionListHydration: true,
@@ -5468,6 +5595,13 @@ class Sync {
         let mutationSession: Session | null = null;
         const exactSessionDataKeys = new Map<string, Uint8Array>();
         const exactSessionDataKeyEnvelopes = new Map<string, string>();
+        const projectionServerId = exactAuthority?.scope.serverId ?? resolvedServerIdOverride
+            ?? this.getAppliedTransportTarget()?.serverId;
+        const incumbent = storage.getState().sessions[sessionId];
+        // Reuse admitted provenance, never the visible tuple as a raw CAS baseline.
+        const ownerMetadataProjectionBaseline = incumbent?.serverId && projectionServerId
+            && areServerProfileIdentifiersEquivalent(incumbent.serverId, projectionServerId)
+            ? incumbent[SESSION_OWNER_METADATA_PROJECTION] : undefined;
 
         const fetchLatestSession = async (
             includeMetadataTupleMutationSnapshot = false,
@@ -5499,6 +5633,7 @@ class Sync {
                         }
                     },
                     getExistingSession: () => mutationSession,
+                    ownerMetadataProjectionBaseline,
                     log,
                     includeTurnsProjection: false,
                     includeMetadataTupleMutationSnapshot,
@@ -5536,6 +5671,7 @@ class Sync {
                 // the exact-Account path does; store admission still owns
                 // projection ordering and the tuple writer owns CAS conflicts.
                 getExistingSession: () => mutationSession,
+                ownerMetadataProjectionBaseline,
                 log,
                 includeTurnsProjection: false,
                 includeMetadataTupleMutationSnapshot,
@@ -5773,18 +5909,30 @@ class Sync {
                 if (!currentSession) {
                     return;
                 }
-                // The tuple's flat compatibility view carries predecessor Agent
-                // aliases. Normalize through the same reader used by hydration.
-                const ownerMetadataView = next.mode === 'owner'
-                    ? MetadataSchema.parse(next.value.metadata)
-                    : null;
+                const credentials = exactAuthority?.context.credentials ?? this.credentials;
+                const accountCurrentness = accountCurrentnessSource?.peek();
+                // Publish the committed envelope and view as one admitted owner
+                // projection, so hydration does not manufacture new provenance.
+                const ownerProjection = next.mode === 'owner' && credentials
+                    ? projectSessionLayout1OwnerMetadata({
+                        sharedMetadata: next.value.sharedMetadata,
+                        metadataVersion: next.metadataVersion,
+                        ownerMetadataRead: readSessionLayout1OwnerMetadata({
+                            access: currentSession.access ?? null,
+                            accountMode: accountCurrentness?.mode,
+                            accountCurrentness,
+                            credentials,
+                            ownerMetadataEnvelope: next.ownerMetadataEnvelope,
+                            previousProjection: currentSession[SESSION_OWNER_METADATA_PROJECTION],
+                        }),
+                    }) : null;
                 const {
                     ownerMetadata: _obsoleteOwnerMetadata,
                     ...ordinarySession
                 } = currentSession as Session & {
                     ownerMetadata?: unknown;
                 };
-                const nextSession = {
+                const committedSession = {
                     ...ordinarySession,
                     metadata:
                         next.value.sharedMetadata as unknown as Metadata,
@@ -5792,13 +5940,18 @@ class Sync {
                     metadataLayoutVersion: 1,
                     ...(next.mode === 'owner'
                         ? {
-                            ownerMetadataView,
-                            composerOptionsInput: projectComposerOptionsInputV1(ownerMetadataView),
+                            ...(ownerProjection?.kind === 'owner' ? {
+                                [SESSION_OWNER_METADATA_PROJECTION]: ownerProjection,
+                                ownerMetadataView: ownerProjection.ownerMetadataView,
+                                composerOptionsInput: ownerProjection.composerOptionsInput,
+                            } : {}),
                             agentState: next.value.agentState,
                             agentStateVersion: next.agentStateVersion,
                         }
                         : {}),
                 } as Session;
+                const nextSession = next.mode === 'owner' && ownerProjection?.kind !== 'owner'
+                    ? buildSessionOwnerMetadataUnavailableShell(committedSession) : committedSession;
                 mutationSession = nextSession;
                 if (!exactAuthority || ownsActiveProjection()) this.applySessions([nextSession]);
             },
@@ -7045,9 +7198,10 @@ class Sync {
             appliedTransportTarget,
             credentials,
         ).catch((error) => {
-            this.publishActiveSessionListObservation(this.socketStatus === 'disconnected' || this.socketStatus === 'error'
+            const failure = classifySessionListFailure(error);
+            this.publishActiveSessionListObservation(failure.reason === 'network' && (this.socketStatus === 'disconnected' || this.socketStatus === 'error')
                 ? 'offline'
-                : 'error', undefined, activeServerId);
+                : 'error', undefined, activeServerId, failure);
             throw error;
         });
         if (canShareFetchSessionsInFlight(options)) {
@@ -7071,6 +7225,7 @@ class Sync {
         phase: SessionListHomeObservationPhase,
         lastSuccessAt?: number,
         expectedServerId?: string,
+        failure?: SessionListFailure,
     ): void => {
         const serverId = this.getAppliedTransportTarget()?.serverId ?? '';
         if (!serverId || (expectedServerId && serverId !== expectedServerId)) return;
@@ -7079,15 +7234,16 @@ class Sync {
             const nextLastSuccessAt = typeof lastSuccessAt === 'number'
                 ? lastSuccessAt
                 : previous?.listObservation?.lastSuccessAt ?? null;
-            if (previous?.listObservation?.phase === phase
-                && previous.listObservation.lastSuccessAt === nextLastSuccessAt) return state;
+            const listObservation = { phase, lastSuccessAt: nextLastSuccessAt,
+                ...(phase === 'error' && failure ? { failure } : {}) };
+            if (areSessionListHomeObservationsEqual(previous?.listObservation, listObservation)) return state;
             return {
                 ...state,
                 concurrentSessionListCacheByServerId: {
                     ...state.concurrentSessionListCacheByServerId,
                     [serverId]: {
                         serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
-                        listObservation: { phase, lastSuccessAt: nextLastSuccessAt },
+                        listObservation,
                     },
                 },
             };
@@ -7407,7 +7563,7 @@ class Sync {
             encryption: this.encryption,
             sessionDataKeys: this.sessionDataKeys,
             sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
-            request: (path, init) => sessionRequest(path, { ...init, signal: page.signal }),
+            request: sessionRequest,
             getExistingSession: () => null,
             getCurrentSessionListRenderable: (sessionId) => (
                 storage.getState().sessionListRowsByServerId?.[serverId]?.[sessionId]
@@ -7838,7 +7994,10 @@ class Sync {
 
                   if (reason !== 'changes-catch-up') {
                       await this.refreshSessionDraftRepositoryForSync({
-                          forceSnapshotHydration: reason === 'manual' || this.sessionDraftOfflineCatchUpPending,
+                          // Durable changes repair missed draft pushes by address. A
+                          // full census is only needed for explicit refresh or an
+                          // earlier snapshot that could not open every Session.
+                          forceSnapshotHydration: reason === 'manual' || this.sessionDraftSnapshotIncomplete,
                       });
                       if (!shouldContinue()) return;
                   }
@@ -7968,7 +8127,7 @@ class Sync {
           }
           if (embedScope) {
               if (this.embedSessionScope !== embedScope || !embedScope.isCurrent()) return;
-              const snapshot = await observeAuthenticatedServerFeaturesFresh({ request: embedScope.request });
+              const snapshot = await observePublicServerFeaturesFresh({ request: embedScope.request });
               if (this.embedSessionScope !== embedScope || !embedScope.isCurrent()) return;
               this.embedFeaturesSnapshot = snapshot;
               primeServerFeaturesSnapshot({ serverId: embedScope.endpointUrl, snapshot });
@@ -7976,6 +8135,9 @@ class Sync {
               if (this.embedSessionScope !== embedScope || !embedScope.isCurrent()) return;
               if (cursor.status === 'ok') this.changesCursor = cursor.cursor;
               await this.refreshEmbedSessionSnapshot();
+              // Approval decisions have their own authority. Keep their pushed
+              // inventory fresh without withholding Session input admission.
+              embedScope.approvalsSync.invalidateCoalesced();
               if (this.embedSessionScope === embedScope && embedScope.isCurrent()) {
                   storage.getState().applyReady();
                   this.markSessionDraftsReady();
@@ -8053,14 +8215,27 @@ class Sync {
           await routeReady;
           if (!isCurrent()) return;
 
+          // Bootstrap can also run during reconnect recovery. The existing
+          // admitted Account lifetime owns exactly one retained-row attempt.
+          const backfillLifetime = captureActiveServerAccountScopeLifetime();
+          if (backfillLifetime && this.managedTargetBackfillLifetime !== backfillLifetime) {
+              this.managedTargetBackfillLifetime = backfillLifetime;
+              fireAndForget(import('@/sync/engine/automations/backfillAutomationManagedTargets')
+                  .then(({ backfillAutomationManagedTargetsForAccount }) => backfillAutomationManagedTargetsForAccount(backfillLifetime)), {
+                  tag: 'Sync.automationManagedTargetBackfill',
+                  logError: false,
+              });
+          }
+
           // Each peripheral publishes its own loading/error state. These queues
           // and independent lists never wait for whole-Account draft recovery.
           for (const syncUnit of [
               this.accountPetsSync, this.machinesSync, this.artifactsSync,
-              this.pluginAvailabilitySync, this.purchasesSync, this.automationsSync,
+              this.pluginAvailabilitySync, this.purchasesSync,
               this.todosSync, this.friendsSync, this.friendRequestsSync,
               this.feedSync, this.nativeUpdateSync,
           ]) syncUnit.invalidateCoalesced();
+          this.requestAutomationsRefresh();
 
           await this.refreshSessionDraftRepositoryForSync();
           if (this.serverScopeGeneration !== generation || this.credentials !== credentials) return;
@@ -8082,7 +8257,7 @@ class Sync {
               return;
           }
           const refreshedServerId = this.getAppliedTransportTarget()?.serverId ?? '';
-          if (refreshedServerId) publishHomeAccountChange(refreshedServerId);
+          if (refreshedServerId) publishHomeAccountChange(refreshedServerId, undefined, { source: 'snapshot' });
 
           const invalidateBounded = async (syncUnit: InvalidateSync, timeoutMs: number): Promise<void> => {
               syncUnit.invalidateCoalesced();
@@ -8129,7 +8304,10 @@ class Sync {
           await runTasksWithLimit(
               [
                   () => invalidateBounded(this.artifactsSync, this.syncTuning.invalidateSyncAwaitTimeoutMs),
-                  () => invalidateBounded(this.automationsSync, this.syncTuning.invalidateSyncAwaitTimeoutMs),
+                  () => {
+                      this.automationRunRefreshPending = true;
+                      return invalidateBounded(this.automationsSync, this.syncTuning.invalidateSyncAwaitTimeoutMs);
+                  },
                   () => invalidateBounded(this.todosSync, this.syncTuning.invalidateSyncAwaitTimeoutMs),
                   () => invalidateBounded(this.friendsSync, this.syncTuning.invalidateSyncAwaitTimeoutMs),
                   () => invalidateBounded(this.friendRequestsSync, this.syncTuning.invalidateSyncAwaitTimeoutMs),
@@ -8259,6 +8437,19 @@ class Sync {
     }
 
     public refreshAutomations = async () => {
+        return this.refreshAutomationsAndAwait();
+    }
+
+    private requestAutomationsRefresh(options?: AutomationRefreshOptions, coalesced = false): void {
+        if (!options?.summariesOnly) this.automationRunRefreshPending = true;
+        // A Run wake during a summary-only HTTP read requires the existing trailing
+        // pass; coalescing it into that weaker read would silently lose freshness.
+        if (coalesced && options?.summariesOnly) this.automationsSync.invalidateCoalesced();
+        else this.automationsSync.invalidate();
+    }
+
+    private refreshAutomationsAndAwait(options?: AutomationRefreshOptions): Promise<void> {
+        if (!options?.summariesOnly) this.automationRunRefreshPending = true;
         return this.automationsSync.invalidateAndAwait();
     }
 
@@ -8717,32 +8908,135 @@ class Sync {
     }
 
     // Artifact methods
-    /** Mounted Artifact browsers consume private attribution on subsequent syncs too. */
-    public observeArtifactProvenance(): () => void {
-        this.artifactProvenanceConsumers += 1;
-        return () => { this.artifactProvenanceConsumers -= 1; };
+    /** Mounted surfaces own inventory demand independently of their initial-read readiness. */
+    public observeArtifactInventory(scope: ServerAccountScope, selection?: ArtifactInventorySelection, options?: Readonly<{
+        includeProvenance?: boolean;
+        refreshOnAdmission?: boolean;
+        onSettled?: (outcome: 'success' | 'failed') => void;
+    }>): () => void {
+        if (Array.isArray(selection) && selection.length === 0) return () => {};
+        // The store can publish this scope before restore finishes binding Sync.
+        // Keep mounted demand; readArtifactInventoryConsumers admits acquisition
+        // only after the exact Account is active, including bootstrap's refresh.
+        const consumer = { scope, selection, includeProvenance: options?.includeProvenance === true, onSettled: options?.onSettled };
+        this.artifactInventoryConsumers.add(consumer);
+        if (options?.refreshOnAdmission) this.artifactsSync.invalidate();
+        return () => {
+            this.artifactInventoryConsumers.delete(consumer);
+            const remaining = this.readArtifactInventorySelections();
+            let withdrawn = false;
+            for (const refresh of this.artifactInventoryRefreshes) {
+                if (!remaining.some(required => doesArtifactInventorySelectionCover(required, refresh.selection))) {
+                    refresh.controller.abort();
+                    withdrawn = true;
+                }
+            }
+            // Withdrawing Browser must not restart a still-demanded approval census.
+            // A shrunken full/union read does need a new attempt for its uncovered remainder.
+            if (withdrawn && remaining.some(required => !this.artifactInventoryRefreshes.some(refresh =>
+                !refresh.controller.signal.aborted && doesArtifactInventorySelectionCover(refresh.selection, required)))) {
+                this.artifactsSync.invalidate();
+            }
+        };
     }
 
-    public fetchArtifactsList = async (): Promise<void> => {
+    private readArtifactInventoryConsumers() {
+        return [...this.artifactInventoryConsumers].filter(consumer =>
+            areServerAccountScopesEqual(consumer.scope, this.pendingSettingsScope));
+    }
+
+    private readArtifactInventorySelections(): readonly (ArtifactInventorySelection | undefined)[] {
+        const consumers = this.readArtifactInventoryConsumers();
+        if (consumers.length === 0) return [];
+        if (consumers.some(consumer => consumer.selection === undefined)) return [undefined];
+        const browser = consumers.some(consumer => consumer.selection === 'browserListed');
+        const kinds = [...new Set(consumers.flatMap(consumer => typeof consumer.selection === 'object'
+            && !isApprovalSessionInventorySelection(consumer.selection) && !isApprovalStateInventorySelection(consumer.selection)
+            ? consumer.selection : []))].sort()
+            .filter(kind => !browser || !doesArtifactInventorySelectionCover('browserListed', [kind]));
+        const selections: ArtifactInventorySelection[] = browser ? ['browserListed'] : [];
+        if (kinds.length > 0) selections.push(kinds);
+        if (consumers.some(consumer => consumer.selection === 'inboxOpen')
+            && !selections.some(selection => doesArtifactInventorySelectionCover(selection, 'inboxOpen'))) selections.push('inboxOpen');
+        const sessions = new Set(consumers.flatMap(consumer => isApprovalSessionInventorySelection(consumer.selection)
+            ? consumer.selection.approvalSessionIds : []));
+        if (sessions.size > 0) selections.push({ approvalSessionIds: [...sessions].sort() });
+        for (const consumer of consumers) if (isApprovalStateInventorySelection(consumer.selection)
+            && !selections.some(selection => doesArtifactInventorySelectionCover(selection, consumer.selection))) selections.push(consumer.selection);
+        return selections;
+    }
+
+    private settleArtifactInventoryConsumers(scope: ServerAccountScope | null, selection: ArtifactInventorySelection | undefined,
+        outcome: 'success' | 'failed'): void {
+        if (!scope || !areServerAccountScopesEqual(scope, this.pendingSettingsScope)) return;
+        for (const consumer of this.readArtifactInventoryConsumers()) {
+            if (doesArtifactInventorySelectionCover(selection, consumer.selection)) {
+                // A full structural census can still contain unreadable headers. It answers
+                // full membership, not the browser's stricter private-policy classification.
+                consumer.onSettled?.(outcome === 'success' && consumer.selection === 'browserListed'
+                    && !isArtifactInventoryLoaded(storage.getState(), 'browserListed') ? 'failed' : outcome);
+            }
+        }
+    }
+
+    private refreshDemandedArtifactInventories = async (): Promise<void> => {
+        const selections = this.readArtifactInventorySelections();
+        if (selections.length === 0) return;
+        // Browser covers ordinary kinds, not the Inbox's private families. Both acquisitions
+        // stay in the existing queue, with independent cancellation for their real consumers.
+        const refreshes = selections.map(selection => ({ controller: new AbortController(), selection }));
+        this.artifactInventoryRefreshes = refreshes;
+        try {
+            const results = await Promise.allSettled(refreshes.map(async refresh => {
+                try {
+                    await this.fetchArtifactsList({ selection: refresh.selection, signal: refresh.controller.signal });
+                } catch (error) {
+                    // Only this acquisition's withdrawal settles its cancellation.
+                    if (!refresh.controller.signal.aborted) throw error;
+                }
+            }));
+            for (const result of results) if (result.status === 'rejected') throw result.reason;
+        } finally {
+            if (this.artifactInventoryRefreshes === refreshes) this.artifactInventoryRefreshes = [];
+        }
+    };
+
+    public fetchArtifactsList = async (options?: Readonly<{ selection?: ArtifactInventorySelection; kinds?: readonly string[]; browserListed?: true; signal?: AbortSignal }>): Promise<void> => {
         if (!this.credentials) return;
         const shouldContinue = this.createServerScopeGuard();
         const inventoryScope = getActiveServerAccountScope();
+        const selection = options?.selection ?? (options?.browserListed ? 'browserListed' : options?.kinds);
         let inventoryReadStartedWith = storage.getState().artifacts;
-        await this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactsList({
+        try { await this.withArtifactReadAuthority(options?.signal, params => fetchAndApplyArtifactsList({
             ...params,
+            ...artifactInventorySelectionOptions(selection),
             inventoryScope,
             inventoryReadStartedWith,
-            readCurrentArtifacts: () => storage.getState().artifacts,
+            getCurrentArtifacts: () => storage.getState().artifacts,
             changesPageLimit: this.syncTuning.changesPageLimit,
             hydrateArtifacts: artifacts => {
                 storage.getState().applyArtifacts(artifacts);
                 inventoryReadStartedWith = storage.getState().artifacts;
             },
-            includeProvenance: this.artifactProvenanceConsumers > 0,
+            includeProvenance: this.readArtifactInventoryConsumers().some(consumer => consumer.includeProvenance
+                && doesArtifactInventorySelectionCover(selection, consumer.selection)),
             shouldContinue: () => shouldContinue() && !params.signal?.aborted,
-            applyArtifacts: (artifacts, source) => storage.getState().applyArtifacts(artifacts,
-                source === 'inventory' ? inventoryReadStartedWith : undefined),
-        }));
+            applyArtifacts: (artifacts, source) => {
+                storage.getState().applyArtifacts(artifacts,
+                    source !== undefined ? inventoryReadStartedWith : undefined, selection, source);
+                // Publication proves this selected acquisition; a resolved no-op does not. Initial
+                // readiness may cancel the opening effect before independent bodies finish.
+                if ((source === 'inventory' || source === 'unreadable' && selection !== 'browserListed')
+                    && shouldContinue() && !params.signal?.aborted) {
+                    this.settleArtifactInventoryConsumers(inventoryScope, selection, 'success');
+                }
+            },
+        })); } catch (error) {
+            if (shouldContinue() && !options?.signal?.aborted) {
+                this.settleArtifactInventoryConsumers(inventoryScope, selection, 'failed');
+            }
+            throw error;
+        }
     }
 
     public async fetchArtifactWithBody(artifactId: string, options?: Readonly<{ fresh?: boolean }>): Promise<DecryptedArtifact | null> {
@@ -8756,6 +9050,7 @@ class Sync {
         return this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactChanges({
             ...params,
             artifactIds: exactIds,
+            getCurrentArtifacts: () => storage.getState().artifacts,
             applyArtifacts: storage.getState().applyArtifacts,
             deleteArtifact: storage.getState().deleteArtifact,
         }));
@@ -8978,9 +9273,11 @@ class Sync {
                 storage.getState().replaceMachineDisplays(machines, { sourceServerId, replace: options?.replace });
             },
             machineDisplayHydrationConcurrencyLimit: this.syncTuning.machineDisplayHydrationConcurrencyLimit,
-            applyMachines: (machines, replace) => {
+            applyMachines: (machines, replace, publishedRows) => {
                 if (!shouldContinue()) return;
-                storage.getState().applyMachines(machines, replace, { sourceServerId });
+                storage.getState().applyMachines(machines, replace, { sourceServerId,
+                    activityUpdates: publishedRows.map(({ id, active, activeAt }) => ({ id, active, activeAt })),
+                });
             },
             onRowsObserved: machines => {
                 if (!shouldContinue()) return;
@@ -9045,19 +9342,26 @@ class Sync {
         const target = this.getAppliedTransportTarget();
         if (!credentials || !target) return;
         const shouldContinue = this.createAppliedTransportScopeGuard(target);
-        const result = await fetchAndApplyAutomations({
-            credentials,
-            requestContext: this.createAppliedAutomationRequestContext(target),
-            shouldContinue,
-            applyAutomations: (automations, nextCursor) =>
-                storage.getState().applyAutomations(automations, nextCursor),
-            appendAutomations: (cursor, traversalToken, automations, nextCursor) =>
-                storage.getState().appendAutomations(cursor, traversalToken, automations, nextCursor),
-            loadedAutomationRunIds: Object.keys(storage.getState().automationRunIdsByAutomationId),
-            refreshAutomationRunsWindow: (automationId, runs, nextCursor) =>
-                storage.getState().refreshAutomationRunsWindow(automationId, runs, nextCursor),
-        });
-        this.automationDefinitionTraversalToken = result.traversalToken;
+        const refreshRuns = this.automationRunRefreshPending;
+        this.automationRunRefreshPending = false;
+        try {
+            const result = await fetchAndApplyAutomations({
+                credentials,
+                requestContext: this.createAppliedAutomationRequestContext(target),
+                shouldContinue,
+                applyAutomations: (automations, nextCursor) =>
+                    storage.getState().applyAutomations(automations, nextCursor),
+                appendAutomations: (cursor, traversalToken, automations, nextCursor) =>
+                    storage.getState().appendAutomations(cursor, traversalToken, automations, nextCursor),
+                loadedAutomationRunIds: refreshRuns ? Object.keys(storage.getState().automationRunIdsByAutomationId) : [],
+                refreshAutomationRunsWindow: (automationId, runs, nextCursor) =>
+                    storage.getState().refreshAutomationRunsWindow(automationId, runs, nextCursor),
+            });
+            this.automationDefinitionTraversalToken = result.traversalToken;
+        } catch (error) {
+            if (refreshRuns && shouldContinue()) this.automationRunRefreshPending = true;
+            throw error;
+        }
     }
 
     private fetchAccountPets = async () => {
@@ -9222,6 +9526,9 @@ class Sync {
         // Retiring the runtime also rejects any source-mode response still in flight.
         this.authoringMemoryRuntime = null;
         this.projectAccountRowsRuntime = null;
+        if (areAccountSettingsScopesEqual(storage.getState().projectAccountRows?.scope, this.pendingSettingsScope)) {
+            storage.getState().clearProjectAccountRowsScope();
+        }
     }
 
     private ensureProjectAccountRowsRuntime(): Promise<ReturnType<typeof createProjectAccountRowsSync>> {
@@ -9235,9 +9542,22 @@ class Sync {
         const guard = this.createAppliedTransportScopeGuard(target);
         storage.getState().activateProjectAccountRowsScope(scope);
         storage.getState().setProjectAccountRowsStatusForScope(scope, 'loading');
+        const isCurrent = () => this.projectAccountRowsRuntime === task && guard()
+            && this.credentials === credentials && areAccountSettingsScopesEqual(this.pendingSettingsScope, scope);
+        const onRefreshFailure = (error: unknown) => {
+            if (!isCurrent()) return;
+            if (isTransientConnectivityError(error)) {
+                storage.getState().setProjectAccountRowsStatusForScope(scope, 'error');
+                return;
+            }
+            // An auth/mode/material or unclassified failure is not permission to
+            // keep disclosing private rows from a previously admitted read.
+            this.projectAccountRowsRuntime = null;
+            if (areAccountSettingsScopesEqual(storage.getState().projectAccountRows?.scope, scope)) {
+                storage.getState().clearProjectAccountRowsScope();
+            }
+        };
         const task = Promise.resolve().then(async () => {
-            const isCurrent = () => this.projectAccountRowsRuntime === task && guard()
-                && this.credentials === credentials && areAccountSettingsScopesEqual(this.pendingSettingsScope, scope);
             const request = async (path: string, init?: RequestInit) => {
                 if (!isCurrent()) throw new StaleServerGenerationError();
                 const response = await context.request(path, { ...init, headers: { ...init?.headers, Authorization: `Bearer ${credentials.token}` } });
@@ -9258,6 +9578,7 @@ class Sync {
                         ? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : null, randomBytes: getRandomBytes }),
                 isCurrent,
                 apply: snapshot => storage.getState().applyProjectAccountRowsForScope(scope, snapshot),
+                onRefreshFailure,
                 // Optional recency is attached by the memory owner when it is available.
                 // Its failure must not stop the independent structural census.
                 writeRecency: async (ref, timestamp) => (await this.ensureAuthoringMemoryRuntime())
@@ -9279,7 +9600,7 @@ class Sync {
             }), { tag: 'Sync.projectAccountRows.recency' });
             return owner;
         }).catch((error: unknown) => {
-            if (this.projectAccountRowsRuntime === task && guard()) storage.getState().setProjectAccountRowsStatusForScope(scope, 'error');
+            onRefreshFailure(error);
             throw error;
         });
         this.projectAccountRowsRuntime = task;
@@ -9295,6 +9616,16 @@ class Sync {
     public mutateProjectWorkspaceRef = async (mutation: WorkspaceRefAccountMutation, expectedScope: AccountSettingsScope) => {
         if (!areAccountSettingsScopesEqual(this.pendingSettingsScope, expectedScope)) throw new Error('Project Account/Home changed');
         return await (await this.ensureProjectAccountRowsRuntime()).mutateRef(mutation);
+    };
+
+    /** An already-demanded SCM observation may enrich an existing accepted ref once. */
+    public recordObservedWorkspaceRepositoryIdentity = async (
+        address: import('@happier-dev/protocol/workspaces/workspaceRefV1').WorkspaceAddressV1,
+        identity: NonNullable<import('@happier-dev/protocol/workspaces/workspaceRefV1').WorkspaceRefV1['repositoryIdentity']>,
+        expectedScope: AccountSettingsScope,
+    ) => {
+        if (!areAccountSettingsScopesEqual(this.pendingSettingsScope, expectedScope)) throw new Error('Project Account/Home changed');
+        return await (await this.ensureProjectAccountRowsRuntime()).recordWorkspaceRepositoryIdentity(address, identity);
     };
 
     private syncSettings = async () => {
@@ -11867,7 +12198,6 @@ class Sync {
 	                  this.postSubscriptionChangesCatchUpPending = false;
 	                  if (this.lastSocketDisconnectedAtMs != null) {
 	                      this.lastSocketOfflineDurationMs = Date.now() - this.lastSocketDisconnectedAtMs;
-	                      this.sessionDraftOfflineCatchUpPending = true;
 	                      this.socketOfflineCatchUpConsumedSessionIds.clear();
 		                  }
 		                  this.lastSocketDisconnectedAtMs = null;
@@ -11892,8 +12222,10 @@ class Sync {
                   // A completed change page cannot renew projections whose authority
                   // was lost with the transport but produced no durable Account row.
                   const serverId = this.getAppliedTransportTarget()?.serverId;
-                  if (serverId) publishHomeAccountChange(serverId, undefined, { source: 'connected' });
-                  publishMachineContributionRegistryProjectionReconnect();
+                  if (serverId) {
+                      publishHomeAccountChange(serverId, undefined, { source: 'connected' });
+                      publishMachineContributionRegistryProjectionReconnect(serverId);
+                  }
               }
               fireAndForget(this.resumeSync('socket-reconnect'), { tag: 'Sync.resumeSync.socket-reconnect' });
           });
@@ -12347,7 +12679,7 @@ class Sync {
                         scopedPlan.sessionFolderAssignmentSessionIds = [];
                         scopedPlan.sessionOrganization = { mode: 'none' };
                         scopedPlan.invalidate.sessionFolderAssignments = false;
-                        return await applyPlannedChangeActions({
+                        const applied = await applyPlannedChangeActions({
                             planned: scopedPlan, credentials,
                             isSessionMessagesLoaded: (sid) => storage.getState().sessionMessages[sid]?.isLoaded === true,
                             getSessionMaterializedMaxSeq: (sid) => this.sessionMaterializedMaxSeqById[sid] ?? 0,
@@ -12358,6 +12690,13 @@ class Sync {
                             invalidateScmStatusForSession: () => {}, applyTodoSocketUpdates: async () => {},
                             kvBulkGet, concurrencyLimit: this.syncTuning.resumeConcurrencyLimit,
                         });
+                        // Exact embed feeds carry only Session/share rows. A Session wake is also
+                        // the freshness signal for Session-bound approval artifacts created during
+                        // a turn, so refresh the bounded approval inventory after any real row.
+                        if (planned.changes.length > 0) {
+                            await embedScope.approvalsSync.invalidateAndAwait();
+                        }
+                        return applied;
                     }
                     const plannedServerId = transportTarget.serverId || sessionRecordChangeScope?.serverId || '';
                     return await applyPlannedChangeActions({
@@ -12397,6 +12736,9 @@ class Sync {
                                     invalidateSessionSystemRecordsFromChanges({ scope: sessionRecordChangeScope, changes, repository });
                                 }
                             }
+                            // Withdraw changed mode facts before a Home observer
+                            // starts its replacement read from this exact page.
+                            invalidateAccountEncryptionModeCacheForChanges(changes, { serverId: plannedServerId });
                             const changedEntityIds = changes.map((change) => change.entityId);
                             if (plannedServerId && changedEntityIds.length > 0) {
                                 // The focused-Home page has already passed through
@@ -12405,6 +12747,7 @@ class Sync {
                                 // to reinterpret AccountChange hints or reacting a
                                 // second time to the earlier content-free wake.
                                 publishHomeAccountChange(plannedServerId, changedEntityIds, {
+                                    feedPageConsumed: true,
                                     entityRevisions: Object.fromEntries(changes.flatMap(change => {
                                         const hint = change.hint;
                                         if (!hint || typeof hint !== 'object' || !('revision' in hint)
@@ -12413,15 +12756,16 @@ class Sync {
                                     })),
                                     changeKinds: changes.map(change => change.kind),
                                     ...(materialization?.workflowRunsMaterialized ? { workflowRunsMaterialized: true as const } : {}),
+                                    ...(materialization?.savedSecretResourcesRefreshStarted ? { savedSecretResourcesRefreshStarted: true as const } : {}),
                                     sessionListQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectSessionListQuery(publishedPlan),
                                     profileCatalogAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectProfileCatalog(publishedPlan),
+                                    workflowTriggersAffect: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectWorkflowTriggers(publishedPlan),
                                     accountSettingsAffects: materialization?.workflowRunsMaterialized ? false : publishedPlan.invalidate.settings || publishedPlan.unsupportedChanges.length > 0,
                                     usageQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectUsageQuery(publishedPlan),
                                 });
                             }
                             publishActivePluginCollectionUiQueryChanges(changes);
                             publishActiveScopedPluginSettingsChanges(changes);
-                            invalidateAccountEncryptionModeCacheForChanges(changes, { serverId: plannedServerId });
                             const changedAvailabilityPluginIds = this.pluginAvailabilityProjectionHydrator.invalidate(changes);
                             if (changedAvailabilityPluginIds.length > 0) {
                                 // AccountChange is a freshness observation, not
@@ -12460,14 +12804,14 @@ class Sync {
                             friends: () => this.friendsSync.invalidateAndAwait(),
                             friendRequests: () => this.friendRequestsSync.invalidateAndAwait(),
                             feed: () => this.feedSync.invalidateAndAwait(),
-                            automations: () => this.automationsSync.invalidateAndAwait(),
+                            automations: options => this.refreshAutomationsAndAwait(options),
                             pets: () => this.fetchAccountPets(),
-                            savedSecretResources: async () => {
+                            savedSecretResources: () => {
                                 const scope = storage.getState().settingsScope;
                                 if (!scope || !plannedServerId || !areServerProfileIdentifiersEquivalent(scope.serverId, plannedServerId)) {
                                     throw new Error('Saved Secret catalog AccountChange scope changed before refresh');
                                 }
-                                await invalidateSavedSecretCatalogProjection(scope);
+                                return invalidateSavedSecretCatalogProjection(scope);
                             },
                             sessions: async ({ requiredHydrationSessionIds, prioritizeSessionIds }) => {
                                 const demandedSessionIds = new Set((requiredHydrationSessionIds ?? [])
@@ -12479,10 +12823,7 @@ class Sync {
                                     requiredHydrationSessionIds: [...demandedSessionIds],
                                     prioritizeSessionIds: (prioritizeSessionIds ?? []).filter(sessionId => this.isSessionHydrationDemanded(sessionId, plannedServerId)),
                                 });
-                                await runTasksWithLimit(
-                                    projectionSessionIds.map(sessionId => () => this.refreshSessionListRowProjection(plannedServerId, sessionId)),
-                                    this.syncTuning.sessionListHydrationConcurrencyLimit,
-                                );
+                                await this.refreshListedSessionRows(plannedServerId, projectionSessionIds);
                                 refreshedByCatchUp.sessions = true;
                             },
                             sessionRows: (sessionIds) => this.refreshListedSessionRows(plannedServerId, sessionIds),
@@ -12677,19 +13018,18 @@ class Sync {
               settingsScope: this.pendingSettingsScope,
               sourceServerId,
               shouldContinue,
-              onAccountChangeWake: () => {
+              onAccountChangeWake: (wake) => {
                   // Catalogs that need current rows independently of the history
                   // cursor opt into this wake at the existing snapshot lifecycle.
                   if (shouldContinue() && sourceServerId) {
-                      publishHomeAccountChange(sourceServerId, undefined, { source: 'catch-up-pending' });
+                      publishHomeAccountChange(sourceServerId, wake.entityIds, {
+                          source: 'catch-up-pending', changeKinds: wake.changeKinds,
+                          sessionSystemRecords: wake.sessionSystemRecords,
+                      });
                   }
-                  // Other focused-Home observers wait for the detailed page. Catch-up
-                  // passes that page through the change planner, which publishes the
-                  // exact changed entities (`publishAccountChanges`), so each Account projection
-                  // (governance, eligibility, Teams, follow, lists) refetches only for what it
-                  // shows. A content-free event here made every one of them refetch on every
-                  // unrelated change. Secondary Homes have no planner and keep their
-                  // conservative wake in the concurrent session cache.
+                  // Catch-up still consumes every feed row. Its detailed dispatch
+                  // separately marks feedPageConsumed; advisory ids cannot stand
+                  // in for that proof while the request is held or blocked.
                   this.requestChangesCatchUp();
               },
               artifactDataKeys: this.artifactDataKeys,
@@ -12731,15 +13071,15 @@ class Sync {
             invalidateFriends: () => this.friendsSync.invalidate(),
             invalidateFriendRequests: () => this.friendRequestsSync.invalidate(),
             invalidateFeed: () => this.feedSync.invalidate(),
-            invalidateAutomations: () => this.automationsSync.invalidate(),
-            invalidateAutomationsCoalesced: () => this.automationsSync.invalidateCoalesced(),
+            invalidateAutomations: options => this.requestAutomationsRefresh(options),
+            invalidateAutomationsCoalesced: options => this.requestAutomationsRefresh(options, true),
             invalidateTodos: () => this.todosSync.invalidate(),
             onTaskLifecycleEvent: (sessionId, event) => this.applySessionThinkingFromTaskLifecycle(sessionId, event),
             log,
         });
     }
 
-    private flushActivityUpdates = (updates: Map<string, ApiEphemeralActivityUpdate>, options?: { sourceServerId?: string | null }) => {
+    private flushActivityUpdates = (updates: Map<string, ApiEphemeralActivityUpdate>, options?: ActivityUpdateFlushOptions) => {
         flushActivityUpdatesEngine({
             updates,
             ...options,
@@ -12766,7 +13106,6 @@ class Sync {
         flushMachineActivityUpdatesEngine({
             updates,
             ...options,
-            applyMachines: (machines, applyOptions) => storage.getState().applyMachines(machines, false, applyOptions),
         });
         options?.onApplied?.();
         const changedMachineIds = new Set<string>();
@@ -12835,12 +13174,18 @@ class Sync {
             sourceServerId,
             shouldContinue,
             addActivityUpdate: (ephemeralUpdate) => {
-                this.activityAccumulator.addUpdate(ephemeralUpdate, { shouldContinue, sourceServerId });
+                const retirementFence = captureSessionListRetirementFence();
+                this.activityAccumulator.addUpdate(ephemeralUpdate, {
+                    shouldContinue: () => shouldContinue()
+                        && !wasSessionRetiredSinceFence(retirementFence, sourceServerId, ephemeralUpdate.id),
+                    sourceServerId,
+                });
             },
             addMachineActivityUpdate: (machineUpdate) => {
                 const observe = captureMachinePresenceObservation(accountScope
                     && areServerProfileIdentifiersEquivalent(accountScope.serverId, sourceServerId) ? accountScope : null);
-                this.machineActivityAccumulator.addUpdate(machineUpdate, { shouldContinue, sourceServerId,
+                if (!shouldContinue()) return;
+                this.flushMachineActivityUpdates(new Map([[machineUpdate.id, machineUpdate]]), { sourceServerId,
                     onApplied: () => { if (shouldContinue()) observe([machineUpdate.id]); },
                 });
             },
@@ -13714,9 +14059,12 @@ export type SyncEmbedSessionOptions = Readonly<{
     scope: Readonly<{ kind: 'embedSession'; sessionId: string }>;
     accountId: string;
     endpointUrl: string;
+    /** From the admitted child grant; approval inventory is not required for Send. */
+    approvalGranted: boolean;
     accountMode?: 'plain' | 'e2ee';
     sessionKey?: string | null;
     composerOptionsInput?: ComposerOptionsInputV1 | null;
+    composerOptionsGrant?: ApiTokenGrantV1 | null;
     isCurrent: () => boolean;
     onCredentialRejected?: () => void;
 }>;
@@ -13806,9 +14154,10 @@ export async function syncSwitchServer(credentials: AuthCredentials | null, targ
 async function syncInit(credentials: AuthCredentials, restore: boolean, target?: SyncServerTarget) {
 
     // Initialize sync engine
-    const encryption = isTokenOnlyAuthCredentials(credentials)
-        ? null
-        : await createEncryptionFromAuthCredentials(credentials);
+    const encryptionTarget = target ?? getActiveServerSnapshot();
+    const encryption = await resolveScopedAccountEncryption({
+        serverId: encryptionTarget.serverId, serverUrl: encryptionTarget.serverUrl, credentials,
+    });
 
     assertSyncServerTargetCurrent(target);
 

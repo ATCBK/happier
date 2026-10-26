@@ -1,17 +1,30 @@
-import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
-    ArtifactKindWriteBatchResponseV1Schema, type ArtifactCoarseKindV1, decodeArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+    ArtifactKindWriteBatchResponseV1Schema, type ArtifactCoarseKindV1, ArtifactKindCoverageV1Schema, decodeArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema,
-    ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
+    ArtifactReadBatchHttpInputV1Schema, ArtifactReadBatchResponseV1Schema, ArtifactReadHeadersBatchResponseV1Schema,
     type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { Buffer } from 'buffer';
 
-import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
+import type { Artifact, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { CoordinationMessageRefV1Schema, type CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { ChangesResponseSchema, CurrentCursorResponseSchema, CursorGoneErrorSchema, type ChangeEntry } from '@happier-dev/protocol/changes';
+import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { deriveApprovalArtifactQueryHintsV1, isApprovalArtifactKindV1, ApprovalArtifactQueryHintsV1Schema,
+    type ApprovalArtifactQueryHintsV1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
+
+type StoredArtifactFixture = Artifact & Partial<ApprovalArtifactQueryHintsV1>;
+
+/** The Home uses its index metadata for selection without projecting it into public reads. */
+export function projectArtifactBoundaryReadRow<T extends object>(artifact: T): Omit<T, 'approvalState' | 'approvalSessionId'> {
+    const row = { ...artifact };
+    Reflect.deleteProperty(row, 'approvalState');
+    Reflect.deleteProperty(row, 'approvalSessionId');
+    return row;
+}
 
 /**
  * A Home's Artifact rows and explicitly seeded Account grants, answered over HTTP.
@@ -69,6 +82,23 @@ export function projectArtifactStoredKind(storedKind: unknown): Readonly<{ kind:
     return { kind: decoded.kind, ...(decoded.classified ? { kindHint: decoded.kindHint } : {}) };
 }
 
+/** Independent HTTP bytes for an explicitly seeded readable Plain Account fixture. */
+export function createPlainArtifactHttpFixture(artifact: Extract<DecryptedArtifact, { isDecrypted: true }>, ownerAccountId: string): Artifact {
+    const header = artifact.rawHeader ?? artifact.header;
+    if (!header) throw new Error('A readable Artifact fixture requires its stored header');
+    return {
+        id: artifact.id, ownerAccountId: artifact.ownerAccountId ?? ownerAccountId, access: artifact.access ?? 'owner',
+        publicAudience: artifact.publicAudience ?? 'none', encryptionMode: 'plain',
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        ...projectArtifactStoredKind(deriveArtifactStoredKindV1(header)),
+        ...deriveApprovalArtifactQueryHintsV1(header),
+        header: encodePlainArtifactStoredContent(header),
+        body: encodePlainArtifactStoredContent({ body: artifact.body ?? null }),
+        headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion ?? 1,
+        seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
+    };
+}
+
 function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -85,8 +115,20 @@ function parseBody(init: RequestInit | undefined): Record<string, unknown> | nul
 
 /** Strict batch framing over the fixture's existing complete row/census facts. */
 export function createArtifactReadBatchHttpResponse(body: unknown, readItem: (artifactId: string) => unknown): Response {
-    const input = ArtifactReadBatchInputV1Schema.parse(body);
-    return json(ArtifactReadBatchResponseV1Schema.parse({ items: input.artifactIds.map(readItem) }));
+    const input = ArtifactReadBatchHttpInputV1Schema.parse(body);
+    const items = input.artifactIds.map(readItem).map(item => {
+        if (!item || typeof item !== 'object' || Reflect.get(item, 'ok') !== true) return item;
+        const artifact: unknown = Reflect.get(item, 'artifact');
+        return artifact && typeof artifact === 'object' ? { ...item, artifact: projectArtifactBoundaryReadRow(artifact) } : item;
+    });
+    if (!('projection' in input)) return json(ArtifactReadBatchResponseV1Schema.parse({ items }));
+    return json(ArtifactReadHeadersBatchResponseV1Schema.parse({ projection: 'headers', items: items.map(item => {
+        if (!item || typeof item !== 'object' || Reflect.get(item, 'ok') !== true) return item;
+        const artifact: unknown = Reflect.get(item, 'artifact');
+        if (!artifact || typeof artifact !== 'object') return item;
+        const header = Object.fromEntries(Object.entries(artifact).filter(([key]) => key !== 'body'));
+        return { artifactId: Reflect.get(item, 'artifactId'), ok: true, artifact: header };
+    }) }));
 }
 
 function isVersion(value: unknown): value is number {
@@ -94,7 +136,7 @@ function isVersion(value: unknown): value is number {
 }
 
 /** The Home's filtered/unfiltered Artifact list framing and structural keyset. */
-export function createArtifactListHttpResponse(url: URL, inventory: readonly Artifact[]): Response {
+export function createArtifactListHttpResponse(url: URL, inventory: readonly StoredArtifactFixture[]): Response {
     const limit = Number(url.searchParams.get('limit') ?? 500);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) return json({ error: 'Failed to get artifacts' }, 400);
     let cursor: { updatedAt: number; id: string } | null = null;
@@ -121,22 +163,40 @@ export function createArtifactListHttpResponse(url: URL, inventory: readonly Art
         } catch { return json({ error: 'Invalid parameters' }, 400); }
     }
     const unclassified = url.searchParams.get('unclassified');
-    if ((unclassified !== null && unclassified !== 'true' && unclassified !== 'coarse')
-        || Number(kind !== null) + Number(kinds !== undefined) + Number(unclassified !== null) > 1
+    const approvalStates = url.searchParams.has('approvalStates') ? JSON.parse(url.searchParams.get('approvalStates')!) as string[] : undefined;
+    const approvalSessionIds = url.searchParams.has('approvalSessionIds') ? JSON.parse(url.searchParams.get('approvalSessionIds')!) as string[] : undefined;
+    const approvalSelected = approvalStates !== undefined || approvalSessionIds !== undefined;
+    const approvalKind = (row: Artifact) => isApprovalArtifactKindV1(row.kindHint);
+    const approvalUnknown = (row: StoredArtifactFixture) => !Object.hasOwn(row, 'kindHint') || approvalKind(row) && row.approvalState == null;
+    const browserListed = url.searchParams.get('browserListed');
+    if ((unclassified !== null && unclassified !== 'true' && unclassified !== 'coarse' && unclassified !== 'approval')
+        || (browserListed !== null && browserListed !== 'true')
+        || Number(kind !== null) + Number(kinds !== undefined) + Number(unclassified !== null) + Number(browserListed !== null) > 1
         || (unclassified !== null && url.searchParams.get('includeBody') === 'true')) return json({ error: 'Invalid parameters' }, 400);
     const unknownKind = (row: Artifact) => kinds !== undefined || unclassified === 'true'
         ? !Object.hasOwn(row, 'kindHint') : row.kind == null;
-    const selected = inventory.filter(row => unclassified !== null ? row.access === 'owner' && unknownKind(row)
-        : kinds !== undefined ? typeof row.kindHint === 'string' && kinds.includes(row.kindHint) : kind === null || row.kind === kind)
+    const ownerAccountId = url.searchParams.get('ownerAccountId');
+    const scopedInventory = inventory.filter(row => ownerAccountId === null || row.ownerAccountId === ownerAccountId);
+    const selected = scopedInventory.filter(row => unclassified === 'approval' ? approvalUnknown(row) : unclassified !== null ? unknownKind(row)
+        : kinds !== undefined ? typeof row.kindHint === 'string' && kinds.includes(row.kindHint)
+            : browserListed !== null ? getArtifactKindPolicyV1(row.kindHint).browserListed : kind === null || row.kind === kind)
+        .filter(row => unclassified !== null || !approvalSelected || (!approvalKind(row) ? approvalSessionIds === undefined
+            : row.approvalState != null && (!approvalStates || approvalStates.includes(row.approvalState))
+                && (approvalSessionIds === undefined || row.approvalSessionId != null && approvalSessionIds.includes(row.approvalSessionId))))
         .filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
         .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
     const items = selected.slice(0, limit).map(row => {
-        if (url.searchParams.get('includeBody') === 'true') return row;
+        if (url.searchParams.get('includeBody') === 'true') return projectArtifactBoundaryReadRow(row);
         const { body: _body, ...header } = row;
-        return header;
+        return projectArtifactBoundaryReadRow(header);
     });
-    return json(kind === null && kinds === undefined && unclassified === null ? items
-        : { items, hasUnclassified: inventory.some(unknownKind) });
+    const unclassifiedCount = scopedInventory.filter(row => approvalSelected || unclassified === 'approval' ? approvalUnknown(row) : !Object.hasOwn(row, 'kindHint')).length;
+    const coverage = ArtifactKindCoverageV1Schema.parse(unclassifiedCount === 0
+        ? { status: 'complete', unclassifiedCount: 0 }
+        : { status: 'partial', unclassifiedCount, reason: 'unclassified_legacy_rows' });
+    return json(kind === null && kinds === undefined && unclassified === null && browserListed === null && !approvalSelected ? items
+        : { items, hasUnclassified: scopedInventory.some(unknownKind),
+            ...(kinds !== undefined || unclassified !== null || browserListed !== null || approvalSelected ? { coverage } : {}) });
 }
 
 export function createArtifactStoreBoundary(params: Readonly<{
@@ -145,7 +205,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
     /** Model the Home's source admission with explicitly admitted fixture messages. Absent = older Home. */
     admitMemoryDecisionSource?: (source: CoordinationMessageRefV1) => boolean;
 }>): ArtifactStoreBoundary {
-    const rows = new Map<string, Artifact>();
+    const rows = new Map<string, StoredArtifactFixture>();
     const accountGrants = new Map<string, Map<string, ArtifactAccessGrantRowV1>>();
     // Mirror Account.seq and the Home's coalesced (Account, kind, entityId) ledger.
     // Keep publication at this boundary so HTTP writes and externally seeded
@@ -169,6 +229,15 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 ? deriveArtifactStoredKindV1(decoded as Readonly<Record<string, unknown>>) : null;
         }
         return projectArtifactStoredKind(stored);
+    };
+    const approvalProjection = (header: string, input: Record<string, unknown> | null) => {
+        if (params.encryptionMode === 'plain') {
+            const decoded = decodePlainArtifactStoredContent(header);
+            if (decoded && typeof decoded === 'object' && !Array.isArray(decoded))
+                return deriveApprovalArtifactQueryHintsV1(decoded as Readonly<Record<string, unknown>>);
+        }
+        return ApprovalArtifactQueryHintsV1Schema.parse({ approvalState: input?.approvalState ?? null,
+            approvalSessionId: input?.approvalSessionId ?? null });
     };
 
     const accessFor = (row: Artifact, accountId: string): Artifact['access'] | null =>
@@ -219,10 +288,11 @@ export function createArtifactStoreBoundary(params: Readonly<{
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
             ...kindProjection(header, input?.kind),
+            ...approvalProjection(header, input),
         };
         rows.set(id, row);
         publish(row);
-        return json(row);
+        return json(projectArtifactBoundaryReadRow(row));
     };
 
     const update = async (callerAccountId: string, artifactId: string, input: Record<string, unknown> | null): Promise<Response> => {
@@ -263,6 +333,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
             ...classification,
+            ...(headerChange ? approvalProjection(headerChange.bytes, input) : {}),
             seq: kindOnly ? current.seq : current.seq + 1,
             updatedAt: kindOnly ? current.updatedAt : Math.max(Date.now(), current.updatedAt + 1),
         };
@@ -304,7 +375,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 return Promise.resolve(json(ChangesResponseSchema.parse({ changes, nextCursor })));
             }
             if (url.pathname === `${ARTIFACTS_PATH}/read` && method === 'POST') {
-                const input = ArtifactReadBatchInputV1Schema.safeParse(parseBody(init));
+                const input = ArtifactReadBatchHttpInputV1Schema.safeParse(parseBody(init));
                 if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
                 return Promise.resolve(createArtifactReadBatchHttpResponse(input.data, artifactId => {
                     const row = rows.get(artifactId);
@@ -484,7 +555,7 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     } : {}) })), 'base64url')}.signature`;
     const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain',
         admitMemoryDecisionSource: options?.admitMemoryDecisionSource });
-    const requests: Readonly<{ path: string; method: string }>[] = [];
+    const requests: Readonly<{ path: string; method: string; projection?: 'headers' }>[] = [];
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         const path = `${url.pathname}${url.search}`;
@@ -499,7 +570,8 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
             if (response) return response;
             throw new Error(`Unexpected Home ${url.origin}`);
         }
-        requests.push({ path, method: init?.method ?? 'GET' });
+        const projection = url.pathname === `${ARTIFACTS_PATH}/read` && parseBody(init)?.projection === 'headers' ? 'headers' as const : undefined;
+        requests.push({ path, method: init?.method ?? 'GET', ...(projection ? { projection } : {}) });
         const additional = await options?.handleRequest?.(path, init);
         if (additional) return additional;
         return await boundary.handle(path, init) ?? json({ error: 'not_found' }, 404);
@@ -522,7 +594,9 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
         // Explicit fixture inputs model an admitted plain Account/Home. This is
         // not a cold Sync bootstrap; credentials still traverse the real owner.
         storage.setState({ settingsScope: { serverId: home.id, accountId }, profileScope: { serverId: home.id, accountId },
-            artifacts: {}, artifactSkillRevisions: {}, artifactInventoryUnreadyCount: 0 });
+            artifacts: {}, artifactsLoaded: false, artifactBrowserLoaded: false, artifactInboxLoaded: false, artifactInboxPartial: false,
+            artifactInventoryKindsLoaded: [], artifactInventoryKindsPartial: [],
+            artifactSkillRevisions: {}, artifactInventoryUnreadyCount: 0 });
         applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     } catch (error) {
         try { await credentialWrite?.rollback(); } finally { restoreFixtureState(); }

@@ -6,9 +6,9 @@ import {
   encodePlainArtifactStoredContent,
   decodePlainArtifactStoredContent,
 } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createPlainArtifactHomeFixture, createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { mutateArtifactOrganizationV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import { mutateArtifactOrganizationV1, readArtifactOrganizationV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { storage } from '@/sync/domains/state/storage';
 import {
   resetRuntimeFetch,
@@ -26,6 +26,8 @@ import { createDeferred } from '@/dev/testkit';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { encodeBase64 } from '@/encryption/base64';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { PROMPT_LIBRARY_ARTIFACT_KINDS, type ArtifactInventoryPublication } from '@/sync/domains/artifacts/artifactInventory';
+import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 
 // The third-party markdown renderer is outside this Artifact-only journey.
 vi.mock(
@@ -45,6 +47,7 @@ afterEach(async () => {
   resetRuntimeFetch();
   vi.restoreAllMocks();
   resetServerFeaturesClientForTests();
+  resetPromptLibraryCatalogSnapshotsForTests();
 });
 
 async function home(
@@ -80,6 +83,89 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it('reads the accepted private revision actor without adding provenance to document content', async () => {
+    const f = await home();
+    const savedBy = { kind: 'agent' as const, accountId: 'artifact-account', sessionId: 'author-session' };
+    await withUiPromptLibraryArtifactStore(async store => {
+      await updatePromptDocInLibrary({ store, savedBy, request: { artifactId: 'current', title: 'Current', markdown: 'Accepted' } });
+      expect(await readPromptDocInLibrary({ store, artifactId: 'current' })).toMatchObject({ ok: true,
+        provenance: { savedBy } });
+      const row = await store.read('current');
+      expect(row?.header).not.toHaveProperty('savedBy');
+      expect(JSON.parse(row!.body!)).not.toHaveProperty('savedBy');
+    }, { serverId: f.home.id });
+  });
+  it('reads and updates one Artifact organization through exact headers without enumerating the Account', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const headerRequests: unknown[] = [];
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
+      if (path === '/v1/artifacts/read') headerRequests.push(JSON.parse(String(init?.body)));
+      return catalog.handle(path, init);
+    } });
+    await Promise.all(Array.from({ length: 512 }, (_, index) => f.boundary.handle('/v1/artifacts', {
+      method: 'POST', body: JSON.stringify({ id: `unrelated-organization-${index}`,
+        header: encodePlainArtifactStoredContent({ kind: 'role.v1', title: 'Unrelated' }),
+        body: encodePlainArtifactStoredContent({ body: 'Not demanded' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }),
+    })));
+    await withUiPromptLibraryArtifactStore(async store => {
+      if (!store.organization) throw new Error('Expected organization owner');
+      const before = f.requests.length;
+      expect(await readArtifactOrganizationV1({ port: store.organization, artifactId: 'current' })).toMatchObject({ status: 'ready' });
+      expect(await mutateArtifactOrganizationV1({ port: store.organization, artifactId: 'current', change: { tags: ['review'] } }))
+        .toMatchObject({ status: 'updated' });
+      const reads = f.requests.slice(before).filter(request => request.path.startsWith('/v1/artifacts'));
+      expect(reads).toEqual([{ path: '/v1/artifacts/read', method: 'POST', projection: 'headers' },
+        { path: '/v1/artifacts/read', method: 'POST', projection: 'headers' }]);
+      expect(headerRequests).toEqual([{ artifactIds: ['current'], projection: 'headers' }, { artifactIds: ['current'], projection: 'headers' }]);
+    }, { serverId: f.home.id });
+  });
+
+  it('distinguishes an unavailable exact organization header from absence and honors cancellation', async () => {
+    const f = await home();
+    await withUiPromptLibraryArtifactStore(async store => {
+      if (!store.organization) throw new Error('Expected organization owner');
+      const stored = f.boundary.read('current')!;
+      f.boundary.replaceStoredRow({ ...stored, header: 'invalid-stored-header' });
+      await expect(store.organization.readArtifactHeader('current')).rejects.toBeDefined();
+      expect(await store.organization.readArtifactHeader('missing')).toBeNull();
+      const before = f.requests.length;
+      const controller = new AbortController(); controller.abort();
+      await expect(store.organization.readArtifactHeader('current', controller.signal)).rejects.toBeDefined();
+      expect(f.requests).toHaveLength(before);
+    }, { serverId: f.home.id });
+  });
+
+  it.each(['scoped', 'full'] as const)('reuses %s admitted Prompt membership despite a locked row of a different known kind', async mode => {
+    const f = await home();
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      const prompt = await account.fetchArtifact('current');
+      if (!prompt?.isDecrypted) throw new Error('Expected admitted Prompt');
+      const locked: DecryptedArtifact = { id: 'locked-role', kindHint: 'role.v1', title: null,
+        headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, storageMode: 'e2ee', isDecrypted: false,
+        availability: { kind: 'locked', reason: 'encryption_material_unavailable' } };
+      storage.getState().applyArtifacts([prompt, locked], storage.getState().artifacts,
+        mode === 'scoped' ? ['prompt_doc.v2'] : undefined);
+      const before = f.requests.length;
+      expect(await store.list!({ kinds: ['prompt_doc.v2'], limit: 500 })).toMatchObject({ coverage: 'complete', items: [{ id: 'current' }] });
+      expect(f.requests.slice(before).filter(request => request.path.startsWith('/v1/artifacts'))).toEqual([]);
+    }, { serverId: f.home.id });
+  });
+
+  it.each(['prompt_doc.v2', undefined] as const)('does not reuse membership after a later locked matching or unknown kind arrives (%s)', async kindHint => {
+    const f = await home();
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      const prompt = await account.fetchArtifact('current');
+      if (!prompt?.isDecrypted) throw new Error('Expected admitted Prompt');
+      storage.getState().applyArtifacts([prompt], storage.getState().artifacts, ['prompt_doc.v2']);
+      storage.getState().updateArtifact({ id: 'locked-prompt', kindHint, title: null,
+        headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, storageMode: 'e2ee', isDecrypted: false,
+        availability: { kind: 'locked', reason: 'encryption_material_unavailable' } });
+      const before = f.requests.length;
+      expect(await store.list!({ kinds: ['prompt_doc.v2'], limit: 500 })).toMatchObject({ coverage: 'complete', items: [{ id: 'current' }] });
+      expect(f.requests.slice(before).some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
+    }, { serverId: f.home.id });
+  });
+
   it('selects only Prompt Docs through the captured indexed query without repair or bodies', async () => {
     const catalog = createPromptLibraryCatalogBoundary();
     const f = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
@@ -193,6 +279,36 @@ describe('UI qualified prompt-library Artifact authority', () => {
       } finally {
         releaseInventory.resolve();
         await Promise.allSettled([inventory, action]);
+      }
+    }, { serverId: f.home.id });
+  });
+
+  it('keeps organization membership full when only Prompt kinds are admitted', async () => {
+    const f = await home();
+    await Promise.all(Array.from({ length: 501 }, (_, index) => f.boundary.handle('/v1/artifacts', {
+      method: 'POST', body: JSON.stringify({ id: `organization-role-${index}`,
+        header: encodePlainArtifactStoredContent({ v: 1, kind: 'role.v1', title: 'Role' }),
+        body: encodePlainArtifactStoredContent({ body: 'Not demanded' }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }),
+    })));
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      const prompt = await account.fetchArtifact('current');
+      if (!prompt?.isDecrypted || !store.organization) throw new Error('Expected readable Prompt and organization owner');
+      storage.getState().applyArtifacts([prompt], storage.getState().artifacts, PROMPT_LIBRARY_ARTIFACT_KINDS);
+      expect(storage.getState().artifactsLoaded).toBe(false);
+      const before = f.requests.length;
+      const inventory = await store.organization.listArtifactHeaders();
+      expect(inventory.coverage).toBe('complete');
+      expect(inventory.items).toHaveLength(502);
+      expect(inventory.items.some(item => item.header.kind === 'role.v1')).toBe(true);
+      const reads = f.requests.slice(before).filter(request => request.path.startsWith('/v1/artifacts'));
+      expect(reads).toHaveLength(2);
+      for (const read of reads) {
+        const query = new URL(read.path, 'https://home.test').searchParams;
+        expect(read.method).toBe('GET');
+        expect(query.has('kinds')).toBe(false);
+        expect(query.has('kind')).toBe(false);
+        expect(query.get('includeBody')).not.toBe('true');
       }
     }, { serverId: f.home.id });
   });
@@ -353,7 +469,8 @@ describe('UI qualified prompt-library Artifact authority', () => {
           inventoryScope: scenario === 'different-account' ? { ...account.accountLifetime.scope, accountId: 'another-account' } : account.accountLifetime.scope,
           encryption: null, artifactDataKeys: new Map(), request: account.request,
           shouldContinue: () => scenario !== 'incomplete' || inventoryGets === 0,
-          applyArtifacts: (rows: DecryptedArtifact[], source?: 'inventory') => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) };
+          applyArtifacts: (rows: DecryptedArtifact[], source?: ArtifactInventoryPublication) =>
+            storage.getState().applyArtifacts(rows, source !== undefined ? basis : undefined, undefined, source) };
         const inventory = fetchAndApplyArtifactsList(params).catch(error => error);
         await inventoryRequested.promise;
         const action = store.list!({ signal: controller.signal });
@@ -634,7 +751,7 @@ describe('UI qualified prompt-library Artifact authority', () => {
     setRuntimeFetch(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/account/encryption') return new Response(JSON.stringify({ mode: 'plain', updatedAt: 0 }), { status: 200 });
-      if (path === '/v1/artifacts') return new Response(JSON.stringify([{ ...row, header: 'invalid stored header' }]), { status: 200 });
+      if (path === '/v1/artifacts') return createArtifactListHttpResponse(new URL(String(input)), [{ ...row, header: 'invalid stored header' }]);
       return (await f.boundary.handle(path, init)) ?? new Response('{}', { status: 404 });
     });
     await expect(withUiPromptLibraryArtifactReader(reader => reader.readArtifactHeader({ kind: 'doc', artifactId: 'missing' }),
