@@ -193,6 +193,8 @@ export type PendingDeliveryStatus = 'server_queued' | 'server_delivering' | 'ext
 export type { PendingDeliveryBlockedReason };
 
 export interface PendingMessage extends TranscriptAccountActorMetadata {
+    /** Home-projected Follow original, separate from person-authored encrypted content. */
+    pendingHostFollowInput?: import('@happier-dev/protocol/sessions/follow/sessionFollowInputV1').SessionFollowInputV1;
     recipient?: Extract<import('@happier-dev/protocol').ParticipantRecipientRoutingIdentityV1, { kind: 'execution_run' }>;
     id: string;
     localId: string | null;

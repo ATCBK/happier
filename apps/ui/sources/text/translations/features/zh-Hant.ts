@@ -10847,6 +10847,7 @@ const zhHant: typeof en = {
         muteFailed: '無法靜音',
         truncated: "結果已縮短。",
         wokenBy: ({ count }) => (count === 1 ? '由一則更新喚醒' : `由 ${count} 則更新喚醒`),
+        updateCount: ({ count }) => (count === 1 ? '1 則更新' : `${count} 則更新`),
         notFromYou: '不是你傳送的訊息',
     },
     workerFollow: {

@@ -10851,6 +10851,7 @@ const ja: typeof en = {
         muteFailed: 'ミュートできませんでした',
         truncated: "結果を短縮しました。",
         wokenBy: ({ count }) => (count === 1 ? '更新により再開' : `${count} 件の更新により再開`),
+        updateCount: ({ count }) => (count === 1 ? '1 件の更新' : `${count} 件の更新`),
         notFromYou: 'あなたからのメッセージではありません',
     },
     workerFollow: {

@@ -1,12 +1,17 @@
 import {
-    getPendingMessageVisualState,
     paintsPendingMessageActionRow,
-    resolvePendingMessageHeightBearingChrome,
+    resolvePendingMessagesPresentation,
+    resolvePendingMessageContentPresentation,
 } from '@/components/sessions/pending/pendingMessageVisualState';
+import { HAPPIER_TYPE_SCALE } from '@happier-dev/plugin-ui/presentation';
 import {
     PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX,
     PENDING_QUEUE_SCROLL_PADDING_TOP_PX,
     PENDING_QUEUE_TOP_INSET_PX,
+    PENDING_MESSAGE_ACTION_ROW_HEIGHT_PX as PENDING_QUEUE_MESSAGE_ACTION_ROW_PX,
+    PENDING_MESSAGE_BLOCKED_NOTICE_HEIGHT_PX as PENDING_QUEUE_MESSAGE_NOTICE_PX,
+    estimatePendingFollowNoticeHeightPx,
+    estimatePendingFollowNoticeBodyHeightPx,
     resolvePendingMessageGapPx,
     resolvePendingQueueScrollMaxHeightPx,
 } from '@/components/sessions/pending/pendingQueueContentClipping';
@@ -347,9 +352,7 @@ const ESTIMATE_TOOL_CARD_ROW_PX = 327;
  * The reorder gate is PER ROW in this repo, so this term is resolved inside the per-message loop
  * from that row's own `deliveryMutationPolicy`, never hoisted for the block.
  */
-const PENDING_QUEUE_MESSAGE_ACTION_ROW_PX = 20;
 /** `blockedDeliveryNotice` (this repo): marginTop 8, paddingVertical 5 ×2, hairline border, 14px text line. */
-const PENDING_QUEUE_MESSAGE_NOTICE_PX = 33;
 // `nonSteerableNotice` (the one notice rendered OUTSIDE the capped scroll box) is deliberately NOT
 // modelled in this repo: `showNonSteerableNotice` is decided by live session capabilities
 // (`inFlightSteerUnavailableReason`, `terminalComposerDraftPresent`, runtime activity), none of
@@ -382,29 +385,34 @@ function estimatePendingQueueRowPx(
     platformIsWeb: boolean,
 ): number {
     let scrollContentPx = PENDING_QUEUE_SCROLL_PADDING_TOP_PX;
-    for (const [index, pendingMessage] of item.pendingMessages.entries()) {
-        scrollContentPx += PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX
-            + resolvePendingMessageGapPx({
-                isLastInScrollContent: index === item.pendingMessages.length - 1 && item.discardedMessages.length === 0,
-            })
-            + estimatePendingQueueTextPx(pendingMessage);
+    const presentation = resolvePendingMessagesPresentation(item.pendingMessages);
+    for (const [index, row] of presentation.shownRows.entries()) {
+        const pendingMessage = row.message;
+        scrollContentPx += resolvePendingMessageGapPx({
+            isLastInScrollContent: index === presentation.shownRows.length - 1 && item.discardedMessages.length === 0,
+        });
+        if (row.isHostInput) {
+            const lines = row.followInput ? 1 : estimateWrappedLineCount((pendingMessage.displayText ?? pendingMessage.text) ?? '');
+            scrollContentPx += estimatePendingFollowNoticeHeightPx(row, platformIsWeb, item.pendingMessages.length > 1)
+                + (lines - 1) * HAPPIER_TYPE_SCALE.label.lineHeight;
+        } else {
+            scrollContentPx += PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX + estimatePendingQueueTextPx(pendingMessage);
+        }
         // F-P2: switched over the owner's height-bearing descriptor — the very thing
         // `transcriptRowShellSignature` keys the row's size version on — so the estimate and the key
         // can never disagree about which in-flow notice exists. This removed a 43px phantom the
         // estimate added for every `send_failed` row: the block paints no send-failed notice, only a
         // retry affordance inside its constant-height web action row.
-        const visualState = getPendingMessageVisualState(pendingMessage);
         // PER ROW, from this row's own delivery-mutation policy — the same gate the block paints
         // the reorder handle from (`hasEffectPossibleDelivery`). Hoisting it for the block would
         // mis-model a mixed queue by 20px per row.
         if (paintsPendingMessageActionRow({
             platformIsWeb,
-            canReorderPendingMessages: item.pendingMessages.length > 1
-                && visualState.deliveryMutationPolicy !== 'effect_possible',
-        })) {
+            canReorderPendingMessages: item.pendingMessages.length > 1 && row.canReorder,
+        }) && row.canMutate && !row.isHostInput) {
             scrollContentPx += PENDING_QUEUE_MESSAGE_ACTION_ROW_PX;
         }
-        switch (resolvePendingMessageHeightBearingChrome(visualState)) {
+        switch (row.isHostInput ? 'none' : row.heightBearingChrome) {
             case 'blocked-notice':
                 scrollContentPx += PENDING_QUEUE_MESSAGE_NOTICE_PX;
                 break;
@@ -415,14 +423,15 @@ function estimatePendingQueueRowPx(
     if (item.discardedMessages.length > 0) {
         scrollContentPx += PENDING_QUEUE_DISCARDED_SECTION_PX;
         for (const [discardedIndex, discardedMessage] of item.discardedMessages.entries()) {
-            scrollContentPx += PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX
+            const content = resolvePendingMessageContentPresentation(discardedMessage);
+            scrollContentPx += (content.isHostInput ? estimatePendingFollowNoticeBodyHeightPx(content.needsYou)
+                + (content.followInput ? 0 : (estimateWrappedLineCount((discardedMessage.displayText ?? discardedMessage.text) ?? '') - 1) * HAPPIER_TYPE_SCALE.label.lineHeight)
+                : PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX + estimatePendingQueueTextPx(discardedMessage, PENDING_QUEUE_COLLAPSED_LINES))
                 + resolvePendingMessageGapPx({
                     isLastInScrollContent: discardedIndex === item.discardedMessages.length - 1,
                 })
-                // A tombstone is ALWAYS clamped — the block renders it through a plain `Text` with
-                // `numberOfLines={collapsedLines}` and no expand path — so its text term is bounded
-                // where a pending row's is not.
-                + estimatePendingQueueTextPx(discardedMessage, PENDING_QUEUE_COLLAPSED_LINES)
+                // Person-authored tombstones are clamped; admitted host notices retain their
+                // actual source/attention presentation without sizing the hidden provider prompt.
                 + (platformIsWeb ? PENDING_QUEUE_MESSAGE_ACTION_ROW_PX : 0)
                 + PENDING_QUEUE_DISCARDED_LABEL_PX
                 + (discardedMessage.discardedReason ? PENDING_QUEUE_DISCARDED_REASON_PX : 0);
@@ -433,7 +442,7 @@ function estimatePendingQueueRowPx(
     // The account default is modelled because a pure estimate cannot read the setting; a user who
     // raises `transcriptPendingQueueMaxHeightPx` undershoots until that row's next onLayout, instead of overshooting without end.
     const scrollBoxPx = Math.min(scrollContentPx, resolvePendingQueueScrollMaxHeightPx({
-        pendingCount: item.pendingMessages.length,
+        pendingCount: presentation.shownRows.length,
         discardedCount: item.discardedMessages.length,
         queueMaxHeightPx: PENDING_QUEUE_SCROLL_MAX_HEIGHT_PX,
         lineHeightPx: transcriptMarkdownTextStyle.lineHeight,

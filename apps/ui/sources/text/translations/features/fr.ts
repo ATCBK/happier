@@ -10864,6 +10864,7 @@ const fr: typeof en = {
         muteFailed: 'Impossible de masquer',
         truncated: "Résultat abrégé.",
         wokenBy: ({ count }) => (count === 1 ? 'Réveillé par une mise à jour' : `Réveillé par ${count} mises à jour`),
+        updateCount: ({ count }) => (count === 1 ? '1 mise à jour' : `${count} mises à jour`),
         notFromYou: 'pas un message de ta part',
     },
     workerFollow: {

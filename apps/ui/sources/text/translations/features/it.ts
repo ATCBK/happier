@@ -10863,6 +10863,7 @@ const it: typeof en = {
         muteFailed: 'Impossibile silenziare',
         truncated: "Risultato abbreviato.",
         wokenBy: ({ count }) => (count === 1 ? 'Risvegliato da un aggiornamento' : `Risvegliato da ${count} aggiornamenti`),
+        updateCount: ({ count }) => (count === 1 ? '1 aggiornamento' : `${count} aggiornamenti`),
         notFromYou: 'non è un tuo messaggio',
     },
     workerFollow: {

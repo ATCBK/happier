@@ -30,6 +30,7 @@ export const en = {
         muteFailed: 'Couldn’t mute it',
         truncated: "Result shortened.",
         wokenBy: ({ count }: { count: number }) => (count === 1 ? 'Woken by an update' : `Woken by ${count} updates`),
+        updateCount: ({ count }: { count: number }) => (count === 1 ? '1 update' : `${count} updates`),
         notFromYou: 'not a message from you',
     },
     workerFollow: {

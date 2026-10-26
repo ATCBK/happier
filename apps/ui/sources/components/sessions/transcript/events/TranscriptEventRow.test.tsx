@@ -7,7 +7,8 @@ import { renderScreen } from '@/dev/testkit';
 import { setPreferredLanguageFromSettings, t } from '@/text';
 import { normalizeRawMessage, RawRecordSchema, type AgentEvent } from "@happier-dev/session-core/raw";
 
-import { TranscriptEventRow } from './TranscriptEventRow';
+import { TranscriptEventRow, TranscriptFollowSourceAction, TranscriptFollowSourceNotice } from './TranscriptEventRow';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -135,6 +136,34 @@ describe('TranscriptEventRow', () => {
         } }} /></AppSessionTranscriptSourceProvider>);
         expect(screen.findByTestId('worker-update:worker')).not.toBeNull();
         expect(screen.findByTestId('worker-update-inspect')).toBeNull();
+    });
+    describe('queued Follow source notice', () => {
+        const needsYou = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceRequests: { agentStateVersion: 3, requests: [{ requestId: 'perm-1', createdAt: 10 }] } },
+            requestEvents: [{ requestId: 'perm-1', event: { kind: 'needs_you', type: 'approval' } }] });
+        const finished = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceTurn: { id: 'turn-1', status: 'completed' } },
+            event: { kind: 'finished' } });
+        const render = (followInput: typeof needsYou) => renderScreen(<AppSessionTranscriptSourceProvider sessionId="lead" serverId="home-b">
+            <TranscriptFollowSourceNotice followInput={followInput} messageId="pending-1" sessionId="lead" serverId="home-b" createdAt={1} />
+            <TranscriptFollowSourceAction followInput={followInput} serverId="home-b" testID="open" />
+        </AppSessionTranscriptSourceProvider>);
+
+        it('tells a stopped lead that the worker needs the person and opens that worker', async () => {
+            const screen = await render(needsYou);
+            expect(screen.getTextContent()).toContain(t('message.provenanceFrom', { source: t('message.provenanceSession') }));
+            expect(screen.getTextContent()).toContain(t('sessionWork.workerUpdate.state.needsYou'));
+            expect(screen.getTextContent()).toContain(t('runs.openSession'));
+            await screen.pressByTestIdAsync('open');
+            expect(workerUpdateRouter.push).toHaveBeenCalledWith('/session/worker?serverId=home-b');
+        });
+
+        it('keeps an ordinary queued Follow as source identity alone', async () => {
+            const screen = await render(finished);
+            expect(screen.getTextContent()).toContain(t('message.provenanceFrom', { source: t('message.provenanceSession') }));
+            expect(screen.getTextContent()).not.toContain(t('sessionWork.workerUpdate.state.needsYou'));
+            expect(screen.getTextContent()).not.toContain(t('runs.openSession'));
+        });
     });
     it('opens a context-only wake with one host row that says it is not a message from you', async () => {
         const update = {

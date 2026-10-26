@@ -10863,6 +10863,7 @@ const ca: typeof en = {
         muteFailed: 'No s’ha pogut silenciar',
         truncated: "Resultat escurçat.",
         wokenBy: ({ count }) => (count === 1 ? 'Despertat per una actualització' : `Despertat per ${count} actualitzacions`),
+        updateCount: ({ count }) => (count === 1 ? '1 actualització' : `${count} actualitzacions`),
         notFromYou: 'no és un missatge teu',
     },
     workerFollow: {

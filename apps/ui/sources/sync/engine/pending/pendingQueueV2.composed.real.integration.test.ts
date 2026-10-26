@@ -2,6 +2,9 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SessionInputMachineTargetV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { buildSessionInputAdmissionReceipt } from '../../../../../server/sources/app/session/messages/sessionInputAdmission';
+import { isHostAuthoredInputMeta, readHostFollowInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
 import { pendingDeliveryStatusV1ToPersistedFields } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { SessionMessageReplyProgressV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
@@ -169,6 +172,33 @@ it('projects real pending receipts and retains external enqueue custody until ac
         const legacy = await request(`/v2/sessions/${session.id}/pending`, { method: 'POST', body: JSON.stringify(legacyBody) });
         expect(legacy.status).toBe(200);
         expect(await legacy.json()).toMatchObject({ pending: { localId: legacyLocalId, deliveryStatus: { status: 'external_handoff' } } });
+        // Read projection starts at an already-admitted stored receipt. Admission
+        // policy is exercised by the server's Follow-original integration suite.
+        // Real DB -> registered route -> UI ingress must preserve its host identity.
+        const follow = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceTurn: { id: 'turn-1', status: 'completed' } },
+            event: { kind: 'finished' } });
+        const hostLocalId = randomUUID();
+        const receipt = { ...buildSessionInputAdmissionReceipt({ issuer: 'authenticatedMachine',
+            admittedTarget: retiredTarget }), followDeliveryV1: follow };
+        await db.sessionPendingMessage.create({ data: { sessionId: session.id, localId: hostLocalId,
+            messageRole: 'user', position: 100, status: 'queued', authorAccountId: null,
+            requestedAction: { v: 1, kind: 'enqueue' },
+            inputAdmissionReceipt: receipt, content: { t: 'plain', v: { role: 'user',
+                content: { type: 'text', text: 'Followed source changed' }, meta: {
+                    happierInputRequestV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+                        permission: {}, followDeliveryV1: follow },
+                    happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+                } } } } });
+        await refresh();
+        const host = storage.getState().sessionPending[session.id]?.messages.find(message => message.localId === hostLocalId);
+        expect(host?.pendingHostFollowInput).toEqual(follow);
+        expect(isHostAuthoredInputMeta(host?.rawRecord.meta, host?.pendingHostFollowInput)).toBe(true);
+        expect(readHostFollowInputMeta(host?.rawRecord.meta, host?.pendingHostFollowInput)).toEqual(follow);
+        const pendingRead = await request(`/v2/sessions/${session.id}/pending`);
+        const pendingBody = await pendingRead.json() as { pending: unknown[] };
+        expect(pendingBody.pending.find(row => typeof row === 'object' && row !== null && 'localId' in row && row.localId === hostLocalId))
+            .not.toHaveProperty('inputAdmissionReceipt');
         const stranger = await db.account.create({ data: { encryptionMode: 'plain' } });
         const forbidden = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/pending`,
             headers: { 'x-test-user-id': stranger.id, 'x-happier-account-stored-content-protocol': '4' },

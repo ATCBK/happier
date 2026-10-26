@@ -162,6 +162,7 @@ describe('pending-queue estimate is chrome-aware', () => {
             pendingDeliveryBlockedReason: 'terminal_composer_draft',
         })]) as number;
 
-        expect(blocked).toBeGreaterThan(queued);
+        // Person-input notices retain both the chip box (25) and its top margin (8).
+        expect(blocked - queued).toBe(33);
     });
 });

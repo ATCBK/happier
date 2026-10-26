@@ -10863,6 +10863,7 @@ const pt: typeof en = {
         muteFailed: 'Não foi possível silenciar',
         truncated: "Resultado abreviado.",
         wokenBy: ({ count }) => (count === 1 ? 'Despertado por uma atualização' : `Despertado por ${count} atualizações`),
+        updateCount: ({ count }) => (count === 1 ? '1 atualização' : `${count} atualizações`),
         notFromYou: 'não é uma mensagem sua',
     },
     workerFollow: {

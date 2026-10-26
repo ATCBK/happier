@@ -1,5 +1,6 @@
 import type { Message } from "@happier-dev/session-core/messages";
 import { isSessionFollowWakeEventLocalId } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { readHostFollowInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
 
 export type TranscriptEventEmphasis = 'normal' | 'deemphasized';
 export type TranscriptEventEmphasisByMessageId = Readonly<Record<string, TranscriptEventEmphasis>>;
@@ -38,15 +39,16 @@ export type TranscriptHostWakeCountByMessageId = Readonly<Record<string, number>
 const EMPTY_TRANSCRIPT_HOST_WAKE_COUNT_BY_MESSAGE_ID: TranscriptHostWakeCountByMessageId = Object.freeze({});
 
 /**
- * An adjacent WorkerUpdate run is not provider acceptance. Count only the
- * same-destination cards linked to a batch whose canonical server projection
- * proves a new turn, with the first card displaying that batch's count.
+ * Adjacency never proves acceptance. Count only original inputs or legacy
+ * batches whose canonical server projection proves a wake, with one presenter
+ * for a consecutive update run and exact input/batch correlation to its cards.
  */
 export function resolveTranscriptHostWakeCountByMessageId(input: Readonly<{
     messageIdsOldestFirst: readonly string[];
     messagesById: Readonly<Record<string, Message>>;
 }>): TranscriptHostWakeCountByMessageId {
     const acceptedBatches = new Set<string>();
+    const cardByInputId = new Map<string, string>();
     for (const messageId of input.messageIdsOldestFirst) {
         const message = input.messagesById[messageId];
         if (message?.kind === 'agent-event'
@@ -54,6 +56,10 @@ export function resolveTranscriptHostWakeCountByMessageId(input: Readonly<{
             && 'followDeliveryProjection' in message
             && message.followDeliveryProjection?.status === 'woke') {
             acceptedBatches.add(message.localId);
+        }
+        if (message?.kind === 'agent-event' && message.event.type === 'worker-update'
+            && message.event.followInputLocalId && !cardByInputId.has(message.event.followInputLocalId)) {
+            cardByInputId.set(message.event.followInputLocalId, messageId);
         }
     }
     let counts: Record<string, number> | null = null;
@@ -72,5 +78,25 @@ export function resolveTranscriptHostWakeCountByMessageId(input: Readonly<{
             counts[openerId] = (counts[openerId] ?? 0) + 1;
         }
     }
+    // Original-input deliveries already carry exact server acceptance. A run of
+    // consecutive updates gets one notice, on its first correlated card when
+    // available, otherwise on its first input. Proximity never proves a wake.
+    let originals: Extract<Message, { kind: 'user-text' }>[] = [];
+    const flushOriginals = () => {
+        if (originals.length === 0) return;
+        const cardId = originals.map(message => message.localId ? cardByInputId.get(message.localId) : undefined).find(Boolean);
+        counts ??= {};
+        const noticeId = cardId ?? originals[0]!.id;
+        counts[noticeId] = (counts[noticeId] ?? 0) + originals.length;
+        originals = [];
+    };
+    for (const messageId of input.messageIdsOldestFirst) {
+        const message = input.messagesById[messageId];
+        if (message?.kind === 'user-text' && message.followDeliveryProjection?.status === 'woke'
+            && readHostFollowInputMeta(message.meta)) {
+            originals.push(message);
+        } else if (message?.kind !== 'agent-event' || message.event.type !== 'worker-update') flushOriginals();
+    }
+    flushOriginals();
     return counts ?? EMPTY_TRANSCRIPT_HOST_WAKE_COUNT_BY_MESSAGE_ID;
 }

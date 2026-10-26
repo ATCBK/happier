@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -39,7 +39,59 @@ const renderItem: React.ComponentProps<typeof PendingMessagesDragReorderList>['r
     </View>
 );
 
+function StatefulPendingRow(props: Readonly<{
+    id: string;
+    renderDragHandle: Parameters<React.ComponentProps<typeof PendingMessagesDragReorderList>['renderItem']>[0]['renderDragHandle'];
+}>) {
+    const [value, setValue] = React.useState(0);
+    return <View testID={`stable-${props.id}`} accessibilityLabel={String(value)}>
+        <Pressable testID={`change-${props.id}`} onPress={() => setValue(previous => previous + 1)} />
+        {props.renderDragHandle({ children: null, testID: `handle-${props.id}` })}
+    </View>;
+}
+
 describe('PendingMessagesDragReorderList · shared reorder and flow layout', () => {
+    it('retains mounted input identity and local state across queued, provider-owned and queued transitions', async () => {
+        const hook = await renderHook(() => useEntityDragDropRuntime());
+        const runtime = hook.getCurrent();
+        const element = (pendingDeliveryStatus: PendingMessage['pendingDeliveryStatus']) => <PendingMessagesDragReorderList
+            scope={scope} sessionId="session" recipient={recipient}
+            messages={[{ ...message('a'), source: 'server_pending', pendingDeliveryStatus }, message('b')]}
+            renderItem={args => <StatefulPendingRow id={args.message.localId!} renderDragHandle={args.renderDragHandle} />}
+        />;
+        const screen = await renderScreen(element('server_queued'));
+        await screen.pressByTestIdAsync('pendingMessages.reorder.organize');
+        await screen.pressByTestIdAsync('change-a');
+        const mountedChild = screen.findHostByTestId('stable-a');
+        expect(mountedChild?.props.accessibilityLabel).toBe('1');
+        expect(screen.findByTestId('handle-a')).not.toBeNull();
+        const binding = () => screen.tree.root.findByType(EntityFlatReorderList).props.binding as React.ComponentProps<typeof EntityFlatReorderList>['binding'];
+        expect(binding().getItem('a')).not.toBeNull();
+        const gripGesture = screen.findAllByType('GestureDetector').find(node => node.findAll(child => child.props.testID === 'handle-a').length > 0)?.props.gesture as TestGestureChain;
+        await act(async () => { gripGesture.__handlers.onStart?.({ absoluteX: 25, absoluteY: 25 }); });
+        const sourceId = runtime.getSnapshot().sourceId!;
+        expect(runtime.getSnapshot().phase).toBe('carrying');
+
+        await screen.update(element('server_delivering'));
+        expect.soft(screen.findHostByTestId('stable-a') === mountedChild).toBe(true);
+        expect.soft(screen.findHostByTestId('stable-a')?.props.accessibilityLabel).toBe('1');
+        expect(binding().getItem('a')).toBeNull();
+        expect(binding().resolve('a', { anchorId: 'b', placement: 'after' }).status).toBe('refused');
+        expect(screen.findByTestId('handle-a')).toBeNull();
+        expect(runtime.getSnapshot().phase).toBe('idle');
+        expect(runtime.begin(sourceId)).toBeNull();
+
+        await screen.update(element('server_queued'));
+        expect.soft(screen.findHostByTestId('stable-a') === mountedChild).toBe(true);
+        expect.soft(screen.findHostByTestId('stable-a')?.props.accessibilityLabel).toBe('1');
+        expect(binding().getItem('a')).not.toBeNull();
+        expect(binding().resolve('a', { anchorId: 'b', placement: 'after' }).status).toBe('allowed');
+        expect(screen.findByTestId('handle-a')).not.toBeNull();
+        await act(async () => {
+            expect(runtime.begin(sourceId)).not.toBeNull();
+            runtime.cancel('test-complete');
+        });
+    });
     it('cancels an admitted move on unsuccessful native end and finalization', async () => {
         const hook = await renderHook(() => useEntityDragDropRuntime());
         const runtime = hook.getCurrent();

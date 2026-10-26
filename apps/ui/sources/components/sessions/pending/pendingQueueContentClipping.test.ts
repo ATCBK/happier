@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { PendingMessage } from '@/sync/domains/state/storageTypes';
+import { resolvePendingMessagesPresentation } from './pendingMessageVisualState';
 
 import {
     PENDING_QUEUE_HEAD_MAX_LINES,
+    estimatePendingFollowNoticeHeightPx,
     PENDING_QUEUE_MESSAGE_GAP_PX,
     clampsPendingMessageLines,
     resolvePendingMessageGapPx,
@@ -101,5 +105,30 @@ describe('pending queue geometry', () => {
                 lineHeightPx: LINE_PX,
             })).toBe(head + QUEUE_MAX_HEIGHT_PX);
         }
+    });
+});
+
+describe('Follow notice height', () => {
+    it('adds only the blocked reason chip to the queued notice height', () => {
+        const message: PendingMessage = {
+            id: 'follow', localId: 'follow-local', createdAt: 1, updatedAt: 1,
+            source: 'server_pending', text: 'provider prompt', rawRecord: null,
+            pendingDeliveryStatus: 'server_queued',
+            pendingHostFollowInput: SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+                original: { sourceSessionId: 'worker', sourceTurn: { id: 'turn', status: 'completed' } },
+                event: { kind: 'finished' } }),
+        };
+        const queued = resolvePendingMessagesPresentation([message]).shownRows[0]!;
+        const blocked = resolvePendingMessagesPresentation([{ ...message,
+            pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'terminal_composer_draft',
+        }]).shownRows[0]!;
+        expect(queued.followInput).toBeTruthy();
+        expect(blocked.followInput).toBeTruthy();
+        expect(blocked.heightBearingChrome).toBe('blocked-notice');
+        // Both presentations have the same pull-up. Only the chip box remains:
+        // paddingVertical 5×2 + text line 14 + border allowance 1 = 25.
+        // The ordinary notice's +8 top margin is replaced by the host pull-up.
+        expect(estimatePendingFollowNoticeHeightPx(blocked, true, false)
+            - estimatePendingFollowNoticeHeightPx(queued, true, false)).toBe(25);
     });
 });

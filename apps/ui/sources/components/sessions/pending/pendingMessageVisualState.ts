@@ -3,6 +3,9 @@ import type { TranslationKeyNoParams } from '@/text';
 import { isPendingDeliveryProviderEffectPossibleV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import type { SessionInputAdmissionRejectionCodeV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { followInputNeedsYou, isHostAuthoredInputMeta, readHostFollowInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
+import { followNoticeSourceKey, groupFollowNoticesBySource } from './followNoticeGroups';
+import type { SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 export type PendingMessageVisualStateKind =
     | 'saving'
@@ -77,6 +80,74 @@ export function resolvePendingMessageHeightBearingChrome(
     // Read off the presentation the block itself renders the notice from, not off a list of kinds,
     // so a state that starts carrying a blocked presentation cannot drop out of the size version.
     return visualState.deliveryBlockedPresentation !== undefined ? 'blocked-notice' : 'none';
+}
+
+/** The actual pending paint, shared by the presenter, reorder binding and transcript measurement. */
+export type PendingMessageContentPresentation = Readonly<{
+    isHostInput: boolean;
+    followInput: SessionFollowInputV1 | null;
+    followSourceKey: string | null;
+    needsYou: boolean;
+}>;
+
+export type PendingMessagePresentation = PendingMessageContentPresentation & Readonly<{
+    message: PendingMessage;
+    index: number;
+    visualState: PendingMessageVisualState;
+    folded: boolean;
+    aggregate: boolean;
+    count: number;
+    opensSourceSession: boolean;
+    heightBearingChrome: PendingMessageHeightBearingChrome;
+    canMutate: boolean;
+    canReorder: boolean;
+}>;
+
+export type PendingMessagesPresentation = Readonly<{
+    rows: readonly PendingMessagePresentation[];
+    shownRows: readonly PendingMessagePresentation[];
+    foldKey: string;
+}>;
+
+export function resolvePendingMessageContentPresentation(message: PendingMessage): PendingMessageContentPresentation {
+    const contentOpen = message.pendingDecryptFailure?.kind !== 'decrypt_failed' && message.pendingDecryption?.kind !== 'loading';
+    const followInput = contentOpen ? readHostFollowInputMeta(message.rawRecord?.meta, message.pendingHostFollowInput) : null;
+    return {
+        isHostInput: contentOpen && isHostAuthoredInputMeta(message.rawRecord?.meta, message.pendingHostFollowInput),
+        followInput,
+        followSourceKey: followInput ? followNoticeSourceKey(followInput) : null,
+        needsYou: followInput !== null && followInputNeedsYou(followInput),
+    };
+}
+
+export function resolvePendingMessagesPresentation(
+    messages: readonly PendingMessage[],
+    options?: Readonly<{ materializingLocalIds?: ReadonlySet<string> }>,
+): PendingMessagesPresentation {
+    const hasProviderDeliveryInFlight = messages.some(isPendingMessageProviderDeliveryInFlight);
+    const inputs = messages.map((message, index) => {
+        const visualState = getPendingMessageVisualState(message, { ...options, hasProviderDeliveryInFlight });
+        return { message, index, visualState, ...resolvePendingMessageContentPresentation(message) };
+    });
+    const groups = groupFollowNoticesBySource(inputs.map(row => ({ id: row.message.id, followInput: row.followInput,
+        foldable: row.visualState.kind === 'queued' || row.visualState.kind === 'delivering' })));
+    const rows = inputs.map(row => {
+        const group = groups.get(row.message.id);
+        const folded = group?.kind === 'folded';
+        const aggregate = group?.kind === 'lead';
+        const followInput = aggregate ? group.followInput : row.followInput;
+        const needsYou = followInput !== null && followInputNeedsYou(followInput);
+        return { ...row, followInput, folded, aggregate,
+            followSourceKey: followInput ? followNoticeSourceKey(followInput) : null,
+            count: aggregate ? group.count : 1,
+            needsYou,
+            opensSourceSession: needsYou && followInput !== null && 'sourceSessionId' in followInput.original,
+            heightBearingChrome: resolvePendingMessageHeightBearingChrome(row.visualState),
+            canMutate: !folded && !aggregate,
+            canReorder: !folded && !aggregate && row.visualState.deliveryMutationPolicy !== 'effect_possible' };
+    });
+    return { rows, shownRows: rows.filter(row => !row.folded),
+        foldKey: rows.map(row => `${row.message.id}:${row.folded}:${row.count}`).join('|') };
 }
 
 const blockedReasonLabelKeys = {
@@ -316,6 +387,17 @@ function derivePendingMessageQueuedReason(
     if (context.runtimeActivity === 'active') return 'waiting_for_runtime_activity';
     if (context.runtimeActivity !== 'idle') return 'runtime_activity_unknown';
     return undefined;
+}
+
+/**
+ * A Follow update the host queued for this Session is retained until its next turn (a worker's finish
+ * is told quietly, never by waking the lead): it is waiting, not on its way. A blocked or failed row
+ * says its own problem instead.
+ */
+export function isNextTurnHostInput(message: PendingMessage): boolean {
+    return message.pendingDecryption?.kind !== 'loading' && message.pendingDecryptFailure?.kind !== 'decrypt_failed'
+        && message.pendingDeliveryStatus !== 'blocked' && message.sendState !== 'failed'
+        && isHostAuthoredInputMeta(message.rawRecord?.meta, message.pendingHostFollowInput);
 }
 
 export function isAcceptedLocalPendingProjection(message: PendingMessage): boolean {

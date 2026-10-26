@@ -10888,6 +10888,7 @@ const ru: typeof en = {
         muteFailed: 'Не удалось заглушить',
         truncated: "Результат сокращён.",
         wokenBy: ({ count }) => (count === 1 ? 'Разбужено обновлением' : `Разбужено обновлениями: ${count}`),
+        updateCount: ({ count }) => `${count} ${(count % 10 === 1 && count % 100 !== 11) ? 'обновление' : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) ? 'обновления' : 'обновлений'}`,
         notFromYou: 'это не ваше сообщение',
     },
     workerFollow: {

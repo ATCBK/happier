@@ -30,13 +30,19 @@ import {
     getPendingMessageVisualState,
     isAcceptedLocalPendingProjection,
     canUseDirectPendingDeliveryActions,
+    isNextTurnHostInput,
     isPendingMessageProviderDeliveryInFlight,
     paintsPendingMessageActionRow,
-    resolvePendingMessageHeightBearingChrome,
+    resolvePendingMessagesPresentation,
+    resolvePendingMessageContentPresentation,
 } from './pendingMessageVisualState';
 import {
     clampsPendingMessageLines,
     PENDING_QUEUE_TOP_INSET_PX,
+    PENDING_QUEUE_SCROLL_PADDING_TOP_PX,
+    estimatePendingFollowNoticeHeightPx,
+    PENDING_MESSAGE_BLOCKED_NOTICE_MARGIN_TOP_PX,
+    resolvePendingFollowNoticePullUpPx,
     resolvePendingMessageGapPx,
     resolvePendingQueueMessagePresentation,
     resolvePendingQueueScrollMaxHeightPx,
@@ -55,8 +61,8 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { SessionMessageAccountByline } from '@/components/sessions/transcript/SessionMessageAccountByline';
-import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
-import { isHostAuthoredInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
+import { EVENT_ICON_CONTAINER_SIZE, TranscriptEventRow, TranscriptFollowSourceAction, TranscriptFollowSourceNotice } from '@/components/sessions/transcript/events/TranscriptEventRow';
+import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { UserMessageBubble, userMessageBubbleAlignerStyle, userMessageBubbleContentPadding } from '@/components/sessions/transcript/UserMessageBubble';
@@ -290,6 +296,21 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         [materializingLocalIds, pendingMessages],
     );
     const blockedPendingExcerpt = blockedPendingIndex >= 0 ? excerptPendingText(pendingMessages[blockedPendingIndex]!) : '';
+    // Several queued updates from one source read as one notice. Presentation only: every row stays in the
+    // queue, in order, with its own delivery; a folded row just paints nothing of its own.
+    const pendingPresentation = React.useMemo(() => resolvePendingMessagesPresentation(pendingMessages, { materializingLocalIds }),
+        [materializingLocalIds, pendingMessages]);
+    const lastShownPendingIndex = pendingPresentation.shownRows.at(-1)?.index ?? -1;
+    const notifyLayoutMutation = useTranscriptRowLayoutMutation();
+    // Local materialization can unfold notices without a new queue item/signature. Reuse the row
+    // shell's content-change owner to release its reservation before the new natural layout lands.
+    const localFoldKey = pendingPresentation.foldKey;
+    const previousLocalFoldKey = React.useRef(localFoldKey);
+    React.useLayoutEffect(() => {
+        if (previousLocalFoldKey.current === localFoldKey) return;
+        previousLocalFoldKey.current = localFoldKey;
+        notifyLayoutMutation({ reason: 'content-change', sourceId: 'pending-queue' });
+    }, [localFoldKey, notifyLayoutMutation]);
 
     const toggleMessageExpanded = React.useCallback((id: string) => {
         setExpandedMessageIds((prev) => {
@@ -488,27 +509,29 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         renderDragHandle: (args: Readonly<{ children: React.ReactNode; testID?: string; accessibilityLabel?: string }>) => React.ReactNode;
     }) => {
         const { message, index, renderDragHandle } = args;
+        const presentation = pendingPresentation.rows[index]!;
+        if (presentation.folded) return null;
         const text = getPendingText(message).trim();
         // The head is the next message to be processed: it keeps the shape it will cross over in.
         const messagePresentation = resolvePendingQueueMessagePresentation(index);
-        const isCollapsible = clampsPendingMessageLines(messagePresentation)
+        const isCollapsible = !presentation.isHostInput && clampsPendingMessageLines(messagePresentation)
             && collapseThresholdChars > 0
             && text.length >= collapseThresholdChars;
         // No trailing gap under the last row in the scroll content: that 8px is separation from the
         // row BELOW, and carrying it made the crossover a DOWNWARD step (see the owner module).
         const messageGapPx = resolvePendingMessageGapPx({
-            isLastInScrollContent: index === pendingCount - 1 && discardedCount === 0,
+            isLastInScrollContent: index === lastShownPendingIndex && discardedCount === 0,
         });
 	        const isExpanded = expandedMessageIds[message.id] === true || !isCollapsible;
 
 	        const menuKey = `active:${message.id}`;
 	        const menuOpen = openMenuKey === menuKey;
 	        const menuAnchor = menuPressAnchor?.menuKey === menuKey ? menuPressAnchor.anchor : undefined;
-	        const hasDecryptFailure = message.pendingDecryptFailure?.kind === 'decrypt_failed';
         // Its Session reader hasn't opened it yet: the bubble holds a placeholder, not the message, so
         // nothing that reads or delivers the content is offered until the real text arrives.
         const isContentLoading = message.pendingDecryption?.kind === 'loading';
-        const isHostFollowInput = !hasDecryptFailure && !isContentLoading && isHostAuthoredInputMeta(message.rawRecord?.meta);
+        const isHostFollowInput = presentation.isHostInput;
+        const followInput = presentation.followInput;
         const visualState = getPendingMessageVisualState(message, {
             materializingLocalIds,
             hasEarlierRow: pendingMessages.slice(0, index).some((candidate) =>
@@ -526,7 +549,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         // Height-bearing, so the size estimate reads this same predicate rather than restating it.
         const paintsMessageActionRow = paintsPendingMessageActionRow({
             platformIsWeb: isWeb,
-            canReorderPendingMessages: pendingMessages.length > 1 && !hasEffectPossibleDelivery,
+            canReorderPendingMessages: pendingMessages.length > 1 && presentation.canReorder,
         });
         const isUncertainDelivery = hasEffectPossibleDelivery && visualState.kind === 'blocked';
         const isServerDeliveryInProgress = isPendingMessageProviderDeliveryInFlight(message)
@@ -545,7 +568,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         // descriptor rather than inline, because `transcriptRowShellSignature` keys the row's Legend
         // size version on exactly this answer — a notice the key cannot see is a stale reservation,
         // and a key move with no notice is a discarded measurement.
-        const heightBearingChrome = resolvePendingMessageHeightBearingChrome(visualState);
+        const heightBearingChrome = presentation.heightBearingChrome;
         const providerDeliveryLabelKey = session && visualState.kind === 'delivering'
             ? resolvePendingDeliveryLabelKeyForSession({
                 session,
@@ -565,8 +588,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                 })
                 : null;
         const deliveryStateLabel =
-            visualState.kind === 'delivering'
-                ? t(providerDeliveryLabelKey ?? 'session.pendingMessages.deliveryStatus.delivering')
+            visualState.kind === 'delivering' && followInput
+                && (!providerDeliveryLabelKey || providerDeliveryLabelKey === 'session.pendingMessages.deliveryStatus.nextTurn')
+                ? t('session.pendingMessages.badgeLabel', { count: 0 })
+                : visualState.kind === 'delivering'
+                ? t(providerDeliveryLabelKey ?? (isNextTurnHostInput(message)
+                    ? 'session.pendingMessages.deliveryStatus.nextTurn' : 'session.pendingMessages.deliveryStatus.delivering'))
                 : visualState.kind === 'blocked'
                     ? t('session.pendingMessages.deliveryStatus.blocked')
                     : visualState.kind === 'send_failed'
@@ -618,6 +645,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 
 	        const menuItems = (() => {
 	            const items: DropdownMenuItem[] = [];
+                if (!presentation.canMutate) return items;
                 if (text && !isContentLoading) {
                     items.push({
                         id: 'copy',
@@ -681,6 +709,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                 }}
                 items={menuItems}
                 onSelect={async (itemId) => {
+                    if (!presentation.canMutate) return;
                     setOpenMenuKey(null);
                     if (itemId === 'copy') await copyPendingMessageText(message);
                     if (itemId === 'edit') await handleEdit(message);
@@ -749,6 +778,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             } : undefined}
                         >
                             <Pressable
+                                disabled={!presentation.canMutate}
                                 onPress={(event) => {
                                     if (menuOpen) {
                                         closeMenu();
@@ -759,15 +789,19 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     openMenu();
                                 }}
                                 testID={`pendingMessages.message:${message.id}`}
-                                accessibilityRole="button"
-                                accessibilityLabel={text || t('session.pendingMessages.title')}
+                                accessibilityRole={presentation.canMutate ? 'button' : undefined}
+                                accessibilityLabel={followInput ? t('session.pendingMessages.title') : text || t('session.pendingMessages.title')}
                                 style={({ pressed }) => ([
                                     !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                     isCollapsible ? styles.userMessageBubbleBodyAboveToggle : null,
                                     { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
                                 ])}
                             >
-                                {isHostFollowInput ? (
+                                {followInput ? (
+                                    <TranscriptFollowSourceNotice followInput={followInput}
+                                        count={presentation.aggregate ? presentation.count : undefined}
+                                        messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} />
+                                ) : isHostFollowInput ? (
                                     <TranscriptEventRow event={{ type: 'message', message: text }}
                                         messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} />
                                 ) : isExpanded ? (
@@ -807,6 +841,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                                testID={`pendingMessages.blockedDeliveryNotice:${message.id}`}
                                 style={[
                                     styles.blockedDeliveryNotice,
+                                    isHostFollowInput ? styles.hostBlockedDeliveryNotice : null,
                                     {
                                         backgroundColor: theme.colors.surface.base,
                                         borderColor: theme.colors.border.default,
@@ -823,7 +858,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                            </View>
 	                        ) : null}
 
-                        <View style={styles.pendingStatusRow}>
+                        <View style={[styles.pendingStatusRow, isHostFollowInput ? (heightBearingChrome === 'blocked-notice' && blockedDeliveryLabel ? styles.hostBlockedStatusRow : styles.hostStatusRow) : null]}>
+                            {followInput ? <TranscriptFollowSourceAction followInput={followInput} serverId={props.serverId}
+                                testID={`pendingMessages.followSourceOpen:${message.id}`} style={styles.hostSourceAction} /> : null}
                             <View
                                 testID={`pendingMessages.pendingAffordance:${message.id}`}
                                 accessible
@@ -853,7 +890,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 </Text>
                             </View>
 
-                            {isWeb ? (
+                            {isWeb && presentation.canMutate ? (
                                 // The committed message's reveal owner: a queued row's actions keep their
                                 // band and fade in on hover or focus, like every transcript row; a delivery
                                 // that needs the person keeps its recovery in view.
@@ -983,7 +1020,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     	                                    />
     	                                ) : null}
     	                            </RowActionRevealSlot>
-                            ) : paintsMessageActionRow ? (
+                            ) : !isWeb && paintsMessageActionRow && presentation.canReorder ? (
                                 <View style={styles.messageActionContainer}>
                                     {renderDragHandle({
                                         children: null,
@@ -1002,7 +1039,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         authorship.hasOtherNamedCollaborator,
         canSteerNow,
         discardedCount,
-        pendingCount,
+        pendingPresentation,
+        lastShownPendingIndex,
         props.onPaintedUtteranceBubbleMeasured,
         hoveredMessageId,
         collapseThresholdChars,
@@ -1044,8 +1082,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const renderDiscardedMessage = React.useCallback((message: DiscardedPendingMessage, index: number, all: readonly DiscardedPendingMessage[]) => {
         const isLastDiscarded = index === all.length - 1;
         const text = getPendingText(message).trim();
-        const isHostFollowInput = message.pendingDecryption?.kind !== 'loading'
-            && message.pendingDecryptFailure?.kind !== 'decrypt_failed' && isHostAuthoredInputMeta(message.rawRecord?.meta);
+        const { isHostInput: isHostFollowInput, followInput } = resolvePendingMessageContentPresentation(message);
         const menuKey = `discarded:${message.id}`;
         const menuOpen = openMenuKey === menuKey;
         const menuAnchor = menuPressAnchor?.menuKey === menuKey ? menuPressAnchor.anchor : undefined;
@@ -1128,13 +1165,15 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             }}
                             testID={`pendingMessages.discarded.message:${message.id}`}
                             accessibilityRole="button"
-                            accessibilityLabel={text || t('session.pendingMessages.discarded.label')}
+                            accessibilityLabel={followInput ? t('session.pendingMessages.discarded.label') : text || t('session.pendingMessages.discarded.label')}
                             style={({ pressed }) => ([
                                 !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                 { opacity: pressed ? motionTokens.press.opacity : 1 },
                             ])}
                         >
-                            {isHostFollowInput ? <TranscriptEventRow event={{ type: 'message', message: text }}
+                            {followInput ? <TranscriptFollowSourceNotice followInput={followInput}
+                                messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} />
+                                : isHostFollowInput ? <TranscriptEventRow event={{ type: 'message', message: text }}
                                 messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} /> : <Text numberOfLines={collapsedLines} style={{ color: theme.colors.text.primary, ...Typography.default() }}>
                                 {text}
                             </Text>}
@@ -1243,10 +1282,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         typeof scrollContentHeightPx === 'number' && Number.isFinite(scrollContentHeightPx) && scrollContentHeightPx > 0
             ? Math.trunc(scrollContentHeightPx)
             : 0;
-    const estimatedPendingContentHeightPx =
-        pendingCount > 0
-            ? pendingCount * reorderEstimatedRowHeightPx
-            : 0;
+    const estimatedPendingContentHeightPx = pendingPresentation.shownRows.some(row => row.followInput)
+        ? PENDING_QUEUE_SCROLL_PADDING_TOP_PX + pendingPresentation.shownRows.reduce((height, row) => height
+            + (row.followInput ? estimatePendingFollowNoticeHeightPx(row, isWeb, pendingCount > 1)
+                + resolvePendingMessageGapPx({ isLastInScrollContent: row.index === lastShownPendingIndex && discardedCount === 0 })
+                : reorderEstimatedRowHeightPx), 0)
+        : pendingPresentation.shownRows.length * reorderEstimatedRowHeightPx;
     const effectiveScrollContentHeightPx = Math.max(
         measuredScrollContentHeightPx,
         estimatedPendingContentHeightPx,
@@ -1255,7 +1296,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     // The queue scrolls inside its own bound under the edge fades; its size and waiting state are
     // said once, on the composer's status line, never by a header over the queue.
     const maxHeight = resolvePendingQueueScrollMaxHeightPx({
-        pendingCount,
+        pendingCount: pendingPresentation.shownRows.length,
         discardedCount,
         queueMaxHeightPx: maxHeightPx,
         lineHeightPx: transcriptMarkdownTextStyle.lineHeight,
@@ -1357,6 +1398,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     sessionId={props.sessionId}
                                     recipient={props.recipient ?? null}
                                     messages={pendingMessages}
+                                    presentation={pendingPresentation}
                                     scrollRef={scrollRef}
                                     viewportHeightPx={scrollViewportHeightPx}
                                     contentHeightPx={scrollContentHeightPx}
@@ -1521,13 +1563,37 @@ const styles = StyleSheet.create((theme) => ({
         alignSelf: 'flex-end',
         gap: theme.space.s8,
     },
+    // A notice carries the transcript's row rhythm as space below it; its delivery mark reads as that row's
+    // own caption, not as the heading of the next one.
+    // ...and sits under the notice's own words (past its glyph column), not at the far edge of the queue.
+    hostStatusRow: {
+        marginTop: -resolvePendingFollowNoticePullUpPx(theme.space),
+        alignSelf: 'flex-start',
+        marginLeft: EVENT_ICON_CONTAINER_SIZE + theme.space.s10,
+    },
+    // A blocked notice's reason chip takes the pull instead (it reads under the notice's words, like the queued
+    // status), and the status band follows it on the same edge.
+    hostBlockedDeliveryNotice: {
+        marginTop: -resolvePendingFollowNoticePullUpPx(theme.space),
+        alignSelf: 'flex-start',
+        marginLeft: EVENT_ICON_CONTAINER_SIZE + theme.space.s10,
+    },
+    // The action is a text button: its label, not its box, reads on the edge the status label below it uses
+    // (the mark and its gap), so it takes the button's own inset back.
+    hostSourceAction: {
+        marginLeft: PENDING_AFFORDANCE_ICON_SIZE_PX + theme.space.s4 - theme.space.s10,
+    },
+    hostBlockedStatusRow: {
+        alignSelf: 'flex-start',
+        marginLeft: EVENT_ICON_CONTAINER_SIZE + theme.space.s10,
+    },
     pendingAffordanceChip: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s4,
     },
     blockedDeliveryNotice: {
-        marginTop: 8,
+        marginTop: PENDING_MESSAGE_BLOCKED_NOTICE_MARGIN_TOP_PX,
         alignSelf: 'flex-end',
         maxWidth: '82%',
         borderWidth: StyleSheet.hairlineWidth,

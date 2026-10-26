@@ -40,12 +40,82 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 const STOP_MARKER_FRESH_MS = 30_000;
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
+import { useSessionDisplayNameSource } from '@/sync/domains/state/storage';
+import { sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import type { SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { describeWorkKind } from '@/components/sessions/work/workerKindGlyphs';
+import { describeWorkerUpdateState } from '@/components/work/status/resolveWorkStatusTone';
+import { workStatusWordStyle } from '@/components/work/status/workStatusTreatment';
+import { followInputNeedsYou } from '@/sync/domains/session/input/hostAuthoredInput';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 
 const EVENT_ICON_SIZE = 18;
 // Derived, not chosen: the spinner replaces the glyph in the same slot, so it must paint the same
 // amount of ink. It was 20 against an 18pt glyph, i.e. larger than the checkmark it settles into.
 const EVENT_SPINNER_SIZE = iconMatchedSpinnerSize(EVENT_ICON_SIZE);
-const EVENT_ICON_CONTAINER_SIZE = 20;
+export const EVENT_ICON_CONTAINER_SIZE = 20;
+
+/** One presenter shared by original Follow inputs and their WorkerUpdate cards. */
+export function TranscriptHostWakeNotice(props: Readonly<{ count: number }>) {
+    const { theme } = useUnistyles();
+    return <View testID="transcript-event-host-wake" style={[styles.row, styles.hostWake]}>
+        <View style={styles.iconContainer}>
+            <Icon name="arrow-elbow-down-right" size={EVENT_ICON_SIZE} color={theme.colors.text.tertiary} />
+        </View>
+        <Text style={[styles.text, styles.textColumn]}>
+            {t('sessionWork.workerUpdate.wokenBy', { count: props.count })}
+            <Text style={styles.hostWakeQuiet}>{` · ${t('sessionWork.workerUpdate.notFromYou')}`}</Text>
+        </Text>
+    </View>;
+}
+
+/**
+ * Pending Follow identifies its source; the composer owns the waiting count. A worker that needs the
+ * person says so with the shared worker state word, so a stopped lead is never the only place the ask hides.
+ */
+export function TranscriptFollowSourceNotice(props: Readonly<{
+    followInput: SessionFollowInputV1;
+    sessionId: string;
+    serverId?: string | null;
+    messageId: string;
+    createdAt: number;
+    /** More than one queued update from this source, shown as this one notice. */
+    count?: number;
+}>) {
+    const { original } = props.followInput;
+    const sourceSessionId = 'sourceSessionId' in original ? original.sourceSessionId : '';
+    const source = useSessionDisplayNameSource(sourceSessionId, props.serverId);
+    const name = 'sourceSessionId' in original
+        ? sessionDisplayTitle(source, props.serverId) ?? t('message.provenanceSession')
+        : describeWorkKind(original.source.kind);
+    return <TranscriptEventRow event={{ type: 'message', message: t('message.provenanceFrom', { source: name }) }}
+        noticeState={followInputNeedsYou(props.followInput)
+            ? describeWorkerUpdateState({ workerKind: 'session', ownerState: 'needs_input', wake: 'needs_you' }) : undefined}
+        noticeCount={props.count}
+        messageId={props.messageId} sessionId={props.sessionId} serverId={props.serverId} createdAt={props.createdAt} />;
+}
+
+/**
+ * Opens the worker a queued Follow notice says needs the person. A sibling of the notice, never inside
+ * it: the pending row's press target is already a button. Nothing for a notice that asks nothing.
+ */
+export function TranscriptFollowSourceAction(props: Readonly<{
+    followInput: SessionFollowInputV1;
+    serverId?: string | null;
+    testID?: string;
+    style?: React.ComponentProps<typeof RoundButton>['style'];
+}>) {
+    const transcriptSource = useSessionTranscriptSource();
+    const { original } = props.followInput;
+    const href = followInputNeedsYou(props.followInput) && 'sourceSessionId' in original
+        ? buildScopedSessionRouteHref({ sessionId: original.sourceSessionId, serverId: props.serverId }) : null;
+    if (!href || !transcriptSource.navigate) return null;
+    const navigate = transcriptSource.navigate;
+    return <RoundButton testID={props.testID ?? 'transcript-follow-notice-open'} size="small" display="inverted" style={props.style}
+        title={t('runs.openSession')} onPress={() => navigate(href)} />;
+}
 
 function SessionStopMarkerRow(props: Readonly<{ event: AgentEvent; sessionId?: string | null; serverId?: string | null; at: number; deemphasized: boolean }>) {
     const current = useSessionStopRecord({ serverId: props.serverId ?? null, sessionId: props.sessionId ?? null, at: props.at });
@@ -352,6 +422,10 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     hostWakeCount?: number;
     followDeliveryProjection?: FollowDeliveryProjectionV1;
     createdAt?: number;
+    /** A state word on its own line under the notice, in its tone (a queued Follow whose worker needs the person). */
+    noticeState?: string;
+    /** Several queued updates from one source read as this one notice: how many it stands for. */
+    noticeCount?: number;
 }) {
     const { theme } = useUnistyles();
     const needsConnectedLabel = props.event.type === 'connected-service-account-switch';
@@ -394,17 +468,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         // (ORC R-01, lab D1), and every update keeps its own card.
         return (
             <View style={styles.container}>
-                {props.hostWakeCount ? (
-                    <View testID="transcript-event-host-wake" style={[styles.row, styles.hostWake]}>
-                        <View style={styles.iconContainer}>
-                            <Icon name="arrow-elbow-down-right" size={EVENT_ICON_SIZE} color={theme.colors.text.tertiary} />
-                        </View>
-                        <Text style={[styles.text, styles.textColumn]}>
-                            {t('sessionWork.workerUpdate.wokenBy', { count: props.hostWakeCount })}
-                            <Text style={styles.hostWakeQuiet}>{` · ${t('sessionWork.workerUpdate.notFromYou')}`}</Text>
-                        </Text>
-                    </View>
-                ) : null}
+                {props.hostWakeCount ? <TranscriptHostWakeNotice count={props.hostWakeCount} /> : null}
                 <WorkerUpdateCard update={props.event.update} followMatches={props.event.followMatches}
                     followInputLocalId={props.event.followInputLocalId} followWakeEventLocalId={props.event.followWakeEventLocalId}
                     delivery={props.followDeliveryProjection} messageId={props.messageId} serverId={props.serverId}
@@ -570,7 +634,10 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                 <View style={styles.textColumn} testID={testID ? `${testID}-body` : undefined}>
                     <Text selectable style={[styles.text, deemphasized ? styles.deemphasizedText : null]}>
                         {props.findSourceRanges?.length ? <FindHighlightedText text={text} ranges={props.findSourceRanges} selectable /> : text}
+                        {props.noticeCount && props.noticeCount > 1
+                            ? <Text style={styles.noticeCount}>{` · ${t('sessionWork.workerUpdate.updateCount', { count: props.noticeCount })}`}</Text> : null}
                     </Text>
+                    {props.noticeState ? <Text style={[workStatusWordStyle('attention'), styles.noticeState]}>{props.noticeState}</Text> : null}
                     {detailText ? (
                         <Text selectable style={styles.detailText} testID={testID ? `${testID}-detail` : undefined}>
                             {detailText}
@@ -653,6 +720,13 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
         ...Typography.variant('meta'),
         flexShrink: 1,
+    },
+    noticeState: {
+        ...Typography.variant('meta', 'semiBold'),
+    },
+    noticeCount: {
+        color: theme.colors.text.tertiary,
+        fontWeight: '400',
     },
     noticeLink: {
         alignSelf: 'flex-start',

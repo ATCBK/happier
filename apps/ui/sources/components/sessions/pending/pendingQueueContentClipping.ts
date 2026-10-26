@@ -48,6 +48,10 @@
  * Device basis: measured on the sibling preview repo (iPhone 17 Pro / iOS 26.5, 2026-08-18) against
  * geometry that is byte-identical here — every constant below is re-derived from THIS repo's styles.
  */
+import { HAPPIER_PAGE_METRICS, HAPPIER_TYPE_SCALE } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_SPACE_STEPS } from '@happier-dev/plugin-ui/environment';
+import type { PendingMessagePresentation } from './pendingMessageVisualState';
+
 export type PendingQueueMessagePresentation = 'head' | 'backlog';
 
 /**
@@ -61,6 +65,41 @@ export const PENDING_QUEUE_SCROLL_PADDING_TOP_PX = 6;
 export const PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX = 16;
 /** `userMessageWrapper.paddingBottom` — separates stacked rows. Zero under the last one. */
 export const PENDING_QUEUE_MESSAGE_GAP_PX = 8;
+export const PENDING_MESSAGE_ACTION_ROW_HEIGHT_PX = 20;
+/** Chip box only: the existing text/padding/border estimate, without its ordinary top margin. */
+export const PENDING_MESSAGE_BLOCKED_NOTICE_CHIP_HEIGHT_PX = 25;
+export const PENDING_MESSAGE_BLOCKED_NOTICE_MARGIN_TOP_PX = 8;
+export const PENDING_MESSAGE_BLOCKED_NOTICE_HEIGHT_PX =
+    PENDING_MESSAGE_BLOCKED_NOTICE_CHIP_HEIGHT_PX + PENDING_MESSAGE_BLOCKED_NOTICE_MARGIN_TOP_PX;
+
+/** Shared with the renderer; callers with a theme retain its density-specific spacing. */
+export function resolvePendingFollowNoticePullUpPx(space: Readonly<{ s16: number }> = HAPPIER_SPACE_STEPS): number {
+    return space.s16;
+}
+
+export function estimatePendingFollowNoticeBodyHeightPx(needsYou: boolean): number {
+    return HAPPIER_TYPE_SCALE.label.lineHeight + 22
+        + (needsYou ? HAPPIER_TYPE_SCALE.meta.lineHeight + 2 : 0);
+}
+
+/** Source-derived notice geometry, shared by the scroll box's initial size and the list estimate.
+ * TranscriptEventRow has 22px below its label; attention adds a meta line and s2. The status band
+ * pulls up by s16, and a blocked notice's reason chip takes that pull instead, so either way the delivery
+ * band reads under the notice's own words; its source action uses RoundButton small.
+ * The estimate assumes one source-label line; natural onLayout owns actual localized wrapping.
+ */
+export function estimatePendingFollowNoticeHeightPx(
+    row: Pick<PendingMessagePresentation, 'needsYou' | 'opensSourceSession' | 'heightBearingChrome' | 'canMutate' | 'canReorder'>,
+    platformIsWeb: boolean,
+    queueCanReorder: boolean,
+): number {
+    const actionBand = row.canMutate && (platformIsWeb || (queueCanReorder && row.canReorder)) ? PENDING_MESSAGE_ACTION_ROW_HEIGHT_PX : 0;
+    return estimatePendingFollowNoticeBodyHeightPx(row.needsYou)
+        - resolvePendingFollowNoticePullUpPx()
+        + (row.heightBearingChrome === 'blocked-notice' ? PENDING_MESSAGE_BLOCKED_NOTICE_CHIP_HEIGHT_PX : 0)
+        + Math.max(HAPPIER_TYPE_SCALE.meta.lineHeight, actionBand,
+            row.opensSourceSession ? HAPPIER_PAGE_METRICS.smallControlHeightPx : 0);
+}
 
 /**
  * How many painted lines of the head are guaranteed visible before it scrolls.

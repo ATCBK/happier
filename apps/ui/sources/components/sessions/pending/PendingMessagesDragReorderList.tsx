@@ -6,6 +6,7 @@ import { entityDragScopesEqualV1, type EntityDragScopeV1 } from '@happier-dev/pr
 
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import { resolvePendingReorderIds } from '@/sync/domains/pending/pendingReorder';
+import { resolvePendingMessagesPresentation } from './pendingMessageVisualState';
 import { t } from '@/text';
 import {
     EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, entityReorderRefused,
@@ -17,6 +18,7 @@ export type PendingMessagesDragReorderListProps = Readonly<{
     sessionId: string;
     recipient: PendingReorderInputV1['recipient'];
     messages: ReadonlyArray<PendingMessage>;
+    presentation?: ReturnType<typeof resolvePendingMessagesPresentation>;
     scrollRef?: React.RefObject<ScrollView | null>;
     onScrollToOffset?: ((y: number) => void) | null;
     viewportHeightPx?: number | null;
@@ -35,40 +37,47 @@ function durableId(message: PendingMessage): string { return message.localId ?? 
 /** Rows stay in normal flow: the shared realm owns carry feedback, measurement and cancellation. */
 export const PendingMessagesDragReorderList = React.memo<PendingMessagesDragReorderListProps>((props) => {
     const executeReorder = useEntityReorderAction(props.scope);
+    const presentation = React.useMemo(() => props.presentation ?? resolvePendingMessagesPresentation(props.messages),
+        [props.presentation, props.messages]);
     const binding: EntityFlatReorderBinding = React.useMemo(() => {
         const { scope, sessionId, recipient, messages } = props;
-        const items = messages.map(message => ({ id: durableId(message), title: readableMessageText(String(message.displayText ?? message.text ?? ''), message.rawRecord?.meta) }));
+        const reorderableIds = new Set(presentation.rows.filter(row => row.canReorder).map(row => durableId(row.message)));
+        const items = presentation.shownRows.filter(row => row.canReorder).map(({ message }) => ({ id: durableId(message), title: readableMessageText(String(message.displayText ?? message.text ?? ''), message.rawRecord?.meta) }));
         return {
             scope, kind: 'pending-input', items,
-            getItem: id => scope && messages.some(message => durableId(message) === id)
+            getItem: id => scope && reorderableIds.has(id)
                 ? { kind: 'pending-input', scope, address: { serverId: scope.serverId, sessionId }, localId: id } : null,
             getSourceId: item => item.kind === 'pending-input' && scope
                 && entityDragScopesEqualV1(item.scope, scope)
                 && item.address.serverId === scope.serverId && item.address.sessionId === sessionId
+                && reorderableIds.has(item.localId)
                 ? item.localId : null,
             resolve: (sourceId, position) => {
                 if (!scope) return entityReorderRefused('pending_reorder_unavailable');
+                if (!reorderableIds.has(sourceId) || (position.anchorId !== null && !reorderableIds.has(position.anchorId))) {
+                    return entityReorderRefused('pending_reorder_unavailable');
+                }
                 const input = { scope, sessionId, recipient, sourceId, position };
                 const order = resolvePendingReorderIds(messages, input);
                 if (!order) return entityReorderRefused('pending_reorder_stale');
                 const eligibleIds = new Set(order);
-                const current = items.filter(item => eligibleIds.has(item.id));
-                if (order.every((id, index) => current[index]?.id === id)) return entityReorderRefused('same-position');
+                const current = messages.filter(message => eligibleIds.has(durableId(message)));
+                if (order.every((id, index) => current[index] && durableId(current[index]!) === id)) return entityReorderRefused('same-position');
                 return { status: 'allowed', effect: { actionId: 'session.pending.reorder', input,
                     preview: entityReorderPreview(position, items) } };
             },
             execute: effect => scope ? executeReorder(effect)
                 : Promise.resolve({ status: 'refused', reason: { code: 'pending_reorder_unavailable', message: t('entityDragDrop.reasons.gone') } }),
         };
-    }, [props.scope, props.sessionId, props.recipient, props.messages, executeReorder]);
+    }, [props.scope, props.sessionId, props.recipient, props.messages, presentation, executeReorder]);
 
     return (
         <EntityFlatReorderList binding={binding} testID="pendingMessages.reorder"
             scrollRef={props.scrollRef} viewportHeightPx={props.viewportHeightPx}
             contentHeightPx={props.contentHeightPx} scrollOffsetY={props.scrollOffsetY}
             onScrollToOffset={props.onScrollToOffset ?? undefined}>
-            {props.messages.map((message, index) => (
-                <EntityFlatReorderRow key={durableId(message)} id={durableId(message)}>
+            {presentation.shownRows.map(({ message, index, canReorder }) => (
+                <EntityFlatReorderRow key={durableId(message)} id={durableId(message)} reorderable={canReorder}>
                     {({ renderHandle, isDragging }) => props.renderItem({ message, index, isDragging,
                         renderDragHandle: args => renderHandle(args.testID) })}
                 </EntityFlatReorderRow>

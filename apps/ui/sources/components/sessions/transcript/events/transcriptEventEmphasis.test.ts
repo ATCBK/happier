@@ -93,4 +93,26 @@ describe('resolveTranscriptHostWakeCountByMessageId', () => {
             messageIdsOldestFirst: [card.id], messagesById: { [card.id]: card },
         })).toEqual({ single: 1 });
     });
+
+    it.each([false, true])('puts consecutive accepted original wakes on their first correlated card, retaining next-turn truth (interleaved: %s)', (interleaved) => {
+        const original = (id: string, status: 'woke' | 'next_turn'): Message => ({
+            kind: 'user-text', id, localId: id, createdAt: 1, text: 'Model-only instructions',
+            followDeliveryProjection: { status, reason: null },
+            meta: { happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+                happierInputAuthorityV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+                    permission: { admittedPermissionCeiling: 'default' }, followDeliveryV1: { v: 1, delivery: 'wake',
+                        original: { sourceSessionId: 'worker', sourceMessage: { localId: id, seq: 1 } },
+                        event: { kind: 'message' } } } },
+        });
+        const first = original('one', 'woke');
+        const second = original('two', 'woke');
+        const firstCard = eventMessage('card-one', { ...update('w1'), followInputLocalId: 'one' });
+        const messages: Message[] = [...(interleaved ? [first, firstCard, second] : [first, second, firstCard]),
+            eventMessage('card-two', { ...update('w2'), followInputLocalId: 'two' }),
+            agentText('reply'), original('quiet', 'next_turn'),
+            eventMessage('quiet-card', { ...update('w3'), followInputLocalId: 'quiet' }),
+            original('three', 'woke')];
+        expect(resolveTranscriptHostWakeCountByMessageId({ messageIdsOldestFirst: messages.map(m => m.id),
+            messagesById: Object.fromEntries(messages.map(m => [m.id, m])) })).toEqual({ 'card-one': 2, three: 1 });
+    });
 });

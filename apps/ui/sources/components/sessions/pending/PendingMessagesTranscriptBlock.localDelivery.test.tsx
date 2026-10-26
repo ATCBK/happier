@@ -18,6 +18,15 @@ import { sync, type SyncMessageTransport } from '@/sync/sync';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { buildChatListItems } from '@/components/sessions/chatListItems';
 import { PendingMessagesTranscriptBlock } from './PendingMessagesTranscriptBlock';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { PendingMessage } from '@/sync/domains/state/storageTypes';
+import { EntityFlatReorderList } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
+import { resolvePendingReorderIds } from '@/sync/domains/pending/pendingReorder';
+import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { resolvePendingMessagesPresentation } from './pendingMessageVisualState';
+import { TranscriptRowLayoutMutationProvider } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
+import { estimateTranscriptRowHeightFromContent } from '@/components/sessions/transcript/measurement/estimateTranscriptRowHeightFromCache';
+import { PENDING_QUEUE_TOP_INSET_PX } from './pendingQueueContentClipping';
 
 // Native presentation and confirmation are the only replaced UI boundaries.
 // The real store, transcript projection, action handlers and Sync submit owner run below them.
@@ -89,6 +98,59 @@ afterEach(() => {
 });
 
 describe('pending transcript local delivery custody', () => {
+    it('makes counted Follow notices read-only through the real body reorder binding and presenter', async () => {
+        const message = (id: string, sourceSessionId: string): PendingMessage => ({
+            id, localId: id, createdAt: 1, updatedAt: 1, source: 'server_pending', pendingDeliveryStatus: 'server_queued',
+            text: 'provider prompt', rawRecord: null,
+            pendingHostFollowInput: SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+                original: { sourceSessionId, sourceTurn: { id, status: 'completed' } }, event: { kind: 'finished' } }),
+        });
+        const messages = [message('A1', 'source-a'), message('A2', 'source-a'), message('B1', 'source-b')];
+        const serverId = getActiveServerSnapshot().serverId;
+        const mutations = vi.fn();
+        const render = (rows: readonly PendingMessage[]) => <TranscriptRowLayoutMutationProvider value={mutations}>
+            <AppSessionTranscriptSourceProvider sessionId={sessionId} serverId={serverId}>
+                <PendingMessagesTranscriptBlock sessionId={sessionId} serverId={serverId} pendingMessages={rows} discardedMessages={[]} />
+            </AppSessionTranscriptSourceProvider>
+        </TranscriptRowLayoutMutationProvider>;
+        const screen = await renderScreen(render(messages));
+        const binding = screen.findByType(EntityFlatReorderList).props.binding as React.ComponentProps<typeof EntityFlatReorderList>['binding'];
+        expect(binding.scope).not.toBeNull();
+        const input = { scope: binding.scope!, sessionId, recipient: null, sourceId: 'A1', position: { anchorId: 'B1', placement: 'after' as const } };
+        // The durable queue owner permits the individual move; presentation must never issue it for an aggregate.
+        expect(resolvePendingReorderIds(messages, input)).toEqual(['A2', 'B1', 'A1']);
+        expect(binding.getItem('A1')).toBeNull();
+        expect(binding.getItem('A2')).toBeNull();
+        expect(binding.resolve('A1', input.position).status).toBe('refused');
+        expect(screen.findHostByTestId('pendingMessages.reorder:A1')).toBeNull();
+        expect(screen.findHostByTestId('pendingMessages.remove:A1')).toBeNull();
+        expect(screen.findHostByTestId('pendingMessages.edit:A1')).toBeNull();
+        expect(screen.findHostByTestId('pendingMessages.row:A2')).toBeNull();
+        const materializing = resolvePendingMessagesPresentation(messages, { materializingLocalIds: new Set(['A1']) });
+        expect(materializing.shownRows.map(row => row.message.id)).toEqual(['A1', 'A2', 'B1']);
+        expect(materializing.rows.every(row => !row.aggregate)).toBe(true);
+        expect(binding.getItem('B1')).toMatchObject({ localId: 'B1' });
+        expect(binding.resolve('B1', { anchorId: 'A1', placement: 'before' }).status).toBe('refused');
+        expect(binding.resolve('B1', { anchorId: null, placement: 'after' }).status).toBe('refused');
+        // Timestamp-only arrivals do not invalidate the mounted row's height reservation.
+        for (let tick = 2; tick <= 11; tick++) await screen.update(render(messages.map(row => ({ ...row, updatedAt: tick }))));
+        expect(mutations).toHaveBeenCalledTimes(0);
+        // Once actually shown individually, both A rows retain the existing individual reorder path.
+        const individual = [messages[0]!, { ...messages[1]!, pendingHostFollowInput: undefined }, messages[2]!];
+        await screen.update(render(individual));
+        expect(mutations).toHaveBeenCalledTimes(1);
+        expect(mutations).toHaveBeenLastCalledWith({ reason: 'content-change', sourceId: 'pending-queue' });
+        const individualBinding = screen.findByType(EntityFlatReorderList).props.binding as typeof binding;
+        expect(individualBinding.getItem('A1')).toMatchObject({ localId: 'A1' });
+        expect(individualBinding.resolve('A1', input.position).status).toBe('allowed');
+        expect(screen.findHostByTestId('pendingMessages.reorder:A1')).not.toBeNull();
+        expect(messages.map(message => message.id)).toEqual(['A1', 'A2', 'B1']);
+        const folded = Array.from({ length: 6 }, (_, index) => message(`A${index}`, 'source-a'));
+        await screen.update(render(folded));
+        const estimated = estimateTranscriptRowHeightFromContent({ platformIsWeb: true, toolCallsGroupChromeVariant: 'feed_background',
+            getMessageById: () => null, item: { kind: 'pending-queue', id: 'pending-queue', pendingMessages: folded, discardedMessages: [] } });
+        expect(screen.findHostByTestId('pendingMessages.scroll')?.props.style.height).toBe(estimated! - PENDING_QUEUE_TOP_INSET_PX);
+    });
     it('does not mutate a server queue row while its local direct send is still awaiting acknowledgement', async () => {
         const localId = 'local-direct-action-message';
         const ack = createDeferred<unknown>();

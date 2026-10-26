@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { estimateTranscriptRowHeightFromContent } from './estimateTranscriptRowHeightFromCache';
 
 import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/state/storageTypes';
 
@@ -61,6 +63,47 @@ function pendingQueueItem(
  * `contentLength` byte-identical while the pending row is on screen.
  */
 describe('pending row signatures are presentation-scoped', () => {
+    it('also measures and invalidates admitted Follow notices in the discarded section', () => {
+        const follow = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceTurn: { id: 'turn', status: 'completed' } }, event: { kind: 'finished' } });
+        const message: DiscardedPendingMessage = { ...pendingMessage({ text: 'provider prompt '.repeat(100), pendingHostFollowInput: follow }), discardedAt: 1, discardedReason: 'manual' };
+        const notice = pendingQueueItem([], [message]);
+        const withdrawn = pendingQueueItem([], [{ ...message, pendingHostFollowInput: undefined }]);
+        const height = (item: TranscriptRowShellItem) => estimateTranscriptRowHeightFromContent({
+            item, platformIsWeb: true, toolCallsGroupChromeVariant: 'feed_background', getMessageById: () => null,
+        })!;
+        expect.soft(signatureFor(notice).structuralKey).not.toBe(signatureFor(withdrawn).structuralKey);
+        expect.soft(height(notice)).toBeLessThan(height(withdrawn));
+    });
+    it('measures and invalidates the Follow notices actually shown, including admission withdrawal and attention', () => {
+        const follow = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceTurn: { id: 'turn', status: 'completed' } }, event: { kind: 'finished' } });
+        const ask = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+            original: { sourceSessionId: 'worker', sourceRequests: { agentStateVersion: 1, requests: [{ requestId: 'ask', createdAt: 1 }] } },
+            requestEvents: [{ requestId: 'ask', event: { kind: 'needs_you', type: 'approval' } }] });
+        const messages = Array.from({ length: 6 }, (_, i) => pendingMessage({
+            id: `p${i}`, localId: `l${i}`, source: 'server_pending', pendingDeliveryStatus: 'server_queued',
+            text: 'provider prompt '.repeat(100), pendingHostFollowInput: follow,
+        }));
+        const folded = pendingQueueItem(messages);
+        const withdrawn = pendingQueueItem(messages.map(message => ({ ...message, pendingHostFollowInput: undefined })));
+        const attention = pendingQueueItem(messages.map((message, i) => i === 1 ? { ...message, pendingHostFollowInput: ask } : message));
+        const height = (item: TranscriptRowShellItem) => estimateTranscriptRowHeightFromContent({
+            item, platformIsWeb: true, toolCallsGroupChromeVariant: 'feed_background', getMessageById: () => null,
+        })!;
+        expect.soft(signatureFor(folded).structuralKey).not.toBe(signatureFor(withdrawn).structuralKey);
+        expect.soft(height(folded)).toBeLessThan(height(withdrawn));
+        // One shown row uses the head cap, never the six-input backlog cap.
+        expect.soft(height(folded)).toBeLessThanOrEqual(182);
+        expect.soft(signatureFor(attention).structuralKey).not.toBe(signatureFor(folded).structuralKey);
+        expect.soft(height(attention)).toBeGreaterThan(height(folded));
+        const ticked = pendingQueueItem(messages.map(message => ({ ...message, updatedAt: 999, pendingDeliveryStatus: 'server_delivering' })));
+        expect(signatureFor(ticked).structuralKey).toBe(signatureFor(folded).structuralKey);
+        expect(height(ticked)).toBe(height(folded));
+        const promptChanged = pendingQueueItem(messages.map(message => ({ ...message, text: 'short' })));
+        expect.soft(signatureFor(promptChanged).structuralKey).toBe(signatureFor(folded).structuralKey);
+        expect.soft(height(promptChanged)).toBe(height(folded));
+    });
     it('ignores a pending record tick that changes nothing the row paints', () => {
         const before = signatureFor(pendingQueueItem([pendingMessage()]));
         const after = signatureFor(pendingQueueItem([pendingMessage({

@@ -295,6 +295,8 @@ function rowSourceId(context: Pick<FlatContext, 'id'>, id: string): string { ret
 /** Optional handle slot keeps dense domain rows in their existing layout and normal flow. */
 export function EntityFlatReorderRow(props: Readonly<{
     id: string;
+    /** Retain the mounted row while its domain temporarily disallows individual reordering. */
+    reorderable?: boolean;
     /** The row's owner has a write for this row in flight: it waits half-dimmed, as a released move does. */
     pending?: boolean;
     children: React.ReactNode | ((args: Readonly<{ renderHandle: (testID?: string) => React.ReactNode; isDragging: boolean; moveBy: (delta: number) => Promise<EntityDropOutcomeV1 | null> }>) => React.ReactNode);
@@ -307,6 +309,7 @@ export function EntityFlatReorderRow(props: Readonly<{
 
 function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow> & Readonly<{ context: FlatContext; scope: EntityDragScopeV1 }>) {
     const { context, id, scope } = props;
+    const reorderable = props.reorderable !== false;
     const { runtime, registry } = context;
     const latest = React.useRef(context);
     latest.current = context;
@@ -317,14 +320,15 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     const waiting = context.landedItemId === id || props.pending === true;
     const settledMatch = React.useMemo(() => ({ sourceId }), [sourceId]);
     const [chooserOpen, setChooserOpen] = React.useState(false);
+    React.useEffect(() => { if (!reorderable) setChooserOpen(false); }, [reorderable]);
     const rowNode = React.useRef<View>(null);
     const current = () => {
         const ownerScope = latest.current.binding.scope;
-        return ownerScope !== null && entityDragScopesEqualV1(ownerScope, scope) && latest.current.binding.items.some(item => item.id === id);
+        return reorderable && ownerScope !== null && entityDragScopesEqualV1(ownerScope, scope) && latest.current.binding.items.some(item => item.id === id);
     };
     useEntityDragSource(runtime, { id: sourceId, scope, isCurrent: current,
         getItem: () => latest.current.binding.getItem(id), getBounds: () => getBounds(),
-        describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '', announcementOwner: 'source' }) });
+        describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '', announcementOwner: 'source' }) }, reorderable);
     const getBounds = () => {
         const live = readWindowBounds(rowNode.current);
         if (live) return live;
@@ -379,7 +383,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         node.addEventListener('pointerdown', capture, true);
         return () => node.removeEventListener('pointerdown', capture, true);
     }, []);
-    const createGesture = React.useCallback((body: boolean) => Gesture.Pan().minDistance(ENTITY_DRAG_ACTIVATION_DISTANCE_PX).runOnJS(true)
+    const createGesture = React.useCallback((body: boolean) => Gesture.Pan().enabled(reorderable).minDistance(ENTITY_DRAG_ACTIVATION_DISTANCE_PX).runOnJS(true)
         .onTouchesDown((_event, manager) => { if (body && !allowBody.current) manager.fail(); })
         .onStart(event => {
             endStarted.current = false;
@@ -402,13 +406,14 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             if (!success) { void activeAdapter.end(false); return; }
             void latest.current.measure().then(() => activeAdapter.end(true, { x: event.absoluteX, y: event.absoluteY }));
         })
-        .onFinalize(() => { if (!endStarted.current) adapter.current?.finalize(); }), [runtime, sourceId]);
+        .onFinalize(() => { if (!endStarted.current) adapter.current?.finalize(); }), [runtime, sourceId, reorderable]);
     const gesture = React.useMemo(() => createGesture(true), [createGesture]);
     const handleGesture = React.useMemo(() => createGesture(false), [createGesture]);
     React.useEffect(() => () => adapter.current?.cancel(), []);
     const keyboardCarry = React.useRef<EntityDragCarry | null>(null);
     const staged = React.useRef<AnchoredListPositionV1 | null>(null);
     const onKeyDown = (event: EntityDragGripKeyEvent): boolean => {
+        if (!reorderable) return false;
         const picked = runtime.getSnapshot().phase === 'carrying' && runtime.getSnapshot().sourceId === sourceId;
         const intent = resolveHappierStagedMoveKey({ key: event.key, repeat: event.repeat, staged: picked, rtl: I18nManager.isRTL });
         if (!intent) return false;
@@ -431,7 +436,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         }
         return true;
     };
-    const destinations = useEntityDragDestinations(runtime, sourceId, chooserOpen).filter(destination => context.binding.items.some(item => rowTargetId(context, item.id) === destination.targetId));
+    const destinations = useEntityDragDestinations(runtime, sourceId, chooserOpen && reorderable).filter(destination => context.binding.items.some(item => rowTargetId(context, item.id) === destination.targetId));
     const sections = resolveHappierDropChooserSections({ options: destinations.map((destination, index) => ({
         id: String(index), label: destination.label ?? t('entityDragDrop.organize.title'),
         refusedReason: destination.admission.status === 'refused' ? destination.admission.reason.message : null,
@@ -449,12 +454,14 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             }} onKeyDown={onKeyDown} expanded={chooserOpen}
             active={active.phase === 'carrying' || waiting} density={context.pointerInteraction ? 'pointer' : 'touch'} /></GestureDetector>} />;
     const moveBy = (delta: number) => {
+        if (!reorderable) return Promise.resolve(null);
         const ids = latest.current.binding.items.map(item => item.id);
         const position = entityFlatPositionAtIndex(ids, id, ids.indexOf(id) + delta);
         return position ? runtime.perform(sourceId, rowTargetId(context, position.anchorId ?? id), position, 'chooser') : Promise.resolve(null);
     };
-    const contents = typeof props.children === 'function' ? props.children({ renderHandle: context.organizing || context.pointerInteraction ? handle : () => null, isDragging: active.phase === 'carrying', moveBy })
-        : <View style={{ flexDirection: 'row', alignItems: 'center' }}>{context.organizing || context.pointerInteraction ? handle() : null}<View style={{ flex: 1 }}>{props.children}</View></View>;
+    const showHandle = reorderable && (context.organizing || context.pointerInteraction);
+    const contents = typeof props.children === 'function' ? props.children({ renderHandle: showHandle ? handle : () => null, isDragging: reorderable && active.phase === 'carrying', moveBy })
+        : <View style={{ flexDirection: 'row', alignItems: 'center' }}>{showHandle ? handle() : null}<View style={{ flex: 1 }}>{props.children}</View></View>;
     const body = <View ref={rowNode} onLayout={(event: LayoutChangeEvent) => {
         registry.registerRow({ id, containerId: context.id, parentId: null, depth: 0, kind: 'leaf', bounds: event.nativeEvent.layout });
         void latest.current.measure().then(async () => {

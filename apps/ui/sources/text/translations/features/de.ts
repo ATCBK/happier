@@ -10850,6 +10850,7 @@ const de: typeof en = {
         muteFailed: 'Stummschalten fehlgeschlagen',
         truncated: "Ergebnis gekürzt.",
         wokenBy: ({ count }) => (count === 1 ? 'Durch ein Update geweckt' : `Durch ${count} Updates geweckt`),
+        updateCount: ({ count }) => (count === 1 ? '1 Update' : `${count} Updates`),
         notFromYou: 'keine Nachricht von dir',
     },
     workerFollow: {

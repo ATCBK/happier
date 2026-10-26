@@ -38,19 +38,22 @@ export function useEntityDropTargetState(runtime: EntityDragDropRuntime, targetI
 }
 
 /** Callback refs keep registration stable across row renders while reading current owner data. */
-export function useEntityDragSource(runtime: EntityDragDropRuntime, source: EntityDragSource): void {
+export function useEntityDragSource(runtime: EntityDragDropRuntime, source: EntityDragSource, enabled = true): void {
     const current = useRef(source);
     current.current = source;
-    useEffect(() => runtime.registerSource({
-        id: source.id, scope: source.scope,
-        getItem: () => current.current.getItem(),
-        describe: () => current.current.describe?.() ?? null,
-        getBounds: () => current.current.getBounds?.() ?? null,
-        isCurrent: () => current.current.id === source.id
-            && current.current.scope.serverId === source.scope.serverId
-            && current.current.scope.accountId === source.scope.accountId
-            && current.current.isCurrent(),
-    }), [runtime, source.id, source.scope.serverId, source.scope.accountId]);
+    useEffect(() => {
+        if (!enabled) return;
+        return runtime.registerSource({
+            id: source.id, scope: source.scope,
+            getItem: () => current.current.getItem(),
+            describe: () => current.current.describe?.() ?? null,
+            getBounds: () => current.current.getBounds?.() ?? null,
+            isCurrent: () => current.current.id === source.id
+                && current.current.scope.serverId === source.scope.serverId
+                && current.current.scope.accountId === source.scope.accountId
+                && current.current.isCurrent(),
+        });
+    }, [runtime, source.id, source.scope.serverId, source.scope.accountId, enabled]);
 }
 
 export function useEntityDropTarget(runtime: EntityDragDropRuntime, target: EntityDropTarget): void {

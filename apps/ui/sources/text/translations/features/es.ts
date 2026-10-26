@@ -10867,6 +10867,7 @@ const es: typeof en = {
         muteFailed: 'No se pudo silenciar',
         truncated: "Resultado abreviado.",
         wokenBy: ({ count }) => (count === 1 ? 'Despertado por una actualización' : `Despertado por ${count} actualizaciones`),
+        updateCount: ({ count }) => (count === 1 ? '1 actualización' : `${count} actualizaciones`),
         notFromYou: 'no es un mensaje tuyo',
     },
     workerFollow: {

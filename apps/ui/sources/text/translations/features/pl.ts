@@ -10877,6 +10877,7 @@ const pl: typeof en = {
         muteFailed: 'Nie udało się wyciszyć',
         truncated: "Wynik skrócony.",
         wokenBy: ({ count }) => (count === 1 ? 'Wybudzono przez aktualizację' : `Wybudzono przez aktualizacje: ${count}`),
+        updateCount: ({ count }) => (count === 1 ? '1 aktualizacja' : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) ? `${count} aktualizacje` : `${count} aktualizacji`),
         notFromYou: 'to nie jest twoja wiadomość',
     },
     workerFollow: {

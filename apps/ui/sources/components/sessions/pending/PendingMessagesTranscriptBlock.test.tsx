@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit/render/renderScreen';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import {
@@ -508,6 +509,26 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         expect(screen.findByTestId('pendingMessages.pendingAffordance:p1')).toBeTruthy();
         expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:p1')).toBeTruthy();
+    });
+
+    it('paints several queued updates from one worker as one counted notice without touching the queue', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
+        const followed = (id: string, createdAt: number, sourceSessionId: string): PendingMessage => ({
+            ...queuedMessage(id, createdAt),
+            pendingHostFollowInput: SessionFollowInputV1Schema.parse({
+                v: 1, delivery: 'next_turn',
+                original: { sourceSessionId, sourceTurn: { id: `turn-${id}`, status: 'completed' } },
+                event: { kind: 'finished' },
+            }),
+        });
+        const pendingMessages = [followed('a1', 1, 'worker-a'), followed('b1', 2, 'worker-b'), followed('a2', 3, 'worker-a'), followed('a3', 4, 'worker-a')];
+        const screen = await renderScreen(React.createElement(AppSessionTranscriptSourceProvider, { sessionId: 's1',
+            children: React.createElement(PendingMessagesTranscriptBlock, { sessionId: 's1', pendingMessages, discardedMessages: [] }) }));
+        expect(['a1', 'b1', 'a2', 'a3'].map((id) => screen.findAllByTestId(`pendingMessages.row:${id}`).length)).toEqual([1, 1, 0, 0]);
+        expect(screen.getTextContent()).toContain(t('sessionWork.workerUpdate.updateCount', { count: 3 }));
+        expect(screen.getTextContent()).not.toContain(t('sessionWork.workerUpdate.updateCount', { count: 4 }));
+        expect(renderedPendingOrder(screen)).toEqual(['a1', 'b1', 'a2', 'a3']);
     });
 
     it('exposes pending and discarded rows by their message-specific accessible names', async () => {

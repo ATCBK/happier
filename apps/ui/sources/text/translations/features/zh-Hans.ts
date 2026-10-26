@@ -10847,6 +10847,7 @@ const zhHans: typeof en = {
         muteFailed: '无法静音',
         truncated: "结果已缩短。",
         wokenBy: ({ count }) => (count === 1 ? '由一条更新唤醒' : `由 ${count} 条更新唤醒`),
+        updateCount: ({ count }) => (count === 1 ? '1 条更新' : `${count} 条更新`),
         notFromYou: '不是你发送的消息',
     },
     workerFollow: {

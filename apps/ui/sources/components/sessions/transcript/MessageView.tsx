@@ -42,11 +42,11 @@ import { ComposerAttachmentFallbackRow } from '@/components/sessions/transcript/
 import { useMessageComposerAttachments } from '@/components/sessions/transcript/composerAttachments/messageComposerAttachments';
 import { useTranscriptMotion } from '@/components/sessions/transcript/motion/TranscriptMotionContext';
 import { ThinkingTimelineRow } from '@/components/sessions/transcript/thinking/ThinkingTimelineRow';
-import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
+import { TranscriptEventRow, TranscriptHostWakeNotice } from '@/components/sessions/transcript/events/TranscriptEventRow';
 import { projectWorkerCardDelivery } from '@/components/sessions/transcript/events/followWorkerCardDelivery';
 import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
-import { isHostAuthoredInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
+import { isHostAuthoredInputMeta, readHostFollowInputMeta } from '@/sync/domains/session/input/hostAuthoredInput';
 import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
@@ -461,6 +461,10 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
     props.messageDisplayCommon.debugInformationEnabled,
   ) === 'hidden') return null;
   const isHostFollowInput = props.message.kind === 'user-text' && isHostAuthoredInputMeta(props.message.meta);
+  // Follow's admitted model prompt remains in storage for the agent. Its exact
+  // delivery facts and cards own the person-visible notice, never prompt prose.
+  if (props.message.kind === 'user-text' && !returnedAnswer
+    && readHostFollowInputMeta(props.message.meta) && !props.hostWakeCount) return null;
   return (
     <View style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
       <View style={messageContentStyle}>
@@ -546,6 +550,9 @@ function RenderBlock(props: {
   switch (props.message.kind) {
     case 'user-text':
       if (props.isHostFollowInput && !props.returnedAnswer) {
+        if (readHostFollowInputMeta(props.message.meta)) {
+          return props.hostWakeCount ? <TranscriptHostWakeNotice count={props.hostWakeCount} /> : null;
+        }
         return <TranscriptTextNoticeRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} />;
       }
       return (
