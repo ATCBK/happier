@@ -29,6 +29,10 @@ import { buildSessionFolderWorkspaceTargets, selectAvailableSessionFolders } fro
 import { buildSessionOrganizationListViewState } from '@/sync/domains/session/organization/viewState';
 import { buildSessionOrganizationTagLabelById } from '@/sync/domains/session/organization/tagLabels';
 import { useAllMachines, useSessionOrganizationProjection, useSetting } from '@/sync/store/hooks';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { t } from '@/text';
 
@@ -235,8 +239,16 @@ export const EmbedSessionsSection = React.memo(function EmbedSessionsSection(pro
     const { draft, onChange } = props;
     const machines = useAllMachines();
     const create = draft.access.create;
-    // Creation binds the computer first; turning it on starts from the active computer.
-    const defaultMachine = machines.find((candidate) => candidate.active) ?? machines[0] ?? null;
+    // Creation binds a computer this Home can reach now, by the same presence the machine picker shows.
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId ?? getAppliedActiveServerSnapshot().serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    const selectableMachines = React.useMemo(
+        () => machines.filter((machine) => resolveMachinePickerPresence(machine, undefined, scope).selectable),
+        [machines, reachabilityRevision, scope],
+    );
+    // Turning creation on starts from the active computer.
+    const defaultMachine = selectableMachines.find((candidate) => candidate.active) ?? selectableMachines[0] ?? null;
     const agents = useEmbedAgentOptions({
         serverId: props.serverId,
         machineId: create?.machineId ?? defaultMachine?.id ?? null,
@@ -278,7 +290,7 @@ export const EmbedSessionsSection = React.memo(function EmbedSessionsSection(pro
                         testID="settings-embed-sessions-switch"
                         accessibilityLabel={t('settingsEmbeds.sessions.allow')}
                         value={create !== null}
-                        disabled={props.disabled || (create === null && (machines.length === 0 || agents.length === 0))}
+                        disabled={props.disabled || (create === null && (defaultMachine === null || agents.length === 0))}
                         onValueChange={enable}
                     />
                 )}
