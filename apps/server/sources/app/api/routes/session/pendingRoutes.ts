@@ -56,6 +56,7 @@ type SessionStoredMessageContent = z.infer<typeof SessionStoredMessageContentSch
 function toPendingJson(row: PendingMessageRow) {
     return {
         localId: row.localId,
+        ...(row.hostFollowInput ? { hostFollowInput: row.hostFollowInput } : {}),
         ...(row.recipient ? { recipient: row.recipient } : {}),
         ...(typeof row.messageRole === "string" ? { messageRole: row.messageRole } : {}),
         content: row.content,
