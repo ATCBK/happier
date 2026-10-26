@@ -936,7 +936,6 @@ describe('SessionView (data ready gating)', () => {
         daemonMergedProjectionState.value = {
             phase: 'ready',
             inputs: await publishedDaemonInputs({
-                pluginProjectionById: {},
                 pluginProjectionV2: {
                     v: 2,
                     generation: 7,
@@ -1409,7 +1408,6 @@ describe('SessionView (data ready gating)', () => {
         daemonMergedProjectionState.value = {
             phase: 'ready',
             inputs: await publishedDaemonInputs({
-                pluginProjectionById: {},
                 pluginProjectionV2: {
                     v: 2,
                     generation: 7,
@@ -1574,7 +1572,6 @@ describe('SessionView (data ready gating)', () => {
         daemonMergedProjectionState.value = {
             phase: 'ready',
             inputs: await publishedDaemonInputs({
-                pluginProjectionById: {},
                 pluginProjectionV2: {
                     v: 2,
                     generation: 7,

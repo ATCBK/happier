@@ -332,7 +332,7 @@ describe('Account Follow editor', () => {
     it('renders the readiness selected by the canonical Voice runtime projection', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: true, policy: { preset: 'important', voice: true } },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: true, policy: { preset: 'important' as const, voice: true } },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
@@ -412,7 +412,7 @@ describe('Account Follow editor', () => {
     it('explains that a followed external Session with Background sync off may only update while attached', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' } },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' as const } },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
@@ -497,7 +497,7 @@ describe('Account Follow editor', () => {
     it('claims no one else follows it while the census is unknown or empty', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' } },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' as const } },
                 isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
             },
             draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,

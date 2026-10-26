@@ -958,6 +958,7 @@ function createChannelsHostApi(input: Readonly<{
   const adapter = createCanonicalPluginReactNativeHostApiAdapter({
     surface: createChannelsSettingsSurfaceContextFixture(),
     requestSurface,
+    requestIdPrefix: 'channels-settings',
     handleRequest: owner.handleRequest,
     installedMethods: owner.installedMethods,
   });
@@ -1348,6 +1349,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     const adapter = createCanonicalPluginReactNativeHostApiAdapter({
       surface: createChannelsPageSurfaceContextFixture(),
       requestSurface,
+      requestIdPrefix: 'channels-page',
       handleRequest: host.handleRequest,
       installedMethods: host.installedMethods,
       getInstalledMethods: () => host.installedMethods,

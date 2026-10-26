@@ -69,7 +69,6 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
         automationRuns: [workflowRunRowFromAutomationRun(run)], automationServerId: serverId, openApprovals: [approval],
         stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
     const model: InboxModel = {
-        invokePluginSessionControl: async () => ({ kind: 'unavailable' }),
         source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         ...createInboxAttentionFixture(serverId),
@@ -174,9 +173,7 @@ describe('mounted canonical Work reads', () => {
             actionOperations: createActionOperationSelectors().selectForSession(operations.getSnapshot(),
                 { serverId: 'home-a', accountId: 'account-a', sessionId: 'lead' }),
             describeOperationStatus: () => 'Running',
-            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null,
-                attentionRequired: true, invocationAttentionRequired: true, failureUnseen: false },
-                title: 'Review', word: 'Running' }],
+            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null }, title: 'Review', word: 'Running', needsAttention: true }],
             ownTriggerRunIds: new Set(), describeAgentStatus: () => '', describeProgress: () => '',
         });
         const remove = registerMountedWorkReadOwner({

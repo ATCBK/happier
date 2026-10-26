@@ -385,7 +385,6 @@ describe('Bots roster', () => {
       createSessionListRenderableSessionFixture({ id: 'offline-working', presence: now - 2 * hour, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now, activeAt: now - 2 * hour, metadata: { ...bot, name: 'A pinned companion' } }),
     ], { source: 'ordinary', mode: 'replace' });
 
-    storage.getState().applySettingsLocal({ sessionListAttentionPlacementV1: 'both' });
     const { BotsPopoverContent } = await import('./BotsPopoverContent');
     const screen = await renderScreen(
       <InjectedAuthProvider credentials={null}><BotsPopoverContent close={() => {}} maxHeight={520} /></InjectedAuthProvider>,
@@ -404,7 +403,6 @@ describe('Bots roster', () => {
       }
     };
     expectUniqueRows();
-    await act(async () => { storage.getState().applySettingsLocal({ sessionListAttentionPlacementV1: 'top' }); });
     await flushHookEffects({ cycles: 3 });
     expectUniqueRows();
     expect(screen.getTextContent()).toContain(`${t('bots.roster.needsYou', { count: 2 })} · ${t('bots.roster.working', { count: 1 })}`);
