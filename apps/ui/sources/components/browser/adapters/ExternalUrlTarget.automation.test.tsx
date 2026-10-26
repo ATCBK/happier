@@ -18,10 +18,17 @@ import { ExternalUrlTarget as WebExternalUrlTarget } from './ExternalUrlTarget.w
 const nativePages = new Map<string, JSDOM>();
 let nativeReplyGate: Promise<void> | null = null;
 const desktopInvoke = vi.hoisted(() => vi.fn());
+const desktopEventListeners = vi.hoisted(() => new Set<(payload: unknown) => void>());
 vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: () => true,
     invokeDesktopHost: desktopInvoke,
+    // Native events are the other half of this OS boundary. The real bridge
+    // subscribes before opening and drains collector replies on IPC arrival.
+    listenDesktopHostEvent: async (_event: string, listener: (payload: unknown) => void) => {
+        desktopEventListeners.add(listener);
+        return () => { desktopEventListeners.delete(listener); };
+    },
 }));
 
 // The SDK/OS boundary runs the actual injected collector and command scripts in the visible guest.
@@ -88,7 +95,7 @@ const request = {
 } as const;
 
 describe('ExternalUrlTarget automation composition', () => {
-    beforeEach(() => { vi.stubGlobal('window', new EventTarget()); desktopInvoke.mockReset(); nativeReplyGate = null; });
+    beforeEach(() => { vi.stubGlobal('window', new EventTarget()); desktopInvoke.mockReset(); desktopEventListeners.clear(); nativeReplyGate = null; });
     afterEach(() => {
         for (const page of nativePages.values()) page.window.close();
         nativePages.clear();
@@ -123,7 +130,14 @@ describe('ExternalUrlTarget automation composition', () => {
         const page = new JSDOM('<button id="go">Go</button><output>Idle</output>', { url: 'https://example.com/', runScripts: 'outside-only' });
         vi.spyOn(page.window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
         const messages: string[] = [];
-        Object.defineProperty(page.window, 'ipc', { value: { postMessage: (raw: string) => messages.push(raw) } });
+        Object.defineProperty(page.window, 'ipc', { value: { postMessage: (raw: string) => {
+            messages.push(raw);
+            queueMicrotask(() => {
+                for (const listener of desktopEventListeners) listener({
+                    browserSessionId: identity.browserSessionId, viewId: identity.viewId, kind: 'diagnosticsAvailable',
+                });
+            });
+        } } });
         page.window.document.querySelector('#go')?.addEventListener('click', () => { page.window.document.querySelector('output')!.textContent = 'Clicked'; });
         const success = { ok: true, availability } as const;
         desktopInvoke.mockImplementation(async (command: string, payload?: { request?: { diagnosticsInitScript?: string; script?: string } }) => {
@@ -146,6 +160,7 @@ describe('ExternalUrlTarget automation composition', () => {
             expect(await automation.controlService.executeAction(request)).toMatchObject({ status: 'succeeded' });
             expect(page.window.document.querySelector('output')?.textContent).toBe('Clicked');
             await screen.unmount();
+            expect(desktopEventListeners.size).toBe(0);
             page.window.document.querySelector('output')!.textContent = 'Retired';
             expect((await automation.controlService.executeAction({ ...request, automationRequestId: 'retired_click' })).status).not.toBe('succeeded');
             expect(page.window.document.querySelector('output')?.textContent).toBe('Retired');

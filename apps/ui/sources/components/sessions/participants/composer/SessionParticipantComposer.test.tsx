@@ -44,6 +44,7 @@ import {
     type MutableComposerDocumentOwner,
 } from '@/components/sessions/composer/composerDocumentOwner';
 import type { ParticipantComposerPreparedSubmission } from './SessionParticipantComposer';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,6 +69,13 @@ const participantDaemonProjectionState = vi.hoisted(() => ({
 }));
 const participantAccountBindingState = vi.hoisted(() => ({
     accountId: 'account-1',
+    bindings: new Map<string, Readonly<{
+        serverId: string;
+        accountId: string;
+        scope: Readonly<{ serverId: string; accountId: string }>;
+        isCurrent: () => boolean;
+        onRetire: () => Readonly<{ dispose: () => void }>;
+    }>>(),
 }));
 const pluginSurfaceHostSpy = vi.hoisted(() => vi.fn());
 
@@ -189,11 +197,10 @@ function currentParticipantDaemonProjection(entriesById: Readonly<Record<string,
     };
     return {
         phase: 'ready' as const,
-        inputs: {
-            pluginProjectionById: {},
-            pluginProjectionV2,
+        inputs: publishDaemonMergedProjectionInputs({
+            projection: pluginProjectionV2,
             composerSurfaceCatalog: [createParticipantComposerCatalogEntry()],
-        },
+        }),
     };
 }
 
@@ -407,7 +414,8 @@ vi.mock('@/components/plugins/surfaces/PluginSurfaceHost', () => ({
 // Composer-control chrome and contextual Resource transport have their own
 // owner suites. This consumer test keeps the real catalog-to-physical-mount
 // projection while replacing those already-covered descendants.
-vi.mock('@/components/plugins/actions/pluginContributedActionComposerChips', () => ({
+vi.mock('@/components/plugins/actions/pluginContributedActionComposerChips', async importOriginal => ({
+    ...await importOriginal<typeof import('@/components/plugins/actions/pluginContributedActionComposerChips')>(),
     createPluginContributedActionComposerChips: () => [],
 }));
 vi.mock('@/components/plugins/surfaces/PluginContextualResourceStoreProvider', () => ({
@@ -429,13 +437,18 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
     AttachmentFilePicker: () => null,
 }));
 vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
-    useServerCredentialAccountScopeBindings: (serverIds: readonly string[]) => new Map(serverIds.map((serverId) => [serverId, {
-        serverId,
-        accountId: participantAccountBindingState.accountId,
-        scope: { serverId, accountId: participantAccountBindingState.accountId },
-        isCurrent: () => true,
-        onRetire: () => ({ dispose: () => undefined }),
-    }])),
+    useServerCredentialAccountScopeBindings: (serverIds: readonly string[]) => new Map(serverIds.map(serverId => {
+        const accountId = participantAccountBindingState.accountId;
+        const key = JSON.stringify([serverId, accountId]);
+        let binding = participantAccountBindingState.bindings.get(key);
+        if (!binding) {
+            binding = { serverId, accountId, scope: { serverId, accountId },
+                isCurrent: () => participantAccountBindingState.accountId === accountId,
+                onRetire: () => ({ dispose: () => undefined }) };
+            participantAccountBindingState.bindings.set(key, binding);
+        }
+        return [serverId, binding];
+    })),
 }));
 vi.mock('@/sync/domains/transfers/ops/uploadSessionAttachment', () => ({
     sessionAttachmentsUploadFile: (args: unknown) => sessionAttachmentsUploadFileSpy(args),
@@ -483,6 +496,7 @@ describe('SessionParticipantComposer', () => {
         machineRpcWithServerScopeSpy.mockResolvedValue({});
         pluginSurfaceHostSpy.mockClear();
         participantAccountBindingState.accountId = 'account-1';
+        participantAccountBindingState.bindings.clear();
         participantDaemonProjectionState.current = currentParticipantDaemonProjection({
             [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry,
         });
@@ -922,9 +936,11 @@ describe('SessionParticipantComposer', () => {
 
     it('admits contributed drops on a presented participant without input focus and retires hidden hosts', async () => {
         const daemon = currentParticipantDaemonProjection({ [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry });
-        const introspection = daemon.inputs.pluginProjectionV2.contributionIntrospection!;
+        const projection = daemon.inputs.pluginProjectionV2;
+        if (!projection) throw new Error('Expected the published participant projection');
+        const introspection = projection.contributionIntrospection!;
         participantDaemonProjectionState.current = { ...daemon, inputs: { ...daemon.inputs, pluginProjectionV2: {
-            ...daemon.inputs.pluginProjectionV2, contributionIntrospection: { ...introspection,
+            ...projection, contributionIntrospection: { ...introspection,
                 contributions: introspection.contributions.map(record => ({ ...record, occurrenceId: '7' })),
             },
         } } };

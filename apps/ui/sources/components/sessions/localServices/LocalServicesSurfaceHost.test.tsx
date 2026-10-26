@@ -94,15 +94,16 @@ vi.mock('@/components/plugins/surfaces', () => ({
 }));
 
 const openableTarget: LocalServiceLaunchTarget = {
-  id: 'preview:host-feed',
-  source: 'registered_preview',
+  id: 'inventory:host-feed',
+  source: 'inventory_entry',
+  sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'host-feed' },
   machineId: 'machine-a',
   sessionId: 'session-a',
   title: 'Host feed preview',
   subtitle: 'localhost:5173',
   confidence: 'high',
   state: 'available',
-  actions: [],
+  actions: ['open_preview', 'register_preview'],
   browserTarget: {
     kind: 'localServicePreview',
     targetId: 'preview-host',
@@ -360,7 +361,7 @@ describe('LocalServicesSurfaceHost', () => {
     );
 
     expect(
-      screen.findByTestId('surface-host-services-row:preview:host-feed'),
+      screen.findByTestId('surface-host-services-row:inventory:host-feed'),
     ).toBeTruthy();
     expect(
       screen.findByTestId('surface-host-services-plugin-stack'),
@@ -405,12 +406,12 @@ describe('LocalServicesSurfaceHost', () => {
     );
 
     await pressTestInstanceAsync(
-      screen.findByTestId('surface-host-services-row:preview:host-feed-item'),
-      'surface-host-services-row:preview:host-feed-item',
+      screen.findByTestId('surface-host-services-row:inventory:host-feed-item'),
+      'surface-host-services-row:inventory:host-feed-item',
     );
     await pressTestInstanceAsync(
-      screen.findByTestId('surface-host-services-row:preview:host-feed-open'),
-      'surface-host-services-row:preview:host-feed-open',
+      screen.findByTestId('surface-host-services-row:inventory:host-feed-open'),
+      'surface-host-services-row:inventory:host-feed-open',
     );
 
     expect(onOpenServiceInBrowser).toHaveBeenCalledExactlyOnceWith(
@@ -900,7 +901,7 @@ describe('LocalServicesSurfaceHost', () => {
 
     expect(
       screen.findAllByTestId(
-        'surface-host-services-row:preview:host-feed-open',
+        'surface-host-services-row:inventory:host-feed-open',
       ),
     ).toHaveLength(0);
   });

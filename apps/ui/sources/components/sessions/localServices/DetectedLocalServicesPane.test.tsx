@@ -257,8 +257,9 @@ describe('DetectedLocalServicesPane', () => {
         const { resetLocalServicePublicPreviewStoreForTests, publishLocalServicePublicPreviewSnapshot } =
             await import('@/sync/domains/local/services/publicPreview/sharedStore');
         resetLocalServicePublicPreviewStoreForTests();
-        const workerTarget = { ...openableTarget, id: 'worker-preview', source: 'registered_preview' as const,
-            sourceClass: undefined, machineId: 'worker', sessionId: 'worker-session', browserTarget: {
+        const workerTarget = { ...openableTarget, id: 'inventory:worker-listener',
+            sourceClass: { kind: 'inventory_entry' as const, inventoryEntryId: 'worker-listener' },
+            actions: ['open_preview' as const, 'register_preview' as const], machineId: 'worker', sessionId: 'worker-session', browserTarget: {
                 kind: 'localServicePreview' as const, targetId: 'same-preview', machineId: 'worker', sessionId: 'worker-session',
             } };
         const exposure = { exposureId: 'same-exposure', previewId: 'same-preview', machineId: 'worker',
@@ -292,9 +293,9 @@ describe('DetectedLocalServicesPane', () => {
                     return { ok: true, snapshot: workerSnapshot };
                 }} publicPreviewActions={actions} testID="worker-pane" />);
             await flushHookEffects();
-            await expandRow(screen, 'worker-pane-row:worker-preview');
-            const prefix = 'worker-pane-row:worker-preview-public-preview';
-            const shareId = 'worker-pane-row:worker-preview-share';
+            await expandRow(screen, 'worker-pane-row:inventory:worker-listener');
+            const prefix = 'worker-pane-row:inventory:worker-listener-public-preview';
+            const shareId = 'worker-pane-row:inventory:worker-listener-share';
             expect(screen.findByTestId(shareId)).toBeTruthy();
             await act(async () => { await actions.create(workerTarget); });
             expect(screen.findByTestId(`${prefix}-exposure:same-exposure`)).toBeTruthy();
@@ -477,6 +478,28 @@ describe('DetectedLocalServicesPane', () => {
         expect(onRefresh).toHaveBeenCalledTimes(1);
     });
 
+    it('counts the rendered Running rows when the launcher observation precedes inventory metadata', async () => {
+        const screen = await renderScreen(inHeaderHost(
+            <DetectedLocalServicesPane
+                inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+                launcherState={launcherStateWith([openableTarget, { ...openableTarget,
+                    id: 'inventory:second', title: 'Second listener', subtitle: 'localhost:5174',
+                    sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'second' },
+                    browserTarget: { ...openableTarget.browserTarget, targetId: 'inventory-loopback:second',
+                        url: openableTarget.browserTarget.url.replace(':5173', ':5174'),
+                        display: { title: 'Second listener', addressLabel: 'localhost:5174' } },
+                }], 'session-a')}
+                machine={MACBOOK_ONLINE}
+                sessionId="session-a"
+                testID="local-services-pane"
+            />,
+        ));
+        expect(screen.findByTestId('local-services-pane-row:inventory:openable-row')).toBeTruthy();
+        expect(screen.findByTestId('local-services-pane-row:inventory:second')).toBeTruthy();
+        expect(collectText(screen.findByTestId('probe-header.subtitle')!)).toContain('2 running');
+        expect(collectText(screen.findByTestId('probe-header.subtitle')!)).not.toContain('Nothing running');
+    });
+
     it('claims nothing about what runs while the first scan is loading or has failed', async () => {
         for (const refreshState of ['refreshing', 'error'] as const) {
             const screen = await renderScreen(inHeaderHost(
@@ -636,14 +659,15 @@ describe('DetectedLocalServicesPane', () => {
      */
     it('shows the live public link inside its service row expansion (§5.7, lab S signature)', async () => {
         const previewTarget = {
-            id: 'preview:preview_1',
-            source: 'registered_preview' as const,
+            id: 'inventory:dashboard-listener',
+            source: 'inventory_entry' as const,
+            sourceClass: { kind: 'inventory_entry' as const, inventoryEntryId: 'dashboard-listener' },
             machineId: 'machine-a',
             sessionId: 'session-a',
             title: 'Dashboard preview',
             confidence: 'high' as const,
             state: 'available' as const,
-            actions: [] as never[],
+            actions: ['open_preview' as const, 'register_preview' as const],
             browserTarget: {
                 kind: 'localServicePreview' as const,
                 targetId: 'preview_1',
@@ -695,8 +719,8 @@ describe('DetectedLocalServicesPane', () => {
         );
         // The live link belongs to its service: it shows in that row's expansion, not as a pane group.
         expect(screen.findAllByTestId('local-services-pane-public-preview')).toHaveLength(0);
-        await expandRow(screen, 'local-services-pane-row:preview:preview_1');
-        expect(screen.findByTestId('local-services-pane-row:preview:preview_1-public-preview-exposure:public_preview_1-revoke')).toBeTruthy();
+        await expandRow(screen, 'local-services-pane-row:inventory:dashboard-listener');
+        expect(screen.findByTestId('local-services-pane-row:inventory:dashboard-listener-public-preview-exposure:public_preview_1-revoke')).toBeTruthy();
     });
 
     it('renders disabled public-preview state for a plain loopback open target (§5.7)', async () => {

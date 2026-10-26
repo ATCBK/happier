@@ -72,6 +72,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
 const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { resetLocalServiceLauncherStoreForTests } = await import('@/sync/domains/local/services/launch/sharedStore');
+const { resetLocalServiceInventoryStoreForTests } = await import('@/sync/domains/local/services/inventory/sharedStore');
 const { resetLocalServicePublicPreviewStoreForTests } = await import('@/sync/domains/local/services/publicPreview/sharedStore');
 let serverId: string;
 
@@ -92,6 +93,17 @@ function daemonRequests(method: string) {
 }
 
 async function defaultDaemonResponse(request: MachineRpcRequest) {
+    if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) {
+        return { protocolVersion: 1, snapshot: { v: 1, machineId: request.machineId,
+            generatedAt: 1_000, refreshState: 'idle', entries: [], diagnostics: [] } };
+    }
+    if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+        return await new Promise(resolve => {
+            const finish = () => resolve({ protocolVersion: 1, changed: false });
+            if (request.signal?.aborted) finish();
+            else request.signal?.addEventListener('abort', finish, { once: true });
+        });
+    }
     if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_STATUS) {
         return { protocolVersion: 1, snapshot: publicPreviewSnapshot() };
     }
@@ -131,8 +143,9 @@ function buildPublicPreviewLauncherState() {
         sessionId: 'session-a',
         updatedAt: 3_000,
         targets: [{
-            id: 'preview:session-feed',
-            source: 'registered_preview',
+            id: 'inventory:session-feed',
+            source: 'inventory_entry',
+            sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'session-feed' },
             machineId: 'machine-a',
             sessionId: 'session-a',
             title: 'Session feed preview',
@@ -202,6 +215,7 @@ describe('SessionRightPanelServicesView', () => {
     beforeEach(async () => {
         await homes.reset();
         resetLocalServiceLauncherStoreForTests();
+        resetLocalServiceInventoryStoreForTests();
         resetLocalServicePublicPreviewStoreForTests();
         daemonRpc.mockReset();
         daemonRpc.mockImplementation(defaultDaemonResponse);
@@ -215,6 +229,7 @@ describe('SessionRightPanelServicesView', () => {
     afterEach(async () => {
         await standardCleanup();
         resetLocalServiceLauncherStoreForTests();
+        resetLocalServiceInventoryStoreForTests();
         resetLocalServicePublicPreviewStoreForTests();
         await homes.reset();
     });
@@ -394,7 +409,9 @@ describe('SessionRightPanelServicesView', () => {
             />,
         );
 
-        expect(screen.findByTestId('session-rightpanel-services-row:managed:session-feed-start')).toBeTruthy();
+        await waitForHomeGovernance(() => {
+            expect(screen.findByTestId('session-rightpanel-services-row:managed:session-feed-start')).toBeTruthy();
+        });
 
         await pressTestInstanceAsync(
             screen.findByTestId('session-rightpanel-services-row:managed:session-feed-start'),
@@ -473,12 +490,12 @@ describe('SessionRightPanelServicesView', () => {
         );
 
         await pressTestInstanceAsync(
-            screen.findByTestId('session-rightpanel-services-row:preview:session-feed-item'),
-            'session-rightpanel-services-row:preview:session-feed-item',
+            screen.findByTestId('session-rightpanel-services-row:inventory:session-feed-item'),
+            'session-rightpanel-services-row:inventory:session-feed-item',
         );
         await pressTestInstanceAsync(
-            screen.findByTestId('session-rightpanel-services-row:preview:session-feed-share'),
-            'session-rightpanel-services-row:preview:session-feed-share',
+            screen.findByTestId('session-rightpanel-services-row:inventory:session-feed-share'),
+            'session-rightpanel-services-row:inventory:session-feed-share',
         );
         await waitForHomeGovernance(() => expect(daemonRequests(RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE)).toEqual([{
             serverId,

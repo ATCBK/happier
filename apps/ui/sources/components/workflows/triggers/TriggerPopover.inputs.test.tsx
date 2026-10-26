@@ -557,9 +557,11 @@ describe('a workflow trigger in its popover (07 S4)', () => {
         await screen.pressByTestIdAsync('retired-target-submit');
         expect(submit).not.toHaveBeenCalled();
         if (scope === 'account') {
-            const sessions = screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session');
-            if (!sessions) throw new Error('Expected the destination picker');
-            await act(async () => { sessions.props.onSelect(replacement.id); });
+            const sessions = () => screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session')!;
+            // 9c718cad7e/fe9de9f1f7 defer candidate projection until the chooser is opened.
+            await act(async () => { sessions().props.onOpenChange(true); });
+            await waitForHomeGovernance(() => expect(sessions().props.items).toContainEqual(expect.objectContaining({ id: replacement.id })));
+            await act(async () => { sessions().props.onSelect(replacement.id); });
             expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(false);
             await screen.pressByTestIdAsync('retired-target-submit');
             const target = TriggerTargetV1Schema.parse(submit.mock.calls[0]?.[1].target);

@@ -53,14 +53,14 @@ vi.mock('@/text', async () => {
   return createTextModuleMock();
 });
 
-const { SessionSetupSections } =
+const { SessionHabitsSection, SessionSetupSections } =
   await import('@/components/sessions/work/SessionSetupSections');
 
-/** The Session's Info page host of its setup sections, Triggers among them (coordination lab P1i). */
+/** The Session's Info host of its Setup and Habits sections (lab csinfo I2). */
 function SessionInfoSetup(props: Readonly<{ sessionId: string }>) {
   const session = useSessionViewShellSession(props.sessionId, home.serverId);
   return <InjectedAuthProvider credentials={workflowHttp?.credentials ?? null}><UniversalSearchRuntimeProvider value={searchRuntime}>
-    <AppPaneProvider><ItemList>{session ? <SessionSetupSections session={session} serverId={home.serverId} /> : null}</ItemList></AppPaneProvider>
+    <AppPaneProvider><ItemList>{session ? <><SessionSetupSections session={session} serverId={home.serverId} /><SessionHabitsSection sessionId={session.id} serverId={home.serverId} /></> : null}</ItemList></AppPaneProvider>
   </UniversalSearchRuntimeProvider></InjectedAuthProvider>;
 }
 const searchRuntime = { open: () => {}, buildCommands: () => [] };
@@ -128,7 +128,7 @@ const automationHttp = vi.fn(async (url: URL, init?: RequestInit): Promise<Respo
     const row = AutomationDefinitionDetailSchema.parse({ id: input.automationId, name: input.name,
       description: input.description ?? null, enabled: input.enabled, workflowDefinitionId: input.workflowDefinitionId ?? null,
       scopeSessionId: input.scopeSessionId ?? null, targetType: null, existingSessionId: null,
-      templateVersion: input.executionRecipe.templateVersion, lastRunAt: null, createdAt: 1, updatedAt: 1,
+      templateVersion: input.executionRecipe!.templateVersion, lastRunAt: null, createdAt: 1, updatedAt: 1,
       executionRecipe: input.executionRecipe, assignments: input.assignments?.map(assignment => ({ ...assignment,
         enabled: assignment.enabled ?? true, priority: assignment.priority ?? 0, updatedAt: 1 })) ?? [],
       triggers: input.triggers.map(({ triggerId, trigger }) => ({ ...trigger, id: triggerId, revision: 1,

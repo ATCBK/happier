@@ -107,7 +107,7 @@ async function mount(
     }) => {
       const answer = options.rpc?.(method, payload);
       if (answer !== undefined) return answer;
-      if (method === RPC_METHODS.DAEMON_GUARD_WATCH)
+      if (method === RPC_METHODS.DAEMON_GUARD_WATCH || method === RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH)
         return new Promise(() => {});
       if (method === RPC_METHODS.MACHINES_GUARD_GET)
         return options.view ?? createMachineGuardViewFixture();
