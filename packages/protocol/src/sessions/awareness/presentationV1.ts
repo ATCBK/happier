@@ -50,9 +50,16 @@ export function readSessionAwarenessPresentationV1(awareness: SessionAwarenessPr
   if (primary === 'usage_limited') return 'usage_limited';
   if (awareness.operational.reasons?.includes('runtime_unservable')) return 'recoverable_unservable';
   if (awareness.operational.reasons?.includes('resuming')) return 'resuming';
-  if (awareness.processTerminalState === 'stopped' && primary !== 'working') return 'stopped';
-  if (awareness.runtime === 'offline') return 'disconnected';
-  if (awareness.freshness === 'stale') return 'stale';
+  // A completed turn is settled evidence even after its publisher detaches. Process stop,
+  // presence loss and observation expiry describe runtime reachability; none reopens that work.
+  // Requests, explicit resume and runtime serviceability failures retain their precedence above.
+  if (primary !== 'ready') {
+    if (awareness.processTerminalState === 'stopped' && primary !== 'working') return 'stopped';
+    if (awareness.runtime === 'offline') return 'disconnected';
+    // Observation age does not settle reported background work. Keep its shared Work bucket,
+    // filter and rank; localized presenters use freshness separately to state uncertainty.
+    if (awareness.freshness === 'stale' && awareness.runtime !== 'background_active') return 'stale';
+  }
   // Operational evidence and runtime reachability are orthogonal: an active turn or pending
   // request stays meaningful without a presence channel, while no operational fact stays unknown.
   if (primary === 'working') return 'thinking';

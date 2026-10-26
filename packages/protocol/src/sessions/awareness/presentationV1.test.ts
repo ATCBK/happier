@@ -1,8 +1,50 @@
 import { describe, expect, it } from 'vitest';
 
 import { listSessionPresentationStatesForWorkStatusFilterV1, readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionManagedSessionsPresentationV1 } from './presentationV1.js';
+import { projectSessionAwarenessV1 } from './projectV1.js';
 
 describe('readSessionAwarenessWorkStatusV1', () => {
+  it('keeps a completed worker settled across runtime detach and observation expiry', () => {
+    const nowMs = 1_000_000;
+    for (const runtime of [
+      { presence: 'online', active: true, lastObservedAtMs: nowMs },
+      { presence: 'online', active: true, lastObservedAtMs: nowMs - 60_000 },
+      { presence: 'offline', active: false, lastObservedAtMs: nowMs },
+      { presence: 'offline', active: false, lastObservedAtMs: nowMs - 60_000 },
+      { presence: 'unknown', active: false, lastObservedAtMs: nowMs - 60_000 },
+    ] as const) {
+      for (const processTerminalState of [null, 'stopped'] as const) {
+        const awareness = projectSessionAwarenessV1({
+          sessionId: 'worker', nowMs, content: { mode: 'plain' }, runtime, pending: {},
+          lifecycle: { latestTurnStatus: 'completed', latestTurnStatusObservedAtMs: nowMs - 1_000,
+            processTerminalState },
+          currentness: { lifecycle: 'observed', runtime: 'observed', pending: 'observed', work: 'observed' },
+        });
+        expect(awareness.operational.primary).toBe('ready');
+        expect(readSessionAwarenessWorkStatusV1({ awareness, settled: true }))
+          .toMatchObject({ state: 'ready', bucket: 'finished', tone: 'neutral' });
+        if (processTerminalState) expect(awareness.processTerminalState).toBe('stopped');
+      }
+    }
+  });
+  it('keeps cancellation, new work, and explicit resume distinct from a completed worker', () => {
+    const base = {
+      sessionId: 'worker', nowMs: 1_000_000, content: { mode: 'plain' }, pending: {},
+      lifecycle: { latestTurnStatus: 'completed', processTerminalState: 'stopped' },
+      runtime: { presence: 'online', active: true, lastObservedAtMs: 1_000_000 },
+      currentness: { lifecycle: 'observed', runtime: 'observed', pending: 'observed', work: 'observed' },
+    } as const;
+    const state = (value: Parameters<typeof projectSessionAwarenessV1>[0]) =>
+      readSessionAwarenessPresentationV1(projectSessionAwarenessV1(value));
+    expect(state({ ...base, lifecycle: { ...base.lifecycle, latestTurnStatus: 'cancelled' } })).toBe('stopped');
+    expect(state({ ...base, lifecycle: { ...base.lifecycle, latestTurnStatus: 'in_progress' } })).toBe('thinking');
+    expect(state({ ...base, runtime: { ...base.runtime, resumingAtMs: base.nowMs } })).toBe('resuming');
+    expect(state({ ...base, runtime: { ...base.runtime, controlServiceability: 'recoverable_unservable' } }))
+      .toBe('recoverable_unservable');
+    expect(state({ ...base, lifecycle: { latestTurnStatus: 'completed' }, runtime: {
+      ...base.runtime, activityState: 'active', activityActiveCount: 1,
+    } })).toBe('background_active');
+  });
   it('keeps the admitted archive operation working without inventing runtime activity', () => {
     const awareness = { runtime: 'idle', encryption: 'plain', archiving: true, operational: { primary: 'none' } } as const;
     expect(readSessionAwarenessWorkStatusV1({ awareness })).toMatchObject({ state: 'archiving', bucket: 'working', tone: 'neutral' });
@@ -23,9 +65,11 @@ describe('readSessionAwarenessWorkStatusV1', () => {
   });
   it('keeps background activity in Working and its status filter until it settles', () => {
     const awareness = { runtime: 'background_active', encryption: 'plain', operational: { primary: 'none' } } as const;
-    const status = readSessionAwarenessWorkStatusV1({ awareness, settled: true });
-    expect(status).toMatchObject({ bucket: 'working', tone: 'neutral' });
-    expect(readSessionWorkStateGroupV1(status.bucket)).toBe('working');
+    for (const freshness of ['live', 'stale'] as const) {
+      const status = readSessionAwarenessWorkStatusV1({ awareness: { ...awareness, freshness }, settled: true });
+      expect(status).toMatchObject({ state: 'background_active', bucket: 'working', tone: 'neutral' });
+      expect(readSessionWorkStateGroupV1(status.bucket)).toBe('working');
+    }
     expect(listSessionPresentationStatesForWorkStatusFilterV1('working')).toContain('background_active');
     expect(readSessionAwarenessWorkStatusV1({ awareness: { ...awareness, runtime: 'idle' }, settled: true }))
       .toMatchObject({ bucket: 'finished', tone: 'neutral' });
