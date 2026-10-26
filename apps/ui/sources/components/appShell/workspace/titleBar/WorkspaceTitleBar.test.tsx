@@ -19,7 +19,14 @@ import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMat
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
 import { invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
 import { View } from 'react-native';
+import { readHitFrameReach } from '@/dev/testkit/harness/hitFrameReach';
+import { HappierUiPlatformProvider } from '@happier-dev/plugin-ui/environment';
 import { DocumentTabStrip, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
+import { WorkspaceGroupTabs } from './WorkspaceGroupTabs';
+import { resolveCompactAppDestinations, resolveDestinationRefFromHref, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import * as workspaceRoutes from '@/components/appShell/workspace/workspaceRoutes';
+import { storage } from '@/sync/domains/state/storageStore';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -45,6 +52,7 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 });
 
 type WindowFrame = Readonly<{ x: number; width: number }>;
+const EMPTY_CATALOG: readonly CompactAppDestination[] = [];
 
 /** The platform's window measurement, per measured view (the only boundary between panes and the strip). */
 function windowMeasurement(frames: Readonly<Record<string, WindowFrame>>): NonNullable<RenderWithAppProvidersOptions['createNodeMock']> {
@@ -60,13 +68,13 @@ function tab(id: string, overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     return { id, target: { kind: `removed:${id}`, params: {} }, pinned: false, preview: false, ...overrides };
 }
 
-function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number; chromeActive?: boolean }>) {
+function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number; chromeActive?: boolean; tabsOnly?: boolean; catalog?: readonly CompactAppDestination[] }>) {
     const [state, dispatch] = React.useReducer(reduceWorkspaceState, props.initial);
     const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
     const currentState = React.useRef(state);
     currentState.current = state;
     const navigation = React.useMemo(() => createWorkspaceNavigationAdapter({
-        getState: () => currentState.current, getCatalog: () => [], dispatch,
+        getState: () => currentState.current, getCatalog: () => EMPTY_CATALOG, dispatch,
         createId: () => 'empty', onChange: () => {}, transport: { commit: () => {} },
     }), []);
     React.useEffect(() => {
@@ -89,14 +97,15 @@ function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number
     return <WorkspaceNavigationContext.Provider value={value}>
         <WorkspaceBarGeometryContext.Provider value={geometry}>
             {React.createElement('WorkspaceStateProbe', { state, dispatch })}
-            {props.chromeActive === undefined ? <>
-                <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
-                <WorkspaceShell catalog={[]} />
+            {props.tabsOnly ? <WorkspaceGroupTabs workspace={value} group={state.groups['group:1']} catalog={props.catalog ?? EMPTY_CATALOG}
+                focused placement="bar" /> : props.chromeActive === undefined ? <>
+                <WorkspaceTitleBar catalog={EMPTY_CATALOG} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
+                <WorkspaceShell catalog={EMPTY_CATALOG} />
             </> : <AppShellMaterialFrame showChrome={props.chromeActive} dragEnabled={false} leftOffsetPx={0}
                 sidebarWidth={320} rail={null} column={null} peek={null}
                 titleStrip={<AppShellTitleStrip columnVisible={false} columnToggleAvailable={false}
-                    onToggleColumn={() => {}} navigation={value} workspaceCatalog={[]} trailing={<View />} />}>
-                <WorkspaceShell catalog={[]} />
+                    onToggleColumn={() => {}} navigation={value} workspaceCatalog={EMPTY_CATALOG} trailing={<View />} />}>
+                <WorkspaceShell catalog={EMPTY_CATALOG} />
             </AppShellMaterialFrame>}
         </WorkspaceBarGeometryContext.Provider>
     </WorkspaceNavigationContext.Provider>;
@@ -123,6 +132,35 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('resolves only the arriving route at 153 tabs and does no route work on a real Machine arrival', async () => {
+        const original = storage.getState();
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const target = resolveDestinationRefFromHref(catalog, '/settings/appearance')!;
+        const makeTab = (index: number) => tab(`route-${index}`, { target });
+        let initial = createWorkspaceState(makeTab(0));
+        for (let index = 1; index < 153; index++) initial = reduceWorkspaceState(initial, {
+            type: 'openTab', groupId: 'group:1', tab: makeTab(index), fallbackTitle: `Saved ${index}`,
+        });
+        const routes = vi.spyOn(workspaceRoutes, 'matchWorkspaceDestinationRoute');
+        const screen = await renderScreen(<Harness initial={initial} clusterEndPx={200} tabsOnly catalog={catalog} />);
+        try {
+            const routesPerTab = Math.ceil(routes.mock.calls.length / 153);
+            expect(routesPerTab).toBeGreaterThan(0);
+            routes.mockClear();
+            await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'workspace-strip-background' })]));
+            expect(routes).not.toHaveBeenCalled();
+            await act(async () => screen.root.findByType('WorkspaceStateProbe' as unknown as React.ElementType).props.dispatch({
+                type: 'openTab', groupId: 'group:1', tab: makeTab(153), fallbackTitle: 'Arriving tab',
+            }));
+            expect(routes.mock.calls.length).toBeLessThanOrEqual(routesPerTab);
+            console.info('PERF-STRIP workspace route cost', { existingTabs: 153, arrivingRouteMatches: routes.mock.calls.length, routesPerTab });
+            expect(screen.findHostByTestId('workspace-tab-route-153')?.props.accessibilityState.selected).toBe(true);
+        } finally {
+            await screen.unmount();
+            routes.mockRestore();
+            storage.setState(original, true);
+        }
+    });
     it('changes only the affected document descriptor across a 120-tab title, pin and selection publication', async () => {
         let initial = createWorkspaceState(tab('document-0'));
         initial = reduceWorkspaceState(initial, { type: 'setFallbackTitle', tabId: 'document-0', title: 'Document 0' });
@@ -291,6 +329,25 @@ describe('WorkspaceTitleBar', () => {
         // A tab in the strip is the pane's own tab: pressing it focuses that pane.
         await act(async () => { second?.findAll((node) => node.props?.testID === 'workspace-tab-c' && typeof node.props.onPress === 'function')[0]?.props.onPress(); });
         expect(stateOf(screen).focusedGroupId).toBe('group:2');
+    });
+
+    // The strip's controls sit 2 px (+ New tab, All tabs, Split) apart, with an 8 px spacer between New tab and All
+    // tabs: a finger's hit areas split those gaps, so none of them overlaps the next.
+    it('splits the gaps between the pane end controls instead of reaching into each other', async () => {
+        const screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+            <Harness initial={threePanes()} clusterEndPx={200} />
+        </HappierUiPlatformProvider>, {
+            createNodeMock: windowMeasurement({
+                'workspace-title-bar': { x: 0, width: 1440 },
+                'workspace-group-group_1': { x: 300, width: 560 },
+                'workspace-group-group_2': { x: 870, width: 560 },
+                'workspace-group-group_3': { x: 870, width: 560 },
+            }),
+        });
+        const reachOf = (id: string) => readHitFrameReach(screen.findByTestId(id)!);
+        expect([reachOf('workspace-new-tab-group_1')?.left, reachOf('workspace-new-tab-group_1')?.right]).toEqual([2, 6]);
+        expect([reachOf('workspace-overflow-group_1')?.left, reachOf('workspace-overflow-group_1')?.right]).toEqual([6, 1]);
+        expect(reachOf('workspace-split-right')?.left).toBe(1);
     });
 
     it('starts the first pane\'s tabs after the strip\'s own controls when the pane reaches under them', async () => {

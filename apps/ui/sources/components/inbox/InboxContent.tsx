@@ -3,7 +3,6 @@ import type { MachineVitalsNotificationV1 } from '@happier-dev/protocol/activity
 import { happierPageTextMetrics, type HappierSceneId } from '@happier-dev/plugin-ui/presentation';
 import { Platform, Pressable, View } from 'react-native';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Modal } from '@/modal';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -39,11 +38,15 @@ import { buildInboxSessionContextLine } from './workGroups/inboxSessionContextLi
 import { createInboxItemRoute, isFocusedInboxWorkItem } from './inboxItemFocus';
 import { getInboxNeedsYouItemTypes, selectInboxItemsForView, type InboxItem, type InboxItemType, type InboxItemView } from './inboxItems';
 import { InboxWorkRow } from './InboxWorkRow';
+import { InboxPluginSessionLines } from './InboxPluginSessionLines';
+import type { InboxPluginSessionRow } from './inboxItemProjection';
 import { InboxRelativeTime } from './InboxRelativeTime';
 import type { InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
 import type { IconName } from '@/components/ui/icons/Icon';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { type SessionPresentationRecord,
+    type SessionListPresentationSource } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 export type InboxView = InboxItemView;
@@ -56,18 +59,21 @@ const ITEM_MARKS: Readonly<Record<InboxItemType, IconName>> = {
 const NEEDS_YOU_TYPES = getInboxNeedsYouItemTypes().map(type => ({ type, icon: ITEM_MARKS[type], attention: type !== 'blocked' }));
 
 const BoundReadyRow = React.memo(function BoundReadyRow(props: Readonly<{
-    session: Session; serverId: string | null; identityDisplay: SessionListIdentityDisplay; title: string; subtitle?: string;
+    session: SessionPresentationRecord; presentationSource?: SessionListPresentationSource;
+    serverId: string | null; identityDisplay: SessionListIdentityDisplay; title: string; subtitle?: string;
     route?: string; pending: boolean; navigate: (route: string) => void; markRead: InboxModel['markRead'];
+    pluginSessionRows?: readonly InboxPluginSessionRow[]; invokePluginSessionControl?: InboxModel['invokePluginSessionControl'];
 }>) {
     const { route, navigate, markRead, serverId } = props;
     const sessionId = props.session.id;
     const open = React.useCallback(() => { if (route) navigate(route); }, [navigate, route]);
     const mark = React.useCallback(() => markRead([{ key: buildServerScopedSessionKey(sessionId, serverId), sessionId, serverId, readState: 'unread' }]), [markRead, serverId, sessionId]);
-    const nowMs = React.useMemo(() => Date.now(), [props.session]);
-    const status = presentInboxSessionStatus(props.session, nowMs);
-    return <InboxReadySessionRow session={props.session} identityDisplay={props.identityDisplay}
-        connected={getSessionStatus(props.session, nowMs, { workingTextMode: 'static' }).isConnected} sessionId={sessionId} serverId={serverId}
-        title={props.title} subtitle={props.subtitle} statusWord={status.word} statusTone={status.tone} pending={props.pending} onOpen={open} onMarkRead={mark} />;
+    const nowMs = React.useMemo(() => Date.now(), [props.session, props.presentationSource]);
+    const status = presentInboxSessionStatus(props.session, nowMs, props.presentationSource);
+    return <InboxReadySessionRow session={props.session} presentationSource={props.presentationSource} identityDisplay={props.identityDisplay}
+        connected={getSessionStatus(props.session, nowMs, { presentationSource: props.presentationSource }).isConnected} sessionId={sessionId} serverId={serverId}
+        title={props.title} subtitle={props.subtitle} statusWord={status.word} statusTone={status.tone} pending={props.pending} onOpen={open} onMarkRead={mark}
+        pluginSessionRows={props.pluginSessionRows} invokePluginSessionControl={props.invokePluginSessionControl} />;
 });
 
 /**
@@ -80,6 +86,7 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
     markOpened: InboxModel['markItemOpened'];
     /** A stored notice's one quick action, the same Dismiss every Inbox notice row carries. */
     dismissNotice: (item: InboxItem) => Promise<void>;
+    invokePluginSessionControl: InboxModel['invokePluginSessionControl'];
 }>) {
     const { theme } = useUnistyles();
     const { item, navigate, onSelectItem, markOpened, dismissNotice } = props;
@@ -113,11 +120,20 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
         trailingAccessory={item.producer === 'notice' ? (
             <IconButton testID={`inbox.item.${item.key}.dismiss`} accessibilityLabel={t('inbox.actionOperations.dismiss')}
                 tooltip={t('inbox.actionOperations.dismiss')} iconName="x" variant="plain" size={28}
-                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={8}
+                interactiveTargetGapPx={8}
                 onPress={dismiss} />
+        ) : undefined}
+        belowAccessory={item.pluginSessionRows?.length ? (
+            <InboxPluginSessionLines rows={item.pluginSessionRows} invoke={props.invokePluginSessionControl}
+                testID={`inbox.item.${item.key}.plugin_rows`} />
         ) : undefined}
         onPress={open} />;
 });
+
+/** A worker row names its lead and its latest update from the Inbox item the model already projected. */
+function readInboxItemWorker(item: InboxItem) {
+    return item.reportsTo ? { leadTitle: item.reportsTo.title, headline: item.workerUpdateHeadline } : undefined;
+}
 
 type WorkRowSource = Readonly<{ item: InboxWorkItem; automationServerId: string | null }>;
 
@@ -230,6 +246,10 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                     focused={isFocusedInboxWorkItem(work.item, props.focusedItem ?? null, model.workflowAttention.serverId, model.automationAttention.serverId)}
                     onSelectItem={props.onSelectItem}
                     showDivider={showDivider}
+                    pluginSessionRows={item.pluginSessionRows}
+                    invokePluginSessionControl={model.invokePluginSessionControl}
+                    reportsToTitle={item.reportsTo ? item.reportsTo.title : undefined}
+                    workerUpdateHeadline={item.workerUpdateHeadline}
                 />
             );
         }
@@ -242,21 +262,25 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                 <BoundReadyRow
                     key={item.key}
                     session={ready.session}
+                    presentationSource={ready.presentationSource}
                     identityDisplay={identityDisplay}
                     serverId={serverId}
                     title={ready.title}
-                    subtitle={buildInboxSessionContextLine(ready, { showHome: model.spansHomes, showNeed: false })}
+                    subtitle={buildInboxSessionContextLine(ready, { showHome: model.spansHomes, showNeed: false, worker: readInboxItemWorker(item) })}
                     pending={model.pendingReadKeys.has(target.key)}
                     route={ready.route}
                     navigate={navigate}
                     markRead={model.markRead}
+                    pluginSessionRows={item.pluginSessionRows}
+                    invokePluginSessionControl={model.invokePluginSessionControl}
                 />
             );
         }
         return (
             <InboxItemRow key={item.key} item={item} narrow={!(page && wide)} showDivider={showDivider}
                 selected={focusedRouteKey !== null && createInboxItemRoute(item.focus).params.item === focusedRouteKey}
-                navigate={navigate} onSelectItem={props.onSelectItem} markOpened={model.markItemOpened} dismissNotice={dismissNotice} />
+                navigate={navigate} onSelectItem={props.onSelectItem} markOpened={model.markItemOpened} dismissNotice={dismissNotice}
+                invokePluginSessionControl={model.invokePluginSessionControl} />
         );
     };
 
@@ -330,6 +354,18 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
 
     return (
         <View testID="inbox.content" style={styles.container}>
+            {model.artifactSource.phase === 'failed' || model.artifactSource.phase === 'partial' ? (
+                <View style={page ? styles.freshnessPage : styles.freshnessFlat}>
+                    {model.hasPrimaryAttention ? (
+                        <SurfaceFreshnessLine testID="inbox.artifacts_stale" reason={t('inbox.work.stale.reason')}
+                            action={{ label: t('common.retry'), onPress: model.artifactSource.retry }} />
+                    ) : (
+                        <SurfaceStateCard testID="inbox.artifacts_unavailable" kind="unavailable" size="line"
+                            title={t('common.error')} reason={t('inbox.work.stale.reason')}
+                            action={{ label: t('common.retry'), onPress: model.artifactSource.retry, testID: 'inbox.artifacts_retry' }} />
+                    )}
+                </View>
+            ) : null}
             {view === 'needs_you' ? (
                 <>
                     {workflowStale ? (
@@ -428,7 +464,7 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                     {model.showCaughtUp && !automationUnavailable && needsYouEmpty && page
                         // Nothing anywhere: the page's calm caught-up state.
                         ? renderEmpty(t('inbox.emptyTitle'), t('inbox.emptyDescription'), 'inboxZero')
-                        : !model.isLoading && !workflowUnavailable && !automationUnavailable && needsYouEmpty && (page || updatesCount === 0)
+                        : model.artifactSource.phase === 'current' && !model.isLoading && !workflowUnavailable && !automationUnavailable && needsYouEmpty && (page || updatesCount === 0)
                             ? renderEmpty(t('inbox.work.empty.title'), t('inbox.work.empty.description'), 'inboxZero')
                             : null}
                 </>
@@ -491,10 +527,10 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         </InboxSection>
                     ) : null}
 
-                    {!loading && view === 'updates' && daySections.length === 0 && model.friendRequests.length === 0 && model.openUsageNotices.length === 0
+                    {model.artifactSource.phase === 'current' && !loading && view === 'updates' && daySections.length === 0 && model.friendRequests.length === 0 && model.openUsageNotices.length === 0
                         ? renderEmpty(t('inbox.work.updatesEmpty.title'), t('inbox.work.updatesEmpty.description'), 'agentFinished')
                         : null}
-                    {!loading && view === 'mentions' && daySections.length === 0
+                    {model.artifactSource.phase === 'current' && !loading && view === 'mentions' && daySections.length === 0
                         ? renderEmpty(t('inbox.work.mentionsEmpty.title'), t('inbox.work.mentionsEmpty.description'), 'inboxZero')
                         : null}
                 </>

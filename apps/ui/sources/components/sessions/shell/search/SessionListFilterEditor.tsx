@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { EntityListFilterResultV1 } from '@happier-dev/protocol/collections/filter/entityListFilterV1';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -7,7 +8,6 @@ import {
     type SelectionListPagination,
     type SelectionListStep,
 } from '@/components/ui/selectionList';
-import { SelectionListBackChip } from '@/components/ui/selectionList/SelectionListBackChip';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
@@ -31,12 +31,21 @@ import {
     type SessionListViewContext,
     type SessionListViewFilters,
 } from './sessionListViewFilters';
+import type { CollectionConditionEdit, CollectionConditionValueCountRequest, CollectionConditionValueCounts, HappierCollectionConditionValuePicker } from '@happier-dev/plugin-ui/components';
+import { CollectionConditionEditor } from '@/components/ui/lists/collection/CollectionConditionEditor';
 import {
-    SessionListFilterPanel,
-    type SessionListFilterDrillSection,
-    type SessionListFilterPanelCopy,
-} from './SessionListFilterPanel';
+    SESSION_LIST_CONDITION_FIELD_ICONS,
+    SESSION_LIST_CONDITION_GROUPS,
+    SESSION_LIST_LOCKED_CONDITION_FIELDS,
+    applySessionListConditionEdit,
+    buildSessionListConditionBindings,
+    buildSessionListConditionModel,
+    resolveSessionListBaseConditionFields,
+    type SessionListConditionCopy,
+} from './sessionListConditionFields';
+import { createSessionListViewFilterDefaults } from './sessionListViewFilters';
 import { useSessionListFilterProjectOptions } from './useSessionListFilterProjectOptions';
+import { useSessionListFilterLocalOptions } from './useSessionListFilterLocalOptions';
 /*
  * Audience identity belongs to the filter state owner. This component consumes its
  * qualified JSON key rather than maintaining a parallel Team-only syntax.
@@ -45,8 +54,17 @@ function teamAudienceIdentity(serverId: string, teamId: string): string {
     return buildQualifiedAudienceSelectionKey({ serverId, kind: 'team', teamId });
 }
 
-export type SessionListFilterEditorCopy = SessionListFilterEditorLabels & Omit<SessionListFilterPanelCopy, keyof SessionListFilterEditorLabels> & Readonly<{
+export type SessionListFilterEditorCopy = SessionListFilterEditorLabels & Readonly<{
     title: string;
+    clear: string;
+    done: string;
+    resultCount: (count: number) => string;
+    runsNeedingYouAlwaysShow: string;
+    needsMeOnly: string;
+    needsMeOnlyDescription: string;
+    moreTags: (count: number) => string;
+    /** The condition list's own words (lab `clfilter`). */
+    conditions: SessionListConditionCopy;
     /** The Archived destination's label; shown only when the host passes `onOpenArchived`. */
     archived?: string;
     catalogLoading?: string;
@@ -58,6 +76,9 @@ export type SessionListFilterEditorCopy = SessionListFilterEditorLabels & Omit<S
 }>;
 
 export type SessionListFilterEditorProps = Readonly<{
+    conditionValueCounts?: CollectionConditionValueCounts;
+    onConditionValueCountRequest?: (request: CollectionConditionValueCountRequest | null) => void;
+    result?: EntityListFilterResultV1;
     filters: SessionListViewFilters;
     includeInactive: boolean;
     inactiveVisibilityAvailable?: boolean;
@@ -84,6 +105,17 @@ export type SessionListFilterEditorProps = Readonly<{
     onOpenArchived?: () => void;
     /** Sessions the list currently shows for these choices, from the list's own derivation. */
     resultCount?: number;
+    /**
+     * What the list starts from (its saved space, or the context default): a condition shows while its
+     * part of the filter differs from this, and removing it restores this. Defaults to a fresh filter.
+     */
+    baseFilters?: SessionListViewFilters;
+    baseIncludeInactive?: boolean;
+    /** Opens the save form with the current conditions (the Sessions column only). */
+    onSaveAsSpace?: () => void;
+    /** Where the filter is evaluated: a daemon rule (Follow, matching) offers only the fields the daemon can answer. */
+    evaluator?: 'list' | 'daemonRule';
+    doneLabel?: string;
     /** Worded result for a host whose result is a live preview rather than the list's count. */
     resultSummary?: string;
     onDone?: () => void;
@@ -92,19 +124,16 @@ export type SessionListFilterEditorProps = Readonly<{
     disableTransitions?: boolean;
 }>;
 
-/** Everything the drill view needs above its list: the way back to the panel. */
-const DRILL_HEADER_HEIGHT = 44;
+/** The shared editor's way back above a field's own value list. */
+const PICKER_HEADER_HEIGHT = 44;
+
+/** Session fields whose values keep the editor model's own list (see renderValuePicker). */
+const SESSION_LIST_PICKER_SECTIONS: Readonly<Record<string, string>> = { scope: 'show', audiences: 'audiences' };
 
 const stylesheet = StyleSheet.create({
     root: {
         minWidth: 280,
         flexShrink: 1,
-    },
-    drillHeader: {
-        minHeight: DRILL_HEADER_HEIGHT,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
     },
 });
 
@@ -466,71 +495,123 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
         teamAudienceEnabled,
     ]);
 
-    const [drill, setDrill] = React.useState<SessionListFilterDrillSection | null>(null);
-    const closeDrill = React.useCallback(() => setDrill(null), []);
-    // The drill view lists one facet of the SAME model step (same step id, same option ids), so the
-    // SelectionList's search, pagination and Team drill-down behave exactly as they always have.
-    const drillStep = React.useMemo<SelectionListStep | null>(() => {
-        if (!drill) return null;
-        const section = model.rootStep.sections.find((candidate) => candidate.id === drill)
+    const baseFilters = React.useMemo(() => props.baseFilters
+        ?? createSessionListViewFilterDefaults({ homeServerIds: props.homes.map((home) => home.serverId) }),
+    [props.baseFilters, props.homes]);
+    const baseIncludeInactive = props.baseIncludeInactive ?? true;
+    const [openedLocalFieldId, setOpenedLocalFieldId] = React.useState<string | null>(null);
+    const localOptions = useSessionListFilterLocalOptions(props.homes, openedLocalFieldId,
+        Boolean(props.filters.sections && props.filters.sections.include.length + props.filters.sections.exclude.length));
+    const handleValuePickerChange = React.useCallback((request: CollectionConditionValueCountRequest | null) => {
+        setOpenedLocalFieldId(request?.fieldId ?? null);
+        props.onConditionValueCountRequest?.(request);
+    }, [props.onConditionValueCountRequest]);
+    const conditionLabels = props.labels.conditions;
+    const choices = React.useMemo(() => buildSessionListConditionBindings({
+        editorLabels: props.labels,
+        copy: conditionLabels,
+        scopesAvailable: resolveSessionListFilterScopeAvailability(props),
+        homes: props.homes,
+        tags: props.tags,
+        projects,
+        ...localOptions,
+        audiences,
+        fixedShow: props.fixedShow,
+        attentionAvailable: props.queryEnabled,
+        inactiveVisibilityAvailable: props.inactiveVisibilityAvailable !== false,
+        sourceAvailable: props.sourceAvailable,
+        ...(props.evaluator ? { evaluator: props.evaluator } : {}),
+    }), [audiences, conditionLabels, localOptions, projects, props]);
+    const conditionModel = React.useMemo(
+        () => buildSessionListConditionModel(props.filters, props.includeInactive, choices.bindings, props.conditionValueCounts),
+        [choices.bindings, props.filters, props.includeInactive, props.conditionValueCounts],
+    );
+    const hiddenFieldIds = React.useMemo(() => {
+        const hidden = new Set(resolveSessionListBaseConditionFields({
+            filters: props.filters, base: baseFilters, includeInactive: props.includeInactive, baseIncludeInactive,
+        }));
+        // A surface without inactive visibility (archived, a stored selector) has no such condition to show.
+        if (props.inactiveVisibilityAvailable === false) hidden.add('includeInactive');
+        return hidden;
+    }, [baseFilters, baseIncludeInactive, props.filters, props.includeInactive, props.inactiveVisibilityAvailable]);
+    const handleEdit = React.useCallback((edit: CollectionConditionEdit) => {
+        applySessionListConditionEdit(edit, {
+            filters: props.filters,
+            includeInactive: props.includeInactive,
+            updateFilters: props.updateFilters,
+            setSource: props.setSource,
+            setIncludeInactive: props.setIncludeInactive,
+            resetFilters: props.resetFilters,
+        });
+    }, [props.filters, props.includeInactive, props.resetFilters, props.setIncludeInactive, props.setSource, props.updateFilters]);
+    // Two Session fields keep their own value lists: Whose carries the Archived way out, and Shared with walks
+    // Teams into Groups page by page. Each lists one section of the SAME editor model (same option ids), so
+    // search, pagination and the Team drill-down behave as before. Status is the shared editor's grouped field.
+    const renderValuePicker = React.useCallback<HappierCollectionConditionValuePicker>(({ field, close, maxHeight }) => {
+        const sectionId = SESSION_LIST_PICKER_SECTIONS[field.id];
+        if (!sectionId) return null;
+        const section = model.rootStep.sections.find((candidate) => candidate.id === sectionId)
             // While the Teams directory is still answering there are no audience rows yet; the list
             // opens empty and its pagination footer says it is loading.
-            ?? (drill === 'audiences' && teamAudienceEnabled
+            ?? (sectionId === 'audiences' && teamAudienceEnabled
                 ? { kind: 'static' as const, id: 'audiences', title: props.labels.sharedWith, options: [] }
                 : null);
         if (!section) return null;
-        return { ...model.rootStep, sections: [section] };
-    }, [drill, model.rootStep, props.labels.sharedWith, teamAudienceEnabled]);
+        const audiencesPicker = sectionId === 'audiences';
+        return (
+            <SelectionList
+                key={field.id}
+                rootStep={{ ...model.rootStep, inputPlaceholder: field.label, sections: [{ ...section, title: undefined }] }}
+                selection={model.selection}
+                syncActiveStep={audiencesPicker && props.teamAudienceContext?.kind === 'global' ? syncedAudienceStep : undefined}
+                onActiveStepChange={handleActiveStepChange}
+                listAccessibilityLabel={field.label}
+                onSelect={(optionId) => {
+                    handleSelect(optionId);
+                    // One Whose is the whole answer; audiences stay open for more.
+                    if (sectionId === 'show') close();
+                }}
+                pagination={audiencesPicker ? pagination : undefined}
+                onRequestClose={close}
+                autoFocusInputOnWeb
+                autoFocusInputOnNative={false}
+                maxHeight={maxHeight === undefined ? undefined : Math.max(0, maxHeight - PICKER_HEADER_HEIGHT)}
+                heightBehavior="content"
+                showsVerticalScrollIndicator
+                disableTransitions={props.disableTransitions}
+                testID="session-list-filter-editor"
+            />
+        );
+    }, [handleActiveStepChange, handleSelect, model.rootStep, model.selection, pagination, props.disableTransitions,
+        props.labels.sharedWith, props.teamAudienceContext, syncedAudienceStep, teamAudienceEnabled]);
 
     return (
         <View testID="session-list-filter-editor-surface" style={styles.root}>
-            {drillStep ? (
-                <>
-                    <View style={styles.drillHeader}>
-                        <SelectionListBackChip
-                            testID="session-list-filter-drill-back"
-                            label={props.labels.title}
-                            onPress={closeDrill}
-                        />
-                    </View>
-                    <SelectionList
-                        rootStep={drillStep}
-                        selection={model.selection}
-                        syncActiveStep={drill === 'audiences' && props.teamAudienceContext?.kind === 'global'
-                            ? syncedAudienceStep
-                            : undefined}
-                        onActiveStepChange={handleActiveStepChange}
-                        listAccessibilityLabel={drill === 'tags' ? props.labels.tags : drill === 'projects' ? props.labels.project : props.labels.sharedWith}
-                        onSelect={handleSelect}
-                        pagination={drill === 'audiences' ? pagination : undefined}
-                        onRequestClose={closeDrill}
-                        autoFocusInputOnWeb
-                        autoFocusInputOnNative={false}
-                        maxHeight={props.maxHeight === undefined
-                            ? undefined
-                            : Math.max(0, props.maxHeight - DRILL_HEADER_HEIGHT)}
-                        heightBehavior="content"
-                        showsVerticalScrollIndicator
-                        disableTransitions={props.disableTransitions}
-                        testID="session-list-filter-editor"
-                    />
-                </>
-            ) : (
-                <SessionListFilterPanel
-                    rootStep={model.rootStep}
-                    selectedIds={model.selection.selectedIds}
-                    labels={props.labels}
-                    resultCount={props.resultCount}
-                    resultSummary={props.resultSummary}
-                    maxHeight={props.maxHeight}
-                    onSelect={handleSelect}
-                    onOpenDrill={setDrill}
-                    audiencesAvailable={teamAudienceEnabled}
-                    onReset={props.resetFilters}
-                    onDone={props.onDone}
-                    doneDisabled={props.doneDisabled}
-                />
-            )}
+            <CollectionConditionEditor
+                testID="session-list-filter-conditions"
+                model={conditionModel}
+                onValuePickerChange={handleValuePickerChange}
+                onChange={handleEdit}
+                labels={{ ...conditionLabels, count: conditionLabels.resultCount }}
+                result={props.result ?? (props.resultCount === undefined ? undefined : { matchedCount: props.resultCount, coverage: 'complete' })}
+                {...(props.resultSummary === undefined ? {} : { resultSummary: props.resultSummary })}
+                {...(props.onSaveAsSpace ? { onSaveAsSpace: props.onSaveAsSpace } : {})}
+                {...(props.onDone ? { onDone: props.onDone } : {})}
+                doneLabel={props.doneLabel ?? props.labels.done}
+                {...(props.doneDisabled === undefined ? {} : { doneDisabled: props.doneDisabled })}
+                lockedFieldIds={SESSION_LIST_LOCKED_CONDITION_FIELDS}
+                hiddenFieldIds={hiddenFieldIds}
+                addableFieldIds={choices.addableFieldIds}
+                fieldGroups={[
+                    { id: 'work', title: conditionLabels.groups.work, fieldIds: SESSION_LIST_CONDITION_GROUPS.work },
+                    { id: 'people', title: conditionLabels.groups.people, fieldIds: SESSION_LIST_CONDITION_GROUPS.people },
+                    { id: 'kind', title: conditionLabels.groups.kind, fieldIds: SESSION_LIST_CONDITION_GROUPS.kind },
+                ]}
+                fieldIcons={SESSION_LIST_CONDITION_FIELD_ICONS}
+                formatValue={choices.formatValue}
+                renderValuePicker={renderValuePicker}
+                {...(props.maxHeight === undefined ? {} : { maxHeight: props.maxHeight })}
+            />
         </View>
     );
 });

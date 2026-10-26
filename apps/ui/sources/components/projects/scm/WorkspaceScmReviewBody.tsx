@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 
-import { ScmComparisonBar, ScmComparisonExplainToggle, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
+import { ScmComparisonBar, SCM_COMPARISON_ACTIONS_GAP_PX, ScmComparisonExplainToggle, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonHeader } from '@/components/sessions/files/comparison/ScmComparisonHeader';
 import { ScmComparisonPhoneHeader, type ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { ScmComparisonMoreMenu } from '@/components/sessions/files/comparison/ScmComparisonMoreMenu';
@@ -116,8 +116,12 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         const next = Math.round(event.nativeEvent.layout.width);
         setWidth((previous) => previous === next ? previous : next);
     }, []);
-    const stacked = width !== null && width < COMPARISON_STACKED_MAX_WIDTH_PX;
-    const rail = width !== null && width >= COMPARISON_RAIL_MIN_WIDTH_PX;
+    // Before the body is measured, a window narrower than the stacked bound already decides it: the body
+    // can't be wider than its window, so a phone opens (and reopens after Retry) in its phone layout.
+    const windowWidth = useWindowDimensions().width;
+    const knownWidth = width ?? (windowWidth > 0 && windowWidth < COMPARISON_STACKED_MAX_WIDTH_PX ? windowWidth : null);
+    const stacked = knownWidth !== null && knownWidth < COMPARISON_STACKED_MAX_WIDTH_PX;
+    const rail = knownWidth !== null && knownWidth >= COMPARISON_RAIL_MIN_WIDTH_PX;
     const views = props.views ?? REVIEW_VIEWS;
     const reading = props.reading;
     // Explicit code navigation reveals the active file; a view switch retains Files' own scroll and folding.
@@ -171,7 +175,7 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         if (stacked) return renderPhoneHeader(props.fileCount ?? reading?.source.fileCount ?? null, <>{actions}{review}</>, sections);
         const menu = review && startReviewSection ? [startReviewSection, ...(sections ?? [])] : sections;
         return <ScmComparisonBar leading={renderLeading(props.fileCount ?? null)}
-            trailing={<>{actions}{review ? <>{review}{proposeCommits}</> : trailing}{menu ? <ScmComparisonMoreMenu sections={menu} /> : null}</>} />;
+            trailing={<>{actions}{review ? <>{review}{proposeCommits}</> : trailing}{menu ? <ScmComparisonMoreMenu sections={menu} interactiveTargetGapPx={SCM_COMPARISON_ACTIONS_GAP_PX} /> : null}</>} />;
     };
     // While a state stands in for the files (loading, not a repository, unreachable), the bar keeps its
     // place and its views, but nothing offers to act on files that are not there.

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -53,8 +53,6 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     done: {
-        minHeight: 44,
-        minWidth: 44,
         alignItems: 'flex-end',
         justifyContent: 'center',
     },
@@ -283,9 +281,9 @@ export function SessionAllTabsPageView(props: Readonly<{
         <View style={[styles.page, { paddingTop: insets.top, backgroundColor: materialColor(theme.colors.background.canvas, 'transparent') }]} testID="session-all-tabs-page">
             <View style={styles.pageHeader}>
                 <Text style={styles.pageTitle} accessibilityRole="header">{t('phoneNav.allTabs.title')}</Text>
-                <Pressable style={styles.done} onPress={props.onDone} accessibilityRole="button" hitSlop={8} testID="session-all-tabs-done">
+                <HappierPressable style={styles.done} onPress={props.onDone} accessibilityRole="button" testID="session-all-tabs-done">
                     <Text style={styles.doneText}>{t('common.done')}</Text>
-                </Pressable>
+                </HappierPressable>
             </View>
             <SessionAllTabsOverviewBody sections={props.sections} currentKey={props.currentKey} onOpen={props.onOpen} />
         </View>

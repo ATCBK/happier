@@ -6,7 +6,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useDesktopWindowDragMouseProps } from '@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion';
 import { ActionOperationActivityButton } from '@/components/inbox/actionOperations/ActionOperationActivityButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import { HeaderLogo } from '@/components/ui/navigation/HeaderLogo';
 import { t } from '@/text';
@@ -109,9 +108,8 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     }, []);
     const glyphColor = theme.colors.chrome.header.foreground;
     const toggleLabel = props.columnVisible ? t('common.collapse') : t('common.expand');
-    const stripHeightPx = Math.max(APP_SHELL_TITLE_STRIP_HEIGHT_PX, resolveTouchTargetFloorPx() ?? 0);
     return (
-        <View {...dragProps} testID="app-shell-title-strip" style={[styles.strip, { height: stripHeightPx }]} onLayout={onStripLayout}>
+        <View {...dragProps} testID="app-shell-title-strip" style={styles.strip} onLayout={onStripLayout}>
             <DesktopShellWindowControlsHost>{windowControls}</DesktopShellWindowControlsHost>
             <View style={styles.logoSlot}>
                 <Pressable
@@ -129,6 +127,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                     testID="app-shell-back"
                     variant="plain"
                     size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+                    interactiveTargetGapPx={TITLE_STRIP_CONTROL_GAP_PX}
                     accessibilityLabel={t('common.previous')}
                     disabled={!(props.navigation?.canGoBack ?? history.canNavigateBack)}
                     icon={<Icon name="arrow-left" size={DESKTOP_SIDEBAR_CHROME_ICON_GLYPH_SIZE_PX} color={glyphColor} />}
@@ -138,6 +137,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                     testID="app-shell-forward"
                     variant="plain"
                     size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+                    interactiveTargetGapPx={TITLE_STRIP_CONTROL_GAP_PX}
                     accessibilityLabel={t('common.next')}
                     disabled={!(props.navigation?.canGoForward ?? history.canNavigateForward)}
                     icon={<Icon name="arrow-right" size={DESKTOP_SIDEBAR_CHROME_ICON_GLYPH_SIZE_PX} color={glyphColor} />}
@@ -148,6 +148,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                         testID="app-shell-column-toggle"
                         variant="plain"
                         size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+                        interactiveTargetGapPx={TITLE_STRIP_CONTROL_GAP_PX}
                         accessibilityLabel={toggleLabel}
                         tooltip={toggleLabel}
                         tooltipPlacement="bottom"
@@ -160,6 +161,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                 <PaneArrangementToggle glyphColor={glyphColor} />
                 <AppShellThemeToggle
                     buttonSize={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+                    interactiveTargetGapPx={TITLE_STRIP_CONTROL_GAP_PX}
                     glyphSize={DESKTOP_SIDEBAR_CHROME_ICON_GLYPH_SIZE_PX}
                     color={glyphColor}
                 />
@@ -173,7 +175,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                 <WorkspaceTitleBar
                     catalog={props.workspaceCatalog}
                     clusterEndPx={clusterEndPx}
-                    stripHeightPx={stripHeightPx}
+                    stripHeightPx={APP_SHELL_TITLE_STRIP_HEIGHT_PX}
                     trailingStartPx={props.trailing ? trailingStartPx : undefined}
                 />
             ) : null}
@@ -204,6 +206,7 @@ const PaneArrangementToggle = React.memo(function PaneArrangementToggle(props: R
             testID="app-shell-arrangement-toggle"
             variant="plain"
             size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+            interactiveTargetGapPx={TITLE_STRIP_CONTROL_GAP_PX}
             accessibilityLabel={t('settingsAppearance.paneArrangementEditor')}
             checked={editorFirst}
             selected={editorFirst}
@@ -214,6 +217,9 @@ const PaneArrangementToggle = React.memo(function PaneArrangementToggle(props: R
         />
     );
 });
+
+/** The gap between the strip's controls: their hit areas split it, so neighbours never overlap. */
+const TITLE_STRIP_CONTROL_GAP_PX = 8;
 
 /** The strip's own end inset, after its trailing accessories. */
 const TITLE_STRIP_END_PADDING_PX = 12;
@@ -237,7 +243,7 @@ const stylesheet = StyleSheet.create(() => ({
     controls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: TITLE_STRIP_CONTROL_GAP_PX,
     },
     trailing: {
         marginLeft: 'auto',

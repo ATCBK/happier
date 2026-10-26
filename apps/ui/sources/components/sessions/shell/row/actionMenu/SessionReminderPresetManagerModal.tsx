@@ -1,11 +1,11 @@
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon } from '@/components/ui/icons/Icon';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal/types';
@@ -17,7 +17,6 @@ import {
     type SessionReminderPresetV1,
 } from '@/sync/domains/session/organization/sessionReminderPreset';
 import { t } from '@/text';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 function moveItem(items: readonly SessionReminderPresetV1[], from: number, to: number): SessionReminderPresetV1[] {
     if (to < 0 || to >= items.length) return [...items];
@@ -106,33 +105,31 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
                             {formatSessionReminderPresetRuleLabel(preset.rule)}
                         </Text>
                     </View>
-                    <Pressable
-                        accessibilityRole="button"
+                    <IconButton
+                        iconName="arrow-up"
+                        variant="plain"
+                        size={32}
                         accessibilityLabel={t('sessionsList.reminders.movePresetUpLabel', { preset: effectivePresetLabel })}
                         disabled={saving || index === 0}
                         onPress={() => setDrafts((current) => moveItem(current, index, index - 1))}
-                        style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: index === 0 ? 0.28 : pressed ? motionTokens.press.opacity : 1 })}
-                    >
-                        <Icon name="arrow-up" size={16} color={theme.colors.text.secondary} />
-                    </Pressable>
-                    <Pressable
-                        accessibilityRole="button"
+                    />
+                    <IconButton
+                        iconName="arrow-down"
+                        variant="plain"
+                        size={32}
                         accessibilityLabel={t('sessionsList.reminders.movePresetDownLabel', { preset: effectivePresetLabel })}
                         disabled={saving || index === drafts.length - 1}
                         onPress={() => setDrafts((current) => moveItem(current, index, index + 1))}
-                        style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: index === drafts.length - 1 ? 0.28 : pressed ? motionTokens.press.opacity : 1 })}
-                    >
-                        <Icon name="arrow-down" size={16} color={theme.colors.text.secondary} />
-                    </Pressable>
-                    <Pressable
-                        accessibilityRole="button"
+                    />
+                    <IconButton
+                        iconName="trash"
+                        tone="danger"
+                        variant="plain"
+                        size={32}
                         accessibilityLabel={t('sessionsList.reminders.deletePresetLabel', { preset: effectivePresetLabel })}
                         disabled={saving}
                         onPress={() => setDrafts((current) => current.filter((_, presetIndex) => presetIndex !== index))}
-                        style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? motionTokens.press.opacity : 1 })}
-                    >
-                        <Icon name="trash" size={16} color={theme.colors.state.danger.foreground} />
-                    </Pressable>
+                    />
                 </View>
                 );
             })}

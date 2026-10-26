@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useUsableHomeServerIds } from '@/sync/domains/scope/usableHomeServerIds';
-import { Platform, View, Pressable } from 'react-native';
+import { View } from 'react-native';
+import { HappierPressable, type HappierFocusable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t, type TranslationKeyNoParams } from '@/text';
 import { StatusDot } from '@/components/ui/status/StatusDot';
@@ -54,7 +55,6 @@ import {
 } from '@/components/account/auth/useHomeAccountServiceEntry';
 import { ConnectionPopoverMachineGuidance } from '@/components/navigation/connectionStatus/ConnectionPopoverMachineGuidance';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     readIrohHomeTransportDiagnostics,
     readIrohHomeTransportDiagnosticsRevision,
@@ -89,11 +89,8 @@ type Variant = 'sidebar' | 'header' | 'page' | 'fullScreen';
 const ACCOUNT_HOMES_ROUTE = '/homes';
 const RELAY_SETTINGS_ROUTE = '/settings/server';
 const DENSE_POINTER_TARGET_SIZE = 24;
-const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 /** A1 · Identity & Homes is drawn 300 wide, and keeps that width on its steps (long values wrap). */
 const ACCOUNT_POPOVER_WIDTH = 300;
-/** The header status line's text line (its `statusText` line height). */
-const HEADER_STATUS_LINE_HEIGHT = 16;
 
 type ConnectionStatusKey = 'connected' | 'connecting' | 'disconnected' | 'error' | 'action_required' | 'unknown';
 
@@ -131,13 +128,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         maxWidth: '100%',
         overflow: 'visible',
-    },
-    headerStatusContainer: {
-        // A full 44px target, laid out as one 16px text line: the frame reaches into the header's
-        // padding above and below so the tab title and this line fit the phone header together.
-        minHeight: minimumInteractiveTargetSize,
-        marginTop: -(minimumInteractiveTargetSize - HEADER_STATUS_LINE_HEIGHT) / 2,
-        marginBottom: -(minimumInteractiveTargetSize - HEADER_STATUS_LINE_HEIGHT) / 2,
     },
     sidebarStatusContainer: {
         // Keep the 0.2 line-box geometry while giving React Native Web a real
@@ -268,7 +258,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: theme.space.s12,
     },
     detailsDisclosure: {
-        minHeight: minimumInteractiveTargetSize,
         marginHorizontal: theme.space.s12,
         marginTop: theme.space.s6,
         paddingHorizontal: theme.space.s8,
@@ -277,7 +266,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'space-between',
     },
     copyDiagnosticsButton: {
-        minHeight: minimumInteractiveTargetSize,
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s6,
@@ -508,7 +496,6 @@ const ConnectionPopoverStatusRow = React.memo(function ConnectionPopoverStatusRo
                         variant="plain"
                         size={DENSE_POINTER_TARGET_SIZE}
                         iconSize={16}
-                        minimumInteractiveTargetSize={minimumInteractiveTargetSize}
                         accessibilityLabel={t('common.retry')}
                         busy={props.retryBusy}
                         onPress={props.onRetry}
@@ -583,7 +570,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     const [diagnosticsCopied, setDiagnosticsCopied] = React.useState(false);
     const [pendingServerId, setPendingServerId] = React.useState<string | null>(null);
     const anchorRef = React.useRef<React.ElementRef<typeof View> | null>(null);
-    const triggerRef = React.useRef<React.ElementRef<typeof Pressable> | null>(null);
+    const triggerRef = React.useRef<HappierFocusable | null>(null);
     // A host-drawn trigger's own control, recorded from its press, is where focus returns.
     const hostTriggerFocusRef = React.useRef<FocusReturnTarget>(null);
     const serverProfilesGeneration = useServerProfilesGeneration();
@@ -1060,7 +1047,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                             </Text>
                         </View>
                     ))}
-                    <Pressable
+                    <HappierPressable
                         testID="connection-copy-diagnostics"
                         accessibilityRole="button"
                         accessibilityLabel={diagnosticsCopied
@@ -1079,18 +1066,18 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                 ? t('connectionStatus.diagnosticsCopied')
                                 : t('connectionStatus.copyDiagnostics')}
                         </Text>
-                    </Pressable>
+                    </HappierPressable>
                 </View>
             ) : null}
         </>
     );
     const homeConnectionDetailsContent = (
         <>
-            <Pressable
+            <HappierPressable
                 testID="connection-details-disclosure"
                 accessibilityRole="button"
                 accessibilityLabel={t('common.details')}
-                accessibilityState={{ expanded: detailsExpanded }}
+                expanded={detailsExpanded}
                 onPress={toggleDetails}
                 style={styles.detailsDisclosure}
             >
@@ -1100,7 +1087,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                     size={14}
                     color={theme.colors.text.secondary}
                 />
-            </Pressable>
+            </HappierPressable>
 
             {detailsExpanded ? detailsBody : null}
         </>
@@ -1180,18 +1167,16 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                     accessibilityLabel: `${activeServerLabel}, ${collapsedStatusLabel}`,
                     accountService: accountServiceSummary,
                 }) : (
-                <Pressable
-                    ref={triggerRef}
+                <HappierPressable
+                    controlRef={(node) => { triggerRef.current = node; }}
                     style={[
                         styles.statusContainer,
-                        props.variant === 'header'
-                            ? styles.headerStatusContainer
-                            : styles.sidebarStatusContainer,
+                        props.variant === 'header' ? null : styles.sidebarStatusContainer,
                     ]}
                     onPress={handleActivate}
                     accessibilityRole="button"
                     accessibilityLabel={`${activeServerLabel}, ${collapsedStatusLabel}`}
-                    accessibilityState={props.variant === 'sidebar' ? { expanded: open } : undefined}
+                    expanded={props.variant === 'sidebar' ? open : undefined}
                 >
                     {collapsedShowsAttentionCue ? (
                         <Icon
@@ -1221,7 +1206,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                         color={collapsedStatusColor}
                         style={styles.statusChevron}
                     />
-                </Pressable>
+                </HappierPressable>
                 )}
                 {props.variant === 'sidebar' && open ? (
                     <Popover

@@ -2,18 +2,20 @@ import * as React from 'react';
 import { Platform, Pressable } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import type { InboxPluginSessionRow } from './inboxItemProjection';
+import { InboxPluginSessionLines } from './InboxPluginSessionLines';
+import type { InboxPluginSessionControlInvoker } from '@/hooks/inbox/useInboxPluginSessionControls';
 
 import { InboxWorkRow } from './InboxWorkRow';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { t } from '@/text';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
-import type { Session } from '@/sync/domains/state/storageTypes';
+
 import {
     SessionListIdentity,
     type SessionListIdentityDisplay,
@@ -21,6 +23,7 @@ import {
 import { SESSION_LIST_ROW_IDENTITY_METRICS } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import type { WorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
+import type { SessionListPresentationSource } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 
 const MARK_READ_ACCESSIBILITY_ACTION = 'markRead';
 const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
@@ -43,7 +46,8 @@ const NO_ACCESSIBILITY_ACTIONS: readonly { name: string; label?: string }[] = []
  * withdraws only the mark-read affordance and leaves the row openable.
  */
 export const InboxReadySessionRow = React.memo(function InboxReadySessionRow(props: Readonly<{
-    session: Session;
+    session: React.ComponentProps<typeof SessionListIdentity>['session'];
+    presentationSource?: SessionListPresentationSource;
     identityDisplay: SessionListIdentityDisplay;
     connected: boolean;
     sessionId: string;
@@ -58,6 +62,9 @@ export const InboxReadySessionRow = React.memo(function InboxReadySessionRow(pro
     showDivider?: boolean;
     onOpen: () => void;
     onMarkRead: () => Promise<void> | void;
+    /** What plugins say about this Session (a watched PR) and their declared controls, under its line. */
+    pluginSessionRows?: readonly InboxPluginSessionRow[];
+    invokePluginSessionControl?: InboxPluginSessionControlInvoker;
 }>) {
     const { theme } = useUnistyles();
     const swipeableRef = React.useRef<Swipeable | null>(null);
@@ -94,9 +101,14 @@ export const InboxReadySessionRow = React.memo(function InboxReadySessionRow(pro
             accessibilityActions={accessibilityActions}
             onAccessibilityAction={onAccessibilityAction}
             onPress={props.onOpen}
+            belowAccessory={props.pluginSessionRows?.length && props.invokePluginSessionControl ? (
+                <InboxPluginSessionLines rows={props.pluginSessionRows} invoke={props.invokePluginSessionControl}
+                    testID={`${testIdPrefix}.plugin_rows`} />
+            ) : undefined}
             mark={props.identityDisplay !== 'none' ? (
                 <SessionListIdentity
                     session={props.session}
+                    presentationSource={props.presentationSource}
                     display={props.identityDisplay}
                     serverId={props.serverId}
                     color={theme.colors.text.primary}
@@ -112,7 +124,6 @@ export const InboxReadySessionRow = React.memo(function InboxReadySessionRow(pro
                     accessibilityLabel={t('sessionInfo.markSessionRead')}
                     variant="plain"
                     size={28}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={8}
                     disabled={props.pending}
                     onPress={markRead}

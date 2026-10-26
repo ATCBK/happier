@@ -40,6 +40,8 @@ export function SidebarFooterPopoverButton(props: Readonly<{
     placement?: 'top' | 'right';
     /** The visible button square; the rail's icons are larger than the footer's. */
     buttonSizePx?: number;
+    /** The free space the hit area may reach on each side, where the host tiles buttons itself (the rail); the footer's own gap applies otherwise. */
+    interactiveTargetEdgesPx?: Readonly<{ leading: number; trailing: number; top?: number; bottom?: number }>;
     /** The glyph's size; the rail passes its one rail-icon size. */
     iconSizePx?: number;
     /** The popover's width when its content needs more than the default (the Usage popover's meters). */
@@ -99,6 +101,7 @@ export function SidebarFooterPopoverButton(props: Readonly<{
                 variant="plain"
                 size={props.buttonSizePx ?? SIDEBAR_FOOTER_ICON_BUTTON_SIZE_PX}
                 interactiveTargetGapPx={SIDEBAR_FOOTER_GAP_PX}
+                interactiveTargetEdgesPx={props.interactiveTargetEdgesPx}
                 accessibilityLabel={props.label}
                 // A previewing button needs no tooltip: resting on it shows the popover itself.
                 tooltip={hoverPreview ? undefined : props.label}

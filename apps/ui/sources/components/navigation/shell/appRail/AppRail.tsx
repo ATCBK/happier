@@ -36,6 +36,7 @@ import { AppRailMachines } from './AppRailMachines';
 import { AppRailBotMenuIcon, AppRailBotPin, AppRailBots, useAppRailBotHomes } from './AppRailBots';
 import {
     APP_RAIL_ICON_GLYPH_SIZE_PX,
+    APP_RAIL_ITEM_EDGES_PX,
     APP_RAIL_ITEM_SIZE_PX,
     APP_RAIL_ITEM_SLOT_PX,
     APP_RAIL_WIDTH_PX,
@@ -233,6 +234,7 @@ const AppRailItem = React.memo(function AppRailItem(props: Readonly<{
             testID={`app-rail:${entry.id}`}
             variant="plain"
             size={APP_RAIL_ITEM_SIZE_PX}
+            interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
             accessibilityLabel={entry.title}
             // Where resting on the icon peeks its column, the column says what it is.
             tooltip={peeks ? undefined : tooltip}
@@ -291,6 +293,7 @@ const AppRailInbox = React.memo(function AppRailInbox(props: Readonly<{
                 placement="right"
                 anchorAlignVertical="start"
                 buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
+                interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
                 iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
                 popoverWidthPx={INBOX_POPOVER_WIDTH_PX}
                 renderContent={renderContent}
@@ -303,11 +306,12 @@ const AppRailInbox = React.memo(function AppRailInbox(props: Readonly<{
 /** The Inbox count: read only by this leaf, so a new item re-renders the badge and nothing else. */
 const AppRailInboxBadge = React.memo(function AppRailInboxBadge(props: Readonly<{ testID: string }>) {
     const summary = useSharedInboxSummary();
-    if (summary.count <= 0) return null;
+    if (summary.count !== null && summary.count <= 0) return null;
     return (
         <AppRailBadge
             testID={props.testID}
-            signal={{ kind: 'count', value: summary.count, tone: resolveAppRailBadgeTone({ source: 'inbox' }) }}
+            signal={summary.count === null ? { kind: 'dot', tone: resolveAppRailBadgeTone({ source: 'inbox' }) }
+                : { kind: 'count', value: summary.count, tone: resolveAppRailBadgeTone({ source: 'inbox' }) }}
         />
     );
 });
@@ -401,6 +405,7 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
                         testID="app-rail-more.trigger"
                         variant="plain"
                         size={APP_RAIL_ITEM_SIZE_PX}
+                        interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
                         accessibilityLabel={t('common.moreActions')}
                         tooltip={t('common.moreActions')}
                         tooltipPlacement="right"
@@ -502,6 +507,7 @@ const AppRailUsage = React.memo(function AppRailUsage(props: Readonly<{ renderTr
                         label={t('settings.usage')}
                         placement="right"
                         buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
+                        interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
                         iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
                         popoverWidthPx={RAIL_POPOVER_WIDE_WIDTH_PX}
                         hoverPreview
@@ -514,6 +520,7 @@ const AppRailUsage = React.memo(function AppRailUsage(props: Readonly<{ renderTr
                         testID="app-rail-usage"
                         variant="plain"
                         size={APP_RAIL_ITEM_SIZE_PX}
+                        interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
                         accessibilityLabel={t('settings.usage')}
                         tooltip={t('settings.usage')}
                         tooltipPlacement="right"

@@ -17,7 +17,7 @@ import { getAvatarUrl } from '@/sync/domains/profiles/profile';
 import { useProfile } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
-import { APP_RAIL_AVATAR_SIZE_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
+import { APP_RAIL_AVATAR_SIZE_PX, APP_RAIL_ITEM_EDGES_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
 
 type AccountIdentity =
     | Readonly<{ kind: 'signedIn'; name: string; profileId: string; imageUrl: string | null; thumbhash?: string }>
@@ -89,6 +89,8 @@ const AppRailAccountTrigger = React.memo(function AppRailAccountTrigger(props: R
                 accessibilityLabel={`${title}, ${state.accessibilityLabel}`}
                 expanded={state.open}
                 hasPopup="dialog"
+                // The avatar fills its rail slot's width; above and below it the hit area takes half the slot's free space.
+                hitReach={{ top: APP_RAIL_ITEM_EDGES_PX.top, bottom: APP_RAIL_ITEM_EDGES_PX.bottom }}
                 onPress={state.activate}
                 style={(pressState) => [
                     styles.trigger,

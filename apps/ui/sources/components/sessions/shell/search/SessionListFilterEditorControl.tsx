@@ -3,78 +3,53 @@ import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, Popover } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
-import { pageTitleTypography } from '@/components/ui/layout/pageTitleTypography';
+import { t } from '@/text';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { shouldUseReadablePhoneMinimalSessionRow } from '../resolveSessionListDensityViewState';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 
-import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from '../sessionListStyles';
+import { sessionListStyles } from '../sessionListStyles';
 import {
     SessionListFilterEditor,
     type SessionListFilterEditorProps,
 } from './SessionListFilterEditor';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { useSessionListSpaceKeyboardCommands } from '@/keyboard/sessionListSpaces';
+import { collectionTitleStyles as titleStyles, useCollectionTitleTriggerHitArea } from '@/components/ui/lists/collection/CollectionTitleButton';
 
-type EditorProps = Omit<SessionListFilterEditorProps, 'onDone' | 'maxHeight'>;
+type EditorProps = Omit<SessionListFilterEditorProps, 'maxHeight'>;
 
 export type SessionListFilterEditorControlProps = Readonly<{
     label: string;
     active: boolean;
     presentation?: 'title' | 'summary';
+    keyboardEnabled?: boolean;
+    openRequested?: boolean;
+    onOpenRequestHandled?: () => void;
+    /**
+     * A host that draws its own entry points (the Sessions column's title menu, Find's filter button,
+     * ⌥F) controls the editor and hangs it from its own anchor; no trigger is drawn here.
+     */
+    controlled?: Readonly<{
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        anchorRef: React.RefObject<View | null>;
+    }>;
     editor: EditorProps;
 }>;
 
-/**
- * The title fills the column's title row (lab S1); where the primary pointer is a finger it takes the
- * platform's touch floor instead.
- */
-const MINIMUM_TRIGGER_TARGET_SIZE = resolveTouchTargetFloorPx() ?? SESSION_LIST_COLUMN_METRICS.titleRowHeightPx;
-/**
- * The scope popover's width: the approved panel (design lab C2), a compact surface that never takes the
- * sidebar's full width. At this width the scope tiles stack in one column so every name stays whole
- * (the panel's `SCOPE_TILE_MIN_WIDTH`); a wider host (a native dialog on a large screen) seats two side by side.
- */
-const SCOPE_POPOVER_WIDTH_PX = 312;
+/** The filter popover's width (lab `clfilter:filter`): wide enough for Field · operator · values · remove. */
+const SCOPE_POPOVER_WIDTH_PX = 356;
 /** Tall enough for every facet on a laptop screen; beyond it the panel scrolls inside. */
 const SCOPE_POPOVER_MAX_HEIGHT_PX = 520;
 /** Keeps the popover off the window's edges when it is clamped there (phones). */
 const SCOPE_POPOVER_EDGE_PADDING = { horizontal: 8, vertical: 8 } as const;
 
-const stylesheet = StyleSheet.create((theme) => ({
-    // The list's title is its scope: "My work ⌄" opens the scope menu. It reads as a title (primary
-    // text, semibold), not as a filter pill; the funnel appears only when the view is narrowed beyond
-    // the default, so the list never looks inexplicably short.
-    trigger: {
-        minHeight: MINIMUM_TRIGGER_TARGET_SIZE,
-        minWidth: MINIMUM_TRIGGER_TARGET_SIZE,
-        flexShrink: 1,
-        paddingHorizontal: theme.space.s6,
-        // Optical alignment: the label, not the press fill, sits on the group labels' edge.
-        marginLeft: -6,
-        borderRadius: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        gap: theme.space.s6,
-    },
-    triggerPressed: {
-        backgroundColor: theme.colors.surface.pressed,
-    },
-    triggerLabel: {
-        minWidth: 0,
-        flexShrink: 1,
-        ...Typography.variant('heading'),
-        color: theme.colors.text.primary,
-    },
-    phoneTriggerLabel: {
-        ...pageTitleTypography(),
-    },
+const stylesheet = StyleSheet.create(() => ({
     modalBody: {
         minHeight: 320,
         alignItems: 'stretch',
@@ -105,8 +80,12 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
     const { width: windowWidth } = useWindowDimensions();
     const phone = shouldUseReadablePhoneMinimalSessionRow({ isTablet, platform: Platform.OS, windowWidth });
     const usePopoverHost = Platform.OS === 'web' || isTablet;
-    const [popoverOpen, setPopoverOpen] = React.useState(false);
-    const anchorRef = React.useRef<View>(null);
+    const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+    const controlled = props.controlled;
+    const popoverOpen = controlled ? controlled.open : uncontrolledOpen;
+    const setPopoverOpen = controlled ? controlled.onOpenChange : setUncontrolledOpen;
+    const ownAnchorRef = React.useRef<View>(null);
+    const anchorRef = controlled?.anchorRef ?? ownAnchorRef;
     const modalIdRef = React.useRef<string | null>(null);
 
     const openArchivedFromEditor = props.editor.onOpenArchived;
@@ -136,6 +115,8 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
             return;
         }
         if (modalIdRef.current) return;
+        // A phone shows the editor as a dialog; a controlled host's open state settles once it is shown.
+        if (controlled?.open) controlled.onOpenChange(false);
         let modalId = '';
         modalId = Modal.show({
             component: SessionListFilterEditorModal,
@@ -153,8 +134,20 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
             },
         });
         modalIdRef.current = modalId;
-    }, [editorProps, props.editor.labels.title, usePopoverHost]);
+    }, [controlled, editorProps, props.editor.labels.title, setPopoverOpen, usePopoverHost]);
 
+    useSessionListSpaceKeyboardCommands({ enabled: props.keyboardEnabled !== false && !controlled, openFilter: open });
+    const controlledOpen = controlled?.open === true;
+    React.useEffect(() => {
+        if (controlledOpen && !usePopoverHost) open();
+    }, [controlledOpen, open, usePopoverHost]);
+    React.useEffect(() => {
+        if (!props.openRequested) return;
+        open();
+        props.onOpenRequestHandled?.();
+    }, [open, props.onOpenRequestHandled, props.openRequested]);
+
+    const triggerHitArea = useCollectionTitleTriggerHitArea();
     const trigger = (
         <Pressable
             ref={anchorRef}
@@ -166,14 +159,17 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
             aria-haspopup={usePopoverHost ? 'dialog' : undefined}
             aria-pressed={props.active}
             onPress={open}
+            hitSlop={triggerHitArea.hitSlop}
+            onLayout={triggerHitArea.onLayout}
             style={({ pressed }) => [
-                styles.trigger,
-                pressed ? styles.triggerPressed : null,
+                titleStyles.trigger,
+                pressed ? titleStyles.triggerPressed : null,
             ]}
         >
+            {triggerHitArea.frame}
             <Text numberOfLines={1} style={props.presentation === 'summary'
                 ? sessionListStyles.searchChromeStatusText
-                : [styles.triggerLabel, phone ? styles.phoneTriggerLabel : null]}>{props.label}</Text>
+                : [titleStyles.triggerLabel, phone ? titleStyles.phoneTriggerLabel : null]}>{props.label}</Text>
             {props.presentation !== 'summary' ? <Icon name="caret-down" size={12} color={theme.colors.text.secondary} /> : null}
             {props.active && props.presentation !== 'summary' ? (
                 <Icon
@@ -186,10 +182,10 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
         </Pressable>
     );
 
-    if (!usePopoverHost) return trigger;
+    if (!usePopoverHost) return controlled ? null : trigger;
     return (
         <>
-            {trigger}
+            {controlled ? null : trigger}
             <Popover
                 open={popoverOpen}
                 anchorRef={anchorRef}
@@ -207,6 +203,11 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
                 onRequestClose={() => setPopoverOpen(false)}
                 closeOnAnchorPress
                 backdrop={false}
+                // A phone-sized window takes the editor as a sheet with Show N (lab `clfilter:filterP`).
+                phonePresentation="sheet"
+                // The editor's own header (Filter · Clear) titles the sheet.
+                sheetHeader="none"
+                accessibilityLabel={props.editor.labels.conditions.title}
                 containerStyle={{ paddingHorizontal: 0 }}
             >
                 {({ maxHeight }) => (
@@ -215,6 +216,12 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
                     <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme" scrollEnabled={false}>
                         <SessionListFilterEditor
                             {...editorProps}
+                            {...(phone && !editorProps.onDone ? {
+                                onDone: () => setPopoverOpen(false),
+                                ...(editorProps.result?.coverage === 'complete'
+                                    ? { doneLabel: t('sessionsList.filterShowCount', { count: editorProps.result.matchedCount }) }
+                                    : {}),
+                            } : {})}
                             maxHeight={maxHeight}
                         />
                     </FloatingOverlay>

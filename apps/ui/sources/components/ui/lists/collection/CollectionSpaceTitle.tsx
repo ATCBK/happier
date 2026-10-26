@@ -1,0 +1,177 @@
+import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
+import type { CollectionEntityKindV1 } from '@happier-dev/protocol/collections/spaces/collectionSpacesV1';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { collectionSpacesManageHref } from '@/components/settings/session/collectionSpaceSettings';
+
+import {
+  DropdownMenu,
+  type DropdownMenuItem,
+} from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { KeyboardShortcutLabelsContext } from '@/keyboard/shortcutLabels';
+import { t } from '@/text';
+
+import { resolveCollectionSpaceIconName, type CollectionSpacesStripItem } from './CollectionSpacesStrip';
+import { CollectionTitleButton } from './CollectionTitleButton';
+
+const SPACE_ITEM_PREFIX = 'space:';
+const FILTER_ITEM = 'filter';
+const SAVE_AS_ITEM = 'save-as';
+const SAVE_CHANGES_ITEM = 'save-changes';
+const EDIT_ITEM = 'edit';
+const MANAGE_ITEM = 'manage';
+
+type ShortcutId = keyof React.ContextType<typeof KeyboardShortcutLabelsContext>;
+
+/**
+ * A saved-space list's title (Sessions, Workflows, Discussions — R9): it names the selected space and its
+ * chevron opens one menu (lab `clfilter`, title chevron ruling): every space with its shortcut, then
+ * Filter…, Save as space… or Edit space…, and Manage spaces (that entity's Settings → Spaces page).
+ */
+export const CollectionSpaceTitle = React.memo(function CollectionSpaceTitle(
+  props: Readonly<{
+    /** `<prefix>-title`, `<prefix>-menu:<space id>`, `<prefix>-menu-filter`, … */
+    testIDPrefix: string;
+    /** Whose spaces Manage spaces opens. */
+    entityKind: CollectionEntityKindV1;
+    label: string;
+    /** Under a page's own title (the Workflows library home) the space title stays a heading on a phone. */
+    titleScale?: 'page' | 'section';
+    spaces: readonly CollectionSpacesStripItem[];
+    /** The list's digit shortcuts, when it has them: `${prefix}${ordinal}` for the first nine spaces. */
+    spaceShortcutPrefix?: string;
+    /** The list's Filter… shortcut, when it has one. */
+    filterShortcutId?: ShortcutId;
+    selectedSpaceId: string;
+    modified: boolean;
+    onSelectSpace: (spaceId: string) => void;
+    onOpenFilter: () => void;
+    onSaveAs: () => void;
+    onSaveChanges: () => void;
+    onEdit: () => void;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const [open, setOpen] = React.useState(false);
+  const router = useRouter();
+  const shortcutLabels = React.useContext(KeyboardShortcutLabelsContext);
+  const iconColor = theme.colors.text.secondary;
+  const items = React.useMemo<readonly DropdownMenuItem[]>(
+    () => [
+      ...props.spaces.map((space, index): DropdownMenuItem => ({
+        id: SPACE_ITEM_PREFIX + space.id,
+        testID: `${props.testIDPrefix}-menu:${space.id}`,
+        title: space.name,
+        icon: (
+          <Icon
+            name={resolveCollectionSpaceIconName(space.icon)}
+            size={ICON_SIZE.sm}
+            color={iconColor}
+          />
+        ),
+        shortcut:
+          props.spaceShortcutPrefix !== undefined && index < 9
+            ? shortcutLabels[`${props.spaceShortcutPrefix}${index + 1}` as ShortcutId]
+            : undefined,
+        checked: space.id === props.selectedSpaceId,
+        category: 'spaces',
+      })),
+      {
+        id: FILTER_ITEM,
+        testID: `${props.testIDPrefix}-menu-filter`,
+        title: t('sessionsList.spacesFilter'),
+        icon: (
+          <Icon name="funnel-simple" size={ICON_SIZE.sm} color={iconColor} />
+        ),
+        shortcut: props.filterShortcutId ? shortcutLabels[props.filterShortcutId] : undefined,
+        category: 'actions',
+      },
+      ...(props.modified
+        ? [
+            {
+              id: SAVE_CHANGES_ITEM,
+              testID: `${props.testIDPrefix}-menu-save-changes`,
+              title: t('sessionsList.spacesSaveChanges'),
+              category: 'actions',
+            },
+            {
+              id: SAVE_AS_ITEM,
+              testID: `${props.testIDPrefix}-menu-save-as`,
+              title: t('sessionsList.spacesSaveAs'),
+              category: 'actions',
+            },
+          ]
+        : [
+            {
+              id: EDIT_ITEM,
+              testID: `${props.testIDPrefix}-menu-edit`,
+              title: t('sessionsList.spacesEdit'),
+              category: 'actions',
+            },
+          ]),
+      {
+        id: MANAGE_ITEM,
+        testID: `${props.testIDPrefix}-menu-manage`,
+        title: t('sessionsList.spacesManage'),
+        category: 'actions',
+      },
+    ],
+    [
+      iconColor,
+      props.filterShortcutId,
+      props.modified,
+      props.selectedSpaceId,
+      props.spaceShortcutPrefix,
+      props.spaces,
+      props.testIDPrefix,
+      shortcutLabels,
+    ],
+  );
+  const handleSelect = React.useCallback(
+    (itemId: string) => {
+      setOpen(false);
+      if (itemId.startsWith(SPACE_ITEM_PREFIX))
+        props.onSelectSpace(itemId.slice(SPACE_ITEM_PREFIX.length));
+      else if (itemId === FILTER_ITEM) props.onOpenFilter();
+      else if (itemId === SAVE_AS_ITEM) props.onSaveAs();
+      else if (itemId === SAVE_CHANGES_ITEM) props.onSaveChanges();
+      else if (itemId === EDIT_ITEM) props.onEdit();
+      else if (itemId === MANAGE_ITEM)
+        router.push(collectionSpacesManageHref(props.entityKind));
+    },
+    [props, router],
+  );
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={setOpen}
+      items={items}
+      onSelect={handleSelect}
+      variant="slim"
+      search={false}
+      separateCategories
+      matchTriggerWidth={false}
+      maxWidthCap={280}
+      popoverPortalWebTarget="body"
+      placement="bottom"
+      popoverAnchorAlign="start"
+      popoverPhonePresentation="sheet"
+      popoverAccessibilityLabel={t('sessionsList.spacesTitle')}
+      trigger={({ toggle }) => (
+        <CollectionTitleButton
+          testID={`${props.testIDPrefix}-title`}
+          label={props.label}
+          accessibilityLabel={t('sessionsList.spacesTitleMenu', {
+            name: props.label,
+          })}
+          expanded={open}
+          hasPopup="menu"
+          onPress={toggle}
+          {...(props.titleScale ? { scale: props.titleScale } : {})}
+        />
+      )}
+    />
+  );
+});

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { t } from '@/text';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -13,11 +14,8 @@ import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messa
 import { useItemRowHovered } from '@/components/ui/lists/ItemRowHover';
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
 
-type AppTheme = ReturnType<typeof useUnistyles>['theme'];
-
 type ProjectsListItemMenuProps = Readonly<{
     testID?: string;
-    theme: AppTheme;
     /** The checkout the row opens; `null` on a Project row with several checkouts (Hide only). */
     workspaceRef: WorkspaceRefV1 | null;
     pinAction?: 'pin' | 'unpin' | null;
@@ -31,6 +29,13 @@ type ProjectsListItemMenuProps = Readonly<{
     /** Hide the Project this row belongs to (lab p-projects HIDE); its sessions and files stay. */
     onHideProject?: (() => void) | null;
 }>;
+
+const ROW_MENU_BUTTON_PX = 24;
+/**
+ * The free space around the button inside the shortest row (the button is centred in it). Stacked rows
+ * touch, so the finger reach stops at the row's own edge and a neighbour's trigger never shares it.
+ */
+const ROW_MENU_VERTICAL_GAP_PX = HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight - ROW_MENU_BUTTON_PX;
 
 function stopPressEventPropagation(event: unknown): void {
     const maybeEvent = event as {
@@ -46,6 +51,7 @@ function stopPressEventPropagation(event: unknown): void {
 }
 
 export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps) => {
+    const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(false);
     const rowHovered = useItemRowHovered();
     const pinTitle = props.pinAction === 'unpin'
@@ -66,7 +72,7 @@ export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps
             id: 'hide',
             title: t('projects.identity.hide'),
             subtitle: t('projects.identity.hideConsequence'),
-            icon: <Icon name="eye-slash" size={16} color={props.theme.colors.text.secondary} />,
+            icon: <Icon name="eye-slash" size={16} color={theme.colors.text.secondary} />,
         } : null;
         if (!hasWorkspaceRef) return hideItem ? [hideItem] : [];
         // Lab p-projects HIDE: start work here and keep the repository first, then the row's own edits.
@@ -74,44 +80,44 @@ export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps
             nextItems.push({
                 id: 'new-session',
                 title: t('projects.identity.newSessionHere'),
-                icon: <Icon name="plus" size={16} color={props.theme.colors.text.secondary} />,
+                icon: <Icon name="plus" size={16} color={theme.colors.text.secondary} />,
             });
         }
         if (canSaveAsSource) {
             nextItems.push({
                 id: 'save-source',
                 title: t('projects.identity.saveAsSource'),
-                icon: <Icon name="books" size={16} color={props.theme.colors.text.secondary} />,
+                icon: <Icon name="books" size={16} color={theme.colors.text.secondary} />,
             });
         }
         if ((props.pinAction === 'pin' || props.pinAction === 'unpin') && pinTitle) {
             nextItems.push({
                 id: props.pinAction,
                 title: pinTitle,
-                icon: <Icon name="push-pin" size={16} color={props.theme.colors.text.secondary} />,
+                icon: <Icon name="push-pin" size={16} color={theme.colors.text.secondary} />,
             });
         }
         nextItems.push(
             {
                 id: 'rename',
                 title: renameTitle,
-                icon: <Icon name="pencil" size={16} color={props.theme.colors.text.secondary} />,
+                icon: <Icon name="pencil" size={16} color={theme.colors.text.secondary} />,
             },
             {
                 id: 'reset',
                 title: resetTitle,
-                icon: <Icon name="arrow-clockwise" size={16} color={props.theme.colors.text.secondary} />,
+                icon: <Icon name="arrow-clockwise" size={16} color={theme.colors.text.secondary} />,
             },
             {
                 id: 'remove',
                 title: removeTitle,
-                icon: <Icon name="trash" size={16} color={props.theme.colors.state.danger.foreground} />,
+                icon: <Icon name="trash" size={16} color={theme.colors.state.danger.foreground} />,
             },
         );
         // Hide sits before Remove: it keeps everything, Remove forgets the checkout.
         if (hideItem) nextItems.splice(nextItems.length - 1, 0, hideItem);
         return nextItems;
-    }, [canHide, canSaveAsSource, canStartSession, hasWorkspaceRef, pinTitle, props.pinAction, props.theme.colors.state.danger.foreground, props.theme.colors.text.secondary, removeTitle, renameTitle, resetTitle]);
+    }, [canHide, canSaveAsSource, canStartSession, hasWorkspaceRef, pinTitle, props.pinAction, theme.colors.state.danger.foreground, theme.colors.text.secondary, removeTitle, renameTitle, resetTitle]);
 
     const handleSelect = useEventCallback((itemId: string) => {
         if (itemId === 'hide') {
@@ -166,7 +172,8 @@ export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps
                     testID={props.testID}
                     iconName="dots-three"
                     variant="plain"
-                    size={24}
+                    size={ROW_MENU_BUTTON_PX}
+                    interactiveTargetVerticalGapPx={ROW_MENU_VERTICAL_GAP_PX}
                     accessibilityLabel={t('common.moreActions')}
                     tooltipHidden={open}
                     onPress={(event) => {

@@ -1,8 +1,6 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { InboxWorkRow } from '../InboxWorkRow';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import type { OpenUsageNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -29,7 +27,6 @@ export const UsageNoticeInboxRow = React.memo(function UsageNoticeInboxRow(props
                     iconName="x"
                     variant="plain"
                     size={28}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={8}
                     onPress={dismiss}
                 />

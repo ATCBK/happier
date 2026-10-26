@@ -2,6 +2,8 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { readHitFrameReach } from '@/dev/testkit/harness/hitFrameReach';
+import { HappierUiPlatformProvider } from '@happier-dev/plugin-ui/environment';
 
 import { installNavigationShellCommonModuleMocks } from '../navigationShellTestHelpers';
 
@@ -25,6 +27,20 @@ afterEach(() => {
 });
 
 describe('AppShellTitleStrip', () => {
+    // The 24 px controls sit 8 px apart: a finger's hit area takes half of that on each side, so Back, Next and
+    // the column toggle meet without overlapping.
+    it('splits the gap between its controls instead of reaching 10 px into the next one', async () => {
+        const { AppShellTitleStrip } = await import('./AppShellTitleStrip');
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <AppShellTitleStrip columnVisible columnToggleAvailable onToggleColumn={() => {}} />
+            </HappierUiPlatformProvider>,
+        );
+        for (const id of ['app-shell-back', 'app-shell-forward', 'app-shell-column-toggle']) {
+            const reach = readHitFrameReach(screen.findByTestId(id)!);
+            expect([reach?.left, reach?.right]).toEqual([4, 4]);
+        }
+    });
     it('uses workspace availability and actions for the shell history controls', async () => {
         const navigation = { canGoBack: true, canGoForward: true, back: vi.fn(), forward: vi.fn(), openHref: vi.fn() };
         const { AppShellTitleStrip } = await import('./AppShellTitleStrip');

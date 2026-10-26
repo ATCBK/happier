@@ -156,7 +156,6 @@ const SessionWorkflowRunPanel = React.memo<SessionWorkflowRunPanelProps>((props)
                             testIDPrefix={`workflow-run-panel-view-${props.runHeadline.runId}`}
                             accessibilityLabel={t('workflows.tabsAccessibility.activityFlow')}
                             compact
-                            targetSize="platform"
                         />
                         {view === 'flow' && flowProjection ? (
                             <WorkflowFlowView

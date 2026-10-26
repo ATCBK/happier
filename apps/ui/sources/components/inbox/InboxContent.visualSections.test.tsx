@@ -4,7 +4,7 @@ import { StyleSheet as NativeStyleSheet } from 'react-native';
 import { act, type ReactTestRenderer, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, createSessionViewerFixture, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createAutomationRunFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
@@ -17,8 +17,11 @@ import { buildInboxItems, type InboxItem } from './inboxItems';
 import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
 import { buildServerScopedSessionKey } from '@/sync/domains/session/navigation/sessionNavigationOrder';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { SessionPresentationRecord, SessionListPresentationSource } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { workflowRunRowFromAutomationRun, workflowRunRowFromSummary, type WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
-import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
+import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
+import { projectSessionContextPresentation } from '@/sync/domains/session/presentation/sessionContextPresentation';
+import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
 
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -90,25 +93,32 @@ function storedSession(id: string, facts: Readonly<{ lead?: string; managedSessi
         ...(facts.lead ? { manager: { sessionId: facts.lead } } : {}),
         ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: 1, needsYou: 1, stalled: 1, finished: 0, attentionPrimary: null } } : {}),
         ...(facts.turn ? { latestTurnStatus: facts.turn } : {}),
+        ...(facts.turn === 'failed' ? { viewer: createSessionViewerFixture({
+            latestFailureSeq: 4,
+            readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+            attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' },
+        }) } : {}),
     });
 }
 
-function candidate(session: Session, attentionState: string, reasons: readonly string[], serverId = 'server-a') {
-    if (session.serverId !== serverId) session = { ...session, serverId };
+function candidate<T extends SessionPresentationRecord>(session: T, reasons: readonly SessionPersonalAttentionReasonV1[],
+    serverId = 'server-a', presentationSource?: SessionListPresentationSource) {
+    const presentedSession = { ...session, serverId, viewer: createSessionViewerFixture({ ...session.viewer,
+        attention: { needsAttention: reasons.length > 0, reasons: [...reasons], primary: reasons[0] ?? null, presentation: 'full' },
+    }) };
+    const attention = buildSessionActivityAttention({ session: presentedSession, presentationSource, nowMs: NOW });
     return {
-        sessionId: session.id,
-        serverId,
-        address: { serverId, sessionId: session.id },
-        session,
-        awareness: projectUiSessionAwareness(session, NOW),
+        ...attention,
         title: `Session ${session.id}`,
         subtitle: `/workspace/${session.id}`,
-        context: { contextLine: `Home · ${session.id}`, segments: [{ kind: 'home', label: 'Home' }, { kind: 'workspace', label: session.id }] },
+        context: projectSessionContextPresentation({
+            address: { serverId, sessionId: session.id }, home: { name: 'Home', serverUrl: null },
+            audience: null, responsibility: null, contentAvailability: attention.awareness.encryption,
+            workspace: { label: session.id },
+            freshness: { state: 'unknown', lastSuccessAt: null, label: null, lastUpdatedLabel: null },
+        }),
         route: `/session/${session.id}`,
-        attentionState,
-        personalAttention: { reasons, presentation: 'full' },
-        reasons: { hasBlockedPendingDelivery: false },
-    } as never;
+    };
 }
 
 const lead = storedSession('lead', { managedSessions: 3 });
@@ -140,12 +150,12 @@ function createModel(options: Readonly<{
     const attention = createInboxAttentionFixture(serverId);
     const sessionEntries = needsYou ? [
         // A worker permission prompt and a stopped session's pending request (A17: "Resume").
-        { candidate: candidate(worker, 'action_required', ['permission_required'], serverId), pendingPermissions: [{ id: 'p-worker' }], pendingUserActions: [] },
-        { candidate: candidate(stopped, 'action_required', ['permission_required'], serverId), pendingPermissions: [{ id: 'p-stopped' }], pendingUserActions: [] },
-        { candidate: candidate(failed, 'failed', ['failed'], serverId), pendingPermissions: [], pendingUserActions: [] },
+        { candidate: candidate(worker, ['permission_required'], serverId), pendingPermissions: [{ id: 'p-worker' }], pendingUserActions: [] },
+        { candidate: candidate(stopped, ['permission_required'], serverId), pendingPermissions: [{ id: 'p-stopped' }], pendingUserActions: [] },
+        { candidate: candidate(failed, ['failed'], serverId), pendingPermissions: [], pendingUserActions: [] },
     ] : [];
     const readySession = storedSession('ready');
-    const ready = candidate(readySession, 'ready', ['unread'], serverId);
+    const ready = candidate(readySession, ['unread'], serverId);
     const readyTarget = {
         key: buildServerScopedSessionKey('ready', serverId),
         sessionId: 'ready',
@@ -161,6 +171,8 @@ function createModel(options: Readonly<{
         workflowRuns: needsYou ? ['library-run', ...(options.moreRunIds ?? [])].map((id) => workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
             id,
             state: options.runStates?.[id] ?? 'interrupted',
+            attentionRequired: (options.heldStep !== undefined && id === 'library-run') || options.runStates?.[id] === 'waiting_for_review',
+            invocationAttentionRequired: (options.heldStep !== undefined && id === 'library-run') || options.runStates?.[id] === 'waiting_for_review',
             updatedAt: '2026-09-30T11:54:00.000Z',
             ...(options.heldStep && id === 'library-run' ? { heldStep: options.heldStep } : {}),
         }), null)) : [],
@@ -660,7 +672,9 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
         const { readSessionWorkStatusFacts } = await import('@/components/work/status/sessionWorkStatusFacts');
         const { workStatusWordStyle } = await import('@/components/work/status/workStatusTreatment');
         const { describeWorkflowRunState } = await import('@/components/workflows/presentation/workflowLifecyclePresentation');
-        const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />);
+        const { readWorkflowRunWorkStatusFacts } = await import('@/components/work/status/workflowWorkStatusFacts');
+        const model = createModel();
+        const { tree } = await renderScreen(<InboxContent model={model} view="updates" />);
 
         // A failed session: the Session owner's word, in the resolver's danger tone.
         const failedStatus = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(failed, NOW) });
@@ -670,14 +684,16 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
         expect(NativeStyleSheet.flatten(failedWord.props.style).color).toBe(workStatusWordStyle('danger').color);
         expect(tree.findHostByTestId('inbox.session.failed.summary:facts')!.findAll((node) => node.props.children === failedStatus.word)).toHaveLength(0);
 
-        // A run listed as an update: the run owner's own word for its state, never "Needs you" in the attention
-        // tone, which only Needs you rows carry. The row is titled by the run; its state is the row's one status.
+        // Updates retains the Run owner's state and tone; C1 admission alone chooses Needs you membership.
+        const run = model.workGroups.flatMap(group => group.items).find(item => item.kind === 'workflow_run');
+        if (run?.kind !== 'workflow_run' || !run.row.summary) throw new Error('Expected the held Run summary');
+        const runStatus = resolveWorkStatusTone({ kind: 'workflow_run', facts: readWorkflowRunWorkStatusFacts(run.row.summary) });
+        expect(runStatus.attentionType).toBeNull();
         const runRow = tree.root.findByProps({ testID: 'inbox.run.library-run' });
         expect(runRow.props.title).not.toBe(describeWorkflowRunState('interrupted').label);
         const runWord = tree.findHostByTestId('inbox.run.library-run.summary:state:label')!;
-        expect(runWord.props.children).toBe(describeWorkflowRunState('interrupted', { inAttentionWindow: false }).label);
-        // Interrupted keeps its state word in either view; Updates supplies the neutral tone.
-        expect(NativeStyleSheet.flatten(runWord.props.style).color).toBe(workStatusWordStyle('neutral').color);
+        expect(runWord.props.children).toBe(runStatus.word);
+        expect(NativeStyleSheet.flatten(runWord.props.style).color).toBe(workStatusWordStyle(runStatus.tone).color);
 
         // A stalled worker: its Session word beside the row's own explanation.
         const stalledStatus = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(stalledWorker, NOW) });
@@ -785,7 +801,7 @@ describe('InboxContent renders the canonical item model in three views (C1 L10, 
         }
         await screen.update(render({ ...model, items: model.items.filter(item => item.key !== expected[0]!.key),
             sessionCandidates: model.sessionCandidates.map(entry => entry.sessionId === expected[0]!.focus.id
-                ? candidate(entry.session, 'quiet', [], serverId) : entry) }));
+                ? candidate(entry.session, [], serverId, entry.presentationSource) : entry) }));
         expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(expected[1]!.focus));
     });
 

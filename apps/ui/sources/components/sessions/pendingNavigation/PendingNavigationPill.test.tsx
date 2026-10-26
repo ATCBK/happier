@@ -6,7 +6,7 @@ import { createSessionFixture, createSessionMessagesFixture, createToolCallMessa
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { clearPendingNavigationState, markSessionPendingAnswer, registerPendingNavigationRuntime } from '@/activity/source/pendingNavigationRuntime';
-import { PendingNavigationPill } from './PendingNavigationPill';
+import { PendingAttentionPill, PendingNavigationPill } from './PendingNavigationPill';
 
 // Native viewport APIs are the boundary; responsive classification stays real.
 const device = vi.hoisted(() => ({ width: 1440, height: 900 }));
@@ -87,6 +87,27 @@ describe('PendingNavigationPill', () => {
         expect(phone.findByTestId('pending-navigation-phone')).not.toBeNull();
     });
 
+    // The phone capsule sits flush between two session nav tabs: a finger's hit area grows up and down
+    // into the bar, never sideways into the tabs beside it.
+    it('keeps the phone capsule\'s hit area off the session nav tabs it sits between', async () => {
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <PendingAttentionPill count={2} phone shortcut={undefined} onPress={() => {}} />
+            </HappierUiPlatformProvider>,
+        );
+        await act(async () => {
+            screen.findByTestId('pending-navigation-phone')?.props.onLayout({ nativeEvent: { layout: { width: 34, height: 26 } } });
+        });
+        // The web hit area is an invisible absolute frame inside the capsule, offset by its reach on each side.
+        const pill = screen.findByTestId('pending-navigation-phone')!;
+        const frame = pill.findAll((node) => node.props?.['aria-hidden'] === true && node.props?.style?.position === 'absolute')[0];
+        const reach = { top: -frame!.props.style.top, bottom: -frame!.props.style.bottom, left: -frame!.props.style.left, right: -frame!.props.style.right };
+        expect(reach.left).toBe(0);
+        expect(reach.right).toBe(0);
+        expect(reach.top + 26 + reach.bottom).toBe(44);
+    });
+
     it('does not rerender the header for unrelated messages or composer settings', async () => {
         let commits = 0;
         await renderScreen(<React.Profiler id="pending-header" onRender={() => { commits += 1; }}>
@@ -140,7 +161,7 @@ describe('PendingNavigationPill', () => {
         expect(screen.findByTestId('pending-navigation-composer')).not.toBeNull();
     });
 
-    it('retires legacy user-action attention at the existing freshness boundary without a store event', async () => {
+    it('keeps legacy user-action attention without an expiry clock until its runtime clears the request', async () => {
         vi.useFakeTimers();
         const now = 1_700_000_000_000;
         vi.setSystemTime(now);
@@ -151,9 +172,17 @@ describe('PendingNavigationPill', () => {
         });
         storage.setState({ sessions: {}, sessionListRowsByServerId: { 'home-b': { legacy: buildSessionListRenderableFromSession(session) } },
             ordinarySessionListMembershipByServerId: { 'home-b': ['legacy'] } });
+        const timersBeforeMount = vi.getTimerCount();
         const screen = await renderScreen(<PendingNavigationPill address={address} presentation="header" />);
         expect(screen.findByTestId('pending-navigation-header')).not.toBeNull();
+        expect(vi.getTimerCount()).toBe(timersBeforeMount);
         await act(async () => { await vi.advanceTimersByTimeAsync(121_000); });
+        expect(screen.findByTestId('pending-navigation-header')).not.toBeNull();
+        await act(async () => {
+            storage.setState({ sessionListRowsByServerId: { 'home-b': {
+                legacy: buildSessionListRenderableFromSession({ ...session, agentState: { requests: {} } }),
+            } } });
+        });
         expect(screen.findByTestId('pending-navigation-header')).toBeNull();
     });
 

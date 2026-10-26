@@ -183,7 +183,6 @@ export function LookSegments<T extends string>(
       onSelectTab={props.onChange}
       segmentSizing="equal"
       iconPlacement="leading"
-      targetSize="platform"
       disabled={props.disabled}
     />
   );
@@ -452,12 +451,14 @@ export function PictureControls(
   const { value, update } = props.editor;
   const { pictures, presentation } = props;
   const ref = value.picture.ref;
+  const shownRef = props.editor.shownPictureRef ?? ref;
+  const shownValue = { ...value, picture: { ...value.picture, ref: shownRef } };
   const picture =
-    ref.kind === 'builtin'
-      ? (pictures.find((candidate) => candidate.id === ref.id) ?? null)
+    shownRef.kind === 'builtin'
+      ? (pictures.find((candidate) => candidate.id === shownRef.id) ?? null)
       : null;
-  const look = effectivePictureLook(value, pictures);
-  const source = usePreviewSource(ref, picture);
+  const look = effectivePictureLook(shownValue, pictures);
+  const source = usePreviewSource(shownRef, picture);
   const settings = APPEARANCE_SETTINGS.settings;
   return (
     <>
@@ -472,7 +473,7 @@ export function PictureControls(
             title={lookCopy('shuffle')}
             icon="shuffle"
             onPress={() =>
-              update((current) => withShuffledPicture(current, pictures))
+              update((current) => withShuffledPicture(current, pictures, Math.random, shownRef))
             }
           />
         }
@@ -514,7 +515,7 @@ export function PictureControls(
           onChange={(effect) => {
             if (effect)
               update((current) =>
-                withPictureLook(current, { look: effect }, pictures),
+                withPictureLook(current, { look: effect }, pictures, shownRef),
               );
           }}
         />
@@ -549,7 +550,7 @@ export function PictureControls(
           onChange={(dissolve) => {
             if (dissolve)
               update((current) =>
-                withPictureLook(current, { dissolve }, pictures),
+                withPictureLook(current, { dissolve }, pictures, shownRef),
               );
           }}
         />
@@ -572,9 +573,11 @@ export function PictureControls(
           formatValueText={(next) => `${Math.round(next * 100)}%`}
           onValueChange={(next) =>
             update((current) =>
-              withPictureLook(current, { strength: next }, pictures),
+              withPictureLook(current, { strength: next }, pictures, shownRef),
             )
           }
+          onValuePreview={(next) => props.editor.preview?.(next === undefined ? undefined : current =>
+            withPictureLook(current, { strength: next }, pictures, shownRef))}
         />
       </LookBlock>
       <LayoutControl
@@ -583,8 +586,8 @@ export function PictureControls(
         onChange={(layout) => update((current) => withLayout(current, layout))}
       />
       <ResetLookRow
-        changed={changedPictureLookControls(value)}
-        onReset={() => update((current) => withoutPictureLook(current))}
+        changed={changedPictureLookControls(shownValue)}
+        onReset={() => update((current) => withoutPictureLook(current, shownRef))}
       />
     </>
   );

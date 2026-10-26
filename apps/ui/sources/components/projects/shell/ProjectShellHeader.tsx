@@ -1,7 +1,6 @@
 import { PaneMainHideButton } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import {
-  Platform,
   Pressable,
   View,
   type LayoutChangeEvent,
@@ -15,7 +14,6 @@ import {
   happierPageTextMetrics,
   isHappierFocusVisible,
 } from '@happier-dev/plugin-ui/presentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { GROUPED_SURFACE_RADIUS_PX } from '@/components/ui/lists/pageListMetrics';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -42,47 +40,25 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
+import type { PluginRightSidebarLabelledCount } from '@/components/appShell/rightSidebar/rightSidebarPluginCount';
 
-import type { ProjectPageV1 } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
 import { useAtmospherePictureShown } from '@/components/atmosphere/atmosphereStage';
 
 /** One page in the header's tabs (D44): the route's page id, its glyph and an optional quiet count. */
-export type ProjectShellPage = Readonly<{ id: ProjectPageV1; count?: string }>;
+export type ProjectShellPage = Readonly<{
+  id: string;
+  title: string;
+  icon: IconName;
+  disabledReason: string | null;
+  disabledReasonCode?: string;
+  count?: string;
+  /** Ordered semantic facts for the UI-owned paired-count composition. */
+  counts?: readonly PluginRightSidebarLabelledCount[];
+}>;
 
-const PAGE_GLYPHS: Readonly<Record<ProjectPageV1, IconName>> = {
-  overview: 'list-bullets',
-  code: 'code',
-  changes: 'git-branch',
-  scripts: 'play',
-  services: 'hard-drives',
-  context: 'stack',
-  memory: 'book-bookmark',
-};
-
-/** A page's glyph: its tab and every reference back to that page draw the same mark. */
-export function projectPageGlyph(page: ProjectPageV1): IconName {
-  return PAGE_GLYPHS[page];
-}
-
-export function projectPageLabel(page: ProjectPageV1): string {
-  switch (page) {
-    case 'overview':
-      return t('projects.pages.overview');
-    case 'code':
-      return t('projects.pages.code');
-    case 'changes':
-      return t('projects.pages.changes');
-    case 'scripts':
-      return t('projects.pages.scripts');
-    case 'services':
-      return t('projects.pages.services');
-    case 'context':
-      return t('projects.pages.context');
-    case 'memory':
-      return t('projects.pages.memory');
-  }
-}
+export { projectPageGlyph, projectPageLabel } from '../navigation/projectPageDisplay';
 
 /** The checkout the page is looking at: its machine and branch, and the exact choices behind the chip. */
 export type ProjectShellCheckout = Readonly<{
@@ -101,6 +77,8 @@ export type ProjectShellCheckout = Readonly<{
  * fit themselves by their own measurement. Not a count of tabs or a viewport class: the band's box.
  */
 const COMPACT_BAND_WIDTH_PX = 960;
+/** The gap between the header's actions: neighbours' finger frames split it. */
+const ACTIONS_GAP_PX = 6;
 
 /**
  * Below this measured band width one row cannot hold the identity, the chip, the actions and even the
@@ -120,8 +98,12 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
     projectName: string;
     checkout: ProjectShellCheckout | null;
     pages: readonly ProjectShellPage[];
-    activePage: ProjectPageV1;
-    onSelectPage: (page: ProjectPageV1) => void;
+    activePage: string;
+    onSelectPage: (page: string) => void;
+    overflowPages?: readonly ProjectShellPage[];
+    orderedPageIds?: readonly string[];
+    onCustomizeTabs?: () => void;
+    changeCount?: number;
     onNewSession: (() => void) | null;
     menuActions: readonly PageHeaderMenuAction[];
     look?: React.ReactNode;
@@ -146,22 +128,27 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
     },
     [atmosphereBoundary],
   );
-  const tabs = React.useMemo(
-    (): ReadonlyArray<SegmentedTab<ProjectPageV1>> =>
-      props.pages.map((page) => ({
+  const renderTab = React.useCallback(
+    (page: ProjectShellPage): SegmentedTab<string> => ({
         id: page.id,
-        label: projectPageLabel(page.id),
+        label: page.title,
         icon: (
           <Icon
-            name={PAGE_GLYPHS[page.id]}
+            name={page.icon}
             size={ICON_SIZE.sm}
             color={theme.colors.text.secondary}
           />
         ),
-        ...(page.count ? { count: page.count } : {}),
-      })),
-    [props.pages, theme.colors.text.secondary],
+        disabled: page.disabledReason !== null,
+        ...(page.disabledReason ? { unavailableReason: page.disabledReasonCode ? page.disabledReason
+          : resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: page.disabledReason }).body } : {}),
+        ...(page.count ? { count: page.count } : page.id === 'changes' && (props.changeCount ?? 0) > 0
+          ? { count: String(props.changeCount) } : {}),
+      }),
+    [theme.colors.text.secondary, props.changeCount],
   );
+  const tabs = React.useMemo(() => props.pages.map(renderTab), [props.pages, renderTab]);
+  const overflowTabs = React.useMemo(() => props.overflowPages?.map(renderTab), [props.overflowPages, renderTab]);
   const testID = props.testID ?? 'project-shell-header';
 
   const identityNode = (
@@ -194,7 +181,9 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
       // would otherwise draw glyphs alone, whatever the room.
       iconPlacement="leading"
       segmentSizing="content"
-      overflow={{ label: t('common.more'), testID: `${testID}.pages.more` }}
+      overflow={{ label: t('common.more'), testID: `${testID}.pages.more`, items: overflowTabs, orderedIds: props.orderedPageIds,
+        footer: props.onCustomizeTabs ? <RoundButton title={t('navigationPlacement.customize')}
+          testID={`${testID}.pages.more.customize`} display="secondary" size="small" onPress={props.onCustomizeTabs} /> : undefined }}
       tabs={tabs}
       activeTabId={props.activePage}
       onSelectTab={props.onSelectPage}
@@ -213,6 +202,7 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
             variant="plain"
             accessibilityLabel={t('projects.open.newSession')}
             tooltip={t('projects.open.newSession')}
+            interactiveTargetGapPx={ACTIONS_GAP_PX}
             onPress={props.onNewSession}
           />
         ) : (
@@ -233,10 +223,10 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
         )
       ) : null}
       {props.menuActions.length > 0 ? (
-        <PageHeaderMenu actions={props.menuActions} testID={`${testID}.menu`} />
+        <PageHeaderMenu actions={props.menuActions} testID={`${testID}.menu`} interactiveTargetGapPx={ACTIONS_GAP_PX} />
       ) : null}
       {/* "Hide project": the main column's own header holds it (lab ade-shell HB). */}
-      <PaneMainHideButton testID={`${testID}.hideMain`} />
+      <PaneMainHideButton testID={`${testID}.hideMain`} interactiveTargetGapPx={ACTIONS_GAP_PX} />
     </View>
   );
 
@@ -446,9 +436,10 @@ const styles = StyleSheet.create(() => ({
   },
   pagesRow: { flexDirection: 'row', minWidth: 0, paddingBottom: 4 },
   grow: { flex: 1 },
-  // The phone row is a touch field: the platform target height, the content width, a card's radius.
+  // The phone row is a field at the page control height (a finger reaches it through its own
+  // press area), the content width, a card's radius.
   row: {
-    height: Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS)),
+    height: HAPPIER_PAGE_METRICS.controlHeightPx,
     maxWidth: '100%',
     alignSelf: 'stretch',
     borderRadius: GROUPED_SURFACE_RADIUS_PX,
@@ -459,7 +450,7 @@ const styles = StyleSheet.create(() => ({
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: ACTIONS_GAP_PX,
     flexShrink: 0,
   },
   chip: {

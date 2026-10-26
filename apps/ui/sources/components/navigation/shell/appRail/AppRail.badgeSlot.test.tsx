@@ -5,7 +5,7 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { InboxSummaryProvider } from '@/hooks/inbox/useInboxSummary';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
-import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
+import type { PluginPage } from '@/components/plugins/pages/pluginPages';
 import { getStorage } from '@/sync/domains/state/storage';
 
 import { AppRailSurface } from './AppRail';
@@ -36,12 +36,14 @@ describe('AppRail badge placement', () => {
         getStorage().setState(state => ({
             profile: { ...state.profile, connectedAccountsV4: [{ status: 'needs_reauth' }, { status: 'needs_reauth' }] },
         }) as never);
-        const pages: PluginAppPage[] = [{
+        const pages: PluginPage[] = [{
+            target: { kind: 'app' },
+            visible: true,
             id: 'plugin:acme.channels:channels', pluginId: 'acme.channels', descriptorId: 'channels', localId: 'channels',
             label: 'channels', icon: 'note', order: 10, disabledReason: null,
-            placement: {} as PluginAppPage['placement'], routePath: '/plugins/acme.channels/channels',
+            placement: {} as PluginPage['placement'], routePath: '/plugins/acme.channels/channels',
             badge: { label: 'Beta', tone: 'info' },
-        } as PluginAppPage];
+        } as PluginPage];
         const entries = buildAppRailEntries(resolveCompactAppDestinations({
             builtins: { externalSessions: true, inbox: true, workflows: true, friends: true }, pages,
         }));

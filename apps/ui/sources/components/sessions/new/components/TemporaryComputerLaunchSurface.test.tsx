@@ -57,9 +57,6 @@ function controller(
 describe('TemporaryComputerLaunchSurface', () => {
     beforeEach(() => {
         platformMock.os = 'web';
-        // This surface's target-size cases exercise touch on web and native.
-        // Browser hardware is separate from the React Native platform name.
-        vi.stubGlobal('navigator', { ...globalThis.navigator, maxTouchPoints: 1 });
         announceForAccessibilityMock.mockClear();
     });
     afterEach(() => {
@@ -422,26 +419,6 @@ describe('TemporaryComputerLaunchSurface', () => {
 
         expect(announceForAccessibilityMock).not.toHaveBeenCalled();
         expect(screen.findByTestId('temporary-computer-launch-progress')?.props.accessibilityLiveRegion).toBe('polite');
-        await screen.unmount();
-    });
-
-    it.each([
-        ['web', 'web', 44],
-        ['iOS', 'ios', 44],
-        ['Android', 'android', 48],
-    ] as const)('uses the canonical %s minimum touch target', async (_name, os, minimum) => {
-        platformMock.os = os;
-        const { TemporaryComputerLaunchSurface } = await import('./TemporaryComputerLaunchSurface');
-        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
-        const screen = await renderScreen(<TemporaryComputerLaunchSurface
-            controller={controller('waiting_for_computer')}
-            onExportPackage={vi.fn(async () => undefined)}
-        />);
-
-        expect(resolveMinimumInteractiveTargetSize(os)).toBe(minimum);
-        const { StyleSheet } = await import('react-native');
-        expect(StyleSheet.flatten(screen.findByTestId('temporary-computer-export')?.props.style).minHeight).toBe(minimum);
-        expect(StyleSheet.flatten(screen.findByTestId('temporary-computer-cancel')?.props.style).minHeight).toBe(minimum);
         await screen.unmount();
     });
 

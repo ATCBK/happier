@@ -387,12 +387,14 @@ vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
     await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({
-    useWindowDimensions: () => ({
-      width: deviceType.current === 'phone' ? 390 : 1440,
-      height: 900,
-      scale: 1,
-      fontScale: 1,
-    }),
+    Dimensions: {
+      get: () => ({
+        width: deviceType.current === 'phone' ? 390 : 1440,
+        height: 900,
+        scale: 1,
+        fontScale: 1,
+      }),
+    },
   });
 });
 vi.mock('@/utils/ui/clipboard', () => ({ setClipboardStringSafe: clipboard }));
@@ -469,6 +471,12 @@ vi.mock('@/components/ui/popover', async (importOriginal) =>
     importOriginal,
   ),
 );
+function readComposerBadge(testID: string): Readonly<{ label: string; onPress?: () => void; onRemove?: () => void }> {
+  const items = (composerProps.current?.contextItems ?? []) as ReadonlyArray<Readonly<{ testID?: string; label: string; onPress?: () => void; onRemove?: () => void }>>;
+  const badge = items.find((item) => item.testID === testID);
+  if (!badge) throw new Error(`no composer badge ${testID}`);
+  return badge;
+}
 vi.mock('@/components/discussions/DiscussionComposer', () => ({
   DiscussionComposer: (props: Record<string, unknown>) => {
     composerProps.current = props;
@@ -1012,10 +1020,16 @@ describe('DiscussionDetailsView selection', () => {
         active
       />,
     );
-    expect(
-      screen.findByTestId('discussion-draft-passage-quote.text')?.props
-        .children,
-    ).toBe(draftState.passage.quote);
+    // The passage is a composer badge, as a Session's context items are: it opens its Doc and can be dropped.
+    expect(screen.findByTestId('discussion-draft-passage-quote')).toBeNull();
+    const badge = readComposerBadge('discussion-composer-passage');
+    expect(badge.label).toBe(draftState.passage.quote);
+    draftState.setPassage.mockClear();
+    routerPush.mockClear();
+    await act(async () => { badge.onPress?.(); });
+    expect(routerPush).toHaveBeenCalledWith('/artifacts/runbook');
+    await act(async () => { badge.onRemove?.(); });
+    expect(draftState.setPassage).toHaveBeenCalledWith(null);
   });
 
   it('shows the passage a thread is being re-attached to above its composer and lets the person drop it', async () => {
@@ -1036,11 +1050,10 @@ describe('DiscussionDetailsView selection', () => {
         active
       />,
     );
-    expect(
-      screen.findByTestId('discussion-draft-passage-quote.text')?.props
-        .children,
-    ).toBe(draftState.passage.quote);
-    await press(screen, 'discussion-draft-passage-remove');
+    expect(screen.findByTestId('discussion-draft-passage-quote')).toBeNull();
+    const badge = readComposerBadge('discussion-composer-passage');
+    expect(badge.label).toBe(draftState.passage.quote);
+    await act(async () => { badge.onRemove?.(); });
     expect(draftState.setPassage).toHaveBeenCalledWith(null);
   });
 
@@ -1503,7 +1516,7 @@ describe('DiscussionDetailsView selection', () => {
     );
   });
 
-  it('selects a trusted Agent-posted row with its Account label and Via Agent attribution, and keeps Run cards ineligible', async () => {
+  it('selects a trusted Agent-posted row with its Session label and Via Agent attribution, and keeps Run cards ineligible', async () => {
     activity.subagents = [
       {
         id: 'execution_run:run-linked',
@@ -1571,7 +1584,7 @@ describe('DiscussionDetailsView selection', () => {
     await press(screen, 'session-discussion-select-message-agent');
     await press(screen, 'transcript-selection-copy');
     expect(clipboard).toHaveBeenCalledWith(
-      '**Alice · Via Agent:**\n\nAgent result',
+      '**Session participant · Via Agent:**\n\nAgent result',
     );
     expect(clipboard.mock.calls[0]?.[0]).not.toContain('Assistant');
     expect(clipboard.mock.calls[0]?.[0]).not.toContain('account-private-123');
@@ -1581,7 +1594,7 @@ describe('DiscussionDetailsView selection', () => {
       expect.objectContaining({
         kind: 'executionRunLauncher',
         resource: expect.objectContaining({
-          initialInstructions: '**Alice · Via Agent:**\n\nAgent result',
+          initialInstructions: '**Session participant · Via Agent:**\n\nAgent result',
           source: expect.objectContaining({
             kind: 'discussion',
             serverId: 'server-a',
@@ -1679,7 +1692,7 @@ describe('DiscussionDetailsView selection', () => {
     expect(
       screen.findByTestId('session-discussion-message-actor-message-agent')
         ?.props.children,
-    ).toBe('Alice');
+    ).toBe('Session participant');
     expect(
       screen.findByTestId('session-discussion-message-producer-message-agent')
         ?.props.children,
@@ -1766,32 +1779,150 @@ describe('DiscussionDetailsView selection', () => {
     ).toBe('Codex');
   });
 
-  it('leaves Open run to the Run itself: a Session answer in a Workflow round does not repeat it', async () => {
-    const messages = snapshot.threads['discussion-a'].messages as unknown as Array<
+  it('leaves Open run to the Run itself: neither a Session answer in a Workflow round nor the Workflow\'s own result repeats it', async () => {
+    const messages = snapshot.threads['discussion-a']
+      .messages as unknown as Array<
       (typeof snapshot.threads)['discussion-a']['messages'][number]
     >;
     const agent = messages[1]!;
     const { messageRef: _agentRef, ...base } = agent;
-    const round = { runId: 'run-w', invocationRecordId: 'invocation-w', invocationAttempt: '0' };
-    messages[1] = openedMessage({ ...base, producerV1: { v: 1, kind: 'agent', sessionId: 'session-a', runId: 'run-w',
-      replyReturn: { serverId: 'server-a', requestLocalId: 'request-w', outcome: 'answer', workflow: round } } });
-    messages.push(openedMessage({ ...base, id: 'message-workflow', seq: 3, createdAt: 3,
-      producerV1: { v: 1, kind: 'workflow', ...round, execution: { kind: 'action', actionId: 'workflow.discussion.round.project' }, outcome: 'answer' },
-      content: { v: 1, parts: [{ t: 'text', text: 'Workflow result' }] } }));
+    const round = {
+      runId: 'run-w',
+      invocationRecordId: 'invocation-w',
+      invocationAttempt: '0',
+    };
+    messages[1] = openedMessage({
+      ...base,
+      producerV1: {
+        v: 1,
+        kind: 'agent',
+        sessionId: 'session-a',
+        runId: 'run-w',
+        replyReturn: {
+          serverId: 'server-a',
+          requestLocalId: 'request-w',
+          outcome: 'answer',
+          workflow: round,
+        },
+      },
+    });
+    messages.push(
+      openedMessage({
+        ...base,
+        id: 'message-workflow',
+        seq: 3,
+        createdAt: 3,
+        producerV1: {
+          v: 1,
+          kind: 'workflow',
+          ...round,
+          execution: {
+            kind: 'action',
+            actionId: 'workflow.discussion.round.project',
+          },
+          outcome: 'answer',
+        },
+        content: { v: 1, parts: [{ t: 'text', text: 'Workflow result' }] },
+      }),
+    );
     try {
       const screen = await renderScreen(
         <DiscussionDetailsView
-          target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }}
+          target={{
+            kind: 'discussion',
+            address: { serverId: 'server-a' },
+            discussionId: 'discussion-a',
+          }}
           active
         />,
       );
-      expect(screen.findByTestId('session-discussion-workflow-open-message-workflow')).not.toBeNull();
-      expect(screen.findByTestId('session-discussion-workflow-open-message-agent')).toBeNull();
+      // The run's header carries Open run; the result it published reads as the message it is.
+      expect(
+        screen.findByTestId(
+          'session-discussion-workflow-open-message-workflow',
+        ),
+      ).toBeNull();
+      expect(
+        screen.findByTestId('session-discussion-workflow-open-message-agent'),
+      ).toBeNull();
       // The answer still says what it read.
-      expect(screen.findByTestId('session-discussion-message-cutoff-message-agent')).not.toBeNull();
+      expect(
+        screen.findByTestId('session-discussion-message-cutoff-message-agent'),
+      ).not.toBeNull();
     } finally {
       messages.pop();
       messages[1] = agent;
+    }
+  });
+
+  it('gives each speaker its own face: a person their avatar, an Agent answer its Agent mark, a Workflow result the Run mark', async () => {
+    const messages = snapshot.threads['discussion-a']
+      .messages as unknown as Array<
+      (typeof snapshot.threads)['discussion-a']['messages'][number]
+    >;
+    const agent = messages[1]!;
+    const { messageRef: _agentRef, ...base } = agent;
+    const round = {
+      runId: 'run-w',
+      invocationRecordId: 'invocation-w',
+      invocationAttempt: '0',
+    };
+    messages.push(
+      openedMessage({
+        ...base,
+        id: 'message-workflow',
+        seq: 3,
+        createdAt: 3,
+        producerV1: {
+          v: 1,
+          kind: 'workflow',
+          ...round,
+          execution: {
+            kind: 'action',
+            actionId: 'workflow.discussion.round.project',
+          },
+          outcome: 'answer',
+        },
+        content: { v: 1, parts: [{ t: 'text', text: 'Workflow result' }] },
+      }),
+    );
+    try {
+      const screen = await renderScreen(
+        <DiscussionDetailsView
+          target={{
+            kind: 'discussion',
+            address: { serverId: 'server-a' },
+            discussionId: 'discussion-a',
+          }}
+          active
+        />,
+      );
+      // The Agent answer is stamped with the asking person's Account, but that person did not write it.
+      expect(
+        screen.findByTestId('session-discussion-message-face-person-message-a'),
+      ).not.toBeNull();
+      expect(
+        screen.findByTestId(
+          'session-discussion-message-face-agent-message-agent',
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.findByTestId(
+          'session-discussion-message-face-person-message-agent',
+        ),
+      ).toBeNull();
+      expect(
+        screen.findByTestId(
+          'session-discussion-message-face-workflow-message-workflow',
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.findByTestId(
+          'session-discussion-message-face-person-message-workflow',
+        ),
+      ).toBeNull();
+    } finally {
+      messages.pop();
     }
   });
 
@@ -2475,6 +2606,43 @@ describe('DiscussionDetailsView selection', () => {
       } finally {
         thread.status = previousStatus;
         thread.summary = previousSummary;
+        thread.messages = previousMessages;
+      }
+    },
+  );
+
+  it.each([
+    ['offline', 'This conversation isn’t available offline'],
+    ['locked', 'Can’t open this conversation on this device yet'],
+    ['error', 'Couldn’t open this conversation'],
+  ] as const)(
+    'says a failed %s read in the thread\u2019s own words, never as the list\u2019s empty or load-error copy',
+    async (status, expected) => {
+      const thread = snapshot.threads['discussion-a'];
+      const previousStatus = thread.status;
+      const previousMessages = thread.messages;
+      thread.status = status;
+      thread.messages = [] as never;
+      try {
+        const screen = await renderScreen(
+          <DiscussionDetailsView
+            target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }}
+            active
+          />,
+        );
+
+        const text = screen.getTextContent();
+        expect(text).toContain(expected);
+        expect(text).not.toContain('No active conversations yet.');
+        expect(text).not.toContain('Conversations could not be loaded.');
+        expect(text).not.toContain('Delivery unknown');
+        expect(screen.findByTestId('session-discussion-empty')).toBeNull();
+        expect(screen.findByTestId('session-discussion-freshness')).toBeNull();
+        repositoryRefreshDiscussion.mockClear();
+        await press(screen, 'session-discussion-thread-state-action');
+        expect(repositoryRefreshDiscussion).toHaveBeenCalledWith('discussion-a');
+      } finally {
+        thread.status = previousStatus;
         thread.messages = previousMessages;
       }
     },

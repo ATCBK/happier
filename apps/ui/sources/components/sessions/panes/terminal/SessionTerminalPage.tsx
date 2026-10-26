@@ -6,7 +6,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { DocumentTabStrip } from '@/components/ui/navigation/DocumentTabStrip';
 import { resolvePointerMenuAnchor } from '@/components/ui/popover/resolvePointerMenuAnchor';
 import type { PopoverAnchor } from '@/components/ui/popover';
@@ -102,8 +101,6 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const { workspace, tabs, context, onAction } = props;
-    const touchTarget = resolveTouchTargetFloorPx() ?? 32;
-    const actionGap = Math.max(0, touchTarget - 32);
     const testId = (suffix: string) => (props.testIdPrefix ? `${props.testIdPrefix}-${suffix}` : undefined);
     const [menu, setMenu] = React.useState<Readonly<{ tabId: string; anchor: PopoverAnchor | undefined }> | null>(null);
 
@@ -201,7 +198,7 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
                         tabStatus: (key) => testId(`chip-status-${key}`),
                     }}
                     railTrailing={(
-                        <View style={{ flexDirection: 'row', gap: actionGap }}>
+                        <View style={{ flexDirection: 'row' }}>
                             {props.tabMenu && activeTab ? (
                                 <IconButton
                                     testID={testId('tab-menu')}
@@ -209,8 +206,7 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
                                     onPress={(event) => setMenu({ tabId: activeTab.id, anchor: resolvePointerMenuAnchor(event) })}
                                     iconName="dots-three"
                                     size={32}
-                                    minimumInteractiveTargetSize={touchTarget}
-                                    interactiveTargetGapPx={actionGap}
+                                    interactiveTargetGapPx={0}
                                 />
                             ) : null}
                             <IconButton
@@ -219,8 +215,7 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
                                 onPress={openShell}
                                 iconName="plus"
                                 size={32}
-                                minimumInteractiveTargetSize={touchTarget}
-                                interactiveTargetGapPx={actionGap}
+                                interactiveTargetGapPx={0}
                             />
                         </View>
                     )}

@@ -9,7 +9,10 @@ import { DocumentTabStrip, type DocumentTabItem, type DocumentTabPresentation } 
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { createRenderCommitCounter, useRenderCommitCounter } from '@/dev/testkit/performance/counts';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
+import { resolveCompactAppDestinations, resolveDestinationRefFromHref, useDestinationInstanceTitleSources, type CompactAppDestination, type DestinationInstanceTitleEntry } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 
 /** The node mock sees React Native's host ScrollView by its mocked host name. */
 const isHostScrollView = (type: unknown) => type === 'ScrollView';
@@ -26,6 +29,16 @@ const { glassPresetMaterials } = await import('@/components/ui/glass/glassMateri
 function TabRenderProbe(props: Readonly<{ counter: ReturnType<typeof createRenderCommitCounter>; id: string }>) {
     useRenderCommitCounter(props.counter);
     return <View testID={`probe-${props.id}`} />;
+}
+
+function LiveTitleSourceStripFixture(props: Omit<React.ComponentProps<typeof LiveTabStripFixture>, 'tabs'> & Readonly<{
+    entries: readonly DestinationInstanceTitleEntry[];
+    catalog: readonly CompactAppDestination[];
+}>) {
+    const sources = useDestinationInstanceTitleSources(props.catalog, props.entries);
+    const tabs = React.useMemo(() => props.entries.map(entry => ({ key: entry.key, title: 'Restored tab',
+        titleSource: sources.get(entry.key), isPinned: false, isPreview: false })), [props.entries, sources]);
+    return <LiveTabStripFixture {...props} tabs={tabs} />;
 }
 
 function LiveTabStripFixture(props: Readonly<{
@@ -98,9 +111,44 @@ function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof create
 }
 
 describe('DocumentTabStrip actions', () => {
+    it('subscribes in each of 153 real destination leaves and renders only the renamed Artifact', async () => {
+        const original = storage.getState();
+        const artifacts = Array.from({ length: 153 }, (_, index): Extract<DecryptedArtifact, { isDecrypted: true }> => ({
+            id: `artifact-${index}`, title: `Artifact ${index}`, isDecrypted: true,
+            createdAt: 1, updatedAt: 1, headerVersion: 1, bodyVersion: 1, seq: 1,
+        }));
+        storage.getState().activateProfileScope({ serverId: 'tab-home', accountId: 'tab-account' });
+        storage.getState().applyArtifacts(artifacts, storage.getState().artifacts);
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const entries = artifacts.map((artifact, index): DestinationInstanceTitleEntry => ({ key: `tab-${index}`,
+            ref: resolveDestinationRefFromHref(catalog, `/artifacts/${artifact.id}`)! }));
+        const counters = entries.map(() => createRenderCommitCounter());
+        const icons: string[] = [];
+        const screen = await renderScreen(<LiveTitleSourceStripFixture variant="bar" entries={entries}
+            catalog={catalog}
+            runtime={createEntityDragDropRuntime()} events={[]}
+            renderIcon={tab => { icons.push(tab.key); return <TabRenderProbe id={tab.key} counter={counters[Number(tab.key.slice(4))]} />; }} />);
+        try {
+            expect(icons).toHaveLength(153);
+            icons.length = 0;
+            counters.forEach(counter => counter.reset());
+            await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'title-source-background' })]));
+            expect(icons).toEqual([]);
+            expect(counters.map(counter => counter.read())).toEqual(entries.map(() => ({ renders: 0, commits: 0 })));
+            await act(async () => storage.getState().applyArtifacts(artifacts.map((artifact, index) => index === 37
+                ? { ...artifact, title: 'Renamed artifact', updatedAt: 2 } : artifact), storage.getState().artifacts));
+            expect(icons).toEqual(['tab-37']);
+            expect(counters.filter((_, index) => index !== 37).map(counter => counter.read()))
+                .toEqual(entries.slice(1).map(() => ({ renders: 0, commits: 0 })));
+            expect(screen.findHostByTestId('live-tab-37')!.findAll(node => node.props.children === 'Renamed artifact')).not.toHaveLength(0);
+        } finally {
+            await screen.unmount();
+            storage.setState(original, true);
+        }
+    });
     it.each(['bar', 'rail', 'strip'] as const)('does no unchanged %s tab rendering for unrelated real Session publications', async variant => {
         const original = storage.getState();
-        const tabs = Array.from({ length: 120 }, (_, index) => ({ key: `tab-${index}`, title: `Document ${index}`, isPinned: false, isPreview: false }));
+        const tabs = Array.from({ length: 153 }, (_, index) => ({ key: `tab-${index}`, title: `Document ${index}`, isPinned: false, isPreview: false }));
         const counters = tabs.map(() => createRenderCommitCounter());
         const iconCalls: string[] = [];
         const renderIcon = (tab: DocumentTabItem) => {
@@ -110,7 +158,7 @@ describe('DocumentTabStrip actions', () => {
         const props = { variant, tabs, renderIcon, runtime: createEntityDragDropRuntime(), events: [] as string[] };
         const screen = await renderScreen(<LiveTabStripFixture {...props} />);
         try {
-            expect(iconCalls).toHaveLength(120);
+            expect(iconCalls).toHaveLength(153);
             iconCalls.length = 0;
             counters.forEach(counter => counter.reset());
             for (let version = 1; version <= 3; version++) {
@@ -118,6 +166,15 @@ describe('DocumentTabStrip actions', () => {
             }
             expect(iconCalls).toEqual([]);
             expect(counters.map(counter => counter.read())).toEqual(tabs.map(() => ({ renders: 0, commits: 0 })));
+            await act(async () => { storage.getState().applyMachines([createMachineFixture({ id: 'strip-unrelated-machine' })]); });
+            expect(iconCalls).toEqual([]);
+            expect(counters.map(counter => counter.read())).toEqual(tabs.map(() => ({ renders: 0, commits: 0 })));
+            const arriving = { key: 'tab-153', title: 'Arriving document', isPinned: false, isPreview: false };
+            counters.push(createRenderCommitCounter());
+            await screen.update(<LiveTabStripFixture {...props} tabs={[...tabs, arriving]} />);
+            expect(iconCalls).toEqual(['tab-153']);
+            expect(counters.slice(0, 153).map(counter => counter.read())).toEqual(tabs.map(() => ({ renders: 0, commits: 0 })));
+            iconCalls.length = 0;
             await act(async () => { screen.findHostByTestId('live-tab-2')!.props.onPress(); });
             expect(props.events).toContain('activate:3:tab-2');
 
@@ -374,6 +431,32 @@ describe('DocumentTabStrip actions', () => {
         expect(close).toHaveBeenCalledWith('b');
     });
 
+    it('draws the tab actions and the tab at their design size under a finger and reaches the platform target by hit area', async () => {
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const { readHitArea } = await import('@/dev/testkit/harness/hitFrameReach');
+        const screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+            <DocumentTabStrip
+                tabs={[{ key: 'a', title: 'Alpha', isPinned: false, isPreview: true }]}
+                activeTabKey="a" accessibilityLabel="Documents"
+                onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
+                renderLeadingIcon={() => null} tabNativeId={(id) => `tab-${id}`} panelNativeId={(id) => `panel-${id}`}
+                testIds={{ tab: (id) => `tab-${id}`, tabPin: (id) => `pin-${id}`, tabClose: (id) => `close-${id}` }}
+            />
+        </HappierUiPlatformProvider>);
+        for (const id of ['pin-a', 'close-a']) {
+            const control = screen.findByTestId(id)!;
+            const drawn = { width: 24, height: 24 };
+            await act(async () => { control.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, ...drawn } } }); });
+            const area = readHitArea(screen.findByTestId(id)!, drawn);
+            expect(area.drawn, `${id} drawn`).toEqual(drawn);
+            expect(area.height, `${id} hit`).toBeGreaterThanOrEqual(44);
+        }
+        // The tab itself keeps its designed height: no finger floor sits in its style.
+        const tabStyle = StyleSheet.flatten(screen.findByTestId('tab-a')!.props.style) as { minHeight?: number; minWidth?: number };
+        expect(tabStyle.minHeight).toBeLessThan(44);
+        expect(tabStyle.minWidth ?? 0).toBeLessThan(44);
+    });
+
     it('keeps pinned tabs fixed ahead of one scrolling strip of every other tab and scrolls the open tab into view', async () => {
         const keys = ['pin', 'a', 'b', 'c', 'd', 'e', 'f'];
         const scrollTo = vi.fn();
@@ -402,6 +485,34 @@ describe('DocumentTabStrip actions', () => {
         scrollTo.mockClear();
         await screen.update(strip('f'));
         expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ x: 5 * 122 + 120 - 300 + 12 }));
+    });
+
+    it('keeps the open rail tab in view from the live tab positions, not a stale measured layout', async () => {
+        const keys = ['a', 'b', 'c', 'd', 'e', 'f'];
+        const scrollTo = vi.fn();
+        const strip = (active: string) => <DocumentTabStrip variant="rail"
+            tabs={keys.map(key => ({ key, title: `Tab ${key}`, isPinned: false, isPreview: false }))}
+            activeTabKey={active} accessibilityLabel="Documents"
+            onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
+            renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+            testIds={{ tab: id => `tab-${id}` }} />;
+        // The platform's live positions: six 120 px tabs. The layout events below report none of them.
+        const screen = await renderScreen(strip('a'), {
+            createNodeMock: element => {
+                if (isHostScrollView(element.type)) return { scrollTo };
+                const frame = /^document-tab-frame-(.+)$/.exec(String(element.props?.testID ?? ''))?.[1];
+                return frame ? { offsetLeft: keys.indexOf(frame) * 122, offsetWidth: 120 } : null;
+            },
+        });
+        const scroller = screen.root.findAll(node => isHostScrollView(node.type))[0]!;
+        await act(async () => { scroller.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 30 } } }); });
+        scrollTo.mockClear();
+        await screen.update(strip('f'));
+        expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ x: 5 * 122 + 120 - 300 + 12 }));
+        // Tabs arriving beside the open one resize the content without a layout event of the open tab's own.
+        scrollTo.mockClear();
+        await act(async () => { scroller.props.onContentSizeChange?.(6 * 122, 30); });
+        expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ x: 5 * 122 + 120 - 300 + 12 }));
     });
 
     it('takes a carried item only at a tab inside the visible strip, never at one scrolled out of view', async () => {

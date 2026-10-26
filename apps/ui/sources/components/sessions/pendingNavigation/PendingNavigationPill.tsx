@@ -94,6 +94,8 @@ export const PendingNavigationPill = React.memo(function PendingNavigationPill(p
         shortcut={shortcut} onPress={onPress} />;
 });
 
+const PHONE_CAPSULE_HIT_REACH = { left: 0, right: 0 } as const;
+
 /** "● 2 need you ⌘⇧J" in the header; "● 2" in the phone session nav. */
 export function PendingAttentionPill(props: Readonly<{ count: number; phone: boolean; compact?: boolean; shortcut: string | undefined; onPress: () => unknown }>) {
     const { theme } = useUnistyles();
@@ -110,6 +112,8 @@ export function PendingAttentionPill(props: Readonly<{ count: number; phone: boo
             accessibilityRole="button"
             accessibilityLabel={`${t('pendingNavigation.next')}: ${label}`}
             onPress={props.onPress}
+            // The phone capsule sits flush between two session nav tabs: its hit area grows up and down, never into them.
+            {...(phone ? { hitReach: PHONE_CAPSULE_HIT_REACH } : {})}
             style={({ hovered, pressed }) => [
                 styles.attention,
                 countOnly ? styles.attentionPhone : shortcut ? styles.attentionWithKeys : null,

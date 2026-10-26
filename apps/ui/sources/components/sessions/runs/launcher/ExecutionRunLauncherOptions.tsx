@@ -1,13 +1,13 @@
 import type { EffectiveActionInputField } from '@happier-dev/protocol';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ActionInputFields, type ActionFieldOption } from '@/components/sessions/actions/ActionInputFields';
 import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -196,9 +196,11 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
 }>) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    // The shared platform policy owns this number; the launcher must not keep its
-    // own Run-local 44 next to it.
-    const interactiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    // Wrapped chips sit one gap apart; each hit area takes half of it so neighbours never overlap.
+    const chipHitReach = React.useMemo(() => {
+        const half = theme.space.s10 / 2;
+        return { top: half, bottom: half, left: half, right: half };
+    }, [theme.space.s10]);
     const sections = props.sections ?? ALL_SECTIONS;
     const includeFieldPath = props.includeFieldPath;
     const optionFields = React.useMemo(() => resolveExecutionRunLauncherOptionFields({
@@ -244,20 +246,19 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
                                     const selected = props.selectedBackendTargetKeys.includes(choice.targetKey);
                                     const disabled = choice.disabled || !props.editable;
                                     return (
-                                        <Pressable
+                                        <HappierPressable
                                             key={choice.targetKey}
                                             testID={`execution-run-launcher-target:${choice.targetKey}`}
                                             accessibilityRole={props.multiSelect ? 'checkbox' : 'radio'}
                                             accessibilityLabel={t('executionRuns.newRun.a11y.toggleBackend', { backendId: choice.title })}
-                                            accessibilityState={{ selected, checked: selected, disabled }}
+                                            selected={selected}
+                                            checked={selected}
                                             disabled={disabled}
                                             onPress={() => props.onSelectBackend(choice.targetKey)}
                                             style={({ pressed }) => [
                                                 styles.tile,
                                                 selected ? styles.tileSelected : null,
                                                 {
-                                                    minWidth: interactiveTargetSize,
-                                                    minHeight: interactiveTargetSize,
                                                     opacity: choice.disabled ? 0.5 : pressed ? motionTokens.press.opacity : 1,
                                                 },
                                             ]}
@@ -269,7 +270,7 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
                                             <View style={[styles.check, props.multiSelect ? null : styles.checkRound, selected ? styles.checkOn : null]}>
                                                 {selected ? <Icon name="check" size={13} color={theme.colors.surface.base} /> : null}
                                             </View>
-                                        </Pressable>
+                                        </HappierPressable>
                                     );
                                 })}
                             </View>
@@ -290,7 +291,6 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
                                         activeTabId={props.selectedPermissionMode}
                                         onSelectTab={(value) => props.onPatch({ permissionMode: value })}
                                         segmentSizing="content"
-                                        targetSize="platform"
                                         disabled={!props.editable}
                                         accessibilityLabel={t('executionRuns.newRun.sections.permissions')}
                                         testIDPrefix="execution-run-launcher-permission-mode"
@@ -301,26 +301,25 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
                                     {props.permissionModeOptions.map((option) => {
                                         const selected = props.selectedPermissionMode === option.value;
                                         return (
-                                            <Pressable
+                                            <HappierPressable
                                                 key={String(option.value)}
                                                 testID={`execution-run-launcher-permission-mode:${String(option.value)}`}
                                                 accessibilityRole="button"
                                                 accessibilityLabel={t('executionRuns.newRun.a11y.selectPermissionMode', { mode: option.label })}
-                                                accessibilityState={{ selected, disabled: !props.editable }}
+                                                selected={selected}
+                                                hitReach={chipHitReach}
                                                 disabled={!props.editable}
                                                 onPress={() => props.onPatch({ permissionMode: option.value })}
                                                 style={({ pressed }) => [
                                                     styles.chip,
                                                     selected ? styles.chipSelected : null,
                                                     {
-                                                        minWidth: interactiveTargetSize,
-                                                        minHeight: interactiveTargetSize,
                                                         opacity: !props.editable ? 0.45 : pressed ? motionTokens.press.opacity : 1,
                                                     },
                                                 ]}
                                             >
                                                 <Text style={[styles.chipText, selected ? styles.chipTextSelected : null]}>{option.label}</Text>
-                                            </Pressable>
+                                            </HappierPressable>
                                         );
                                     })}
                                 </View>

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { act } from 'react';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { createSessionFixture, createSessionListRenderableSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -42,6 +43,26 @@ describe('Session lineage navigation', () => {
         expect(link?.props.role ?? link?.props.accessibilityRole).toBe('link');
         await screen.pressByTestIdAsync('session-header-lineage:lead');
         expect(push).toHaveBeenCalledWith('/session/lead?serverId=report-home');
+    });
+
+    it('draws the Reports-to row at its text line and gives the finger its reach through the hit area', async () => {
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <DestinationInstanceHost tabId="phone-work" ref={{ kind: 'session', params: { id: 'child' } }} pathname="/session/child" focused visible
+                    navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+                    <SessionLineageBreadcrumb sessionId="child" serverId="report-home" presentation="manager" />
+                </DestinationInstanceHost>
+            </HappierUiPlatformProvider>,
+        );
+        const link = screen.findHostByTestId('session-header-lineage:lead')!;
+        await act(async () => { link.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 200, height: 16 } } }); });
+        const drawn = [link.props.style].flat(Infinity).filter(Boolean).reduce((all, one) => ({ ...all, ...one }), {} as Record<string, unknown>);
+        expect(drawn.minHeight).toBeUndefined();
+        const frame = screen.root.findAll((node) => node.props?.dataSet?.happierHitArea === 'true')[0]!;
+        // The header title sits flush beneath the row: the row's hit area keeps its upper side only.
+        expect(frame.props.style.bottom).toBeCloseTo(0);
+        expect(frame.props.style.top).toBeLessThan(0);
     });
 
     it('keeps the root-first breadcrumb and renders no relationship for a root Session', async () => {

@@ -65,6 +65,8 @@ export function SessionFollowHeaderChip(
           accessibilityLabel={t('session.follow.editor.title')}
           tooltip={label}
           expanded={props.open}
+          // The header keeps 6 px between its actions: neighbouring hit areas split it.
+          interactiveTargetGapPx={6}
           onPress={props.onPress}
         />
       ) : (

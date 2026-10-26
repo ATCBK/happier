@@ -20,6 +20,7 @@ import {
 
 /** With the column hidden, the first pane's tabs start this far after the strip's own controls (lab T). */
 const SEGMENT_END_PADDING_PX = 6;
+const SPLIT_EDGES_PX = { leading: B.stripGapPx / 2, trailing: SEGMENT_END_PADDING_PX } as const;
 
 /**
  * The tabs of the top-row panes, in the window's top strip (workspace lab T/S). Each pane's tabs sit
@@ -117,6 +118,8 @@ function WorkspaceSplitButton(props: Readonly<{ workspace: WorkspaceNavigationCo
             size={28}
             iconSize={M.actionGlyphPx}
             iconName="square-split-horizontal"
+            // Half the strip's gap to All tabs before it; the segment's end padding after it.
+            interactiveTargetEdgesPx={SPLIT_EDGES_PX}
             accessibilityLabel={t('workspaceBar.splitRight')}
             tooltip={label}
             tooltipPlacement="bottom"

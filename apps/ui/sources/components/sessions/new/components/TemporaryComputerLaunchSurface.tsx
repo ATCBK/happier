@@ -6,7 +6,6 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import {
@@ -370,7 +369,7 @@ function Action(props: Readonly<{ testID: string; label: string; disabled?: bool
         display={props.display}
         size="normal"
         titleNumberOfLines="complete"
-        style={{ minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), maxWidth: '100%' }}
+        style={{ maxWidth: '100%' }}
         onPress={props.onPress}
     />;
 }

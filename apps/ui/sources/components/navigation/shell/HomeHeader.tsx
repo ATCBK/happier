@@ -17,7 +17,6 @@ import { useSharedUpdatesSummary } from '@/updates/useUpdatesSummary';
 import { Icon } from '@/components/ui/icons/Icon';
 import { AppShellThemeToggle } from './appRail/AppShellThemeToggle';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import {
     shouldForceFreshNewSessionEntryFromPressEvent,
     useResolveNewSessionOrdinaryEntryRoute,
@@ -112,8 +111,6 @@ function HeaderRight() {
     const router = useRouter();
     const resolveNewSessionOrdinaryEntryRoute = useResolveNewSessionOrdinaryEntryRoute();
     const { theme } = useUnistyles();
-    const touchTarget = resolveTouchTargetFloorPx() ?? 32;
-    const gap = Math.max(0, touchTarget - 32);
     const handleNewSession = React.useCallback((event?: unknown) => {
         const { draftId, draftOrigin } = resolveNewSessionOrdinaryEntryRoute({
             forceFresh: shouldForceFreshNewSessionEntryFromPressEvent(event),
@@ -122,15 +119,14 @@ function HeaderRight() {
     }, [resolveNewSessionOrdinaryEntryRoute, router]);
 
     return (
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
-        <AppShellThemeToggle buttonSize={32} glyphSize={22} color={theme.colors.chrome.header.foreground} interactiveTargetGapPx={gap} />
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <AppShellThemeToggle buttonSize={32} glyphSize={22} color={theme.colors.chrome.header.foreground} interactiveTargetGapPx={0} />
         <IconButton
             testID="home-header-start-new-session"
             onPress={handleNewSession}
             size={32}
             variant="plain"
-            minimumInteractiveTargetSize={touchTarget}
-            interactiveTargetGapPx={gap}
+            interactiveTargetGapPx={0}
             accessibilityLabel={t('newSession.title')}
             icon={<Icon name="plus" size={29} color={theme.colors.chrome.header.foreground} />}
         />

@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +9,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const dropdownMenuSpy = vi.fn();
-const resolveWorkspaceFaviconMock = vi.hoisted(() => vi.fn());
+const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const setSessionFolderViewMode = vi.fn();
 const applySettings = vi.hoisted(() => vi.fn());
 const setSettingSpy = vi.hoisted(() => vi.fn(async () => true));
@@ -61,8 +62,9 @@ vi.mock('expo-image', () => ({
     Image: 'Image',
 }));
 
-vi.mock('@/sync/ops/workspaceFavicon', () => ({
-    resolveWorkspaceFavicon: resolveWorkspaceFaviconMock,
+// The machine RPC is the boundary; the shared result owner the header observes stays real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: machineRpcWithServerScopeMock,
 }));
 
 // The declared-setting Action writer is the owner of View option writes (its own tests admit and persist them);
@@ -132,7 +134,8 @@ installSessionShellCommonModuleMocks({
 // loads. Configure those first and finish loading before any renderer/test starts.
 const { renderScreen, standardCleanup } = await import('@/dev/testkit');
 const { HappierPressable } = await import('@happier-dev/plugin-ui/presentation');
-const { ProjectGroupHeader, CollapsibleSectionHeader, FolderGroupHeader, SessionFolderFocusBreadcrumbs } = await import('./sessionListChrome');
+const { ProjectGroupHeader, CollapsibleSectionHeader, SessionSectionHeader } = await import('./sessionListChrome');
+const { clearWorkspaceFaviconCacheForTests } = await import('@/sync/ops/workspaceFavicon');
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -163,8 +166,9 @@ function childTreeContainsPressable(node: any): boolean {
 
 describe('ProjectGroupHeader menu items', () => {
     beforeEach(() => {
-        resolveWorkspaceFaviconMock.mockReset();
-        resolveWorkspaceFaviconMock.mockResolvedValue({ status: 'missing' });
+        machineRpcWithServerScopeMock.mockReset();
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: true, found: false });
+        clearWorkspaceFaviconCacheForTests();
     });
 
     afterEach(() => {
@@ -209,6 +213,7 @@ describe('ProjectGroupHeader menu items', () => {
             title: '/repo',
             headerKind: 'project',
             groupKey: 'project:repo',
+            projectKey: 'project-repo',
             workspaceKey: 'legacy_repo',
             workspaceScopeHint: {
                 serverId: 'server_a',
@@ -412,7 +417,7 @@ describe('ProjectGroupHeader menu items', () => {
         expect(screen.findByType('Pressable') === rootBeforeActivation).toBe(true);
     });
 
-    it('applies folder display from the shared View options owner', async () => {
+    it('offers what the list shows and where Needs you and Working sit, written through the shared writer', async () => {
         const { SessionListViewOptionsButton } = await import('./sessionListChrome');
 
         await renderScreen(
@@ -421,56 +426,61 @@ describe('ProjectGroupHeader menu items', () => {
 
         const latestMenuProps = dropdownMenuSpy.mock.calls.at(-1)?.[0] as any;
         expect(latestMenuProps?.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                id: 'folderDisplay',
-                submenu: expect.objectContaining({
-                    items: expect.arrayContaining([
-                        expect.objectContaining({ id: 'folderDisplay:tree' }),
-                    ]),
-                }),
-            }),
+            expect.objectContaining({ id: 'layout:projects' }),
+            expect.objectContaining({ id: 'layout:recent_activity' }),
+            expect.objectContaining({ id: 'attention:both' }),
+            expect.objectContaining({ id: 'attention:top' }),
+            expect.objectContaining({ id: 'attention:inPlace' }),
         ]));
+        expect(latestMenuProps?.items.map((item: { id: string }) => item.id)).not.toContain('folderDisplay');
 
-        latestMenuProps?.onSelect?.('folderDisplay:tree');
-        await vi.waitFor(() => expect(setSettingSpy).toHaveBeenCalledWith(SESSION_SETTINGS.settings.folderView, 'tree'));
+        latestMenuProps?.onSelect?.('attention:top');
+        await vi.waitFor(() => expect(setSettingSpy).toHaveBeenCalledWith(SESSION_SETTINGS.settings.attentionPromotion, 'top'));
     });
 
-    it('routes folder row press, collapse, and menu actions separately', async () => {
-        const onFocus = vi.fn();
+    it('offers status words as a row choice written to the one Account setting (P4 statusWords)', async () => {
+        const { SessionListViewOptionsButton } = await import('./sessionListChrome');
+        await renderScreen(<SessionListViewOptionsButton />);
+        const latestMenuProps = dropdownMenuSpy.mock.calls.at(-1)?.[0] as any;
+        const item = latestMenuProps?.items.find((entry: { id: string }) => entry.id.startsWith('statusWords:'));
+        // Off by default, so choosing it turns words on.
+        expect(item).toEqual(expect.objectContaining({ id: 'statusWords:true', checked: false }));
+        latestMenuProps?.onSelect?.('statusWords:true');
+        await vi.waitFor(() => expect(setSettingSpy).toHaveBeenCalledWith(SESSION_SETTINGS.settings.statusWords, true));
+    });
+
+    it('routes section disclosure and offers the section operations, not folder-tree ones (P5 §6)', async () => {
         const onToggleCollapse = vi.fn();
         const onNewSession = vi.fn();
-        const onAddSubfolder = vi.fn();
         const onRename = vi.fn();
-        const onDelete = vi.fn();
+        const onChangeIcon = vi.fn();
+        const onRemove = vi.fn();
+        const onArchiveAll = vi.fn();
         const onMove = vi.fn();
         const onMoveToWorkspaceRoot = vi.fn();
         const onMoveUp = vi.fn();
         const onMoveDown = vi.fn();
 
         const screen = await renderScreen(
-            <FolderGroupHeader
-                title="Planning"
-                depth={1}
+            <SessionSectionHeader
+                title="Launch 0.3"
+                icon="rocket"
+                memberCount={4}
                 collapsed={false}
                 item={{
                     type: 'header',
-                    title: 'Planning',
+                    title: 'Launch 0.3',
                     headerKind: 'folder',
                     folderId: 'folder_planning',
-                    folderDepth: 1,
+                    folderDepth: 0,
                     serverId: 'server_a',
-                    workspace: {
-                        t: 'workspaceRef',
-                        serverId: 'server_a',
-                        workspaceRefId: 'workspace_a',
-                    },
                 }}
-                onPress={onFocus}
                 onToggleCollapse={onToggleCollapse}
                 onNewSession={onNewSession}
-                onAddSubfolder={onAddSubfolder}
                 onRename={onRename}
-                onDelete={onDelete}
+                onChangeIcon={onChangeIcon}
+                onRemove={onRemove}
+                onArchiveAll={onArchiveAll}
                 onMove={onMove}
                 onMoveToWorkspaceRoot={onMoveToWorkspaceRoot}
                 onMoveUp={onMoveUp}
@@ -478,70 +488,91 @@ describe('ProjectGroupHeader menu items', () => {
             />,
         );
 
-        const row = screen.findByProps({ testID: 'session-folder-header-folder_planning' });
-        expect(row.props.style).toEqual(expect.arrayContaining([
-            expect.objectContaining({ paddingLeft: 32 }),
-        ]));
-        expect(screen.findByProps({ testID: 'session-folder-reorder-handle-folder_planning' })).toBeTruthy();
-        const focusButton = screen.findByProps({ testID: 'session-folder-header-folder_planning-focus' });
+        // Sections are flat Account filing: the label sits on the column's text edge, led by its own icon and count.
+        const row = screen.findHostByTestId('session-folder-header-folder_planning');
+        expect(StyleSheet.flatten(row?.props.style)).toEqual(expect.objectContaining({ paddingLeft: 22 }));
+        expect(screen.findAllByProps({ name: 'rocket' }).length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).toContain('4');
+        const focusButton = screen.findByProps({ testID: 'session-folder-header-folder_planning:open' });
         await act(async () => {
             focusButton.props.onPress();
-        });
-        expect(onFocus).toHaveBeenCalledTimes(1);
-        expect(onToggleCollapse).not.toHaveBeenCalled();
-
-        const collapseButton = screen.findByProps({ testID: 'session-folder-collapse-folder_planning' });
-        await act(async () => {
-            collapseButton.props.onPress({ stopPropagation: vi.fn() });
         });
         expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
         const latestMenuProps = dropdownMenuSpy.mock.calls.at(-1)?.[0] as any;
-        expect(latestMenuProps?.items).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'new-session' }),
-            expect.objectContaining({ id: 'add-subfolder' }),
-            expect.objectContaining({ id: 'move' }),
-            expect.objectContaining({ id: 'rename' }),
-            expect.objectContaining({ id: 'delete' }),
+        const ids = (latestMenuProps?.items ?? []).map((item: any) => item.id);
+        // Lab `clsections:custom` menu: the edits, then Archive all and Remove under one hairline.
+        expect(ids).toEqual(['rename', 'icon', 'new-session', 'archive-all', 'remove']);
+        expect(latestMenuProps.items.find((item: any) => item.id === 'archive-all'))
+            .toEqual(expect.objectContaining({ category: 'remove', disabled: false }));
+        const iconItem = latestMenuProps.items.find((item: any) => item.id === 'icon');
+        expect(iconItem.submenu.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'icon:rocket', checked: true }),
+            expect.objectContaining({ id: 'icon:eye', checked: false }),
         ]));
+        expect(latestMenuProps.items.find((item: any) => item.id === 'remove'))
+            .toEqual(expect.objectContaining({ subtitle: 'sessionsList.removeSectionDetail' }));
 
         await act(async () => {
-            await latestMenuProps?.onSelect?.('add-subfolder');
-            await latestMenuProps?.onSelect?.('move');
             await latestMenuProps?.onSelect?.('rename');
-            await latestMenuProps?.onSelect?.('delete');
+            await latestMenuProps?.onSelect?.('icon:eye');
+            await latestMenuProps?.onSelect?.('remove');
             await latestMenuProps?.onSelect?.('new-session');
+            await latestMenuProps?.onSelect?.('archive-all');
         });
-        expect(onAddSubfolder).toHaveBeenCalledTimes(1);
-        expect(onMove).toHaveBeenCalledTimes(1);
+        expect(onArchiveAll).toHaveBeenCalledTimes(1);
         expect(onRename).toHaveBeenCalledTimes(1);
-        expect(onDelete).toHaveBeenCalledTimes(1);
+        expect(onChangeIcon).toHaveBeenCalledWith('eye');
+        expect(onRemove).toHaveBeenCalledTimes(1);
         expect(onNewSession).toHaveBeenCalledTimes(1);
 
         expect(focusButton.props.accessibilityActions).toEqual(expect.arrayContaining([
             expect.objectContaining({ name: 'moveUp' }),
             expect.objectContaining({ name: 'moveDown' }),
-            expect.objectContaining({ name: 'moveToFolder' }),
-            expect.objectContaining({ name: 'moveToWorkspaceRoot' }),
         ]));
-
         await act(async () => {
             focusButton.props.onAccessibilityAction({ nativeEvent: { actionName: 'moveUp' } });
             focusButton.props.onAccessibilityAction({ nativeEvent: { actionName: 'moveDown' } });
-            focusButton.props.onAccessibilityAction({ nativeEvent: { actionName: 'moveToFolder' } });
-            focusButton.props.onAccessibilityAction({ nativeEvent: { actionName: 'moveToWorkspaceRoot' } });
         });
         expect(onMoveUp).toHaveBeenCalledTimes(1);
         expect(onMoveDown).toHaveBeenCalledTimes(1);
-        expect(onMove).toHaveBeenCalledTimes(2);
-        expect(onMoveToWorkspaceRoot).toHaveBeenCalledTimes(1);
     });
 
-    it('renders a locked folder as unavailable state and disables name-dependent actions', async () => {
+    it('says where sessions go only when the section is proven empty (P5 §4 Sections)', async () => {
+        const header = (memberCount: number | undefined) => (
+            <SessionSectionHeader
+                title="Payments"
+                icon={null}
+                memberCount={memberCount}
+                collapsed={false}
+                item={{ type: 'header', title: 'Payments', headerKind: 'folder', folderId: 'folder_pay', folderDepth: 0, serverId: 'server_a' }}
+                onToggleCollapse={vi.fn()}
+                onNewSession={vi.fn()}
+                onRename={vi.fn()}
+                onChangeIcon={vi.fn()}
+                onRemove={vi.fn()}
+                onArchiveAll={vi.fn()}
+            />
+        );
+        const empty = await renderScreen(header(0));
+        expect(empty.getTextContent()).toContain('sessionsList.sectionDropHint');
+        // Nothing to archive in a proven-empty section.
+        expect((dropdownMenuSpy.mock.calls.at(-1)?.[0] as any).items.find((item: any) => item.id === 'archive-all'))
+            .toEqual(expect.objectContaining({ disabled: true }));
+        standardCleanup();
+        // Unknown membership is not zero: no hint and no count.
+        const unknown = await renderScreen(header(undefined));
+        expect(unknown.getTextContent()).not.toContain('sessionsList.sectionDropHint');
+    });
+
+    it.each([
+        { reason: 'account_key_unavailable', label: 'sessionsList.lockedSection' },
+        { reason: 'invalid_stored_display', label: 'sessionsList.unavailableSection' },
+    ] as const)('renders an unreadable Section state label and separate membership count ($reason)', async ({ reason, label }) => {
         const screen = await renderScreen(
-            <FolderGroupHeader
+            <SessionSectionHeader
                 title=""
-                depth={0}
+                memberCount={23}
                 collapsed={false}
                 item={{
                     type: 'header',
@@ -552,33 +583,31 @@ describe('ProjectGroupHeader menu items', () => {
                     serverId: 'server_a',
                     displayState: {
                         status: 'locked',
-                        reason: 'account_key_unavailable',
+                        reason,
                     },
                 }}
-                onPress={vi.fn()}
                 onToggleCollapse={vi.fn()}
                 onNewSession={vi.fn()}
-                onAddSubfolder={vi.fn()}
+                icon={null}
                 onRename={vi.fn()}
-                onDelete={vi.fn()}
+                onChangeIcon={vi.fn()}
+                onRemove={vi.fn()}
             />,
         );
 
         const focusButton = screen.findByProps({
-            testID: 'session-folder-header-private-folder-id-focus',
+            testID: 'session-folder-header-private-folder-id:open',
         });
         expect(focusButton.props.accessibilityLabel).toBe(
-            'common.unavailable',
+            label,
         );
-        expect(
-            screen.findAllByType('Eyebrow' as never)
-                .map((node) => node.props.children),
-        ).not.toContain('private-folder-id');
+        expect(screen.getTextContent()).toContain('23');
+        expect(screen.getTextContent()).not.toContain('private-folder-id');
         const latestMenuProps = dropdownMenuSpy.mock.calls.at(-1)?.[0] as any;
         expect(latestMenuProps?.items).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ id: 'rename', disabled: true }),
-                expect.objectContaining({ id: 'delete', disabled: true }),
+                expect.objectContaining({ id: 'icon', disabled: true }),
             ]),
         );
     });
@@ -587,9 +616,8 @@ describe('ProjectGroupHeader menu items', () => {
         platformOs = 'web';
 
         const renderHeader = () => (
-            <FolderGroupHeader
+            <SessionSectionHeader
                 title="Planning"
-                depth={0}
                 collapsed={false}
                 item={{
                     type: 'header',
@@ -604,12 +632,12 @@ describe('ProjectGroupHeader menu items', () => {
                         workspaceRefId: 'workspace_a',
                     },
                 }}
-                onPress={vi.fn()}
                 onToggleCollapse={vi.fn()}
                 onNewSession={vi.fn()}
-                onAddSubfolder={vi.fn()}
+                icon={null}
                 onRename={vi.fn()}
-                onDelete={vi.fn()}
+                onChangeIcon={vi.fn()}
+                onRemove={vi.fn()}
             />
         );
 
@@ -630,9 +658,8 @@ describe('ProjectGroupHeader menu items', () => {
     it('does not nest folder header pressable controls inside another pressable on web', async () => {
 
         const screen = await renderScreen(
-            <FolderGroupHeader
+            <SessionSectionHeader
                 title="Planning"
-                depth={1}
                 collapsed={false}
                 item={{
                     type: 'header',
@@ -647,12 +674,12 @@ describe('ProjectGroupHeader menu items', () => {
                         workspaceRefId: 'workspace_a',
                     },
                 }}
-                onPress={vi.fn()}
                 onToggleCollapse={vi.fn()}
                 onNewSession={vi.fn()}
-                onAddSubfolder={vi.fn()}
+                icon={null}
                 onRename={vi.fn()}
-                onDelete={vi.fn()}
+                onChangeIcon={vi.fn()}
+                onRemove={vi.fn()}
             />,
         );
 
@@ -694,71 +721,6 @@ describe('ProjectGroupHeader menu items', () => {
 
         for (const pressable of screen.findAllByType('Pressable' as never)) {
             expect(childTreeContainsPressable(pressable)).toBe(false);
-        }
-    });
-
-    it('renders focused folder breadcrumbs with root and folder targets', async () => {
-        const onClear = vi.fn();
-        const onSelectFolder = vi.fn();
-
-        const screen = await renderScreen(
-            <SessionFolderFocusBreadcrumbs
-                breadcrumbs={[
-                    {
-                        id: 'root',
-                        name: 'Root',
-                        parentId: null,
-                        workspace: { t: 'workspaceRef', serverId: 'server_a', workspaceRefId: 'workspace_a' },
-                        renderWorkspaceKey: 'workspace_a',
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                    {
-                        id: 'child',
-                        name: 'Child',
-                        parentId: 'root',
-                        workspace: { t: 'workspaceRef', serverId: 'server_a', workspaceRefId: 'workspace_a' },
-                        renderWorkspaceKey: 'workspace_a',
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                ]}
-                onClear={onClear}
-                onSelectFolder={onSelectFolder}
-            />,
-        );
-
-        await act(async () => {
-            screen.findByProps({ testID: 'session-folder-breadcrumb-root' }).props.onPress();
-            screen.findByProps({ testID: 'session-folder-breadcrumb-root' }).props.onPress();
-            screen.findByProps({ testID: 'session-folder-breadcrumb-folder-child' }).props.onPress();
-        });
-
-        expect(onClear).toHaveBeenCalledTimes(2);
-        expect(onSelectFolder).toHaveBeenCalledWith('child');
-        const targets = [
-            screen.findByProps({ testID: 'session-folder-breadcrumb-root' }),
-            screen.findByProps({ testID: 'session-folder-breadcrumb-folder-root' }),
-            screen.findByProps({ testID: 'session-folder-breadcrumb-folder-child' }),
-        ];
-        expect(targets.map((target) => target.props.accessibilityLabel)).toEqual([
-            'sessionsList.workspaceRoot',
-            'Root',
-            'Child',
-        ]);
-        expect(targets.every((target) => target.props.accessibilityRole === 'button')).toBe(true);
-        const navigation = screen.findByProps({ testID: 'session-folder-breadcrumb-targets' });
-        expect(navigation.props.role).toBe('navigation');
-        expect(flattenStyle(navigation.props.style).flexWrap).toBe('wrap');
-        const sharedTargets = screen.findAllByType(HappierPressable).filter((target) => (
-            String(target.props.testID ?? '').startsWith('session-folder-breadcrumb-')
-        ));
-        expect(sharedTargets).toHaveLength(3);
-        for (const target of sharedTargets) {
-            const resolvedStyle = typeof target.props.style === 'function'
-                ? target.props.style({ focused: false, hovered: false, pressed: false })
-                : target.props.style;
-            expect(flattenStyle(resolvedStyle)).toEqual(expect.objectContaining({ minWidth: 44, minHeight: 44 }));
         }
     });
 
@@ -862,9 +824,10 @@ describe('ProjectGroupHeader menu items', () => {
         expect(screen.root.findAllByProps({ accessibilityLabel: 'machine.launchNewSessionInDirectory' })).toHaveLength(0);
     });
 
-    it('keeps project actions and the drag indication available before hover', async () => {
+    it('folds from its label and keeps its own actions beside it, outside the label press', async () => {
         platformOs = 'web';
         const onCreateSession = vi.fn();
+        const onToggleCollapse = vi.fn();
 
         const item = {
             type: 'header',
@@ -892,84 +855,36 @@ describe('ProjectGroupHeader menu items', () => {
                 onRename={vi.fn()}
                 onReset={vi.fn()}
                 collapsed={false}
-                onToggleCollapse={vi.fn()}
+                onToggleCollapse={onToggleCollapse}
             />,
         );
 
-        const pressables = screen.root.findAllByType('Pressable');
-        const rowPressable = pressables[0];
+        const label = screen.findByProps({ testID: 'session-list-project-header:project:repo:open' });
+        expect(label.props.expanded).toBe(true);
+        await act(async () => {
+            label.props.onPress();
+        });
+        expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+
         const addButton = screen.findByProps({ accessibilityLabel: 'machine.launchNewSessionInDirectory' });
-        const chevronWrapper = rowPressable.findAllByType('Icon')[0]?.parent;
-
-        expect(addButton).toBeTruthy();
-        expect(chevronWrapper?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 0 })]));
-        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
-        expect(screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })).toHaveLength(1);
-
+        expect(label.findAll((node) => node === addButton)).toHaveLength(0);
         await act(async () => {
             addButton.props.onPress();
         });
-
         expect(onCreateSession).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            rowPressable.props.onHoverIn?.();
-        });
-
+        expect(onToggleCollapse).toHaveBeenCalledTimes(1);
         expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
-        const reorderHandle = screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })[0];
-        expect(reorderHandle).toBeTruthy();
-        expect(reorderHandle.props.onPress).toBeUndefined();
-        expect(reorderHandle.props.accessibilityRole).toBeUndefined();
-        expect(rowPressable.findAllByType('Icon')[0]?.parent?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 1 })]));
-        const menuTrigger = screen.findByProps({ accessibilityLabel: 'common.moreActions' });
-
-        await act(async () => {
-            reorderHandle.props.onHoverIn?.();
-            rowPressable.props.onHoverOut?.();
-        });
-
-        expect(screen.findByProps({ testID: 'session-workspace-reorder-handle:project:repo' })).toBeTruthy();
-
-        await act(async () => {
-            menuTrigger.props.onHoverIn?.();
-            rowPressable.props.onHoverOut?.();
-        });
-
-        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
-        expect(screen.findByProps({ accessibilityLabel: 'common.moreActions' })).toBeTruthy();
-
-        await act(async () => {
-            menuTrigger.props.onHoverOut?.();
-            rowPressable.props.onHoverOut?.();
-        });
-
-        expect(rowPressable.findAllByType('Icon')[0]?.parent?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 0 })]));
-
-        const collapsedScreen = await renderScreen(
-            <ProjectGroupHeader
-                item={item as any}
-                hasMultipleMachines={false}
-                displayTitle="Important Repo"
-                hasCustomLabel={true}
-                canOpenProject={true}
-                onOpenProject={vi.fn()}
-                onCreateSession={vi.fn()}
-                onAddFolder={vi.fn()}
-                onRename={vi.fn()}
-                onReset={vi.fn()}
-                collapsed={true}
-                onToggleCollapse={vi.fn()}
-            />,
-        );
-
-        expect(collapsedScreen.root.findAllByType('Icon')[0]?.parent?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 1 })]));
+        // No decorative reorder glyph: the header itself is what a pointer carries.
+        expect(screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })).toHaveLength(0);
     });
 
     it('shows detected workspace favicons on project headers when enabled', async () => {
-        resolveWorkspaceFaviconMock.mockResolvedValueOnce({
-            status: 'found',
-            uri: 'data:image/svg+xml;base64,PHN2Zy8+',
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            success: true,
+            found: true,
+            mimeType: 'image/svg+xml',
+            contentBase64: 'PHN2Zy8+',
+            sizeBytes: 6,
             relativePath: 'public/favicon.svg',
         });
 
@@ -1007,16 +922,50 @@ describe('ProjectGroupHeader menu items', () => {
             await Promise.resolve();
         });
 
-        expect(resolveWorkspaceFaviconMock).toHaveBeenCalledWith(expect.objectContaining({
-            enabled: true,
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             serverId: 'server_a',
             machineId: 'machine_a',
-            workspacePath: '/repo',
+            payload: { workspacePath: '/repo' },
         }));
         const images = screen.root.findAllByType('Image' as any);
         expect(images).toHaveLength(1);
         expect(images[0].props.source).toEqual({ uri: 'data:image/svg+xml;base64,PHN2Zy8+' });
         expect(screen.root.findByProps({ testID: 'session-list-workspace-favicon' })).toBeDefined();
+    });
+
+    it('asks for the favicon of the accepted baseline only: explicit null and an unreachable baseline fall back (P5 U5)', async () => {
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: true, found: true, mimeType: 'image/svg+xml',
+            contentBase64: 'PHN2Zy8+', sizeBytes: 6, relativePath: 'favicon.svg' });
+        const header = (props: Partial<React.ComponentProps<typeof ProjectGroupHeader>>) => (
+            <ProjectGroupHeader
+                item={{
+                    type: 'header', title: '/repo', headerKind: 'project', groupKey: 'project:repo',
+                    // The raw lead scope must never stand in for the accepted baseline.
+                    workspaceScopeHint: { serverId: 'server_a', machineId: 'lead_machine', rootPath: '/lead-checkout' },
+                    serverId: 'server_a',
+                } as any}
+                hasMultipleMachines={false} displayTitle="happier" hasCustomLabel={false} canOpenProject={true}
+                workspaceFaviconsEnabled={true} onOpenProject={vi.fn()} onCreateSession={vi.fn()} onAddFolder={vi.fn()}
+                onRename={vi.fn()} onReset={vi.fn()} collapsed={false} onToggleCollapse={vi.fn()}
+                {...props}
+            />
+        );
+        const noBaseline = await renderScreen(header({ faviconSource: null }));
+        await act(async () => { await Promise.resolve(); });
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+        expect(noBaseline.root.findAllByProps({ testID: 'session-list-workspace-favicon' })).toHaveLength(0);
+
+        await renderScreen(header({
+            faviconSource: { serverId: 'server_a', machineId: 'baseline_machine', rootPath: '/repo' }, faviconSourceReachable: false,
+        }));
+        await act(async () => { await Promise.resolve(); });
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+
+        await renderScreen(header({ faviconSource: { serverId: 'server_a', machineId: 'baseline_machine', rootPath: '/repo' } }));
+        await act(async () => { await Promise.resolve(); });
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'baseline_machine', payload: { workspacePath: '/repo' },
+        }));
     });
 
     it('hides machine subtitles when workspace machine subtitles are disabled', async () => {

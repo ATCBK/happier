@@ -51,7 +51,7 @@ describe('SessionListSelectionCheckbox', () => {
             .toMatchObject({ checked: false });
     });
 
-    it('keeps a stable hit target while using a smaller visible selection control', async () => {
+    it('draws the selection control inside its identity slot, not a touch-sized box', async () => {
         const screen = await renderScreen(
             <SessionListSelectionProvider scopeKey="scope-a" visibleOrderedKeys={['server-a:session-a']}>
                 <SessionListSelectionCheckbox sessionId="session-a" selectionKey="server-a:session-a" />
@@ -63,8 +63,9 @@ describe('SessionListSelectionCheckbox', () => {
         const visibleBox = checkbox.findByType(View);
         const boxStyle = StyleSheet.flatten(visibleBox.props.style);
 
-        expect(rootStyle.width).toBeGreaterThanOrEqual(40);
-        expect(rootStyle.height).toBeGreaterThanOrEqual(40);
+        // The root is the row's identity slot, never a touch-sized box; the hit area is the pressable's.
+        expect(rootStyle.width).toBeLessThan(40);
+        expect(rootStyle.height).toBeLessThan(40);
         expect(boxStyle.width).toBeLessThan(24);
         expect(boxStyle.height).toBeLessThan(24);
     });

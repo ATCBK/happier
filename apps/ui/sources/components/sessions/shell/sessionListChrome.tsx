@@ -1,8 +1,5 @@
 import React from 'react';
-import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { describeWorkStatusBucket } from '@/components/work/status/workStatusBuckets';
-import { View, Pressable, Platform, I18nManager, Image as ReactNativeImage, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
-import { HappierPressable, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { View, Pressable, Platform, Image as ReactNativeImage, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { useUnistyles } from 'react-native-unistyles';
@@ -10,12 +7,10 @@ import { RecoveryKeyReminderBanner } from '@/components/account/RecoveryKeyRemin
 import { useIsTablet } from '@/utils/platform/responsive';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Text } from '@/components/ui/text/Text';
-import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import { t } from '@/text';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import {
     resolveDurableWorkspaceRefForSessionListHeader,
-    type SessionFolderV1,
     type SessionFolderWorkspaceRefV1,
 } from '@/sync/domains/session/folders';
 import { useSessionListOrganizeMode } from './organize/SessionListOrganizeMode';
@@ -24,24 +19,36 @@ import {
     useSessionListLayoutChoice,
     useYieldSessionListLayoutIntent,
 } from '@/hooks/session/sessionListLayoutIntent';
+import type { SessionListLayoutChoice } from '@/sync/domains/session/listing/sessionListLayout';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { cancelSessionListLayoutFlight, captureSessionListLayoutFlight } from './sessionListLayoutFlight';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 
 import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from './sessionListStyles';
 import { resolveProjectGroupHeaderMenuItems } from './resolveProjectGroupHeaderMenuItems';
 import { resolveNewSessionGroupTarget } from './resolveSessionListHeaderActionHandlers';
 import {
+    resolveSessionListDensityItems,
+    resolveSessionListIdentityItems,
     resolveSessionListViewOptionsPresentation,
     type SessionListViewOptionDescriptor,
 } from './sessionListViewOptionsPresentation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import type { RegisterSessionFolderDropTarget } from './useSessionListViewState';
 import { useWorkspaceFavicon } from './useWorkspaceFavicon';
 import { resolveWorkspaceRootTreeRowId, treeRowId } from './drop-resolution/treeRowId';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { useSessionListViewOptionWriter } from './useSessionListViewOptionWriter';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-
-const HEADER_ACTION_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+import type { CollectionGroupRollup } from '@happier-dev/plugin-ui/components';
+import { WorkStatusRollup } from '@/components/work/status/WorkStatusRollup';
+import { SESSION_SECTION_ICON_CHOICES, resolveSessionSectionIcon } from '@/components/sessions/organization/sessionSectionIcons';
+import { useSessionSectionDraftController } from '@/components/sessions/organization/useSessionSectionDraft';
+import { resolveSessionSectionDisplayTitle } from '@/sync/domains/session/organization/sections';
+import { isHappierTouchPrimaryPointer } from '@happier-dev/plugin-ui/environment';
 
 
 export function stopPressEventPropagation(event: unknown): void {
@@ -119,177 +126,126 @@ function useMeasuredDropTargetRegistration(params: Readonly<{
 }
 
 const SESSION_LIST_ORGANIZE_MENU_ITEM_ID = 'organize';
+const SESSION_LIST_NEW_SECTION_MENU_ITEM_ID = 'newSection';
+const SESSION_LIST_FILTER_MENU_ITEM_ID = 'filter';
+const SESSION_LIST_SETTINGS_MENU_ITEM_ID = 'settings';
+/** The View menu holds whole placement sentences (lab `clfilter:view`) at the menu's own type size. */
+const VIEW_MENU_OVERLAY_STYLE = { minWidth: 300 } as const;
 
 export const SessionListViewOptionsButton = React.memo(function SessionListViewOptionsButton(props: Readonly<{
     placement?: 'top' | 'bottom' | 'left' | 'right';
     onMenuOpenChange?: (open: boolean) => void;
     serverId?: string | null;
-    /** The touch floor where the primary pointer is a finger; the column's compact square otherwise. */
-    minimumInteractiveTargetSize?: number;
+    /** Filter… closes the View menu (lab `clfilter:view`): View is layout only, Find narrows. */
+    onOpenFilter?: () => void;
 }>) {
     const styles = sessionListStyles;
+    const router = useRouter();
+    const [sessionListIdentityDisplay] = useSettingMutable('sessionListIdentityDisplay');
+    const [sessionListDensity] = useSettingMutable('sessionListDensity');
+    const [sessionListRowContextV1] = useSettingMutable('sessionListRowContextV1');
+    const [sessionListStatusWords] = useSettingMutable('sessionListStatusWords');
     const { theme } = useUnistyles();
-    const [sessionListOrderingModeV1] = useSettingMutable('sessionListOrderingModeV1');
-    const [sessionListSectionModeV1] = useSettingMutable('sessionListSectionModeV1');
-    const [sessionListActiveGroupingV1] = useSettingMutable('sessionListActiveGroupingV1');
-    const [sessionListInactiveGroupingV1] = useSettingMutable('sessionListInactiveGroupingV1');
-    const [sessionListAttentionPromotionModeV1] = useSettingMutable('sessionListAttentionPromotionModeV1');
-    const [sessionListWorkingPlacementModeV1] = useSettingMutable('sessionListWorkingPlacementModeV1');
-    const [sessionFolderViewModeV1] = useSettingMutable('sessionFolderViewModeV1');
-    const [sessionListFolderSortModeV1] = useSettingMutable('sessionListFolderSortModeV1');
-    const settings = {
-        sessionListOrderingModeV1,
-        sessionListSectionModeV1,
-        sessionListActiveGroupingV1,
-        sessionListInactiveGroupingV1,
-        sessionListAttentionPromotionModeV1,
-        sessionListWorkingPlacementModeV1,
-        sessionFolderViewModeV1,
-        sessionListFolderSortModeV1,
-    };
+    const [sessionListAttentionPlacementV1] = useSettingMutable('sessionListAttentionPlacementV1');
     const applyViewOption = useSessionListViewOptionWriter();
-    const sessionFoldersFeatureEnabled = useFeatureEnabled('sessions.folders', props.serverId
-        ? { scopeKind: 'spawn', serverId: props.serverId }
-        : { scopeKind: 'main_selection' });
     const [menuOpen, setMenuOpen] = React.useState(false);
     const organize = useSessionListOrganizeMode();
+    const sectionDraft = useSessionSectionDraftController();
+    const openNewSection = sectionDraft?.openNew;
     const actionIconColor = theme.colors.text.secondary;
     // The rendered arrangement is the one this menu describes, so the checkmark
     // and the dependent controls read the effective-layout owner, not the raw
     // settings a visit intent may currently be overriding.
     const effectiveLayout = useSessionListLayoutChoice();
     const yieldLayoutIntent = useYieldSessionListLayoutIntent();
-    const presentation = resolveSessionListViewOptionsPresentation({
-        ...settings,
-        foldersFeatureEnabled: sessionFoldersFeatureEnabled,
-    }, effectiveLayout);
+    const presentation = resolveSessionListViewOptionsPresentation({ sessionListAttentionPlacementV1 }, effectiveLayout);
     const withSelection = React.useCallback((
         items: ReadonlyArray<SessionListViewOptionDescriptor>,
         selectedId: string,
+        category: string,
     ): ReadonlyArray<DropdownMenuItem> => items.map((item) => ({
         ...item,
+        category,
         checked: item.id === selectedId,
         rightElement: item.id === selectedId
             ? <Icon name="check" size={16} color={actionIconColor} />
             : undefined,
     })), [actionIconColor]);
-    const selectedTitle = React.useCallback((
-        items: ReadonlyArray<SessionListViewOptionDescriptor>,
-        selectedId: string,
-    ) => items.find((item) => item.id === selectedId)?.title, []);
-    const menuItems = React.useMemo<ReadonlyArray<DropdownMenuItem>>(() => [
-        ...withSelection(presentation.layoutItems, `layout:${presentation.selectedLayout}`).map((item) => ({
-            ...item,
-            category: t('settingsSession.sessionList.layoutTitle'),
-        })),
-        ...(presentation.showSectionGrouping ? [{
-            id: 'activeGrouping',
-            title: t('settingsFeatures.sessionListActiveGrouping'),
-            category: t('settingsSession.sessionList.sectionsTitle'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.activeGroupingItems,
-                presentation.selectedActiveGroupingId,
-            )}</Text>,
-            submenu: {
-                items: withSelection(presentation.activeGroupingItems, presentation.selectedActiveGroupingId),
-                search: false,
-                maxWidthCap: 320,
+    // Lab `clfilter:view`: what the list shows (Projects or Recent), where Needs you and Working sit, what
+    // each row shows; then Filter… and the settings page. Every item is the Settings → Sessions setting.
+    const identityItems = React.useMemo(() => resolveSessionListIdentityItems(), []);
+    const densityItems = React.useMemo(() => resolveSessionListDensityItems(), []);
+    const rowsCategory = t('settingsSession.sessionList.rowsTitle');
+    const menuItems = React.useMemo<ReadonlyArray<DropdownMenuItem>>(() => {
+        const selectedIdentity = identityItems.find((item) => item.id === `identity:${sessionListIdentityDisplay}`) ?? identityItems[0]!;
+        const selectedDensity = densityItems.find((item) => item.id === `density:${sessionListDensity}`) ?? densityItems[densityItems.length - 1]!;
+        return [
+            ...withSelection(presentation.layoutItems, `layout:${presentation.selectedLayout}`,
+                t('settingsSession.sessionList.viewTitle')),
+            ...withSelection(presentation.attentionItems, `attention:${presentation.selectedAttentionPlacement}`,
+                t('settingsSession.sessionList.attentionPlacementTitle')),
+            {
+                id: 'menu:identity',
+                testID: 'session-list-view-identity',
+                title: t('settingsSession.sessionList.leadingMarkTitle'),
+                category: rowsCategory,
+                rightElement: <View style={styles.viewMenuValue}><Text style={styles.viewMenuValueText}>{selectedIdentity.title}</Text><Icon name="caret-right" size={14} color={actionIconColor} /></View>,
+                submenu: { items: withSelection(identityItems, selectedIdentity.id, ''), placement: 'right' },
             },
-        }, {
-            id: 'inactiveGrouping',
-            title: t('settingsFeatures.sessionListInactiveGrouping'),
-            category: t('settingsSession.sessionList.sectionsTitle'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.inactiveGroupingItems,
-                presentation.selectedInactiveGroupingId,
-            )}</Text>,
-            submenu: {
-                items: withSelection(presentation.inactiveGroupingItems, presentation.selectedInactiveGroupingId),
-                search: false,
-                maxWidthCap: 320,
+            {
+                id: `rowContext:${sessionListRowContextV1 === false ? 'true' : 'false'}`,
+                testID: 'session-list-view-row-context',
+                title: t('settingsSession.sessionList.rowContextTitle'),
+                category: rowsCategory,
+                checked: sessionListRowContextV1 !== false,
+                rightElement: sessionListRowContextV1 !== false ? <Icon name="check" size={16} color={actionIconColor} /> : undefined,
             },
-        } satisfies DropdownMenuItem] : []),
-        {
-            id: 'attentionPlacement',
-            title: describeWorkStatusBucket('needs_you'),
-            category: t('settingsSession.sessionList.attentionPlacementTitle'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.attentionItems,
-                `attention:${presentation.selectedAttentionPlacement}`,
-            )}</Text>,
-            submenu: {
-                items: withSelection(
-                    presentation.attentionItems,
-                    `attention:${presentation.selectedAttentionPlacement}`,
-                ),
-                search: false,
-                maxWidthCap: 320,
+            {
+                id: `statusWords:${sessionListStatusWords === true ? 'false' : 'true'}`,
+                testID: 'session-list-view-status-words',
+                title: t('settingsSession.sessionList.statusWordsTitle'),
+                category: rowsCategory,
+                checked: sessionListStatusWords === true,
+                rightElement: sessionListStatusWords === true ? <Icon name="check" size={16} color={actionIconColor} /> : undefined,
             },
-        },
-        {
-            id: 'workingPlacement',
-            title: describeWorkStatusBucket('working'),
-            category: t('settingsSession.sessionList.attentionPlacementTitle'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.workingItems,
-                `working:${presentation.selectedWorkingPlacement}`,
-            )}</Text>,
-            submenu: {
-                items: withSelection(
-                    presentation.workingItems,
-                    `working:${presentation.selectedWorkingPlacement}`,
-                ),
-                search: false,
-                maxWidthCap: 320,
+            {
+                id: 'menu:density',
+                testID: 'session-list-view-density',
+                title: t('settingsSession.sessionList.densityMenuTitle'),
+                category: rowsCategory,
+                rightElement: <View style={styles.viewMenuValue}><Text style={styles.viewMenuValueText}>{selectedDensity.title}</Text><Icon name="caret-right" size={14} color={actionIconColor} /></View>,
+                submenu: { items: withSelection(densityItems, selectedDensity.id, ''), placement: 'right' },
             },
-        },
-        ...(presentation.showProjectOrdering
-            ? withSelection(presentation.orderingItems, `ordering:${presentation.selectedOrdering}`).map((item) => ({
-                ...item,
-                category: t('settingsSession.sessionList.sortWithinProjectsTitle'),
-            }))
-            : []),
-        ...(presentation.showFolderOptions ? [{
-            id: 'folderDisplay',
-            title: t('settingsSession.sessionList.folderTreeView'),
-            category: t('settingsSession.sessionList.menuSections.show'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.folderDisplayItems,
-                `folderDisplay:${presentation.selectedFolderDisplay}`,
-            )}</Text>,
-            submenu: {
-                items: withSelection(
-                    presentation.folderDisplayItems,
-                    `folderDisplay:${presentation.selectedFolderDisplay}`,
-                ),
-                search: false,
-                maxWidthCap: 320,
+            // A new section is named in place, where it lands (lab `clsections:custom`).
+            ...(openNewSection ? [{
+                id: SESSION_LIST_NEW_SECTION_MENU_ITEM_ID,
+                testID: 'session-list-view-new-section',
+                title: t('sessionsList.newSection'),
+                category: t('entityDragDrop.organize.title'),
+                icon: <Icon name="plus" size={16} color={actionIconColor} />,
+            } satisfies DropdownMenuItem] : []),
+            // Phones drag only in an intentional Organize mode (lab K1); desktop rows carry themselves.
+            ...(organize.available ? [{
+                id: SESSION_LIST_ORGANIZE_MENU_ITEM_ID,
+                title: t('entityDragDrop.organize.enter'),
+                category: t('entityDragDrop.organize.title'),
+                icon: <Icon name="dots-six-vertical" size={16} color={actionIconColor} />,
+            } satisfies DropdownMenuItem] : []),
+            ...(props.onOpenFilter ? [{
+                id: SESSION_LIST_FILTER_MENU_ITEM_ID,
+                testID: 'session-list-view-filter',
+                title: t('sessionsList.spacesFilter'),
+                icon: <Icon name="funnel-simple" size={16} color={actionIconColor} />,
+            } satisfies DropdownMenuItem] : []),
+            {
+                id: SESSION_LIST_SETTINGS_MENU_ITEM_ID,
+                testID: 'session-list-view-settings',
+                title: t('sessionsList.spacesSessionListSettings'),
+                icon: <Icon name="gear" size={16} color={actionIconColor} />,
             },
-        }, {
-            id: 'folderSort',
-            title: t('settingsSession.sessionList.folderSortModeTitle'),
-            category: t('settingsSession.sessionList.menuSections.show'),
-            rightElement: <Text style={{ color: theme.colors.text.secondary }}>{selectedTitle(
-                presentation.folderSortItems,
-                `folderSort:${presentation.selectedFolderSort}`,
-            )}</Text>,
-            submenu: {
-                items: withSelection(
-                    presentation.folderSortItems,
-                    `folderSort:${presentation.selectedFolderSort}`,
-                ),
-                search: false,
-                maxWidthCap: 320,
-            },
-        } satisfies DropdownMenuItem] : []),
-        // Phones drag only in an intentional Organize mode (lab K1); desktop rows carry themselves.
-        ...(organize.available ? [{
-            id: SESSION_LIST_ORGANIZE_MENU_ITEM_ID,
-            title: t('entityDragDrop.organize.enter'),
-            category: t('entityDragDrop.organize.title'),
-            icon: <Icon name="dots-six-vertical" size={16} color={actionIconColor} />,
-        } satisfies DropdownMenuItem] : []),
-    ], [actionIconColor, organize.available, presentation, selectedTitle, theme.colors.text.secondary, withSelection]);
+        ];
+    }, [actionIconColor, densityItems, identityItems, openNewSection, organize.available, presentation, props.onOpenFilter, rowsCategory,
+        sessionListDensity, sessionListIdentityDisplay, sessionListRowContextV1, sessionListStatusWords, styles.viewMenuValue, styles.viewMenuValueText, withSelection]);
 
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (itemId === SESSION_LIST_ORGANIZE_MENU_ITEM_ID) {
@@ -297,12 +253,28 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
             organize.enter();
             return;
         }
+        if (itemId === SESSION_LIST_NEW_SECTION_MENU_ITEM_ID) {
+            setMenuOpen(false);
+            openNewSection?.();
+            return;
+        }
+        if (itemId === SESSION_LIST_FILTER_MENU_ITEM_ID) {
+            setMenuOpen(false);
+            props.onOpenFilter?.();
+            return;
+        }
+        if (itemId === SESSION_LIST_SETTINGS_MENU_ITEM_ID) {
+            setMenuOpen(false);
+            router.push(SETTINGS_ROUTES.session as never);
+            return;
+        }
+        if (itemId.startsWith('menu:')) return;
         if (!await applyViewOption(itemId)) return;
         // An explicit layout choice retires the host's opening intent, so the
         // choice applies here and now instead of only after leaving the route.
         if (itemId.startsWith('layout:')) yieldLayoutIntent();
         setMenuOpen(false);
-    }, [applyViewOption, organize, yieldLayoutIntent]);
+    }, [applyViewOption, openNewSection, organize, props, router, yieldLayoutIntent]);
 
     return (
         <DropdownMenu
@@ -316,8 +288,10 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
             variant="slim"
             search={false}
             showCategoryTitles={true}
+            separateCategories
             matchTriggerWidth={false}
             maxWidthCap={320}
+            overlayStyle={VIEW_MENU_OVERLAY_STYLE}
             popoverPortalWebTarget="body"
             placement={props.placement ?? 'bottom'}
             popoverAnchorAlign="end"
@@ -330,11 +304,11 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
                     variant="plain"
                     size={SESSION_LIST_COLUMN_METRICS.iconButtonSizePx}
                     iconSize={ICON_SIZE.sm}
-                    minimumInteractiveTargetSize={props.minimumInteractiveTargetSize}
                     interactiveTargetGapPx={SESSION_LIST_COLUMN_METRICS.iconButtonGapPx}
                     expanded={menuOpen}
                     hasPopup="menu"
-                    iconName="sliders-horizontal"
+                    // The View menu rides the header's ⋯ (lab `clfilter:view`); Find and the title menu own filtering.
+                    iconName="dots-three"
                     onPress={(event) => {
                         stopPressEventPropagation(event);
                         toggle();
@@ -342,6 +316,46 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
                 />
             )}
         />
+    );
+});
+
+/**
+ * Projects or Recent (lab `clviews`): the one icon segmented control beside Find and View, bound to the one
+ * stored layout (`session.list.layout`) through the same writer the View menu and Settings use. Choosing here
+ * retires a route's opening intent, so the choice applies now.
+ */
+export const SessionListLayoutSegment = React.memo(function SessionListLayoutSegment() {
+    const { theme } = useUnistyles();
+    const effectiveLayout = useSessionListLayoutChoice();
+    const yieldLayoutIntent = useYieldSessionListLayoutIntent();
+    const applyViewOption = useSessionListViewOptionWriter();
+    const iconColor = theme.colors.text.secondary;
+    const reducedMotion = useReducedMotionPreference();
+    const handleSelect = React.useCallback((next: SessionListLayoutChoice) => {
+        if (next === effectiveLayout) return;
+        // The rows glide to where the chosen layout puts them (P5 §6); reduced motion switches in place.
+        if (Platform.OS === 'web' && !reducedMotion) captureSessionListLayoutFlight(next);
+        void applyViewOption(`layout:${next}`).then((applied) => {
+            if (applied) yieldLayoutIntent();
+            else cancelSessionListLayoutFlight();
+        });
+    }, [applyViewOption, effectiveLayout, reducedMotion, yieldLayoutIntent]);
+    return (
+        <View style={sessionListStyles.layoutSegment}>
+            <SegmentedTabBar<SessionListLayoutChoice>
+                testIDPrefix="session-list-layout"
+                accessibilityLabel={t('settingsSession.sessionList.layoutTitle')}
+                role="radiogroup"
+                compact
+                segmentSizing="content"
+                tabs={[
+                    { id: 'projects', label: t('settingsSession.sessionList.layoutProjectsTitle'), icon: <Icon name="list-bullets" size={15} color={iconColor} /> },
+                    { id: 'recent_activity', label: t('settingsSession.sessionList.layoutRecentActivityTitle'), icon: <Icon name="clock" size={15} color={iconColor} /> },
+                ]}
+                activeTabId={effectiveLayout === 'recent_activity' ? 'recent_activity' : 'projects'}
+                onSelectTab={handleSelect}
+            />
+        </View>
     );
 });
 
@@ -360,79 +374,6 @@ export const SessionsListHeader = React.memo(function SessionsListHeader() {
     );
 });
 
-export const SessionFolderFocusBreadcrumbs = React.memo(function SessionFolderFocusBreadcrumbs(props: Readonly<{
-    breadcrumbs: ReadonlyArray<SessionFolderV1>;
-    onClear: () => void;
-    onSelectFolder: (folderId: string) => void;
-    rootTitle?: string | null;
-}>) {
-    const styles = sessionListStyles;
-    const { theme } = useUnistyles();
-    if (props.breadcrumbs.length === 0) return null;
-    return (
-        <View style={styles.groupHeaderSection} testID="session-folder-focused-breadcrumbs">
-            <View
-                testID="session-folder-breadcrumb-targets"
-                role="navigation"
-                accessibilityLabel={t('sessionsList.workspaceRoot')}
-                style={[styles.headerLabelRow, { flexWrap: 'wrap', rowGap: theme.space.s4 }]}
-            >
-                <HappierPressable
-                    testID="session-folder-breadcrumb-root"
-                    onPress={props.onClear}
-                    accessibilityRole="button"
-                    accessibilityLabel={props.rootTitle ?? t('sessionsList.workspaceRoot')}
-                    style={({ focused, pressed }) => [{
-                        minWidth: HEADER_ACTION_TARGET_SIZE,
-                        minHeight: HEADER_ACTION_TARGET_SIZE,
-                        maxWidth: '100%',
-                        paddingHorizontal: theme.space.s8,
-                        justifyContent: 'center',
-                        borderRadius: 6,
-                        borderWidth: 1,
-                        borderColor: 'transparent',
-                        ...focusRingStyle({ focused, color: theme.colors.border.focus }),
-                        opacity: pressed ? motionTokens.press.opacitySubtle : 1,
-                    }]}
-                >
-                    <Text style={styles.groupHeaderSubtitle}>{props.rootTitle ?? t('sessionsList.workspaceRoot')}</Text>
-                </HappierPressable>
-                {props.breadcrumbs.map((breadcrumb) => (
-                    <React.Fragment key={breadcrumb.id}>
-                        <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                            <Icon
-                                name="caret-right"
-                                size={14}
-                                color={theme.colors.text.tertiary}
-                                style={I18nManager?.isRTL ? { transform: [{ scaleX: -1 }] } : undefined}
-                            />
-                        </View>
-                        <HappierPressable
-                            testID={`session-folder-breadcrumb-folder-${breadcrumb.id}`}
-                            onPress={() => props.onSelectFolder(breadcrumb.id)}
-                            accessibilityRole="button"
-                            accessibilityLabel={breadcrumb.name}
-                            style={({ focused, pressed }) => [{
-                                minWidth: HEADER_ACTION_TARGET_SIZE,
-                                minHeight: HEADER_ACTION_TARGET_SIZE,
-                                maxWidth: '100%',
-                                paddingHorizontal: theme.space.s8,
-                                justifyContent: 'center',
-                                borderRadius: 6,
-                                borderWidth: 1,
-                                borderColor: 'transparent',
-                                ...focusRingStyle({ focused, color: theme.colors.border.focus }),
-                                opacity: pressed ? motionTokens.press.opacitySubtle : 1,
-                            }]}
-                        >
-                            <Text style={styles.groupHeaderSubtitle}>{breadcrumb.name}</Text>
-                        </HappierPressable>
-                    </React.Fragment>
-                ))}
-            </View>
-        </View>
-    );
-});
 
 export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonly<{
     item: Extract<SessionListIndexItem, { type: 'header' }>;
@@ -454,31 +395,35 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     onRegisterDropTarget?: RegisterSessionFolderDropTarget;
     onMoveUp?: () => void;
     onMoveDown?: () => void;
+    /** The column's first group sits closer to the header. */
+    first?: boolean;
+    /**
+     * The header VM's accepted baseline (P5): `null` means no baseline, so no favicon is asked for.
+     * Only a header drawn without a VM falls back to the item's own scope.
+     */
+    faviconSource?: Readonly<{ serverId: string; machineId: string; rootPath: string }> | null;
+    /** The held baseline Machine's canonical reachability; false keeps the folder mark. */
+    faviconSourceReachable?: boolean;
 }>) {
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
     const machineSubtitle = props.machineSubtitle ?? props.item.subtitle;
     const { item, hasMultipleMachines, displayTitle, hasCustomLabel, canOpenProject, workspaceFaviconsEnabled = false, workspaceMachineSubtitlesEnabled = true, newSessionEnabled = true, onOpenProject, onCreateSession, onAddFolder, onRename, onReset, collapsed, onToggleCollapse } = props;
-    const [isRowHovered, setIsRowHovered] = React.useState(false);
-    const [isActionsHovered, setIsActionsHovered] = React.useState(false);
     const [menuOpen, setMenuOpen] = React.useState(false);
-    const isWeb = Platform.OS === 'web';
     const newSessionTarget = resolveNewSessionGroupTarget(item);
     const projectServerId = newSessionTarget?.serverId ?? item.serverId ?? null;
     const sessionFoldersFeatureEnabled = useFeatureEnabled('sessions.folders', projectServerId
         ? { scopeKind: 'spawn', serverId: projectServerId }
         : { scopeKind: 'main_selection' });
-    const showHoverActions = !isWeb || isRowHovered || isActionsHovered || menuOpen;
-    const showChevron = !isWeb || collapsed || showHoverActions;
-    const reorderHandleKey = item.groupKey ?? item.workspaceKey ?? '';
     const actionIconColor = theme.colors.text.secondary;
     const canCreateSession = newSessionEnabled && newSessionTarget !== null;
+    const faviconSource = props.faviconSource !== undefined ? props.faviconSource : item.workspaceScopeHint ?? null;
     const favicon = useWorkspaceFavicon({
         enabled: workspaceFaviconsEnabled,
-        serverId: item.workspaceScopeHint?.serverId ?? item.serverId ?? null,
-        machineId: item.workspaceScopeHint?.machineId ?? null,
-        workspacePath: item.workspaceScopeHint?.rootPath ?? null,
+        serverId: faviconSource?.serverId ?? item.serverId ?? null,
+        machineId: faviconSource?.machineId ?? null,
+        workspacePath: faviconSource?.rootPath ?? null,
+        reachable: props.faviconSourceReachable,
     });
     const workspace = React.useMemo(() => resolveDurableWorkspaceRefForSessionListHeader(item), [item]);
     const dropTarget = React.useMemo(() => {
@@ -500,7 +445,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const menuItems = resolveProjectGroupHeaderMenuItems({
         canOpenProject,
         canAddFolder: sessionFoldersFeatureEnabled && workspace !== null,
-        canRename: Boolean(item.workspaceScopeHint) && item.workspace?.t !== 'managedSessions',
+        canRename: Boolean(item.projectKey) && item.workspace?.t !== 'managedSessions',
         hasCustomLabel,
         canMoveUp: typeof props.onMoveUp === 'function',
         canMoveDown: typeof props.onMoveDown === 'function',
@@ -508,156 +453,125 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     });
     const menuEnabled = menuItems.length > 0;
 
-    const chevronColor = theme.colors.text.secondary;
-    return (
-        <View style={styles.groupHeaderSection}>
-            <View
-                ref={dropRegistration.ref}
-                testID={headerTestId}
-                style={styles.groupHeaderRow}
-                onLayout={dropRegistration.onLayout}
-                onPointerEnter={isWeb ? () => setIsRowHovered(true) : undefined}
-                onPointerLeave={isWeb ? () => setIsRowHovered(false) : undefined}
-            >
-                <Pressable
-                    style={styles.groupHeaderContent}
-                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
-                    onPress={onToggleCollapse}
-                    onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
-                    onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
-                    accessibilityRole="button"
-                    accessibilityLabel={displayTitle}
-                >
-                    <View style={styles.groupHeaderTitleRow}>
-                        {favicon ? (
-                            <View testID="session-list-workspace-favicon" style={[styles.groupHeaderFaviconFrame, { backgroundColor: materialColor(theme.colors.background.canvas, 'transparent') }]}>
-                                <ReactNativeImage
-                                    source={{ uri: favicon.uri }}
-                                    style={styles.groupHeaderFavicon}
-                                    resizeMode="cover"
-                                    accessibilityIgnoresInvertColors
-                                />
-                            </View>
-                        ) : null}
-                        <Eyebrow style={styles.groupHeaderTitle} numberOfLines={1}>{displayTitle}</Eyebrow>
-                        {/* The machine sits on the label's line, quiet like a count ("Chats  MacBook Pro", lab FL3). */}
-                        {workspaceMachineSubtitlesEnabled && hasMultipleMachines && machineSubtitle ? (
-                            <Text testID="session-list-group-machine" style={styles.groupHeaderMachine} numberOfLines={1}>{machineSubtitle}</Text>
-                        ) : null}
-                        <View
-                            style={styles.groupHeaderInlineActions}
-                            onPointerEnter={isWeb ? () => setIsActionsHovered(true) : undefined}
-                            onPointerLeave={isWeb ? () => setIsActionsHovered(false) : undefined}
-                        >
-                            <View
-                                style={[
-                                    styles.groupHeaderChevron,
-                                    isWeb && !showChevron ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
-                                ]}
-                            >
-                                <Icon
-                                    name={collapsed ? 'caret-right' : 'caret-down'}
-                                    size={14}
-                                    color={chevronColor}
-                                />
-                            </View>
-                        </View>
-                    </View>
-                </Pressable>
-                <View style={styles.groupHeaderTrailingActions}>
-                    {reorderHandleKey ? (isWeb ? (
-                        <View
-                            style={[styles.groupHeaderActionButton, styles.groupHeaderDragHandle]}
-                            testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
-                            pointerEvents="none"
-                            accessible={false}
-                        >
-                            <Icon name="list" size={14} color={actionIconColor} />
-                        </View>
-                    ) : (
-                        <Pressable
-                            style={styles.groupHeaderActionButton}
-                            testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
-                            onPress={stopPressEventPropagation}
-                            accessible={false}
-                            hitSlop={8}
-                        >
-                            <Icon name="list" size={14} color={actionIconColor}
-                                style={[styles.folderHeaderDragHandleIcon, styles.folderHeaderDragHandleIconActive]} />
-                        </Pressable>
-                    )) : null}
-                    {menuEnabled ? (
-                        <DropdownMenu
-                            open={menuOpen}
-                            onOpenChange={setMenuOpen}
-                            items={menuItems}
-                            onSelect={(itemId) => {
-                                if (itemId === 'moveUp') {
-                                    props.onMoveUp?.();
-                                } else if (itemId === 'moveDown') {
-                                    props.onMoveDown?.();
-                                } else if (itemId === 'openProject') {
-                                    onOpenProject();
-                                } else if (itemId === 'addFolder') {
-                                    onAddFolder();
-                                } else if (itemId === 'rename') {
-                                    onRename();
-                                } else if (itemId === 'reset') {
-                                    onReset();
-                                }
-                            }}
-                            placement="bottom"
-                            popoverAnchorAlign="end"
-                            variant="slim"
-                            matchTriggerWidth={false}
-                            maxWidthCap={220}
-                            showCategoryTitles={false}
-                            popoverPortalWebTarget="body"
-                            trigger={({ toggle }) => (
-                                <Pressable
-                                    style={styles.groupHeaderActionButton}
-                                    onPress={(event) => {
-                                        stopPressEventPropagation(event);
-                                        toggle();
-                                    }}
-                                    onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
-                                    onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('common.moreActions')}
-                                    hitSlop={8}
-                                >
-                                    <Icon name="dots-three" size={14} color={actionIconColor} />
-                                </Pressable>
-                            )}
-                        />
-                    ) : null}
-                    {canCreateSession ? (
+    const mark = favicon ? (
+        <View testID="session-list-workspace-favicon" style={styles.groupHeaderFaviconFrame}>
+            <ReactNativeImage
+                source={{ uri: favicon.uri }}
+                style={styles.groupHeaderFavicon}
+                resizeMode="cover"
+                accessibilityIgnoresInvertColors
+            />
+        </View>
+    ) : <Icon name="folder" size={13} color={theme.colors.text.tertiary} />;
+    // The group's own operations ride with the pointer (lab `.ls-h .act`): ⋯ then New session here.
+    const actions = (
+        <>
+            {menuEnabled ? (
+                <DropdownMenu
+                    open={menuOpen}
+                    onOpenChange={setMenuOpen}
+                    items={menuItems}
+                    onSelect={(itemId) => {
+                        if (itemId === 'moveUp') {
+                            props.onMoveUp?.();
+                        } else if (itemId === 'moveDown') {
+                            props.onMoveDown?.();
+                        } else if (itemId === 'openProject') {
+                            onOpenProject();
+                        } else if (itemId === 'addFolder') {
+                            onAddFolder();
+                        } else if (itemId === 'rename') {
+                            onRename();
+                        } else if (itemId === 'reset') {
+                            onReset();
+                        }
+                    }}
+                    placement="bottom"
+                    popoverAnchorAlign="end"
+                    variant="slim"
+                    matchTriggerWidth={false}
+                    maxWidthCap={220}
+                    showCategoryTitles={false}
+                    popoverPortalWebTarget="body"
+                    trigger={({ toggle }) => (
                         <Pressable
                             style={styles.groupHeaderActionButton}
                             onPress={(event) => {
                                 stopPressEventPropagation(event);
-                                onCreateSession();
+                                toggle();
                             }}
                             accessibilityRole="button"
-                            accessibilityLabel={newSessionTarget && 'kind' in newSessionTarget && newSessionTarget.kind === 'managed'
-                                ? t('newSession.title')
-                                : t('machine.launchNewSessionInDirectory')}
+                            accessibilityLabel={t('common.moreActions')}
                             hitSlop={8}
                         >
-                            <Icon name="plus" size={14} color={actionIconColor} />
+                            <Icon name="dots-three" size={14} color={actionIconColor} />
                         </Pressable>
-                    ) : null}
-                </View>
-            </View>
+                    )}
+                />
+            ) : null}
+            {canCreateSession ? (
+                <Pressable
+                    style={styles.groupHeaderActionButton}
+                    onPress={(event) => {
+                        stopPressEventPropagation(event);
+                        onCreateSession();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={newSessionTarget && 'kind' in newSessionTarget && newSessionTarget.kind === 'managed'
+                        ? t('newSession.title')
+                        : t('machine.launchNewSessionInDirectory')}
+                    hitSlop={8}
+                >
+                    <Icon name="plus" size={14} color={actionIconColor} />
+                </Pressable>
+            ) : null}
+        </>
+    );
+    return (
+        <View ref={dropRegistration.ref} onLayout={dropRegistration.onLayout} collapsable={false}>
+            <CollectionListGroupLabel
+                testID={headerTestId}
+                title={displayTitle}
+                // The machine sits on the label's line, quiet like a count, only when groups span machines.
+                detail={workspaceMachineSubtitlesEnabled && hasMultipleMachines && machineSubtitle ? machineSubtitle : undefined}
+                first={props.first}
+                rollup={<WorkStatusRollup rollup={props.item.rollup} testID={`${headerTestId}:rollup`} />}
+                mark={mark}
+                disclosure={{ expanded: !collapsed, onToggle: onToggleCollapse }}
+                actions={actions}
+                actionsHeld={menuOpen}
+            />
         </View>
     );
 });
 
+/** The glyph a column's own groups lead with (lab `clgroups`): amber only where the person is needed. */
+const SECTION_HEADER_MARKS: Partial<Record<NonNullable<SessionListHeaderItemKind>, Readonly<{ icon: IconName; attention?: boolean }>>> = {
+    attention: { icon: 'tray', attention: true },
+    working: { icon: 'pulse' },
+    pinned: { icon: 'push-pin' },
+};
+
+type SessionListHeaderItemKind = Extract<SessionListIndexItem, { type: 'header' }>['headerKind'];
+
+/**
+ * A column group's label that folds its rows (Needs you, Working, Pinned, a date or Home): the shared list
+ * label on the plane — glyph, sentence-case title, quiet count and the chevron after them — 24 apart from
+ * the group above it and tight to its own first row.
+ */
 export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHeader(props: Readonly<{
+    /** Admitted facts from the membership owner before local disclosure hides rows. */
+    rollup?: CollectionGroupRollup;
     title: string;
     collapsed: boolean;
     onPress: () => void;
-    isPrimaryHeader?: boolean;
+    /** Opens what the group stands for (Needs you → Inbox); the chevron then folds it on its own. */
+    onOpen?: () => void;
+    headerKind?: SessionListHeaderItemKind;
+    /** How many the group holds now; omitted while unknown. */
+    count?: number;
+    /** The column's first group sits closer to the header. */
+    first?: boolean;
     testID?: string;
     rootMeasurement?: Readonly<{
         active: boolean;
@@ -666,58 +580,65 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
         style?: StyleProp<ViewStyle>;
     }>;
 }>) {
-    const styles = sessionListStyles;
     const { theme } = useUnistyles();
-    const isWeb = Platform.OS === 'web';
-    const [isHovered, setIsHovered] = React.useState(false);
-    const headerChevronColor = theme.colors.text.secondary;
-    const isPrimaryHeader = props.isPrimaryHeader === true;
-    const showChevron = !isWeb || props.collapsed || isHovered;
-    return (
-        <Pressable
-            ref={props.rootMeasurement?.ref}
-            collapsable={props.rootMeasurement?.active ? false : undefined}
-            style={[
-                isPrimaryHeader ? styles.headerSection : styles.groupHeaderSection,
-                props.rootMeasurement?.style,
-            ]}
-            onPress={props.onPress}
+    const markSpec = props.headerKind ? SECTION_HEADER_MARKS[props.headerKind] : undefined;
+    const mark = markSpec ? (
+        <Icon name={markSpec.icon} size={13}
+            color={markSpec.attention ? theme.colors.state.warning.foreground : theme.colors.text.tertiary} />
+    ) : undefined;
+    const label = (
+        <CollectionListGroupLabel
+            title={props.title}
+            count={props.count}
+            first={props.first}
+            mark={mark}
             testID={props.testID}
-            onLayout={props.rootMeasurement?.onLayout}
-            onHoverIn={isWeb ? () => setIsHovered(true) : undefined}
-            onHoverOut={isWeb ? () => setIsHovered(false) : undefined}
+            rollup={props.testID ? <WorkStatusRollup rollup={props.rollup} testID={`${props.testID}:rollup`} /> : undefined}
+            disclosure={{
+                expanded: !props.collapsed,
+                onToggle: props.onPress,
+                ...(props.onOpen ? {
+                    onOpen: props.onOpen,
+                    openAccessibilityLabel: t('sessionsList.openNeedsYouInInbox'),
+                    toggleAccessibilityLabel: props.collapsed ? t('common.expand') : t('common.collapse'),
+                } : {}),
+            }}
+        />
+    );
+    if (!props.rootMeasurement) return label;
+    return (
+        <View
+            ref={props.rootMeasurement.ref}
+            collapsable={props.rootMeasurement.active ? false : undefined}
+            style={props.rootMeasurement.style}
+            onLayout={props.rootMeasurement.onLayout}
         >
-            <View style={styles.headerRow}>
-                <View style={styles.headerLabelRow}>
-                    <Eyebrow style={isPrimaryHeader ? styles.headerText : styles.groupHeaderTitle}>{props.title}</Eyebrow>
-                    <View
-                        style={[
-                            styles.headerChevron,
-                            isWeb && !showChevron ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
-                        ]}
-                    >
-                        <Icon
-                            name={props.collapsed ? 'caret-right' : 'caret-down'}
-                            size={14}
-                            color={headerChevronColor}
-                        />
-                    </View>
-                </View>
-            </View>
-        </Pressable>
+            {label}
+        </View>
     );
 });
 
-export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Readonly<{
+/**
+ * A section's label (lab `clsections:custom`): its own icon, sentence-case name and complete membership
+ * count, folding from the label; New session here and ⋯ ride with the pointer. Sections are flat Account
+ * filing, so the label sits on the column's text edge whatever a legacy definition's parents were.
+ */
+export const SessionSectionHeader = React.memo(function SessionSectionHeader(props: Readonly<{
     title: string;
-    depth: number;
+    /** The section's chosen icon; unknown names keep the default lines. */
+    icon: string | null;
+    /** Complete assignment membership; omitted while it is not proven (unknown is not zero). */
+    memberCount?: number;
+    /** Whether this view draws any of its members; a counted section with none says where they are. */
+    hasRowsInView?: boolean;
     collapsed: boolean;
-    onPress: () => void;
     onToggleCollapse: () => void;
-    onNewSession: () => void;
-    onAddSubfolder: () => void | Promise<void>;
+    onNewSession?: () => void;
     onRename: () => void | Promise<void>;
-    onDelete: () => void | Promise<void>;
+    onChangeIcon: (icon: IconName) => void | Promise<void>;
+    onRemove: () => void | Promise<void>;
+    /** Archives the section's exact membership; omitted where the list cannot archive. */
+    onArchiveAll?: () => void | Promise<void>;
     onMove?: () => void;
     onMoveToWorkspaceRoot?: () => void;
     onMoveUp?: () => void;
@@ -725,20 +646,21 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
     item: Extract<SessionListIndexItem, { type: 'header' }>;
     onRegisterDropTarget?: RegisterSessionFolderDropTarget;
     disabled?: boolean;
+    /** The column's first group sits closer to the header. */
+    first?: boolean;
 }>) {
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
-    const [isHovered, setIsHovered] = React.useState(false);
-    const [isActionsHovered, setIsActionsHovered] = React.useState(false);
     const [menuOpen, setMenuOpen] = React.useState(false);
-    const isWeb = Platform.OS === 'web';
-    const normalizedDepth = Math.min(Math.max(Math.trunc(props.depth), 0), 3);
-    const indentation = 20 + normalizedDepth * 12;
     const displayLocked = props.item.displayState?.status === 'locked';
-    const displayTitle = displayLocked ? t('common.unavailable') : props.title;
+    const displayTitle = props.item.displayState?.status === 'locked'
+        ? resolveSessionSectionDisplayTitle(props.item.displayState) : props.title;
     const actionsDisabled = props.disabled || displayLocked;
     const iconColor = actionsDisabled ? theme.colors.text.tertiary : theme.colors.text.secondary;
-    const showActions = !isWeb || isHovered || isActionsHovered || menuOpen;
+    // Archive all works by the section's id, so a locked name does not stop it; a proven-empty section has nothing to archive.
+    const archiveDisabled = props.disabled === true || props.memberCount === 0;
+    const archiveIconColor = archiveDisabled ? theme.colors.text.tertiary : theme.colors.text.secondary;
+    const sectionIcon = resolveSessionSectionIcon(props.icon);
     const dropTarget = React.useMemo(() => {
         if (!props.item.workspace || !props.item.folderId) return null;
         return {
@@ -755,62 +677,73 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
         target: dropTarget,
         onRegister: props.onRegisterDropTarget,
     });
-    const menuItems = React.useMemo((): DropdownMenuItem[] => {
-        const items: DropdownMenuItem[] = [{
-            id: 'new-session',
-            title: t('sessionsList.newSessionInFolder'),
-            icon: <Icon name="plus-circle" size={16} color={iconColor} />,
-            disabled: actionsDisabled,
-        },
+    const menuItems = React.useMemo((): DropdownMenuItem[] => [
         {
-            id: 'add-subfolder',
-            title: t('sessionsList.addSubfolder'),
-            icon: <Icon name="folder-open" size={16} color={iconColor} />,
-            disabled: actionsDisabled,
-        }];
-        if (typeof props.onMoveUp === 'function') items.push({ id: 'move-up', title: t('common.moveUp'), disabled: actionsDisabled });
-        if (typeof props.onMoveDown === 'function') items.push({ id: 'move-down', title: t('common.moveDown'), disabled: actionsDisabled });
-        if (typeof props.onMove === 'function') {
-            items.push({
-                id: 'move',
-                title: t('sessionsList.moveToFolder'),
-                icon: <Icon name="arrows-out-cardinal" size={16} color={iconColor} />,
-                disabled: actionsDisabled,
-            });
-        }
-        items.push({
             id: 'rename',
-            title: t('sessionsList.renameFolder'),
-            icon: <Icon name="pencil" size={16} color={iconColor} />,
+            title: t('common.rename'),
+            icon: <Icon name="pencil-simple" size={16} color={iconColor} />,
             disabled: actionsDisabled,
+            category: 'edit',
         },
         {
-            id: 'delete',
-            title: t('sessionsList.deleteFolder'),
-            icon: <Icon name="trash" size={16} color={iconColor} />,
+            id: 'icon',
+            title: t('sessionsList.sectionChangeIcon'),
+            icon: <Icon name={sectionIcon} size={16} color={iconColor} />,
             disabled: actionsDisabled,
-        });
-        return items;
-    }, [actionsDisabled, iconColor, props.onMove, props.onMoveUp, props.onMoveDown]);
+            category: 'edit',
+            submenu: {
+                title: t('sessionsList.sectionChangeIcon'),
+                maxWidthCap: 200,
+                items: SESSION_SECTION_ICON_CHOICES.map((choice) => ({
+                    id: `icon:${choice}`,
+                    title: t(`sessionsList.sectionIcons.${choice}` as never),
+                    icon: <Icon name={choice} size={16} color={theme.colors.text.secondary} />,
+                    checked: choice === sectionIcon,
+                })),
+            },
+        },
+        ...(props.onNewSession ? [{
+            id: 'new-session',
+            title: t('sessionsList.sectionNewSessionHere'),
+            icon: <Icon name="plus" size={16} color={iconColor} />,
+            disabled: actionsDisabled,
+            category: 'edit',
+        }] : []),
+        ...(props.onArchiveAll ? [{
+            id: 'archive-all',
+            title: t('sessionsList.sectionArchiveAll'),
+            icon: <Icon name="archive" size={16} color={archiveIconColor} />,
+            disabled: archiveDisabled,
+            category: 'remove',
+        }] : []),
+        {
+            id: 'remove',
+            title: t('sessionsList.removeSection'),
+            subtitle: t('sessionsList.removeSectionDetail'),
+            icon: <Icon name="minus-circle" size={16} color={theme.colors.text.secondary} />,
+            category: 'remove',
+        },
+    ], [actionsDisabled, archiveDisabled, archiveIconColor, iconColor, props.onArchiveAll, props.onNewSession, sectionIcon, theme.colors.text.secondary]);
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
+        if (itemId === 'remove') {
+            await props.onRemove();
+            return;
+        }
+        if (itemId === 'archive-all') {
+            if (!archiveDisabled) await props.onArchiveAll?.();
+            return;
+        }
         if (actionsDisabled) return;
-        if (itemId === 'move-up') {
-            props.onMoveUp?.();
-        } else if (itemId === 'move-down') {
-            props.onMoveDown?.();
-        } else if (itemId === 'new-session') {
-            props.onNewSession();
-        } else if (itemId === 'add-subfolder') {
-            await props.onAddSubfolder();
-        } else if (itemId === 'move') {
-            props.onMove?.();
+        if (itemId === 'new-session') {
+            props.onNewSession?.();
         } else if (itemId === 'rename') {
             await props.onRename();
-        } else if (itemId === 'delete') {
-            await props.onDelete();
+        } else if (itemId.startsWith('icon:')) {
+            const choice = SESSION_SECTION_ICON_CHOICES.find((candidate) => `icon:${candidate}` === itemId);
+            if (choice) await props.onChangeIcon(choice);
         }
     }, [actionsDisabled, props]);
-    const folderAccessibilityActions = React.useMemo(() => {
+    const sectionAccessibilityActions = React.useMemo(() => {
         const actions: Array<{ name: string; label: string }> = [];
         if (typeof props.onMoveUp === 'function') {
             actions.push({ name: 'moveUp', label: t('common.moveUp') });
@@ -818,15 +751,9 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
         if (typeof props.onMoveDown === 'function') {
             actions.push({ name: 'moveDown', label: t('common.moveDown') });
         }
-        if (typeof props.onMove === 'function') {
-            actions.push({ name: 'moveToFolder', label: t('sessionsList.moveToFolder') });
-        }
-        if (typeof props.onMoveToWorkspaceRoot === 'function') {
-            actions.push({ name: 'moveToWorkspaceRoot', label: t('sessionsList.moveToWorkspaceRoot') });
-        }
         return actions;
-    }, [props.onMove, props.onMoveDown, props.onMoveToWorkspaceRoot, props.onMoveUp]);
-    const handleFolderAccessibilityAction = React.useCallback((event: { nativeEvent?: { actionName?: string } }) => {
+    }, [props.onMoveDown, props.onMoveUp]);
+    const handleSectionAccessibilityAction = React.useCallback((event: { nativeEvent?: { actionName?: string } }) => {
         if (actionsDisabled) return;
         switch (event.nativeEvent?.actionName) {
             case 'moveUp':
@@ -835,119 +762,97 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
             case 'moveDown':
                 props.onMoveDown?.();
                 break;
-            case 'moveToFolder':
-                props.onMove?.();
-                break;
-            case 'moveToWorkspaceRoot':
-                props.onMoveToWorkspaceRoot?.();
-                break;
             default:
                 break;
         }
     }, [actionsDisabled, props]);
-    const headerTestId = `session-folder-header-${props.item.folderId ?? props.title}`;
+    const sectionKey = props.item.folderId ?? props.title;
+    const headerTestId = `session-folder-header-${sectionKey}`;
+    const touchPrimary = isHappierTouchPrimaryPointer(Platform.OS);
     return (
-        <View
-            ref={dropRegistration.ref}
-            style={styles.folderHeaderSection}
-            onLayout={dropRegistration.onLayout}
-            onPointerEnter={isWeb ? () => setIsHovered(true) : undefined}
-            onPointerLeave={isWeb ? () => setIsHovered(false) : undefined}
-        >
-            <View
+        <View ref={dropRegistration.ref} onLayout={dropRegistration.onLayout} collapsable={false}>
+            <CollectionListGroupLabel
                 testID={headerTestId}
-                style={[
-                    styles.folderHeaderRow,
-                    { paddingLeft: indentation },
-                ]}
-            >
-                <Pressable
-                    testID={`session-folder-collapse-${props.item.folderId ?? props.title}`}
-                    style={styles.groupHeaderActionButton}
-                    onPress={(event) => {
-                        stopPressEventPropagation(event);
-                        props.onToggleCollapse();
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={props.collapsed ? t('common.expand') : t('common.collapse')}
-                    hitSlop={8}
-                >
-                    <Icon
-                        name={props.collapsed ? 'caret-right' : 'caret-down'}
-                        size={14}
-                        color={iconColor}
-                    />
-                </Pressable>
-                <Pressable
-                    testID={`${headerTestId}-focus`}
-                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
-                    style={styles.headerLabelRow}
-                    onPress={actionsDisabled ? undefined : props.onPress}
-                    accessibilityRole="button"
-                    accessibilityLabel={displayTitle}
-                    accessibilityActions={folderAccessibilityActions}
-                    onAccessibilityAction={folderAccessibilityActions.length > 0 ? handleFolderAccessibilityAction : undefined}
-                    disabled={actionsDisabled}
-                >
-                    <Icon name="folder" size={14} color={iconColor} />
-                    <Eyebrow style={styles.groupHeaderTitle} numberOfLines={1}>{displayTitle}</Eyebrow>
-                </Pressable>
-                <View
-                    testID={`session-folder-reorder-handle-${props.item.folderId ?? props.title}`}
-                    style={[
-                        styles.groupHeaderActionButton,
-                        isWeb ? styles.groupHeaderDragHandle : styles.webHoverVisibleChevron,
-                    ]}
-                    pointerEvents="none"
-                >
-                    <Icon
-                        name="list"
-                        size={14}
-                        color={iconColor}
-                        style={[
-                            styles.folderHeaderDragHandleIcon,
-                            isWeb || showActions ? styles.folderHeaderDragHandleIconActive : null,
-                        ]}
-                    />
-                </View>
-                <View
-                    onPointerEnter={isWeb ? () => setIsActionsHovered(true) : undefined}
-                    onPointerLeave={isWeb ? () => setIsActionsHovered(false) : undefined}
-                >
-                    <DropdownMenu
-                        open={menuOpen}
-                        onOpenChange={setMenuOpen}
-                        items={menuItems}
-                        onSelect={handleMenuSelect}
-                        placement="left"
-                        variant="slim"
-                        matchTriggerWidth={false}
-                        maxWidthCap={240}
-                        showCategoryTitles={false}
-                        popoverPortalWebTarget="body"
-                        trigger={({ toggle }) => (
+                title={displayTitle}
+                count={props.memberCount}
+                first={props.first}
+                rollup={<WorkStatusRollup rollup={props.item.rollup} testID={`${headerTestId}:rollup`} />}
+                mark={<Icon name={sectionIcon} size={13} color={theme.colors.text.tertiary} />}
+                disclosure={{
+                    expanded: !props.collapsed,
+                    onToggle: props.onToggleCollapse,
+                    toggleAccessibilityLabel: props.collapsed ? t('common.expand') : t('common.collapse'),
+                    accessibilityActions: sectionAccessibilityActions,
+                    onAccessibilityAction: sectionAccessibilityActions.length > 0 ? handleSectionAccessibilityAction : undefined,
+                    disabled: actionsDisabled,
+                }}
+                actionsHeld={menuOpen}
+                actions={(
+                    <>
+                        <DropdownMenu
+                            open={menuOpen}
+                            onOpenChange={setMenuOpen}
+                            items={menuItems}
+                            onSelect={handleMenuSelect}
+                            placement="bottom"
+                            popoverAnchorAlign="end"
+                            variant="slim"
+                            matchTriggerWidth={false}
+                            maxWidthCap={240}
+                            showCategoryTitles={false}
+                            separateCategories
+                            popoverPortalWebTarget="body"
+                            trigger={({ toggle }) => (
+                                <Pressable
+                                    testID={`session-folder-menu-trigger-${sectionKey}`}
+                                    style={styles.groupHeaderActionButton}
+                                    onPress={(event) => {
+                                        stopPressEventPropagation(event);
+                                        toggle();
+                                    }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={t('common.moreActions')}
+                                    hitSlop={8}
+                                >
+                                    <Icon name="dots-three" size={14} color={theme.colors.text.secondary} />
+                                </Pressable>
+                            )}
+                        />
+                        {props.onNewSession && !actionsDisabled ? (
                             <Pressable
-                                testID={`session-folder-menu-trigger-${props.item.folderId ?? props.title}`}
-                                style={[
-                                    styles.groupHeaderActionButton,
-                                    styles.webHoverVisibleChevron,
-                                ]}
+                                testID={`session-folder-new-session-${sectionKey}`}
+                                style={styles.groupHeaderActionButton}
                                 onPress={(event) => {
                                     stopPressEventPropagation(event);
-                                    toggle();
+                                    props.onNewSession?.();
                                 }}
-                                onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
-                                onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
                                 accessibilityRole="button"
-                                accessibilityLabel={t('common.moreActions')}
+                                accessibilityLabel={t('sessionsList.sectionNewSessionHere')}
                                 hitSlop={8}
                             >
-                                <Icon name="dots-three" size={14} color={iconColor} />
+                                <Icon name="plus" size={14} color={theme.colors.text.secondary} />
                             </Pressable>
-                        )}
-                    />
+                        ) : null}
+                    </>
+                )}
+            />
+            {props.memberCount === 0 && !props.collapsed && !displayLocked ? (
+                // Under a finger the place is a destination you move to (Organize, the move sheet); the hint
+                // is a note, not a control, so it keeps the list row's own height.
+                <View style={styles.sectionDropHint}
+                    testID={`${headerTestId}:drop-hint`}>
+                    <Text variant="meta" style={styles.sectionDropHintText} numberOfLines={1}>
+                        {touchPrimary ? t('sessionsList.sectionDropHintTouch') : t('sessionsList.sectionDropHint')}
+                    </Text>
                 </View>
-            </View>
+            ) : null}
+            {(props.memberCount ?? 0) > 0 && props.hasRowsInView === false && !props.collapsed && !displayLocked ? (
+                <View style={styles.sectionOutsideHint} testID={`${headerTestId}:outside-view`}>
+                    <Text variant="meta" style={styles.sectionDropHintText} numberOfLines={1}>
+                        {t('sessionsList.sectionMembersOutsideView', { count: props.memberCount ?? 0 })}
+                    </Text>
+                </View>
+            ) : null}
         </View>
     );
 });

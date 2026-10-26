@@ -1,33 +1,42 @@
 import * as React from 'react';
-import { Animated, Easing, Platform, Pressable, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, resolveHappierCollectionTitleAccessoryFits } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { SelectionListFilterChip, type SelectionListFilter } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 
-import { SessionListViewOptionsButton, stopPressEventPropagation } from '../sessionListChrome';
+import { SessionListLayoutSegment, SessionListViewOptionsButton, stopPressEventPropagation } from '../sessionListChrome';
 import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from '../sessionListStyles';
+import { CollectionFilterButton } from '@/components/ui/lists/collection/CollectionFilterButton';
+import { CollectionSpaceSwipeTitle, CollectionSpaceSwipeZone, useCollectionSpaceSwipeTrack } from '@/components/ui/lists/collection/CollectionSpaceSwipeZone';
+import { useIsTablet } from '@/utils/platform/responsive';
+import { usePhoneTabNavRow } from '@/components/navigation/shell/phoneTabNavRow';
 
 const SEARCH_FIELD_FADE_MS = 170;
-/** The retry and Search everything rows keep the platform's minimum target. */
-const MINIMUM_ESCALATION_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
-const MINIMUM_ESCALATION_TARGET_STYLE = {
-    minWidth: MINIMUM_ESCALATION_TARGET_SIZE,
-    minHeight: MINIMUM_ESCALATION_TARGET_SIZE,
-};
 type Focusable = Readonly<{ focus: () => void }>;
 
 
 export type SessionListSearchChromeProps = Readonly<{
     filterControl?: React.ReactNode;
+    /** The spaces strip under the title (lab `clspaces`); its presence makes the conditions the tokens below. */
+    spacesStrip?: React.ReactNode;
+    /** Conditions on top of the space, as removable tokens (lab `clfilter:filter`). */
+    filterTokens?: React.ReactNode;
+    /** Floating surfaces the space chrome hangs from this header (the save form). */
+    overlays?: React.ReactNode;
+    /** The header's bottom edge, where the filter and the save form hang. */
+    anchorRef?: React.RefObject<View | null>;
+    /** Find's filter button beside the search field (badge = active conditions). */
+    filterButton?: Readonly<{ activeCount: number; open: boolean; onPress(): void }>;
+    /** Phone paging between spaces on the title and strip (lab `clspaces:swipe`). */
+    spaceSwipe?: Readonly<{ canPrevious: boolean; canNext: boolean; previousLabel: string | null; nextLabel: string | null; onCommit(direction: -1 | 1): void }>;
     filterSummary?: Readonly<{ label: string; onReset(): void }>;
     /** Facets that are on without showing in the title; each chip turns its own facet off. */
     filterChips?: ReadonlyArray<SelectionListFilter>;
@@ -74,6 +83,7 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
     } = props;
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
+    const isTablet = useIsTablet();
     const reducedMotion = useReducedMotionPreference();
     const trimmedQuery = searchQuery.trim();
     const [searchOpened, setSearchOpened] = React.useState(false);
@@ -81,9 +91,21 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
     const searchIsOpen = searchOpened || trimmedQuery.length > 0;
     const fieldOpacity = React.useRef(new Animated.Value(searchIsOpen ? 1 : 0)).current;
     const toggleRef = React.useRef<Focusable | null>(null);
-    // The header's icon buttons and the field's close button take the touch floor only where the primary
-    // pointer is a finger; a pointer column keeps the lab's compact squares.
-    const touchTargetSize = resolveTouchTargetFloorPx() ?? undefined;
+    // The header's icon buttons keep the lab's compact squares under every pointer; a finger reaches
+    // them through the shared hit area, never a larger drawn square.
+    // The title keeps its floor; the segment yields to View options when the row is too narrow for both. Measured on layout only, never per frame.
+    const [layoutSegmentFits, setLayoutSegmentFits] = React.useState(true);
+    const layoutSegmentWidthRef = React.useRef<number | null>(null);
+    const handleTitleSlotLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        const titleWidth = event.nativeEvent.layout.width;
+        setLayoutSegmentFits((shown) => resolveHappierCollectionTitleAccessoryFits({
+            shown, titleWidth, accessoryWidth: layoutSegmentWidthRef.current,
+            titleFloor: SESSION_LIST_COLUMN_METRICS.titleFloorPx, gap: SESSION_LIST_COLUMN_METRICS.iconButtonGapPx,
+        }));
+    }, []);
+    const handleLayoutSegmentLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        layoutSegmentWidthRef.current = event.nativeEvent.layout.width;
+    }, []);
     const iconColor = theme.colors.text.secondary;
 
     React.useEffect(() => {
@@ -156,54 +178,90 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
         onPress={props.filterSummary.onReset}
         style={(state) => [
             styles.searchChromeStatusRetry,
-            // A finger gets the platform floor; a pointer keeps the quiet line's own height.
-            touchTargetSize ? { minWidth: touchTargetSize, minHeight: touchTargetSize } : null,
             focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
         ]}
     ><Text style={styles.searchChromeStatusActionText}>{t('common.reset')}</Text></HappierPressable> : null;
 
+    const spaceChrome = props.presentation !== 'runs' && props.spacesStrip !== undefined;
+    const spaceSwipeCommit = props.spaceSwipe?.onCommit;
+    const handleSpaceSwipe = React.useCallback((direction: -1 | 1) => spaceSwipeCommit?.(direction), [spaceSwipeCommit]);
+    const spaceSwipeTrack = useCollectionSpaceSwipeTrack();
+    // On a phone tab whose column is the page, the shell's line joins this header (lab `clviews:recentP`):
+    // one nav row — the Home line, the column's controls, the shell's glyphs — then the large title alone.
+    const shellNavRow = usePhoneTabNavRow();
+    const navRow = props.presentation === 'runs' ? null : shellNavRow;
+    const columnControls = (
+        <>
+            {props.presentation === 'runs' || !layoutSegmentFits ? null : <View onLayout={handleLayoutSegmentLayout}>
+                <SessionListLayoutSegment />
+            </View>}
+            <IconButton
+                testID="session-list-search-trigger"
+                accessibilityLabel={t('sessionsList.searchSessions')}
+                tooltip={t('sessionsList.searchSessions')}
+                variant="plain"
+                size={SESSION_LIST_COLUMN_METRICS.iconButtonSizePx}
+                iconSize={ICON_SIZE.sm}
+                interactiveTargetGapPx={SESSION_LIST_COLUMN_METRICS.iconButtonGapPx}
+                selected={searchIsOpen}
+                controlRef={handleToggleRef}
+                iconName="magnifying-glass"
+                onPress={handleToggleSearch}
+            />
+            {props.presentation === 'runs' ? resetControl : <SessionListViewOptionsButton
+                onOpenFilter={props.filterButton ? props.filterButton.onPress : undefined}
+                placement="bottom"
+                serverId={props.organizationServerId}
+            />}
+        </>
+    );
     return (
-        <View style={styles.searchChrome} testID="session-list-search-chrome">
+        <View ref={props.anchorRef} collapsable={false} style={styles.searchChrome} testID="session-list-search-chrome">
+            {navRow ? (
+                <View testID="session-list-phone-nav-row" style={styles.searchChromeControlsRow}>
+                    {/* The Home line yields its width before the controls do; the segment yields first. */}
+                    <View style={styles.searchChromeTitleSlot} onLayout={handleTitleSlotLayout}>{navRow.leading}</View>
+                    {columnControls}
+                    {navRow.trailing}
+                </View>
+            ) : null}
+            <CollectionSpaceSwipeZone
+                testID="session-list-space-swipe-zone"
+                track={spaceSwipeTrack}
+                enabled={spaceChrome && props.spaceSwipe !== undefined && !isTablet}
+                canPrevious={props.spaceSwipe?.canPrevious ?? false}
+                canNext={props.spaceSwipe?.canNext ?? false}
+                onCommit={handleSpaceSwipe}
+            >
             <View
                 testID="session-list-search-primary-controls"
                 style={[styles.searchChromeControlsRow, props.presentation === 'runs' ? styles.searchChromeSummaryRow : null]}
             >
-                <View testID="session-list-title-slot" style={styles.searchChromeTitleSlot}>
-                    {filterControl}
+                <View testID="session-list-title-slot" style={styles.searchChromeTitleSlot} onLayout={navRow ? undefined : handleTitleSlotLayout}>
+                    {spaceChrome ? (
+                        <CollectionSpaceSwipeTitle track={spaceSwipeTrack}
+                            previousLabel={props.spaceSwipe?.previousLabel ?? null} nextLabel={props.spaceSwipe?.nextLabel ?? null}>
+                            {filterControl}
+                        </CollectionSpaceSwipeTitle>
+                    ) : filterControl}
                 </View>
-                <IconButton
-                    testID="session-list-search-trigger"
-                    accessibilityLabel={t('sessionsList.searchSessions')}
-                    tooltip={t('sessionsList.searchSessions')}
-                    variant="plain"
-                    size={SESSION_LIST_COLUMN_METRICS.iconButtonSizePx}
-                    iconSize={ICON_SIZE.sm}
-                    minimumInteractiveTargetSize={touchTargetSize}
-                    interactiveTargetGapPx={SESSION_LIST_COLUMN_METRICS.iconButtonGapPx}
-                    selected={searchIsOpen}
-                    controlRef={handleToggleRef}
-                    iconName="magnifying-glass"
-                    onPress={handleToggleSearch}
-                />
-                {props.presentation === 'runs' ? resetControl : <SessionListViewOptionsButton
-                    placement="bottom"
-                    serverId={props.organizationServerId}
-                    minimumInteractiveTargetSize={touchTargetSize}
-                />}
+                {navRow ? null : columnControls}
             </View>
-            {props.filterSummary && props.presentation !== 'runs' ? (
+            {spaceChrome ? props.spacesStrip : null}
+            </CollectionSpaceSwipeZone>
+            {props.filterSummary && props.presentation !== 'runs' && !spaceChrome ? (
                 <View testID="session-list-filter-summary" style={styles.searchChromeStatusRow}>
                     <Text style={styles.searchChromeStatusText}>{props.filterSummary.label}</Text>
                     {resetControl}
                 </View>
             ) : null}
-            {props.filterChips && props.filterChips.length > 0 && props.presentation !== 'runs' ? (
+            {props.filterChips && props.filterChips.length > 0 && props.presentation !== 'runs' && !spaceChrome ? (
                 <View testID="session-list-filter-chips" style={styles.searchChromeChipRow}>
                     {props.filterChips.map((filter) => <SelectionListFilterChip key={filter.id} filter={filter} />)}
                 </View>
             ) : null}
             {searchIsOpen ? (
-                <Animated.View style={{ opacity: fieldOpacity }}>
+                <Animated.View style={[{ opacity: fieldOpacity }, props.filterButton ? styles.searchChromeFindRow : null]}>
                     <CompactSearchField
                         testID="session-list-search-input"
                         accessibilityLabel={t('sessionsList.searchSessions')}
@@ -236,15 +294,23 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
                                     variant="plain"
                                     size={SESSION_LIST_COLUMN_METRICS.fieldCloseButtonSizePx}
                                     iconSize={ICON_SIZE.xs}
-                                    minimumInteractiveTargetSize={touchTargetSize}
                                     iconName="x"
                                     onPress={handleCloseSearch}
                                 />
                             </>
                         )}
                     />
+                    {props.filterButton ? (
+                        <CollectionFilterButton
+                            testID="session-list-filter-open"
+                            activeCount={props.filterButton.activeCount}
+                            open={props.filterButton.open}
+                            onPress={props.filterButton.onPress}
+                        />
+                    ) : null}
                 </Animated.View>
             ) : null}
+            {spaceChrome ? props.filterTokens : null}
             {searchScopeLabel && trimmedQuery.length > 0 ? (
                 <View
                     testID="session-list-search-scope"
@@ -264,32 +330,34 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
                 >
                     <Text style={styles.searchChromeStatusText}>{searchStatus.message}</Text>
                     {searchStatus.onRetry ? (
-                        <Pressable
+                        <HappierPressable
                             testID="session-list-search-retry"
                             accessibilityRole="button"
                             accessibilityLabel={t('common.retry')}
                             onPress={handleRetrySearch}
-                            style={[styles.searchChromeStatusRetry, MINIMUM_ESCALATION_TARGET_STYLE]}
+                            style={styles.searchChromeStatusRetry}
                         >
                             <Text style={styles.searchChromeStatusRetryText}>{t('common.retry')}</Text>
-                        </Pressable>
+                        </HappierPressable>
                     ) : null}
                 </View>
             ) : null}
             {onSearchEverything && trimmedQuery.length > 0 ? (
-                <Pressable
+                <HappierPressable
                     testID="session-list-search-everything"
                     accessibilityRole="button"
                     accessibilityLabel={t('sessionsList.searchEverythingFor', { query: trimmedQuery })}
                     onPress={handleSearchEverything}
-                    style={[styles.searchChromeEscalationRow, MINIMUM_ESCALATION_TARGET_STYLE]}
+                    hitReach={{ top: 4, bottom: 4 }}
+                    style={styles.searchChromeEscalationRow}
                 >
                     <Icon name="magnifying-glass" size={14} color={iconColor} />
                     <Text style={styles.searchChromeEscalationText}>
                         {t('sessionsList.searchEverythingFor', { query: trimmedQuery })}
                     </Text>
-                </Pressable>
+                </HappierPressable>
             ) : null}
+            {props.overlays}
         </View>
     );
 });

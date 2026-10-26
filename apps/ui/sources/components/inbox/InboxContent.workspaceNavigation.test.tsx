@@ -26,6 +26,7 @@ function createModel(includeApproval = true): InboxModel {
         stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
     const sessionPresentation = { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] };
     return {
+        invokePluginSessionControl: async () => ({ kind: 'unavailable' }),
         source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         openApprovals,

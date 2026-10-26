@@ -9,14 +9,9 @@ import {
     type TeamSummaryV1,
 } from '@happier-dev/protocol/teams';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/http/client', () => ({ serverFetch: serverFetchMock }));
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: runtimeFetchMock,
-}));
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
     return createTokenStorageModuleMock({
@@ -36,6 +31,10 @@ vi.mock('@legendapp/list/react-native', async () => {
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 
 import { createDeferred, createRootLayoutFeaturesResponse, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import {
     primeServerFeaturesSnapshot,
     resetServerFeaturesClientForTests,
@@ -53,6 +52,7 @@ import {
     type SessionListViewFilters,
 } from './sessionListViewFilters';
 import { clearSessionListViewFilterRetentionForTests, useSessionListViewFilters } from './useSessionListViewFilters';
+import { buildSessionListConditionLabels } from './SessionListFilterControl';
 
 const labels = {
     search: 'Search filters', show: 'Show', myWork: 'My work', assignedToMe: 'Assigned to me',
@@ -71,7 +71,22 @@ const labels = {
     needsMeOnly: 'Needs me only', needsMeOnlyDescription: 'Sessions waiting on you',
     moreTags: (count: number) => `+ ${count} more`,
     resultCount: (count: number) => `${count} sessions`,
+    conditions: buildSessionListConditionLabels(),
 } as const;
+
+/** Shared with is not a condition yet: Add filter opens its values in the editor's one value list. */
+async function openSharedWith(screen: Awaited<ReturnType<typeof renderScreen>>): Promise<void> {
+    // A retained selection is already a condition: its value opens the same list.
+    if (screen.findByTestId('collection-filter-condition:audiences:is:value')) {
+        await screen.pressByTestIdAsync('collection-filter-condition:audiences:is:value');
+        return;
+    }
+    await screen.pressByTestIdAsync('collection-filter-add');
+    await vi.waitFor(() => {
+        expect(screen.findByTestId('collection-filter-field:audiences')).not.toBeNull();
+    });
+    await screen.pressByTestIdAsync('collection-filter-field:audiences');
+}
 
 function tokenForSub(sub: string): string {
     const payload = globalThis.btoa(JSON.stringify({ sub }))
@@ -134,10 +149,27 @@ async function addTeamsHome(): Promise<string> {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
     getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
+    // Replace only the external HTTP leaf. Captured endpoint requests, Account
+    // admission and the Team directory/Group owners must all execute for real.
+    setRuntimeFetch(async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (isServerFetchConnectivityProbeRequest(url)) return Response.json({});
+        const path = new URL(url).pathname;
+        if (path === '/v1/account/encryption/currentness') {
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        }
+        if (path === '/v1/account/encryption') {
+            const currentness = createPlainAccountEncryptionCurrentnessFixture();
+            return Response.json({ mode: currentness.mode, updatedAt: currentness.updatedAt });
+        }
+        if (path === '/v2/account/settings') {
+            return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        }
+        return waitForNetworkResponseForTests(runtimeFetchMock({ url }, init), init?.signal);
+    });
     resetServerFeaturesClientForTests();
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
@@ -146,6 +178,7 @@ beforeEach(() => {
 
 afterEach(async () => {
     await standardCleanup();
+    resetRuntimeFetch();
     clearSessionListViewFilterRetentionForTests();
     resetTeamActionClientForTests();
     resetTeamsDirectoryEngineForTests();
@@ -252,7 +285,7 @@ describe('SessionListFilterEditor Team audiences', () => {
         }
         const screen = await renderScreen(<Harness />);
         // The audiences facet opens in place of the panel, as its own list.
-        await screen.pressByTestIdAsync('session-list-filter-audiences');
+        await openSharedWith(screen);
         await vi.waitFor(() => {
             expect(runtimeFetchMock.mock.calls.some((call) => call[0]?.url?.endsWith('/groups/list'))).toBe(true);
         });
@@ -304,7 +337,7 @@ describe('SessionListFilterEditor Team audiences', () => {
             />,
         );
         // The audiences facet opens in place of the panel, as its own list.
-        await screen.pressByTestIdAsync('session-list-filter-audiences');
+        await openSharedWith(screen);
 
         const teamStepId = `session-list-audience-team:${JSON.stringify([serverId, 'team', 'team-1'])}`;
         await vi.waitFor(() => {
@@ -384,7 +417,7 @@ describe('SessionListFilterEditor Team audiences', () => {
             />,
         );
         // The audiences facet opens in place of the panel, as its own list.
-        await screen.pressByTestIdAsync('session-list-filter-audiences');
+        await openSharedWith(screen);
 
         const teamStepId = `session-list-audience-team:${JSON.stringify([serverId, 'team', 'team-1'])}`;
         await vi.waitFor(() => {
@@ -549,7 +582,7 @@ describe('SessionListFilterEditor Team audiences', () => {
             />,
         );
         // The audiences facet opens in place of the panel, as its own list.
-        await screen.pressByTestIdAsync('session-list-filter-audiences');
+        await openSharedWith(screen);
 
         await vi.waitFor(() => {
             expect(screen.findByTestId('session-list-filter-editor:pagination:loading')).not.toBeNull();
@@ -606,7 +639,7 @@ describe('SessionListFilterEditor Team audiences', () => {
             />,
         );
         // The audiences facet opens in place of the panel, as its own list.
-        await screen.pressByTestIdAsync('session-list-filter-audiences');
+        await openSharedWith(screen);
 
         await vi.waitFor(() => {
             expect(screen.findByTestId('session-list-filter-editor:pagination:error')).not.toBeNull();

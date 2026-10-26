@@ -1,18 +1,19 @@
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The static storage graph reaches the Socket.IO transport; register its external boundary before any import.
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
-import { createSessionListRenderableSessionFixture, flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storageStore';
+// The harness installs the server socket boundary as it loads: import it before any runtime module.
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { PluginAppPageLaunchInputScope } from '@/components/appShell/plugins/pluginAppPageNavigation';
+import { PluginPageLaunchInputScope } from '@/components/plugins/pages/pluginPageNavigation';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel, type PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
-import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
+import type { PluginPage } from '@/components/plugins/pages/pluginPages';
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -62,7 +63,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ scopeId: 'app' });
 let projection: PluginUiProjectionModel;
 
 function placement(localId: string, container: 'appPage' | 'rightSidebarTab',
-    extra: Partial<Pick<PluginAppPage, 'requestedPlacement' | 'disabledReason'>> = {}): PluginUiSurfacePlacementProjection {
+    extra: Partial<Pick<PluginPage, 'requestedPlacement' | 'disabledReason'>> = {}): PluginUiSurfacePlacementProjection {
     const pluginId = container === 'rightSidebarTab' ? 'acme.review' : `acme.${localId}`;
     const binding = normalizePluginUiDestinationBindingV1({
         pluginId, destinationId: localId, rendererId: localId, container, target: { kind: 'app' },
@@ -80,7 +81,7 @@ function placement(localId: string, container: 'appPage' | 'rightSidebarTab',
         ...(container === 'rightSidebarTab' ? { rightSidebar: { tabId: localId, scopes: ['app'] } } : {}),
     };
 }
-function page(localId: string, extra: Partial<Pick<PluginAppPage, 'requestedPlacement' | 'disabledReason'>> = {}) {
+function page(localId: string, extra: Partial<Pick<PluginPage, 'requestedPlacement' | 'disabledReason'>> = {}) {
     return placement(localId, 'appPage', extra);
 }
 const reviewTab = placement('review-panel', 'rightSidebarTab');
@@ -107,11 +108,11 @@ function Wrapper({ children }: React.PropsWithChildren) {
         interactionEnabled: true, machineId: null, serverId: runtime.serverId, platform: surfaceState.platformOS,
         accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {},
         reloadConnectedAccountProjection: () => {},
-    }}><PluginAppPageLaunchInputScope pluginUiProjection={projection}>
+    }}><PluginPageLaunchInputScope target={{ kind: 'app' }} pluginUiProjection={projection}>
         <UniversalSearchRuntimeProvider value={{ open: openUniversalSearch, buildCommands: () => [] }}>
             {children}
         </UniversalSearchRuntimeProvider>
-    </PluginAppPageLaunchInputScope></AppShellPluginUiProjectionValueProvider></runtime.Wrapper>;
+    </PluginPageLaunchInputScope></AppShellPluginUiProjectionValueProvider></runtime.Wrapper>;
 }
 async function render(element: React.ReactElement) {
     const screen = await renderScreen(element, { wrapper: Wrapper });
@@ -167,102 +168,21 @@ describe('ColumnDestinationRows', () => {
         expect(rowIds(plugins)).toEqual([]);
     });
 
-    it("pins the app's own destinations on the phone launcher and keeps plugin destinations behind More", async () => {
-        setCatalog({
-            pages: [page('log', { requestedPlacement: { kind: 'column', column: 'sessions' } }), page('board')],
-            tabs: [reviewTab],
-        });
-        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
-        const launcher = await render(<ColumnDestinationRows />);
-        // Four pinned rows keep "My work" in the first third of a phone screen (lab xrail P1).
-        const pinned = [
-            'sessions-search-all-button',
-            'compact-app-destination:workflows',
-            'compact-app-destination:artifacts',
-            'compact-app-destination:bots',
-        ];
-        expect(rowIds(launcher)).toEqual([...pinned, 'phone-launcher-more']);
-
-        // More opens in place: the rest of the destinations, then the way to change what is pinned.
-        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
-        expect(rowIds(launcher)).toEqual([
-            ...pinned,
-            'phone-launcher-more',
-            'compact-app-destination:boards',
-            'external-sessions-browse-button',
-            'compact-app-destination:plugin:acme.log:log',
-            'compact-app-destination:plugins',
-            'compact-app-destination:plugin:acme.board:board',
-            'compact-app-destination:rightSidebarTab:plugin:acme.review:review-panel',
-            'phone-launcher-customize',
-        ]);
-    });
-
-    it("honours the launcher's own placements, never the desktop rail's", async () => {
-        setCatalog({
-            pages: [page('board')],
-            navigationPlacements: {
-                phoneLauncher: { orderedIds: [], placements: { 'plugin:acme.board:board': 'pinned', boards: 'hidden', artifacts: 'overflow' } },
-                appRail: { orderedIds: [], placements: { workflows: 'hidden' } },
-            },
-        });
-        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
-        const launcher = await render(<ColumnDestinationRows />);
-        const ids = rowIds(launcher);
-        expect(ids).toContain('compact-app-destination:plugin:acme.board:board');
-        expect(ids).toContain('compact-app-destination:workflows');
-        expect(ids).not.toContain('compact-app-destination:boards');
-        expect(ids).not.toContain('compact-app-destination:artifacts');
-        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
-        expect(rowIds(launcher)).toContain('compact-app-destination:artifacts');
-        expect(rowIds(launcher)).not.toContain('compact-app-destination:boards');
-    });
-
-    it('names why a pinned destination is unavailable, and dims an unavailable one in More without repeating it', async () => {
-        setCatalog({
-            pages: [page('pinned', { disabledReason: 'feature_disabled' }), page('later', { disabledReason: 'feature_disabled' })],
-            navigationPlacements: { phoneLauncher: { orderedIds: [], placements: { 'plugin:acme.pinned:pinned': 'pinned' } } },
-        });
-        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
-        const launcher = await render(<ColumnDestinationRows />);
-        expect(rowFor(launcher, 'compact-app-destination:plugin:acme.pinned:pinned')?.props.subtitle).toEqual(expect.any(String));
-        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
-        const later = rowFor(launcher, 'compact-app-destination:plugin:acme.later:later');
-        expect(later?.props.disabled).toBe(true);
-        expect(later?.props.subtitle).toBeUndefined();
-    });
-
-    it('opens Search over the page with the column scope, and navigates every other row through the one activation', async () => {
-        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
-        const scope = { accountId: 'account-b', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null } as const;
-        const screen = await render(<ColumnDestinationRows universalSearchScope={scope} />);
-
-        await pressTestInstanceAsync(rowFor(screen, 'sessions-search-all-button'));
-        expect(openUniversalSearch).toHaveBeenCalledWith(undefined, scope);
-        expect(routeState.push).not.toHaveBeenCalled();
-
-        await pressTestInstanceAsync(rowFor(screen, 'phone-launcher-more'));
-        await pressTestInstanceAsync(rowFor(screen, 'compact-app-destination:plugins'));
-        await pressTestInstanceAsync(rowFor(screen, 'compact-app-destination:plugin:acme.notes:notes'));
-        expect(routeState.push.mock.calls.map(([href]) => href)).toEqual(['/plugins', '/plugins/acme.notes/notes']);
-    });
-
     it.each([
         { platformOS: 'ios' as const, isTablet: true },
         { platformOS: 'ios' as const, isTablet: false },
         { platformOS: 'android' as const, isTablet: true },
-    ])('holds the native touch floor on $platformOS (tablet: $isTablet)', async (surface) => {
+    ])('keeps the density row height on $platformOS (tablet: $isTablet); a finger reaches it through the hit area', async (surface) => {
         surfaceState.platformOS = surface.platformOS;
         surfaceState.isTablet = surface.isTablet;
-        const minimumTargetSize = resolveMinimumInteractiveTargetSize(surface.platformOS);
         const densityHeight = resolveSessionListDensityViewState('narrow', {
             isTablet: surface.isTablet,
             platform: surface.platformOS,
         }).rowHeight;
         const style = await renderActionRowStyle();
 
-        expect(style.height).toBe(Math.max(densityHeight, minimumTargetSize));
-        expect(style.minHeight).toBe(Math.max(densityHeight, minimumTargetSize));
+        expect(style.height).toBe(densityHeight);
+        expect(style.minHeight).toBe(densityHeight);
     });
 
     it('keeps the desktop-web row on the session-list density grid', async () => {
@@ -297,30 +217,7 @@ describe('ColumnDestinationRows', () => {
         expect(row?.props.subtitle).not.toBe('feature_disabled');
     });
 
-    it("carries the Bots faces and what needs you on the phone launcher's one Bots entry", async () => {
-        // DF-B1: the launcher row is the phone's only way to the roster, so it says what the lab's
-        // My work entry said (b-rail Ap): a few faces, then what needs you.
-        const bots = ['alpha', 'beta'].map((id) => createSessionListRenderableSessionFixture({
-            id, metadata: { path: '/home/happier', bot: { kind: 'bot' } },
-        }));
-        storage.setState({ sessionListRowsByServerId: {
-            ...storage.getState().sessionListRowsByServerId,
-            [runtime.serverId]: Object.fromEntries(bots.map((row) => [row.id, row])),
-        } });
-        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
-        const launcher = await render(<ColumnDestinationRows />);
-
-        const row = rowFor(launcher, 'compact-app-destination:bots');
-        expect(row?.props.rightElement).toBeTruthy();
-        // Still a navigation row: the faces sit before the same chevron every launcher row has.
-        expect(row?.props.keepChevronWithRightElement).toBe(true);
-        expect(launcher.findAllByTestId('bots-entry-summary')).toHaveLength(1);
-        // A column (desktop) keeps its quiet row: the rail button carries the Bots dot there.
-        const column = await render(<ColumnDestinationRows column="sessions" />);
-        expect(column.findAllByTestId('bots-entry-summary')).toHaveLength(0);
-    });
-
-    it('keeps column and phone discovery visible when the rail icon is hidden', async () => {
+    it('keeps column discovery visible when the rail icon is hidden', async () => {
         setCatalog({
             pages: [page('notes', { requestedPlacement: { kind: 'column', column: 'sessions' } })],
             navigationPlacements: { appRail: { orderedIds: ['plugin:acme.notes:notes'], placements: { 'plugin:acme.notes:notes': 'hidden' } } },
@@ -330,8 +227,5 @@ describe('ColumnDestinationRows', () => {
 
         expect(screen.findByTestId('compact-app-destination:plugin:acme.notes:notes')).not.toBeNull();
         expect(rowIds(screen)[0]).toBe('external-sessions-browse-button');
-        const launcher = await render(<ColumnDestinationRows />);
-        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
-        expect(launcher.findByTestId('compact-app-destination:plugin:acme.notes:notes')).not.toBeNull();
     });
 });

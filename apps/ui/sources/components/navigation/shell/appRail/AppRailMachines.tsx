@@ -1,9 +1,8 @@
 import * as React from 'react';
 
-import { useLocalSetting } from '@/sync/domains/state/storage';
-import { getStorage } from '@/sync/domains/state/storageStore';
+import { useMachinesRailSeen, writeMachinesRailSeen } from '@/sync/domains/state/machineAdministrationUiState';
 import { t } from '@/text';
-import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 
 import { SidebarFooterPopoverButton, type SidebarFooterPopoverContentProps, type SidebarFooterPopoverTrigger } from '../sidebarFooter/SidebarFooterPopoverButton';
 import { SidebarMachinesPopoverContent } from '../sidebarFooter/SidebarMachinesPopoverContent';
@@ -11,7 +10,7 @@ import { RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX, RAIL_POPOVER_WIDE_WIDTH_PX } from '.
 import { AppRailBadge, AppRailMenuCount } from './AppRailBadge';
 import { AppRailIcon } from './AppRailIcon';
 import { AppRailSlot } from './AppRailSlot';
-import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
+import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_EDGES_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
 import { buildMachinesRailSeen, forgetRecoveredMachinesRailReasons, useMachinesRailSignal } from './useMachinesRailSignal';
 
 /**
@@ -26,7 +25,8 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
     selected?: boolean;
 }>) {
     const rail = useMachinesRailSignal();
-    const seen = useLocalSetting('machinesRailSeenV1');
+    const seen = useMachinesRailSeen(rail.fleet.accountScope);
+    const scopeKey = rail.fleet.accountScope ? serverAccountScopeKeySuffix(rail.fleet.accountScope) : null;
     const title = t('settings.machines');
     const label = rail.detail ? `${title} · ${rail.detail}` : title;
     const fleetRef = React.useRef(rail.fleet);
@@ -42,15 +42,17 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
         // establishes no recovery fact about the previously observed scope.
         if (previous === rail.fleet || !areServerAccountScopesEqual(previous.accountScope, rail.fleet.accountScope)) return;
         const next = forgetRecoveredMachinesRailReasons(rail.fleet, seenRef.current);
-        if (next !== seenRef.current) getStorage().getState().applyLocalSettings({ machinesRailSeenV1: next }, { source: 'ui' });
+        if (next !== seenRef.current) writeMachinesRailSeen(rail.fleet.accountScope, next);
     }, [rail.fleet]);
-    const previousGuardSeenAtRef = React.useRef(seen.guardSeenAt);
+    const previousGuardSeenAtRef = React.useRef({ scopeKey, at: seen.guardSeenAt });
+    if (previousGuardSeenAtRef.current.scopeKey !== scopeKey) previousGuardSeenAtRef.current = { scopeKey, at: seen.guardSeenAt };
     const recordSeen = React.useCallback(() => {
-        previousGuardSeenAtRef.current = seenRef.current.guardSeenAt;
-        getStorage().getState().applyLocalSettings({ machinesRailSeenV1: buildMachinesRailSeen(fleetRef.current, Date.now()) }, { source: 'ui' });
+        const scope = fleetRef.current.accountScope;
+        previousGuardSeenAtRef.current = { scopeKey: scope ? serverAccountScopeKeySuffix(scope) : null, at: seenRef.current.guardSeenAt };
+        writeMachinesRailSeen(scope, buildMachinesRailSeen(fleetRef.current, Date.now()));
     }, []);
     const renderMachines = React.useCallback((content: SidebarFooterPopoverContentProps) => (
-        <SidebarMachinesPopoverContent {...content} guardSeenAt={previousGuardSeenAtRef.current} />
+        <SidebarMachinesPopoverContent {...content} guardSeenAt={previousGuardSeenAtRef.current.at} />
     ), []);
     const renderIcon = React.useCallback((open: boolean) => <AppRailIcon name="desktop" active={open || props.selected === true} />, [props.selected]);
     const signal = rail.signal;
@@ -65,6 +67,7 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
             label={label}
             placement="right"
             buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
+            interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
             iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
             popoverWidthPx={RAIL_POPOVER_WIDE_WIDTH_PX}
             popoverMaxHeightPx={RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX}

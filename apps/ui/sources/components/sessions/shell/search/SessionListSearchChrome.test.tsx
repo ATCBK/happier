@@ -406,9 +406,6 @@ describe('SessionListSearchChrome', () => {
 
     it('lets the open field use the available width without fixing its height', async () => {
         const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
-        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
-        // The platform the chrome sees is the one the shell mocks install; the static import above predates them.
-        const { Platform: chromePlatform } = await import('react-native');
         const screen = await renderScreen(
             <SessionListSearchChrome
                 searchQuery="responsive"
@@ -431,7 +428,8 @@ describe('SessionListSearchChrome', () => {
         expect(inputStyle.lineHeight).toBeUndefined();
 
         const escalation = screen.root.findByProps({ testID: 'session-list-search-everything' });
-        expect(flatten(escalation.props.style).minHeight).toBe(resolveMinimumInteractiveTargetSize(chromePlatform.OS));
+        // The row keeps its design height (padding around one line); a finger reaches it through the hit area.
+        expect(flatten(escalation.props.style).minHeight).toBeUndefined();
         expect(escalation.findByType(Text).props.numberOfLines).toBeUndefined();
     });
 
@@ -452,6 +450,46 @@ describe('SessionListSearchChrome', () => {
 
         expect(timingSpy).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ duration: 0 }));
         timingSpy.mockRestore();
+    });
+
+    it('on a phone tab page folds the shell line and glyphs into one nav row above the large title', async () => {
+        const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
+        const { PhoneTabNavRowProvider } = await import('@/components/navigation/shell/phoneTabNavRow');
+        const screen = await renderScreen(
+            <PhoneTabNavRowProvider
+                leading={<Text testID="shell-home-line">Personal Home</Text>}
+                trailing={<Text testID="shell-glyphs">glyphs</Text>}
+            >
+                <SessionListSearchChrome
+                    filterControl={<Text testID="filter-control">My work</Text>}
+                    searchQuery=""
+                    onSearchQueryChange={vi.fn()}
+                />
+            </PhoneTabNavRowProvider>,
+        );
+
+        const navRow = firstByTestId(screen.root, 'session-list-phone-nav-row');
+        for (const id of ['shell-home-line', 'session-list-search-trigger', 'session-list-view-options-trigger', 'shell-glyphs']) {
+            expect(navRow.findAllByProps({ testID: id }).length).toBeGreaterThan(0);
+        }
+        // The title is its own row under the nav row, never beside its controls.
+        expect(navRow.findAllByProps({ testID: 'filter-control' })).toHaveLength(0);
+        expect(firstByTestId(screen.root, 'session-list-title-slot').findAllByProps({ testID: 'filter-control' }).length).toBeGreaterThan(0);
+    });
+
+    it('keeps the title beside its controls when no shell row is folded in', async () => {
+        const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
+        const screen = await renderScreen(
+            <SessionListSearchChrome
+                filterControl={<Text testID="filter-control">My work</Text>}
+                searchQuery=""
+                onSearchQueryChange={vi.fn()}
+            />,
+        );
+
+        expect(screen.root.findAllByProps({ testID: 'session-list-phone-nav-row' })).toHaveLength(0);
+        const controls = firstByTestId(screen.root, 'session-list-search-primary-controls');
+        expect(controls.findAllByProps({ testID: 'filter-control' }).length).toBeGreaterThan(0);
     });
 
 });

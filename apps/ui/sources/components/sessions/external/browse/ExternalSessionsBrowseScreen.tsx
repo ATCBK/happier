@@ -995,7 +995,6 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
             // In the band each choice hugs its word (an even split clipped "Conversations"); on a phone the bar
             // spans its row, where an even split has room for both.
             segmentSizing={phone ? 'equal' : 'content'}
-            targetSize="platform"
         />
     );
     const bandTrailing = menu || props.closeButton || !phone ? (

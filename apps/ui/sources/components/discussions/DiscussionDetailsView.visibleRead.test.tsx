@@ -14,7 +14,7 @@ import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protoco
 import { SessionHumanPresenceVisibleReplaceV1Schema } from '@happier-dev/protocol/sessions';
 import { attachSessionHumanPresenceSocket } from '@/sync/domains/session/humanPresence/sessionHumanPresenceRuntime';
 
-import { renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import type { DiscussionRepositoryClient } from '@/sync/ops/discussions/discussionRepository';
 import { clearDiscussionRepositoryRegistryForTests } from '@/sync/ops/discussions/discussionRepositoryRegistry';
@@ -240,6 +240,26 @@ describe('DiscussionDetailsView visible read', () => {
         expect(sourceSessionReads).not.toHaveBeenCalled();
     });
 
+    it('shows a failed return beside its question without presenting it as a delivery hold', async () => {
+        const participantSessionId = 'cmv3failedparticipant';
+        const failed = { ...message(1, true), participantDeliveryV1: [{ participantSessionId, disposition: 'failed' as const,
+            failure: { code: 'action_disabled' as const, phase: 'action_admission' as const, retryable: false },
+        }] };
+        installNetwork(() => [failed, message(2, true)]);
+        const screen = await renderScreen(<DiscussionDetailsView target={target} active standaloneSurface />);
+        await vi.waitFor(() => expect(viewableHumanMessages()).toHaveLength(2));
+
+        const notice = screen.findHostByTestId(`session-discussion-participant-failed-${failed.id}-${participantSessionId}`);
+        expect(notice).not.toBeNull();
+        expect(notice?.props.accessibilityLiveRegion).toBe('polite');
+        expect(notice?.children.join('').trim().length).toBeGreaterThan(0);
+        expect(JSON.stringify(notice?.children)).not.toContain(participantSessionId);
+        expect(JSON.stringify(notice?.children)).not.toContain('action_disabled');
+        expect(screen.findHostByTestId(`session-discussion-participant-held-${failed.id}-${participantSessionId}`)).toBeNull();
+        expect(screen.findHostByTestId('session-discussion-message-content-message-2')).not.toBeNull();
+        expect(sourceSessionReads).not.toHaveBeenCalled();
+    });
+
     it('declares and observes presence for its captured Discussion without a source Session', async () => {
         installNetwork(() => [message(1, true)]);
         const declarations: ReturnType<typeof SessionHumanPresenceVisibleReplaceV1Schema.parse>[] = [];
@@ -302,14 +322,18 @@ describe('DiscussionDetailsView visible read', () => {
         const screen = await renderScreen(<DiscussionDetailsView target={{ ...target, messageId: 'message-1' }} active standaloneSurface />);
         await vi.waitFor(() => expect(screen.findByTestId('session-discussion-reply-message-1')).not.toBeNull());
         // Route focus is navigation only: nothing reads as a reply until the person chooses Reply.
-        expect(screen.findByTestId('discussion-draft-reply')).toBeNull();
+        expect(((composerProps.current as { contextItems?: readonly unknown[] } | null)?.contextItems ?? []).length).toBe(0);
         await screen.pressByTestIdAsync('session-discussion-reply-message-1');
         expect(draftState.setReplyTarget).toHaveBeenLastCalledWith({ kind: 'message', messageId: 'message-1' });
         draftState.replyTarget = { kind: 'message', messageId: 'message-1' };
         await screen.update(<DiscussionDetailsView target={target} active standaloneSurface />);
-        await vi.waitFor(() => expect(screen.findByTestId('discussion-draft-reply')).not.toBeNull());
-        expect(screen.getTextContent()).toContain('message 1');
-        await screen.pressByTestIdAsync('discussion-draft-reply-clear');
+        // The reply target is a composer badge beside Session-style context items, not a block above the card.
+        expect(screen.findByTestId('discussion-draft-reply')).toBeNull();
+        const readReplyBadge = () => ((composerProps.current as { contextItems?: ReadonlyArray<{ testID?: string; label: string; accessibilityLabel?: string; onPress?: () => void; onRemove?: () => void }> } | null)
+            ?.contextItems ?? []).find(item => item.testID === 'discussion-composer-reply');
+        await vi.waitFor(() => expect(readReplyBadge()).toBeDefined());
+        expect(readReplyBadge()!.accessibilityLabel).toContain('message 1');
+        await act(async () => { readReplyBadge()!.onRemove?.(); });
         expect(draftState.setReplyTarget).toHaveBeenLastCalledWith(null);
     });
 
@@ -391,13 +415,14 @@ describe('DiscussionDetailsView visible read', () => {
         const rows = { current: [message(1, true)] };
         const { readState } = installNetwork(() => rows.current);
         const screen = await renderScreen(<DiscussionDetailsView target={target} active={false} standaloneSurface />);
-        await vi.waitFor(() => expect(viewableHumanMessages()).toHaveLength(1));
-        await reportAllRowsVisible();
+        await flushHookEffects();
+        expect(viewableHumanMessages()).toHaveLength(0);
         expect(readState).not.toHaveBeenCalled();
 
         // A Session-surface host (desktop Details pane) is not visible while its
         // Session surface is not registered, even if its tab is the active one.
         await screen.update(<DiscussionDetailsView target={target} active hostSessionAddress={{ serverId: address.serverId, sessionId: 'session-a' }} />);
+        await vi.waitFor(() => expect(viewableHumanMessages()).toHaveLength(1));
         await reportAllRowsVisible();
         expect(readState).not.toHaveBeenCalled();
 

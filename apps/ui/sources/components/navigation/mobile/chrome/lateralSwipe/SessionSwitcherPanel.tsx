@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -160,7 +161,6 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s2,
-        minHeight: 44,
     },
     linkText: {
         ...Typography.variant('label', 'regular'),
@@ -344,10 +344,10 @@ export const SessionSwitcherPanel = React.memo(function SessionSwitcherPanel(pro
                 {props.docked ? (
                     <View style={styles.dockedHeader}>
                         <Text style={styles.dockedTitle} accessibilityRole="header">{t('phoneNav.switcher.title')}</Text>
-                        <Pressable style={styles.link} onPress={props.onAllSessions} accessibilityRole="link" hitSlop={8}>
+                        <HappierPressable style={styles.link} onPress={props.onAllSessions} accessibilityRole="link">
                             <Text style={styles.linkText}>{t('phoneNav.switcher.allSessions')}</Text>
                             <Icon name="caret-right" size={14} color={theme.colors.text.link} />
-                        </Pressable>
+                        </HappierPressable>
                     </View>
                 ) : null}
                 <View style={[styles.viewport, { height: props.viewportHeight - chromeHeight }]}>

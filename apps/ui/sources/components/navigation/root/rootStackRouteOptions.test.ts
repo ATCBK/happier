@@ -39,6 +39,8 @@ describe('root route identity ownership', () => {
     it('lets the phone Home route show the Atmosphere wallpaper instead of painting an opaque sheet over it', () => {
         expect(createRootStackRouteOptions('auto')['home']).toMatchObject({
             contentStyle: { backgroundColor: 'transparent' }, headerStyle: { backgroundColor: 'transparent' },
+            // The picture runs to the top edge, under the Back control, instead of starting below an empty band.
+            headerTransparent: true,
         });
     });
 });

@@ -2169,14 +2169,14 @@ describe('ConnectionStatusControl (native popover config)', () => {
         // Embedded under the Homes page's "Connection details" row, it carries no title of its own.
         expect(screen.getTextContent()).not.toContain('connectionStatus.title');
         expect(screen.findByTestId('connection-popover-primary-action')).toBeTruthy();
-        expect(screen.findByTestId('connection-details-disclosure')?.props.accessibilityState).toEqual({ expanded: false });
+        expect(screen.findByTestId('connection-details-disclosure')?.props.accessibilityState).toMatchObject({ expanded: false });
 
         await act(async () => pressTestInstanceAsync(screen.findByTestId('connection-details-disclosure')));
 
         expect(screen.findByTestId('connection-transport-diagnostics')).toBeTruthy();
         expect(screen.getTextContent()).toContain('iroh-endpoint-123');
         const copyButton = screen.findByTestId('connection-copy-diagnostics');
-        expect(copyButton?.props.accessibilityRole).toBe('button');
+        expect((copyButton?.props.accessibilityRole ?? copyButton?.props.role)).toBe('button');
         await act(async () => screen.tree?.unmount());
     });
 
@@ -2376,7 +2376,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
 
         const copyButton = screen.findByTestId('connection-copy-diagnostics');
         if (!copyButton) throw new Error('expected diagnostics copy action');
-        expect(copyButton.props.accessibilityRole).toBe('button');
+        expect(copyButton.props.accessibilityRole ?? copyButton.props.role).toBe('button');
         expect(copyButton.props.accessibilityLabel).toBe('connectionStatus.copyDiagnostics');
         await act(async () => pressTestInstanceAsync(copyButton));
         expect(clipboardMock.setClipboardStringSafe).toHaveBeenCalled();

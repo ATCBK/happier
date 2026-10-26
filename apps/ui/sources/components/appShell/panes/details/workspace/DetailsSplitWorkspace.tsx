@@ -1,8 +1,8 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -13,7 +13,6 @@ import {
     ModalPaneBoundaryView,
     useModalPaneBoundary,
 } from '@/components/ui/panels/ModalPaneBoundary';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { Text } from '@/components/ui/text/Text';
 import type { FocusReturnTarget } from '@/keyboard/focusReturn';
@@ -223,11 +222,6 @@ export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspacePro
     const overlay = details.overlay ?? null;
     const localOpeningFocusReturnRef = React.useRef<FocusReturnTarget>(null);
     const openingFocusReturnRef = props.pane.detailsOverlayFocusReturnRef ?? localOpeningFocusReturnRef;
-    const interactiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const overlayActionTargetStyle = React.useMemo(() => ({
-        minWidth: interactiveTargetSize,
-        minHeight: interactiveTargetSize,
-    }), [interactiveTargetSize]);
     const groupsById = React.useMemo(
         () => Object.fromEntries(details.groups.map((group) => [group.id, group])),
         [details.groups],
@@ -464,43 +458,43 @@ export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspacePro
                     {...detailsModalBoundary.overlayProps}
                 >
                     <View style={[styles.overlayChrome, { backgroundColor: materialColor(theme.colors.surface.inset, 'transparent') }]}>
-                        <Pressable
+                        <HappierPressable
                             testID="details-workspace-overlay-back"
                             accessibilityRole="button"
                             accessibilityLabel={t('common.back')}
                             onPress={handleReturnToWorkspace}
-                            style={[styles.overlayAction, overlayActionTargetStyle]}
+                            style={styles.overlayAction}
                         >
                             <Text style={styles.overlayActionText}>{t('common.back')}</Text>
-                        </Pressable>
-                        <Pressable
+                        </HappierPressable>
+                        <HappierPressable
                             testID="details-workspace-overlay-focus-workspace"
                             accessibilityRole="button"
                             accessibilityLabel={t('common.restore')}
                             onPress={handleFocusWorkspace}
-                            style={[styles.overlayAction, overlayActionTargetStyle]}
+                            style={styles.overlayAction}
                         >
                             <Text style={styles.overlayActionText}>{t('common.restore')}</Text>
-                        </Pressable>
+                        </HappierPressable>
                         <View style={styles.overlayChromeSpacer} />
-                        <Pressable
+                        <HappierPressable
                             testID="details-workspace-overlay-reveal-right"
                             accessibilityRole="button"
                             accessibilityLabel={t('session.detailsPanel.openRightSidebarA11y')}
                             onPress={handleRevealRightPane}
-                            style={[styles.overlayAction, overlayActionTargetStyle]}
+                            style={styles.overlayAction}
                         >
                             <Text style={styles.overlayActionText}>{t('session.detailsPanel.openRightSidebarA11y')}</Text>
-                        </Pressable>
-                        <Pressable
+                        </HappierPressable>
+                        <HappierPressable
                             testID="details-workspace-overlay-close"
                             accessibilityRole="button"
                             accessibilityLabel={t('common.close')}
                             onPress={props.pane.closeDetails}
-                            style={[styles.overlayAction, overlayActionTargetStyle]}
+                            style={styles.overlayAction}
                         >
                             <Text style={styles.overlayActionText}>{t('common.close')}</Text>
-                        </Pressable>
+                        </HappierPressable>
                     </View>
                     <View style={styles.overlayContent}>
                         <PluginSurfaceFocusEligibilityProvider active>

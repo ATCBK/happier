@@ -25,7 +25,7 @@ it.each([false, true])('keeps a column mode control at its natural height beside
             await act(async () => root.render(
                 <View style={{ height }}>
                     <SegmentedTabBar tabs={tabs} activeTabId="titles" onSelectTab={() => {}}
-                        role="radiogroup" compact={compact} targetSize="platform" testIDPrefix="mode" />
+                        role="radiogroup" compact={compact} testIDPrefix="mode" />
                     <View testID="results" style={{ flex: 1 }} />
                 </View>,
             ));

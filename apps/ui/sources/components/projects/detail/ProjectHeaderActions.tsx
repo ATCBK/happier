@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
@@ -7,7 +7,9 @@ import { t } from '@/text';
 import { BrowserSurfaceOpenButton } from '@/components/browser/surfaces/BrowserSurfaceOpenButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+
+/** The row's gap (`container`): neighbouring actions' hit areas split it. */
+const ACTION_GAP_PX = 4;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -38,7 +40,6 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
     const { theme } = useUnistyles();
     const glyphColor = theme.colors.chrome.header.foreground;
     const size = HAPPIER_PAGE_METRICS.controlHeightPx;
-    const target = resolveMinimumInteractiveTargetSize(Platform.OS);
     const glyph = (name: React.ComponentProps<typeof Icon>['name']) => <Icon name={name} size={ICON_SIZE.sm} color={glyphColor} />;
 
     return (
@@ -48,7 +49,7 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
                     testID={`${props.testIdPrefix}-toggle-workspace-experience`}
                     variant="plain"
                     size={size}
-                    minimumInteractiveTargetSize={target}
+                    interactiveTargetGapPx={ACTION_GAP_PX}
                     onPress={props.onToggleWorkspaceExperience}
                     accessibilityLabel={props.workspaceExperienceToggleA11yLabel}
                     icon={glyph('arrows-left-right')}
@@ -59,7 +60,7 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
                     testID={`${props.testIdPrefix}-open-worktrees`}
                     variant="plain"
                     size={size}
-                    minimumInteractiveTargetSize={target}
+                    interactiveTargetGapPx={ACTION_GAP_PX}
                     onPress={props.onOpenWorktrees}
                     accessibilityLabel={t('files.branchMenu.category.worktrees')}
                     icon={glyph('git-branch')}
@@ -70,6 +71,7 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
                     testID={`${props.testIdPrefix}-open-browser`}
                     size={size}
                     iconColor={glyphColor}
+                    interactiveTargetGapPx={ACTION_GAP_PX}
                     onPress={props.onOpenBrowser}
                 />
             ) : null}
@@ -77,7 +79,7 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
                 testID={`${props.testIdPrefix}-open-terminal`}
                 variant="plain"
                 size={size}
-                minimumInteractiveTargetSize={target}
+                interactiveTargetGapPx={ACTION_GAP_PX}
                 onPress={props.onOpenTerminal}
                 accessibilityLabel={t('settings.terminal')}
                 icon={glyph('terminal')}

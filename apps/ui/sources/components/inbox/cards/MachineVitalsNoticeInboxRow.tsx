@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import type { MachineVitalsNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 
@@ -13,7 +12,6 @@ import { machineVitalsNoticeHref, machineVitalsNoticeTab } from '@/components/ma
 import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Modal } from '@/modal';
 import type { OpenUsageNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useMachine } from '@/sync/store/hooks';
@@ -189,9 +187,6 @@ export const MachineVitalsNoticeInboxRow = React.memo(
             iconName="x"
             variant="plain"
             size={28}
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(
-              Platform.OS,
-            )}
             interactiveTargetGapPx={8}
             onPress={dismiss}
           />

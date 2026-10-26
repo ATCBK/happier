@@ -15,15 +15,15 @@ import { SessionsListWrapper } from '@/components/sessions/shell/SessionsListWra
 import { ProjectsListView } from '@/components/projects/ProjectsListView';
 import { ExternalSessionsEmptyState } from '@/components/sessions/shell/ExternalSessionsEmptyState';
 import { Header } from '@/components/navigation/Header';
-import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { isUsingCustomServer } from '@/sync/domains/server/serverConfig';
 import { trackFriendsSearch } from '@/track';
-import { ConnectionStatusControl } from '@/components/navigation/ConnectionStatusControl';
+import { ConnectionStatusControl, type ConnectionStatusTriggerState } from '@/components/navigation/ConnectionStatusControl';
+import { PhoneHomeLine } from './PhoneHomeLine';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
-import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/workflowsDestinationAccess';
+import { PhoneDestinationsMenu } from '@/components/appShell/destinations/PhoneDestinationsMenu';
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { Text } from '@/components/ui/text/Text';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
@@ -35,8 +35,11 @@ import {
     SESSION_LIST_SURFACE_OWNER_SIDEBAR,
 } from '@/components/sessions/shell/surface/sessionListSurfaceOwnership';
 import { useMainAppTabState } from '@/components/navigation/mobile/chrome/MainAppTabStateProvider';
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ActionOperationActivityButton } from '@/components/inbox/actionOperations/ActionOperationActivityButton';
+import { PhoneTabNavRowProvider } from '@/components/navigation/shell/phoneTabNavRow';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { useScreenSafeAreaBackdrop } from '@/components/navigation/safeArea/HorizontalSafeArea';
 
 
 interface MainViewProps {
@@ -149,6 +152,30 @@ const HeaderTitle = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
     );
 });
 
+const renderPhoneHomeLine = (state: ConnectionStatusTriggerState) => <PhoneHomeLine state={state} />;
+const SESSIONS_NAV_ROW_LEADING = <ConnectionStatusControl variant="header" renderTrigger={renderPhoneHomeLine} />;
+const SessionsNavRowGlyphs = React.memo(function SessionsNavRowGlyphs() {
+    return (
+        <View style={styles.headerButtonsRow}>
+            <ActionOperationActivityButton testID="main-header-action-operations" />
+            <PhoneDestinationsMenu />
+        </View>
+    );
+});
+const SESSIONS_NAV_ROW_TRAILING = <SessionsNavRowGlyphs />;
+
+/** The Sessions tab: the list under the safe area, carrying the shell's line in its own nav row. */
+function PhoneSessionsTab(props: Readonly<{ backgroundColor: string; children: React.ReactNode }>) {
+    const insets = useChromeSafeAreaInsets();
+    return (
+        <View style={[styles.phoneContainer, { backgroundColor: props.backgroundColor, paddingTop: insets.top }]}>
+            <PhoneTabNavRowProvider leading={SESSIONS_NAV_ROW_LEADING} trailing={SESSIONS_NAV_ROW_TRAILING}>
+                {props.children}
+            </PhoneTabNavRowProvider>
+        </View>
+    );
+}
+
 // Header right button - varies by tab
 const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => {
     const router = useRouter();
@@ -156,25 +183,8 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
     const isCustomServer = isUsingCustomServer();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
     const friendsIdentityReady = friendsIdentityReadiness.isReady;
-    const showWorkflows = useWorkflowsDestinationAccess().discoverable;
     if (activeTab === 'sessions') {
-        return (
-            <View style={styles.headerButtonsRow}>
-                <ActionOperationActivityButton testID="main-header-action-operations" />
-                {showWorkflows ? (
-                    <Pressable
-                        onPress={() => router.push('/workflows')}
-                        hitSlop={15}
-                        style={styles.headerButton}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('workflows.openCollection')}
-                    >
-                        <Icon name="tree-structure" size={20} color={theme.colors.chrome.header.foreground} />
-                    </Pressable>
-                ) : null}
-                {/* New sessions start from the glass "+" beside the tab bar: the one "+". */}
-            </View>
-        );
+        return SESSIONS_NAV_ROW_TRAILING;
     }
 
     if (activeTab === 'friends') {
@@ -299,6 +309,7 @@ const PhoneMainView = React.memo((props: Readonly<{
 }>) => {
     const materialColor = useHappierMaterialColorResolver();
     const backgroundColor = materialColor(props.themeGroupedBackground, 'transparent');
+    useScreenSafeAreaBackdrop(backgroundColor);
     const router = useRouter();
     const friendsEnabled = useFriendsEnabled();
     const inboxEnabled = useInboxAvailable();
@@ -359,6 +370,10 @@ const PhoneMainView = React.memo((props: Readonly<{
                 </Text>
             </View>
         );
+    }
+
+    if (headerTab === 'sessions') {
+        return <PhoneSessionsTab backgroundColor={backgroundColor}>{renderTabContent()}</PhoneSessionsTab>;
     }
 
     return (

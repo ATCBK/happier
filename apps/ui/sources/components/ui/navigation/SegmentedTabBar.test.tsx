@@ -377,7 +377,7 @@ describe('SegmentedTabBar', () => {
         expect((frame.minWidth as number) * 6 + 4).toBeLessThanOrEqual(148);
     });
 
-    it('reaches the platform target on touch when a consumer owns enough room, and stays dense under a pointer', async () => {
+    it('never draws a segment taller or wider on touch; its press frame only reclaims the track padding', async () => {
         const { SegmentedTabBar } = await import('./SegmentedTabBar');
         const { Platform } = await import('react-native');
         const previousPlatform = Platform.OS;
@@ -386,10 +386,16 @@ describe('SegmentedTabBar', () => {
             (Platform as { OS: string }).OS = platform;
             try {
                 const screen = await renderScreen(
-                    <SegmentedTabBar tabs={TABS} activeTabId="alpha" onSelectTab={() => {}} testIDPrefix="seg" targetSize="platform" />,
+                    <SegmentedTabBar tabs={TABS} activeTabId="alpha" onSelectTab={() => {}} testIDPrefix="seg" />,
                 );
-                expect(flattenStyle(requireTab(screen, 'seg:alpha').props.style).minWidth).toBe(minimum);
-                expect(flattenStyle(requireTabSurface(screen, 'seg:alpha').props.style).minHeight).toBe(minimum - 4);
+                // The drawn segment stays the padding-driven 28; only the transparent press frame grows by
+                // the track's own 2px, cancelled by an equal negative margin so the row measures the drawn bar.
+                expect(minimum).toBeGreaterThan(28);
+                const frame = flattenStyle(requireTab(screen, 'seg:alpha').props.style);
+                expect(frame.minWidth).toBe(24);
+                expect(frame.paddingVertical).toBe(2);
+                expect(frame.marginVertical).toBe(-2);
+                expect(flattenStyle(requireTabSurface(screen, 'seg:alpha').props.style).minHeight).toBeUndefined();
             } finally {
                 (Platform as { OS: string }).OS = previousPlatform;
             }
@@ -400,7 +406,7 @@ describe('SegmentedTabBar', () => {
         (Platform as { OS: string }).OS = 'web';
         try {
             const screen = await renderScreen(
-                <SegmentedTabBar tabs={TABS} activeTabId="alpha" onSelectTab={() => {}} testIDPrefix="seg" targetSize="platform" />,
+                <SegmentedTabBar tabs={TABS} activeTabId="alpha" onSelectTab={() => {}} testIDPrefix="seg" />,
             );
             const surface = flattenStyle(requireTabSurface(screen, 'seg:alpha').props.style);
             expect(surface.minHeight).toBeUndefined();

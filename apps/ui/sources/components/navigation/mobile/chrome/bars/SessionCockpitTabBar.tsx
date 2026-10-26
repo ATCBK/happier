@@ -3,8 +3,7 @@ import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSe
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import * as React from 'react';
 import { listPendingPermissionRequests } from '@/utils/sessions/sessionUtils';
-import { Platform, useWindowDimensions } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
+import { useWindowDimensions } from 'react-native';
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
@@ -13,6 +12,7 @@ import { useSessionReachableMachineTarget } from '@/components/sessions/model/us
 import { useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { resolveGitTabBadge } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
 import { t } from '@/text';
 import type { SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
@@ -22,15 +22,14 @@ import {
     resolveSessionCockpitMobileTabVisibility,
     type SessionCockpitMobileCatalogEntry,
 } from '@/components/workspaceCockpit/session/sessionCockpitMobileCatalog';
-import { updateNavigationPlacement, type NavigationPlacementPreferences, type NavigationSurfacePlacementsV1 } from '@/sync/domains/settings/mobileSurfacePinning';
-import { useNavigationSurfacePlacement, useNavigationSurfacePlacementActionWriter } from '@/components/ui/navigation/useNavigationSurfacePlacement';
+import { type NavigationPlacementPreferences } from '@/sync/domains/settings/mobileSurfacePinning';
+import { useNavigationSurfacePlacement } from '@/components/ui/navigation/useNavigationSurfacePlacement';
+import { NavigationPlacementPinButton } from '@/components/ui/navigation/NavigationPlacementPinButton';
 import { Modal } from '@/modal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveFloatingTabBarSlotCount } from '@/components/ui/navigation/FloatingTabBarSurface';
-import { resolveTabBarMetrics } from '@/components/ui/navigation/tabBarMetrics';
+import { resolveTabBarMetrics, type TabBarMetrics } from '@/components/ui/navigation/tabBarMetrics';
 import { layout } from '@/components/ui/layout/layout';
-import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SessionCollaborationRailBadge } from '@/components/sessions/collaboration/sessionConversationAttention';
@@ -42,11 +41,14 @@ import { announceAccessibilityMessage } from '@/components/ui/accessibility/anno
 import {
     CockpitTabBar,
     CockpitTabBarAction,
+    CockpitTabBarView,
+    CockpitTabBarActionView,
     type CockpitTabBarTabDefinition,
 } from './CockpitTabBar';
 import { publishCockpitBarScrolls } from './cockpitBarScrollState';
+import { sfSymbolForCockpitTabIcon } from './cockpitTabSymbols';
 
-type SessionCockpitTabBarProps = Readonly<{
+export type SessionCockpitTabBarProps = Readonly<{
     sessionId: string;
     /** Route server scope, so the capsule and the picker anchor on the same entry. */
     serverId?: string | null;
@@ -57,41 +59,39 @@ type SessionCockpitTabBarProps = Readonly<{
     onSurfacePress: (surface: SessionMobileSurface) => void;
 }>;
 
-type SessionCockpitTabDefinition = Readonly<{
-    id: SessionMobileSurface;
-    label: string;
-    icon: CockpitTabBarTabDefinition<SessionMobileSurface>['icon'];
-    badge?: CockpitTabBarTabDefinition<SessionMobileSurface>['badge'];
-}>;
+export type SessionCockpitTabDefinition = CockpitTabBarTabDefinition<SessionMobileSurface> & Readonly<{ sfSymbol: string }>;
 
 const PREVIOUS_SESSION_ACTION = 'previousSession';
 const NEXT_SESSION_ACTION = 'nextSession';
 const SWITCH_SESSION_ACTION = 'switchSession';
+const ignorePreviewPress = () => {};
 
-/** This editor mounts in More, never in the closed navigation chrome. */
-function SessionCockpitPinButton(props: Readonly<{
-    entryId: string;
-    pinned: boolean;
-    label: string;
+/** Placement-only specimen: captured descriptors, with no Session readers or live menu owners. */
+function SessionCockpitTabBarPreview(props: Readonly<{
+    catalog: readonly SessionCockpitMobileCatalogEntry[];
+    tabs: readonly SessionCockpitTabDefinition[];
     preferences: NavigationPlacementPreferences;
-    placementsBySurface: NavigationSurfacePlacementsV1;
-    minimumInteractiveTargetSize: number;
+    activeSurface: SessionMobileSurface;
+    slotCount: number;
+    alwaysSwipe: boolean;
+    metrics: TabBarMetrics;
 }>) {
-    const { theme } = useUnistyles();
-    const setPreferences = useNavigationSurfacePlacementActionWriter('sessionTabBar', props.placementsBySurface);
-    return <IconButton testID={`session-cockpit-pin:${props.entryId}`} accessibilityLabel={props.label} tooltip={props.label}
-        icon={<Icon name="push-pin" size={16} weight={props.pinned ? 'fill' : 'regular'}
-            color={props.pinned ? theme.colors.text.primary : theme.colors.text.secondary} />}
-        minimumInteractiveTargetSize={props.minimumInteractiveTargetSize} accessibilityRole="checkbox" checked={props.pinned}
-        size={28} variant="plain" onPress={event => {
-            event?.stopPropagation?.();
-            fireAndForget(setPreferences(updateNavigationPlacement(props.preferences, props.entryId, props.pinned ? 'overflow' : 'pinned')),
-                { tag: 'SessionCockpitTabBar.pin' });
-        }} />;
+    const visibility = resolveSessionCockpitMobileTabVisibility(props);
+    const tabs = visibility.visible.flatMap(entry => props.tabs.filter(tab => tab.id === entry.id));
+    const activeBehindMore = [...visibility.held, ...visibility.overflow].some(entry => entry.id === props.activeSurface)
+        ? props.tabs.find(tab => tab.id === props.activeSurface) ?? null : null;
+    return <CockpitTabBarView activeSurface={props.activeSurface} tabs={tabs}
+        barTestId="session-cockpit-preview" tabTestIdPrefix="session-cockpit-preview-tab-"
+        metrics={props.metrics} bottomInset={0} layout={visibility.mode === 'scroll' ? 'scroll' : 'fit'}
+        onSurfacePress={ignorePreviewPress} trailing={<CockpitTabBarActionView metrics={props.metrics}
+            testID="session-cockpit-preview-more" label={activeBehindMore?.label ?? t('common.more')}
+            icon={activeBehindMore && typeof activeBehindMore.icon === 'string' ? activeBehindMore.icon : 'dots-three'}
+            selected={activeBehindMore !== null} onPress={ignorePreviewPress} />} />;
 }
 
-export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps) => {
-    const { theme } = useUnistyles();
+/** Catalog admission and presentation facts shared by both phone bar presenters. */
+export function useSessionCockpitTabDefinitions(props: Pick<SessionCockpitTabBarProps,
+    'sessionId' | 'serverId' | 'terminalTabAvailable' | 'openDetailsTabCount' | 'pluginPlacements'>) {
     const sessionServerId = usePreferredServerIdForSession({ serverId: props.serverId, sessionId: props.sessionId });
     const collaborationAdmitted = useSessionCollaborationDestinationAdmitted(sessionServerId ?? '');
     const sessionSharingAvailable = Boolean(sessionServerId) && collaborationAdmitted;
@@ -100,23 +100,6 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
         [props.sessionId, sessionServerId],
     );
     const boardFeatureEnabled = useSessionBoardFeatureEnabled(sessionServerId);
-    // The band's actions are built HERE because a tab is the only element in the band a screen
-    // reader can focus, and an action only reaches the rotor through the element that owns it.
-    // They are the switcher's non-gesture path: step either way, or open it for tapping.
-    const switcherBand = useSessionSwitcherBand();
-    const bandAccessibilityActions = React.useMemo(() => (switcherBand ? [
-        { name: SWITCH_SESSION_ACTION, label: t('phoneNav.switcher.switchSessionAction') },
-        { name: PREVIOUS_SESSION_ACTION, label: t('workspaceCockpit.previousSession') },
-        { name: NEXT_SESSION_ACTION, label: t('workspaceCockpit.nextSession') },
-    ] : undefined), [switcherBand]);
-    const handleBandAccessibilityAction = React.useCallback((actionName: string) => {
-        if (!switcherBand) return;
-        if (actionName === SWITCH_SESSION_ACTION) { switcherBand.dock(); return; }
-        const direction = actionName === PREVIOUS_SESSION_ACTION ? 'previous' : actionName === NEXT_SESSION_ACTION ? 'next' : null;
-        if (direction && !switcherBand.step(direction)) {
-            announceAccessibilityMessage(t(direction === 'next' ? 'phoneNav.switcher.noOlderSessions' : 'phoneNav.switcher.noNewerSessions'));
-        }
-    }, [switcherBand]);
     const session = useSession(props.sessionId, props.serverId);
     const pendingNavigationAddress = React.useMemo(
         () => normalizeSessionAddress(props.serverId ?? session?.serverId, props.sessionId),
@@ -125,15 +108,6 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
     const scmStatus = useSessionProjectScmStatus(props.sessionId, props.serverId);
     const gitBadgeMode = useSetting('tabBarGitBadgeMode');
     const openTabsBadgeEnabled = useSetting('tabBarOpenTabsBadgeEnabled');
-    const { preferences, placementsBySurface } = useNavigationSurfacePlacement('sessionTabBar');
-    // "Always swipe between sessions" depends on the sideways swipe itself.
-    const alwaysSwipeSetting = useSetting('sessionCockpitSwipeAlwaysSessionsEnabled');
-    const swipeSetting = useSetting('sessionCockpitSwipeNavigationEnabled');
-    const alwaysSwipe = alwaysSwipeSetting === true && swipeSetting !== false;
-    const windowWidth = useWindowDimensions().width;
-    const tabMinWidth = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels')).tabMinWidth;
-    const slotCount = resolveFloatingTabBarSlotCount({ windowWidth, maxWidth: layout.maxWidth, tabMinWidth });
-    const [moreOpen, setMoreOpen] = React.useState(false);
     // A session whose Agent cannot be named has no brand for this tab. The
     // catalog identity owner already renders that neutrally; substituting the
     // product default would label another Agent's session Claude.
@@ -151,7 +125,6 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
         () => (session ? listPendingPermissionRequests(session).length : 0),
         [session],
     );
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const appTabInputs = useAppRightSidebarTabInputs();
 
     const catalog = React.useMemo(() => resolveSessionCockpitMobileCatalog({
@@ -161,23 +134,12 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
         terminalTabAvailable: props.terminalTabAvailable,
         pluginPlacements: props.pluginPlacements,
     }), [appTabInputs, boardFeatureEnabled, sessionSharingAvailable, props.pluginPlacements, props.terminalTabAvailable]);
-    const visibility = React.useMemo(() => resolveSessionCockpitMobileTabVisibility({
-        catalog,
-        preferences,
-        slotCount,
-        alwaysSwipe,
-    }), [alwaysSwipe, preferences, catalog, slotCount]);
-    // A scrolling bar owns the horizontal axis; the band's session swipe reads this and steps aside.
-    const barScrolls = visibility.mode === 'scroll';
-    React.useEffect(() => {
-        publishCockpitBarScrolls(barScrolls);
-        return () => publishCockpitBarScrolls(false);
-    }, [barScrolls]);
     const tabForEntry = (entry: SessionCockpitMobileCatalogEntry): SessionCockpitTabDefinition => {
         if (entry.owner === 'host') {
             if (entry.id === 'chat') {
                 return {
                     id: 'chat',
+                    sfSymbol: 'bubble.left',
                     label: agentCore
                         ? t(agentCore.displayNameKey)
                         // No Agent to name yet (unhydrated or unpublished): the tab names its pane.
@@ -201,6 +163,7 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
                     id: 'companion',
                     label: t('sessionBoard.companion.title'),
                     icon: 'stack-simple',
+                    sfSymbol: sfSymbolForCockpitTabIcon('stack-simple'),
                     // The Companion holds the ask with its answers (lab CAp): an amber
                     // dot says something there is waiting, from the canonical pending flag.
                     ...(pendingPermissionCount > 0
@@ -217,6 +180,7 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
                 // means the account's open tabs), and not the Companion's layered glyph.
                 label: t('phoneNav.bar.openFiles'),
                 icon: 'files',
+                sfSymbol: sfSymbolForCockpitTabIcon('files'),
                 badge: openTabsBadgeEnabled && props.openDetailsTabCount > 0
                     ? { kind: 'count', value: props.openDetailsTabCount }
                     : undefined,
@@ -227,9 +191,54 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
             id: entry.id,
             label: tab.owner === 'plugin' ? tab.label : t(tab.labelKey),
             icon: tab.icon,
+            sfSymbol: sfSymbolForCockpitTabIcon(tab.icon),
             ...(entry.id === 'git' && gitBadge ? { badge: gitBadge } : {}),
         };
     };
+    return { catalog, tabForEntry, pendingNavigationAddress, collaborationTarget, agentId, hasBundledAgent: agentCore !== null };
+}
+
+export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps) => {
+    const { catalog, tabForEntry, pendingNavigationAddress, collaborationTarget, agentId, hasBundledAgent } = useSessionCockpitTabDefinitions(props);
+    // The band's actions are built HERE because a tab is the only element in the band a screen
+    // reader can focus, and an action only reaches the rotor through the element that owns it.
+    // They are the switcher's non-gesture path: step either way, or open it for tapping.
+    const switcherBand = useSessionSwitcherBand();
+    const bandAccessibilityActions = React.useMemo(() => (switcherBand ? [
+        { name: SWITCH_SESSION_ACTION, label: t('phoneNav.switcher.switchSessionAction') },
+        { name: PREVIOUS_SESSION_ACTION, label: t('workspaceCockpit.previousSession') },
+        { name: NEXT_SESSION_ACTION, label: t('workspaceCockpit.nextSession') },
+    ] : undefined), [switcherBand]);
+    const handleBandAccessibilityAction = React.useCallback((actionName: string) => {
+        if (!switcherBand) return;
+        if (actionName === SWITCH_SESSION_ACTION) { switcherBand.dock(); return; }
+        const direction = actionName === PREVIOUS_SESSION_ACTION ? 'previous' : actionName === NEXT_SESSION_ACTION ? 'next' : null;
+        if (direction && !switcherBand.step(direction)) {
+            announceAccessibilityMessage(t(direction === 'next' ? 'phoneNav.switcher.noOlderSessions' : 'phoneNav.switcher.noNewerSessions'));
+        }
+    }, [switcherBand]);
+    const { preferences } = useNavigationSurfacePlacement('sessionTabBar');
+    // "Always swipe between sessions" depends on the sideways swipe itself.
+    const alwaysSwipeSetting = useSetting('sessionCockpitSwipeAlwaysSessionsEnabled');
+    const swipeSetting = useSetting('sessionCockpitSwipeNavigationEnabled');
+    const alwaysSwipe = alwaysSwipeSetting === true && swipeSetting !== false;
+    const windowWidth = useWindowDimensions().width;
+    const metrics = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels'));
+    const tabMinWidth = metrics.tabMinWidth;
+    const slotCount = resolveFloatingTabBarSlotCount({ windowWidth, maxWidth: layout.maxWidth, tabMinWidth });
+    const [moreOpen, setMoreOpen] = React.useState(false);
+    const visibility = React.useMemo(() => resolveSessionCockpitMobileTabVisibility({
+        catalog,
+        preferences,
+        slotCount,
+        alwaysSwipe,
+    }), [alwaysSwipe, preferences, catalog, slotCount]);
+    // A scrolling bar owns the horizontal axis; the band's session swipe reads this and steps aside.
+    const barScrolls = visibility.mode === 'scroll';
+    React.useEffect(() => {
+        publishCockpitBarScrolls(barScrolls);
+        return () => publishCockpitBarScrolls(false);
+    }, [barScrolls]);
     const tabs = visibility.visible.map(tabForEntry);
     // More lists every tool: what is on the bar first (pinned, including any that wait here while
     // "Always swipe" keeps the bar to what fits), then the rest. Every row can be pinned.
@@ -241,6 +250,10 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
     ];
     const customize = () => {
         setMoreOpen(false);
+        const previewTabs = catalog.map(tabForEntry).map(tab => tab.id === 'chat'
+            ? { ...tab, icon: { render: ({ size, tintColor }: Readonly<{ size: number; tintColor: string }>) =>
+                <AgentIcon agentId={hasBundledAgent ? agentId : null} size={size} color={tintColor} /> } }
+            : tab);
         fireAndForget(import('@/components/ui/navigation/NavigationPlacementCustomizer').then(({ NavigationPlacementCustomizer }) => {
             Modal.show({ component: NavigationPlacementCustomizer, props: {
                 surfaceId: 'sessionTabBar',
@@ -249,6 +262,9 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
                     return { id: entry.id, title: tab.label, icon: typeof tab.icon === 'string' ? tab.icon : 'puzzle-piece' as const, defaultPlacement: entry.defaultPlacement };
                 }),
                 testID: 'session-cockpit-customizer',
+                renderPreview: (next: NavigationPlacementPreferences) => <SessionCockpitTabBarPreview
+                    catalog={catalog} tabs={previewTabs} preferences={next} metrics={metrics}
+                    activeSurface={props.activeSurface} slotCount={slotCount} alwaysSwipe={alwaysSwipe} />,
             } });
         }), { tag: 'SessionCockpitTabBar.customize' });
     };
@@ -272,9 +288,8 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
                             testID="session-cockpit-more-fact:collaboration"
                         />
                     ) : null}
-                    <SessionCockpitPinButton entryId={entry.id} pinned={pinned} label={pinLabel}
-                        preferences={preferences} placementsBySurface={placementsBySurface}
-                        minimumInteractiveTargetSize={minimumInteractiveTargetSize} />
+                    <NavigationPlacementPinButton surfaceId="sessionTabBar" testID={`session-cockpit-pin:${entry.id}`}
+                        entryId={entry.id} pinned={pinned} label={pinLabel} preferences={preferences} />
                 </>
             ),
         };

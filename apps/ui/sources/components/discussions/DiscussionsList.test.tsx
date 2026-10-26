@@ -12,9 +12,12 @@ import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/se
 import { storage } from '@/sync/domains/state/storage';
 import { clearDiscussionRepositoryRegistryForTests } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 import { t } from '@/text';
+import type { DiscussionListFilterV1 } from '@happier-dev/protocol/discussions/listing/discussionListFilterV1';
 
 import type { DiscussionActivityItem } from '@/components/discussions/discussionActivityItems';
 import { SessionConversationsBody } from '@/components/sessions/conversations/SessionConversationsBody';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
 const credentials = vi.hoisted(() => ({ serverId: '', accountId: 'conversations-account' }));
 const discussionApi = vi.hoisted(() => ({ list: vi.fn() }));
@@ -80,7 +83,10 @@ async function renderConversations(options: Readonly<{
     credentialAvailable?: boolean;
     requestedAccountId?: string;
     homeList?: boolean;
+    column?: boolean;
+    savedFilter?: DiscussionListFilterV1;
 }> = {}) {
+    await loadSyncSingletonForTests();
     const activeProfile = options.activeDifferentHome
         ? await upsertServerProfile({ name: 'Active Home', serverUrl: 'https://active.example.test' })
         : null;
@@ -96,12 +102,23 @@ async function renderConversations(options: Readonly<{
     credentials.serverId = options.credentialAvailable === false ? 'unbound-home' : profile.id;
     const activeServerId = activeProfile?.id ?? profile.id;
     await setActiveServerId(activeServerId, { scope: 'device' });
-    storage.setState(() => ({ profileScope: { serverId: activeServerId, accountId: activeProfile ? 'active-account' : credentials.accountId } }));
+    const settingsScope = { serverId: activeServerId, accountId: activeProfile ? 'active-account' : credentials.accountId };
+    storage.setState(() => ({ profileScope: settingsScope, settingsScope, settingsVersion: 1 }));
+    if (options.savedFilter) {
+        const { CollectionSpacesV1Schema, CollectionSpaceSelectionV1Schema, selectCollectionSpaceV1 } = await import('@happier-dev/protocol/collections/spaces/collectionSpacesV1');
+        const { accountSettingsScopeKeySuffix } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+        storage.setState(current => ({ settings: { ...current.settings,
+            collectionSpacesV1: CollectionSpacesV1Schema.parse({ v: 1, spaces: [{ entityKind: 'discussion', id: 'review', name: 'Review',
+                icon: { kind: 'icon', name: 'list' }, filter: options.savedFilter, includeNeedsYouEverywhere: false }] }),
+        }, localSettings: { ...current.localSettings, collectionSpaceV1: CollectionSpaceSelectionV1Schema.parse(
+            selectCollectionSpaceV1(current.localSettings.collectionSpaceV1, accountSettingsScopeKeySuffix(settingsScope), 'discussion', 'review')) } }));
+    }
 
     const screen = await renderScreen(
         options.homeList ? <DiscussionsList
             address={{ serverId: profile.id }}
             scope={{ serverId: profile.id, accountId: options.requestedAccountId ?? credentials.accountId }}
+            presentation={options.column ? 'column' : 'pane'}
         /> : <SessionConversationsBody
                 address={{ serverId: profile.id, sessionId: 'conversation-session' }}
                 scope={{ serverId: profile.id, accountId: options.requestedAccountId ?? credentials.accountId }}
@@ -183,6 +200,189 @@ function readListItems(screen: Awaited<ReturnType<typeof renderConversations>>['
 }
 
 describe('DiscussionsList and its Session anchor consumer', () => {
+    it('updates mounted column Status words from the Account scalar without hiding its spoken state', async () => {
+        const discussion = { ...summary('mentioned', { title: 'Review the release' }), unreadCount: 1, unreadMentionCount: 1 };
+        discussionApi.list.mockImplementation(() => succeededList([discussion], null));
+        const { screen } = await renderConversations({ homeList: true, column: true });
+        const wordId = 'session-discussion-row-status-word-mentioned';
+        expect(screen.findHostByTestId(wordId)).toBeNull();
+        await act(async () => storage.getState().applySettingsLocal({ sessionListStatusWords: true }));
+        expect(screen.findHostByTestId(wordId)).not.toBeNull();
+        const word = resolveWorkStatusTone({ kind: 'discussion', facts: { attentionReason: 'mentioned', attentionType: 'mention' } }).word!;
+        expect(screen.findHostByTestId(wordId)!.findAll(node => node.children.includes(word)).length).toBeGreaterThan(0);
+        expect(screen.findHostByTestId('session-discussion-row-mentioned')?.props.accessibilityLabel).toContain(word);
+        await act(async () => storage.getState().applySettingsLocal({ sessionListStatusWords: false }));
+        expect(screen.findHostByTestId(wordId)).toBeNull();
+    });
+    it('names the Session whose draft waits in the row\u2019s attention line, and keeps the generic line until it is known', async () => {
+        const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+        const { buildApprovalRequestArtifactHeaderV1 } = await import('@happier-dev/protocol/approvals/approvalArtifactHeaderV1');
+        const { buildApprovalExecutionOriginV1 } = await import('@happier-dev/protocol/actions/actionExecutor');
+        discussionApi.list.mockImplementation(() => succeededList([summary('draft-waits', { title: 'Release notes wording' })], null));
+        const { profile, screen } = await renderConversations({ homeList: true, column: true });
+        const rowSubtitle = () => JSON.stringify(screen.findHostByTestId('session-discussion-row-subtitle-draft-waits')?.props.children ?? null);
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-draft-waits')).not.toBeNull());
+        const sessionId = 'release-bot-session';
+        const actionArgs = { discussionId: 'draft-waits', localId: 'draft-local',
+            content: { v: 1 as const, parts: [{ t: 'text' as const, text: 'A private answer' }] },
+            replyTarget: { kind: 'message' as const, messageId: 'question' } };
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId }, requestedSurface: 'agent', actionId: 'discussion.reply',
+            actionArgs, discussionDraftReview: true, summary: 'Review the answer',
+            executionOriginV1: buildApprovalExecutionOriginV1({ actionId: 'discussion.reply', input: actionArgs,
+                targetSessionId: null, context: { surface: 'agent', authority: 'account_automation',
+                    serverId: profile.id, serverIdentityId: profile.id, runtimeAccountId: credentials.accountId,
+                    actionCaller: { kind: 'host' }, defaultSessionId: sessionId, defaultSessionMachineId: 'machine',
+                    actionRequestId: actionArgs.localId,
+                    discussionReplyReturn: { serverId: profile.id, requestLocalId: 'original-input', acceptedTurnId: 'turn' } } }) });
+        await act(async () => storage.getState().applyArtifacts([{ id: 'draft-approval', title: request.summary ?? null,
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request), isDecrypted: true,
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } as never]));
+        const generic = resolveWorkStatusTone({ kind: 'discussion', facts: { attentionReason: 'draft_waiting', attentionType: 'approval' } }).word!;
+        await vi.waitFor(() => expect(rowSubtitle()).toContain(generic));
+        await act(async () => storage.getState().applySessions([createSessionFixture({ id: sessionId, serverId: profile.id,
+            metadata: { path: '/repo', host: 'box', machineId: 'machine', flavor: 'codex', homeDir: '/home/a',
+                summary: { text: 'Release bot', updatedAt: 1 } } })]));
+        await vi.waitFor(() => expect(rowSubtitle()).toContain('Release bot'));
+        expect(rowSubtitle()).not.toContain(generic);
+    });
+    it('counts the held ordinary Discussion corpus on value demand without reading or inventing attention facts', async () => {
+        const activeRows = [summary('read', { title: 'Read', anchorSessionId: null }),
+            { ...summary('unread', { title: 'Unread', anchorSessionId: null }), unreadCount: 2 }];
+        const archivedRows = [summary('old', { title: 'Archived', anchorSessionId: null, archivedAt: 1 })];
+        discussionApi.list.mockImplementation((input: { state: string }) => succeededList(input.state === 'archived' ? archivedRows : activeRows, null));
+        const { profile, screen } = await renderConversations({ homeList: true, column: true });
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull());
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const target = { serverId: profile.id, accountId: credentials.accountId };
+        const context = { surface: 'agent' as const, serverId: profile.id, runtimeAccountId: credentials.accountId };
+        const set = async (state: 'active' | 'archived') => act(async () => {
+            expect(await createDefaultActionExecutor().execute('discussion.list.view.set', { ...target,
+                filters: { state, attention: 'any', unreadOnly: false } }, context)).toMatchObject({ ok: true });
+        });
+        await set('archived');
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-old')).not.toBeNull());
+        await set('active');
+        const reads = discussionApi.list.mock.calls.length;
+        vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+        try {
+            await screen.pressByTestIdAsync('discussions-column-space-filter-open');
+            const editor = () => screen.findAll(node => node.props.testID === 'discussions-column-space-editor' && node.props.model)[0]!;
+            await screen.pressByTestIdAsync('collection-filter-add');
+            await screen.pressByTestIdAsync('collection-filter-field:state');
+            const options = () => editor().props.model.availableFields.find((field: { id: string }) => field.id === 'state').valueOptions;
+            expect(options()).toEqual(expect.arrayContaining([
+                expect.objectContaining({ value: 'active', count: 2 }), expect.objectContaining({ value: 'archived', count: 1 }),
+            ]));
+            await screen.pressByTestIdAsync('collection-filter-back');
+            await screen.pressByTestIdAsync('collection-filter-add');
+            await screen.pressByTestIdAsync('collection-filter-field:attention');
+            const attention = editor().props.model.availableFields.find((field: { id: string }) => field.id === 'attention');
+            expect(attention.valueOptions[0].count).toBeUndefined();
+            expect(discussionApi.list.mock.calls.length).toBe(reads);
+        } finally { vi.unstubAllGlobals(); }
+    });
+    it('binds saved Discussion selection and preserves a draft while settings reload without another read', async () => {
+        const rows = [summary('read', { title: 'Read', anchorSessionId: null }),
+            { ...summary('unread', { title: 'Unread', anchorSessionId: null }), unreadCount: 2 }];
+        discussionApi.list.mockImplementation(() => succeededList(rows, null));
+        const { profile, screen } = await renderConversations({ homeList: true, column: true,
+            savedFilter: { state: 'active', attention: 'any', unreadOnly: true } });
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-unread')).not.toBeNull());
+        expect(screen.findByTestId('session-discussion-row-read')).toBeNull();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const target = { serverId: profile.id, accountId: credentials.accountId };
+        const context = { surface: 'agent' as const, serverId: profile.id, runtimeAccountId: credentials.accountId };
+        const readCount = discussionApi.list.mock.calls.length;
+        await act(async () => {
+            expect(await executor.execute('discussion.list.view.set', { ...target,
+                filters: { state: 'active', attention: 'any', unreadOnly: false } }, context)).toMatchObject({ ok: true });
+            storage.setState({ settingsVersion: null });
+        });
+        expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull();
+        expect(await executor.execute('discussion.list.view.get', target, context)).toMatchObject({ ok: true, result: {
+            filters: { unreadOnly: false }, selectedSpaceId: 'review', searchQuery: '', coverage: 'partial',
+        } });
+        await act(async () => storage.setState({ settingsVersion: 2 }));
+        expect(await executor.execute('discussion.list.view.get', target, context)).toMatchObject({ ok: true, result: {
+            filters: { unreadOnly: false }, selectedSpaceId: 'review', searchQuery: '',
+        } });
+        await act(async () => { expect(await executor.execute('discussion.list.view.reset', target, context)).toMatchObject({ ok: true }); });
+        expect(screen.findByTestId('session-discussion-row-read')).toBeNull();
+        expect(screen.findByTestId('session-discussion-row-unread')).not.toBeNull();
+        expect(discussionApi.list.mock.calls.length).toBe(readCount);
+    });
+    it('titles the column with its saved space and shows a narrowing as a token that returns to the space (R9)', async () => {
+        discussionApi.list.mockImplementation(() => succeededList([
+            summary('read', { title: 'Read', anchorSessionId: null }),
+            { ...summary('unread', { title: 'Unread', anchorSessionId: null }), unreadCount: 2 },
+        ], null));
+        const { profile, screen } = await renderConversations({ homeList: true, column: true,
+            savedFilter: { state: 'active', attention: 'any', unreadOnly: false } });
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull());
+        expect(screen.findByTestId('discussions-column-space-title')).not.toBeNull();
+        expect(screen.findByTestId('discussions-column-space-strip:review')).not.toBeNull();
+        expect(screen.findByTestId('discussions-column-space-filter-token:unreadOnly')).toBeNull();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const target = { serverId: profile.id, accountId: credentials.accountId };
+        const context = { surface: 'agent' as const, serverId: profile.id, runtimeAccountId: credentials.accountId };
+        await act(async () => {
+            await createDefaultActionExecutor().execute('discussion.list.view.set', { ...target,
+                filters: { state: 'active', attention: 'any', unreadOnly: true } }, context);
+        });
+        expect(screen.findByTestId('session-discussion-row-read')).toBeNull();
+        expect(screen.findByTestId('discussions-column-space-filter-token:unreadOnly')).not.toBeNull();
+        await screen.pressByTestIdAsync('discussions-column-space-filter-token:unreadOnly');
+        expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull();
+        expect(screen.findByTestId('discussions-column-space-filter-token:unreadOnly')).toBeNull();
+    });
+    it('opens this list\'s Manage spaces page from the title menu', async () => {
+        discussionApi.list.mockImplementation(() => succeededList([summary('read', { title: 'Read', anchorSessionId: null })], null));
+        const { screen } = await renderConversations({ homeList: true, column: true });
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull());
+        // The title's menu is the shared DropdownMenu; choose its Manage spaces entry.
+        const menu = screen.find(node => Array.isArray(node.props.items) && typeof node.props.onSelect === 'function'
+            && node.props.items.some((item: { testID?: string }) => item.testID === 'discussions-column-space-menu-manage'));
+        await act(async () => { menu.props.onSelect('manage'); });
+        expect(navigation.push).toHaveBeenCalledWith('/settings/session/spaces?entity=discussion');
+    });
+    it('changes real loaded membership through typed Discussion Actions without another list read', async () => {
+        discussionApi.list.mockImplementation(() => succeededList([
+            summary('read', { title: 'Read', anchorSessionId: null }),
+            { ...summary('unread', { title: 'Unread', anchorSessionId: null }), unreadCount: 2 },
+        ], null));
+        const { profile, screen } = await renderConversations({ homeList: true, column: true });
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-row-unread')).not.toBeNull());
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, serverId: profile.id, runtimeAccountId: credentials.accountId };
+        const target = { serverId: profile.id, accountId: credentials.accountId };
+        const filters = { state: 'active' as const, attention: 'any' as const, unreadOnly: true };
+        const requests = discussionApi.list.mock.calls.length;
+        await act(async () => {
+            expect(await executor.execute('discussion.list.view.set', { ...target, filters }, context)).toEqual({ ok: true, result: { ok: true } });
+        });
+        expect(screen.findByTestId('session-discussion-row-read')).toBeNull();
+        expect(screen.findByTestId('session-discussion-row-unread')).not.toBeNull();
+        expect(discussionApi.list.mock.calls.length).toBe(requests);
+        expect(await executor.execute('discussion.list.view.get', target, context)).toMatchObject({ ok: true, result: {
+            ...target, filters, selectedSpaceId: 'all-discussions', coverage: 'complete',
+        } });
+        expect(await executor.execute('discussion.list.view.set', { ...target, accountId: 'another-account', filters: { ...filters, unreadOnly: false } }, context))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        // The UI executor derives runtimeAccountId from credentials; expectedAccountId is its caller constraint.
+        expect(await executor.execute('discussion.list.view.set', { ...target, filters: { ...filters, unreadOnly: false } }, { ...context, expectedAccountId: 'another-account' }))
+            .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+        const { invokeScopeAction } = await import('@/sync/ops/actions/scopeActionFamily');
+        expect(await invokeScopeAction('discussion.list.view.set', { ...target, filters: { ...filters, unreadOnly: false } }, { ...context, runtimeAccountId: 'another-account' }))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        expect(screen.findByTestId('session-discussion-row-read')).toBeNull();
+        await act(async () => { expect(await executor.execute('discussion.list.view.reset', target, context)).toEqual({ ok: true, result: { ok: true } }); });
+        expect(screen.findByTestId('session-discussion-row-read')).not.toBeNull();
+        await screen.unmount();
+        expect(await executor.execute('discussion.list.view.get', target, context)).toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+    });
     it('lists standalone and anchored Discussions at Home with no source Session loaded', async () => {
         discussionApi.list.mockImplementation(() => succeededList([
             summary('standalone', { title: 'Standalone', anchorSessionId: null }),

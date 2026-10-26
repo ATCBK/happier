@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { I18nManager, Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
-import type { StyleProp, TextStyle } from 'react-native';
+import type { PressableProps, StyleProp, TextStyle, ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 // Selection equality and the RTL-aware roving destination are NOT owned here. `plugin-ui` is the
@@ -16,11 +16,13 @@ import {
     isHappierTabSelected,
     resolveHappierTabGlyphOnly,
     resolveHappierTabKeySelection,
+    useHappierHitArea,
     useHappierMaterialColorResolver,
     happierMaterialGradient,
     type HappierTabLabels,
 } from '@happier-dev/plugin-ui/presentation';
 
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -31,7 +33,6 @@ import { ICON_SIZE } from '@/components/ui/icons/Icon';
 // gauge and chart components (and their SVG dependency) that the barrel also exports.
 import { INSTRUMENT_SPRINGS } from '@/components/instrument/motion/motionTokens';
 import { useMotionPreferences } from '@/components/instrument/motion/useMotionPreferences';
-import { isTouchPrimaryPointer, resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
@@ -173,8 +174,6 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
      * every tab. Default `'all'`.
      */
     labels?: HappierTabLabels;
-    /** Expand each segment to the platform touch-target floor when its consumer owns enough room. */
-    targetSize?: 'platform';
     /** Accessible name for the group. */
     accessibilityLabel?: string;
     /**
@@ -511,6 +510,33 @@ function SlidingThumb(props: Readonly<{
     );
 }
 
+/**
+ * One segment's press target. The segment keeps its designed height under every pointer; the shared
+ * hit-area owner reaches the finger target (or the WCAG pointer floor) past it, through the track
+ * padding it owns and never sideways over a flush sibling.
+ */
+const SegmentedTabPressable = React.forwardRef<React.ElementRef<typeof Pressable>, PressableProps & Readonly<{
+    style: StyleProp<ViewStyle>;
+}>>(function SegmentedTabPressable(props, ref) {
+    const { style, children, onLayout, ...rest } = props;
+    const hitArea = useHappierHitArea({
+        restingStyle: () => style,
+        hitTarget: HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
+        hitReach: { left: 0, right: 0, top: SEGMENT_TRACK_PADDING_PX, bottom: SEGMENT_TRACK_PADDING_PX },
+    });
+    const measure = hitArea.onLayout;
+    const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
+        measure?.(event);
+        onLayout?.(event);
+    }, [measure, onLayout]);
+    return (
+        <Pressable ref={ref} {...rest} hitSlop={hitArea.hitSlop} onLayout={measure || onLayout ? handleLayout : undefined} style={style}>
+            {hitArea.frame}
+            {children as React.ReactNode}
+        </Pressable>
+    );
+});
+
 function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -581,56 +607,12 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
     const activeHidden = hiddenTabs.some((tab) => isHappierTabSelected(props.activeTabId, tab.id));
     // A value choice must always show its value, so it never parks options behind More.
     const asSelect = valueChoice && overflow != null && hiddenTabs.length > 0;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    // The consumer's room grant takes effect only where a finger is the pointer: under a mouse or a
-    // trackpad the control keeps its dense padding-driven height (32 for labels), which is what the
-    // lab draws and what WCAG 2.2 SC 2.5.8 asks of a dense pointer layout.
-    const platformTarget = props.targetSize === 'platform' && isTouchPrimaryPointer(Platform.OS);
-
-    /**
-     * The press frame's vertical budget — bounded on BOTH sides.
-     *
-     * Neither axis is free. Horizontally, segments are flush siblings, so the gap is zero and any
-     * sideways growth would stack two tab targets on top of one another. Vertically the segment has
-     * no sibling inside the track, but the track is not the end of the world: every consumer stacks
-     * this bar against something. In the model card's control list the next control's own segmented
-     * bar sits ~13px below (`inlineSelectedControls` gap 10 + a 9pt title + `selectedControlGroup`
-     * gap 3), so a frame overhanging the track by the 10-12px the compact floor would ask for
-     * overlaps its neighbour's target outright. DESIGN.md forbids overlapping targets in the same
-     * sentence that asks for 44/48, and the space to satisfy both is a CONSUMER fact this component
-     * cannot see. So it claims only the space it owns: its own track padding.
-     *
-     * DEFAULT CEILING, stated plainly: the 44pt/48dp platform floor is not reached by the dense
-     * default. What is met everywhere is WCAG 2.2 Level AA SC 2.5.8 (24 x 24 CSS px), which
-     * DESIGN.md routes a dense pointer layout to. Resulting default target heights (drawn box +
-     * this padding on each side):
-     *
-     *   label  regular  28 + 4 = 32      icon  regular  34 + 4 = 38
-     *   label  compact  20 + 4 = 24      icon  compact  28 + 4 = 32
-     *
-     * Compact-label lands exactly on the 24px floor, which is why the label slot and the surface
-     * padding above are load-bearing rather than decorative. `targetSize="platform"` is the
-     * explicit grant from a consumer that owns enough horizontal and vertical room; only then does
-     * the surface take the extra height and each flush segment take the 44/48 width floor.
-     */
-    // Icon and label bars draw at one height (see `tabSurfaceIcon`), never less than the glyph.
-    const drawnSegmentHeight = Math.max(
-        (compact ? SEGMENT_PADDING_VERTICAL_PX.compact : SEGMENT_PADDING_VERTICAL_PX.default) * 2
-            + (props.labelSize === 'field' ? HAPPIER_FIELD_BOX_METRICS.lineHeightPx : compact ? SEGMENT_LABEL_SLOT_PX.compact : SEGMENT_LABEL_SLOT_PX.default),
-        iconOnly ? SEGMENTED_TAB_ICON_SIZE_PX : 0,
-    );
-    const targetExpandY = Math.min(
-        SEGMENT_TRACK_PADDING_PX,
-        Math.max(0, (minimumInteractiveTargetSize - drawnSegmentHeight) / 2),
-    );
-    const tabFrameTarget = React.useMemo(() => ({
-        paddingVertical: targetExpandY,
-        marginVertical: -targetExpandY,
-        ...(platformTarget ? { minWidth: minimumInteractiveTargetSize } : {}),
-    }), [minimumInteractiveTargetSize, platformTarget, targetExpandY]);
-    const tabSurfaceTarget = React.useMemo(() => platformTarget ? ({
-        minHeight: minimumInteractiveTargetSize - SEGMENT_TRACK_PADDING_PX * 2,
-    }) : null, [minimumInteractiveTargetSize, platformTarget]);
+    // The segment is drawn at its design height under every pointer; its hit area (the shared owner's) reaches
+    // the target through the track padding it owns. Neither axis is free beyond that: segments are flush
+    // siblings, so nothing reaches sideways, and the control above and below this bar sits ~13px away (a model
+    // card's control list), so claiming more than the padding would overlap its neighbour's target.
+    // The dense default meets the WCAG 2.2 pointer floor (24); a finger gets the platform target where the
+    // padding allows.
 
     // RN Web's Pressable hands `focused` to its own style callback only, and the ring belongs on the
     // drawn surface — around the frame it would outline a box the user cannot see.
@@ -766,7 +748,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                         ? ({ onKeyDown: (event: any) => handleTabKeyDown(tabIndex, event) } as Record<string, unknown>)
                         : {};
                     const tabNode = (
-                        <Pressable
+                        <SegmentedTabPressable
                             key={tab.id}
                             ref={(node) => {
                                 if (node) tabRefs.current.set(tab.id, node);
@@ -786,7 +768,6 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                             style={[
                                 styles.tabFrame,
                                 contentSized ? styles.tabFrameContent : null,
-                                tabFrameTarget,
                                 HAPPIER_FOCUS_RING_DELEGATED_STYLE,
                             ]}
                             {...(iconOnly || glyphOnly ? ({ title: tab.label } as object) : !fit.counts && tab.count ? ({ title: baseName } as object) : {})}
@@ -804,7 +785,6 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     styles.tabSurface,
                                     compact ? styles.tabSurfaceCompact : null,
                                     iconOnly ? (compact ? styles.tabSurfaceIconCompact : styles.tabSurfaceIcon) : null,
-                                    tabSurfaceTarget,
                                     contentSized ? (iconOnly ? styles.tabSurfaceIconContent : styles.tabSurfaceContent) : null,
                                     showOwnActiveSurface && !pills && !plain ? (inherited ? styles.thumbOutlined : styles.tabActive) : null,
                                     plain ? styles.plainSurface : null,
@@ -855,7 +835,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     </View>
                                 )}
                             </View>
-                        </Pressable>
+                        </SegmentedTabPressable>
                     );
                     // A wrapped tab is measured at its wrapper, the item that sits in the row, so the thumb lands on it.
                     return props.wrapTab ? (

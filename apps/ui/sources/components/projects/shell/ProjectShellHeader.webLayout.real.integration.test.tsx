@@ -27,9 +27,9 @@ vi.mock(
 
 installWebLayoutBridge();
 
-const PAGES = (
-  ['overview', 'code', 'changes', 'scripts', 'services', 'context'] as const
-).map((id) => ({ id }));
+const { resolveProjectPageCatalog } = await import('@/components/projects/detail/projectPageCatalog');
+const PAGES = resolveProjectPageCatalog({ target: { kind: 'project', workspaceRefId: 'project', serverId: 'home' } })
+  .filter(page => page.id !== 'memory');
 
 it.each([606, 1100])(
   'keeps the selected page a named tab a pointer reaches in a %ipx pane',

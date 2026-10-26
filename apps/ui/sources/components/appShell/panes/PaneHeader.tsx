@@ -147,7 +147,7 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
         // title's edge (files lab FV1p/FV6p). Every item carries its separator in a fixed-width box before it,
         // and the row starts one box to the left under the clip, so a separator that would open a line never shows.
         const items: React.ReactNode[][] = [];
-        if (line.leading) items.push([<View key="leading" style={styles.lineLeading}>{line.leading}</View>]);
+        if (line.leading) items.push([<View key="leading" style={[styles.lineLeading, leadingSeparated ? null : styles.largeLeading]}>{line.leading}</View>]);
         line.segments.forEach((segment, index) => {
             const previous = index === 0 ? null : line.segments[index - 1]!;
             // `+4 −2` stays together; a mark's first fact follows it directly.
@@ -304,12 +304,15 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                     onPress={props.onBack}
                 />
             ) : null}
+            {/* One identity block: the mark stands beside the text, and the overline, title and live line
+                all start on the title's own text edge (lab cshead H1). */}
+            <View style={styles.identity}>
+            {chipVisible ? <PaneMainRestoreChip /> : null}
+            {props.leading ? <View style={large ? styles.identityMark : styles.identityMarkCentered}>{props.leading}</View> : null}
             <View style={styles.titleBlock}>
                 {props.overline ?? null}
                 {/* A host that already names the thing (a breadcrumb ending on it) passes no title: the live line stands alone. */}
                 {hasTitle ? <View style={styles.titleRow}>
-                {chipVisible ? <PaneMainRestoreChip /> : null}
-                {props.leading ? <View style={styles.identityMark}>{props.leading}</View> : null}
                 {props.titleControl ?? (
                 <Text
                     ref={props.headingRef}
@@ -339,6 +342,7 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                         lineTrailing={props.lineTrailing}
                     />
                 ) : null}
+            </View>
             </View>
             {props.actions ? <View style={styles.actions}>{props.actions}</View> : null}
             {props.onClose ? (
@@ -385,6 +389,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
         backgroundColor: theme.colors.surface.base,
     },
+    identity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     titleBlock: {
         flex: 1,
         minWidth: 0,
@@ -395,6 +400,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The title row at its natural width, out of flow and unseen (`onTitleNaturalWidth`).
     titleMeasure: { position: 'absolute', left: 0, top: 0, opacity: 0 },
     identityMark: { flexShrink: 0, alignSelf: 'flex-start', marginTop: theme.space.s2 },
+    // In the band the mark centres on the whole identity text (title over its live line).
+    identityMarkCentered: { flexShrink: 0 },
     lineTrailing: { flexShrink: 0, marginLeft: 'auto' },
     largeTitle: {
         ...pageTitleTypography(),
@@ -412,6 +419,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     lineLeading: {
         flexShrink: 0,
         marginTop: HEADER_BAND_SUBTITLE_TEXT.marginTop,
+    },
+    // On a phone's large header a glyph and its first fact share one wrapping item, so the band's row gap
+    // never reaches between them: the glyph keeps the same step from its words here.
+    largeLeading: {
+        marginRight: theme.space.s4,
     },
     leadingOnly: {
         flex: 1,

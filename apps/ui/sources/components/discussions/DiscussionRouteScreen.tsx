@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { View } from 'react-native';
 import { Stack, useLocalSearchParams, useNavigation, useRouter, useIsFocused, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -7,7 +7,7 @@ import { normalizeSessionMobileSurface } from '@/components/workspaceCockpit/ses
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_PAGE_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { readSessionRouteServerId } from '@/hooks/session/sessionRouteServerScope';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -16,6 +16,7 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
 import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
 import { DiscussionsColumn } from './DiscussionsColumn';
+import { DiscussionPaneHost } from './DiscussionRightSidebar';
 import { useOpenDiscussion } from './useOpenDiscussion';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
@@ -27,16 +28,19 @@ import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readDiscussionRout
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { Text } from '@/components/ui/text/Text';
 import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
-import { useArtifact } from '@/sync/domains/state/storage';
+import { useArtifact, useSetting } from '@/sync/domains/state/storage';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { isMobileWorkspaceCockpitEnabled } from '@/components/workspaceCockpit/mobileWorkspaceExperience';
+import { normalizeDiscussionMobileSurface } from '@/components/workspaceCockpit/discussion/discussionCockpitState';
+import { randomUUID } from '@/platform/randomUUID';
 
-const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 const NO_SERVER_IDS: readonly string[] = Object.freeze([]);
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.base },
     // The index page's invitation sits in the middle of the page (lab T2-E).
     indexPage: { flex: 1, justifyContent: 'center' },
-    headerButton: { minWidth: minimumInteractiveTargetSize, minHeight: minimumInteractiveTargetSize, alignItems: 'center', justifyContent: 'center' },
+    headerButton: { minWidth: HAPPIER_PAGE_METRICS.controlHeightPx, minHeight: HAPPIER_PAGE_METRICS.controlHeightPx, alignItems: 'center', justifyContent: 'center' },
     headerBackLabelled: { flexDirection: 'row', gap: theme.space.s8 },
     headerBackLabel: { flexShrink: 1 },
 }));
@@ -63,6 +67,7 @@ export function DiscussionRouteScreen(props: Readonly<{
         anchorMessageId?: string | string[];
         returnArtifactId?: string | string[];
         draftId?: string | string[];
+        mobileSurface?: string | string[];
     }>();
     const explicitServerId = readSessionRouteServerId(params);
     // An unqualified Home launcher captures its destination once. Changing the
@@ -79,7 +84,9 @@ export function DiscussionRouteScreen(props: Readonly<{
     const address = React.useMemo(() => serverId ? { serverId } : null, [serverId]);
     const discussionId = readParam(params.discussionId);
     const messageId = readParam(params.messageId);
-    const draftId = readDiscussionRouteDraftId(params.draftId);
+    const routeDraftId = readDiscussionRouteDraftId(params.draftId);
+    const [entryDraftId] = React.useState(randomUUID);
+    const draftId = props.kind === 'new' && routeDraftId === undefined ? entryDraftId : routeDraftId;
     const anchorSessionId = readParam(params.anchorSessionId);
     const anchorMessageId = readParam(params.anchorMessageId);
     const anchorParam = readParam(params.anchor);
@@ -96,23 +103,25 @@ export function DiscussionRouteScreen(props: Readonly<{
     const fallbackHref = returnArtifactId ? artifactViewRoute(returnArtifactId)
         : serverId ? buildDiscussionsRouteHref({ serverId }) : '/';
     React.useEffect(() => {
-        if (explicitServerId || !address || anchor === null || props.kind === 'new' && draftId === null) return;
+        if (explicitServerId && (props.kind !== 'new' || params.draftId !== undefined)
+            || !address || anchor === null || props.kind === 'new' && draftId === null) return;
         const href = props.kind === 'list'
             ? buildDiscussionsRouteHref(address)
             : props.kind === 'new'
-                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }, sourceSurface })
+                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }, sourceSurface,
+                    ...(returnArtifactId ? { returnArtifactId } : {}) })
                 : discussionId
                     ? buildDiscussionRouteHref({ target: { kind: 'discussion', address, discussionId, ...(messageId ? { messageId } : {}) }, sourceSurface })
                     : null;
         if (href) router.replace(href as Href);
-    }, [address, anchor, discussionId, draftId, messageId, explicitServerId, props.kind, router, sourceSurface]);
+    }, [address, anchor, discussionId, draftId, messageId, explicitServerId, params.draftId, props.kind, returnArtifactId, router, sourceSurface]);
     const onBack = React.useCallback(() => safeRouterBack({
         router,
         navigation,
         fallbackHref: fallbackHref as Href,
     }), [fallbackHref, navigation, router]);
     const headerLeft = React.useCallback(() => (
-        <Pressable
+        <HappierPressable
             accessibilityRole="button"
             accessibilityLabel={returnLabel ?? t('common.back')}
             testID="session-discussion-back"
@@ -126,11 +135,16 @@ export function DiscussionRouteScreen(props: Readonly<{
                     {returnLabel}
                 </Text>
             ) : null}
-        </Pressable>
+        </HappierPressable>
     ), [onBack, returnLabel, theme.colors.chrome.header.foreground]);
     // Beside the column the page carries its own header band. On a phone a Discussion folds its header into
     // its own navigation band (lab T2-Ap), so only the new page keeps the navigation bar.
     const columnVisible = useAppShellColumn().columnVisible;
+    // The phone bar's own decision (MobileBottomChromeHost): a cockpit phone shows the rail's tabs as surfaces.
+    const deviceType = useDeviceType();
+    const mobileWorkspaceExperience = useSetting('mobileWorkspaceExperienceV1');
+    const phoneSurfaces = !columnVisible && isMobileWorkspaceCockpitEnabled({ deviceType, mobileWorkspaceExperience });
+    const mobileSurface = normalizeDiscussionMobileSurface(readParam(params.mobileSurface)) ?? 'chat';
     const screenOptions = React.useMemo(() => ({
         headerShown: !columnVisible && props.kind === 'new',
         // The labelled Back already says where this thread lives; a second title would repeat it.
@@ -153,6 +167,17 @@ export function DiscussionRouteScreen(props: Readonly<{
                     : binding
                         ? <DiscussionsIndexPage address={address} binding={binding} />
                         : <SurfaceStateCard kind="unavailable" title={t('sessionConversation.discussion.unavailableTitle')} />
+            ) : props.kind === 'discussion' ? (
+                // One retained host owns the Discussion across responsive presentation changes. Beside the
+                // column it exposes the page rail/pane; a cockpit phone presents those tabs as surfaces.
+                <DiscussionPaneHost paneEnabled={columnVisible} phoneSurface={phoneSurfaces ? mobileSurface : null}
+                    onBackToThread={() => router.setParams({ mobileSurface: undefined })}
+                    main={<DiscussionDetailsView
+                        target={{ kind: 'discussion', address, discussionId: discussionId!, ...(messageId ? { messageId } : {}) }}
+                        active={routeFocused}
+                        standaloneSurface
+                        onClose={onBack}
+                    />} />
             ) : (
                 <DiscussionDetailsView
                     target={props.kind === 'new'

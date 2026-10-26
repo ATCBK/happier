@@ -73,6 +73,13 @@ describe('SessionListFilterEditorControl portal ownership', () => {
         globalThis.requestAnimationFrame = (callback) => window.setTimeout(() => callback(0), 0);
         globalThis.cancelAnimationFrame = (handle) => window.clearTimeout(handle);
 
+        // A desktop web window: jsdom reports a 0×0 viewport, which the device owner reads as a phone,
+        // and a phone takes the editor as a sheet (lab `clfilter:filterP`) instead of this anchored popover.
+        const viewport = document.documentElement;
+        Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 1440 });
+        Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 940 });
+        window.dispatchEvent(new Event('resize'));
+
         try {
             const filters = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] });
             await act(async () => {
@@ -125,16 +132,22 @@ describe('SessionListFilterEditorControl portal ownership', () => {
             expect(portalHost).not.toBeNull();
             expect(portalHost?.contains(editorSurface)).toBe(true);
             expect(inlineBranch?.contains(editorSurface)).toBe(false);
-            // The approved panel (lab C2) is a compact ~312px surface, never the sidebar's full width.
+            // The filter (lab `clfilter:filter`) is a compact ~356px surface, never the sidebar's full width.
             const surfaceMaxWidths: string[] = [];
             for (let node = editorSurface?.parentElement ?? null; node && node !== portalHost; node = node.parentElement) {
                 if (node.style.maxWidth) surfaceMaxWidths.push(node.style.maxWidth);
             }
-            expect(surfaceMaxWidths).toEqual(['312px']);
+            expect(surfaceMaxWidths).toEqual(['356px']);
 
-            // Archived is the scope menu's one destination: it leaves the menu, then opens the list.
+            // Archived is Whose's one destination: it leaves the editor, then opens the list.
+            const whose = document.querySelector<HTMLElement>('[data-testid="collection-filter-condition:scope:is:value"]');
+            expect(whose).not.toBeNull();
+            await act(async () => {
+                whose!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            });
             const archivedOption = document.querySelector<HTMLElement>(
-                '[data-testid="session-list-filter-scope:destination:archived"]',
+                '[data-testid="session-list-filter-editor:session-list-filters:option:destination:archived"]',
             );
             expect(archivedOption).not.toBeNull();
             await act(async () => {
@@ -148,6 +161,8 @@ describe('SessionListFilterEditorControl portal ownership', () => {
             HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
             globalThis.requestAnimationFrame = originalRequestAnimationFrame;
             globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+            delete (viewport as unknown as Record<string, unknown>).clientWidth;
+            delete (viewport as unknown as Record<string, unknown>).clientHeight;
             container.remove();
         }
     });

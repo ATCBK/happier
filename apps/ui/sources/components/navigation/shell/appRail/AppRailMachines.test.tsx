@@ -11,6 +11,9 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { machinesRailSeenState } from '@/sync/domains/state/machineAdministrationUiState';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { replacePersistentUiStateForTest } from '@/dev/testkit/harness/persistentUiState';
 
 const vitalsRpc = vi.hoisted(() => vi.fn(async (_input: { machineId: string }) => ({ state: 'not_reported', sample: null,
     series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } })));
@@ -29,6 +32,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 
 let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
 beforeEach(async () => {
+    replacePersistentUiStateForTest(machinesRailSeenState, {});
     servedHome = await serveActionHomes({ homes: [{ key: 'rail', serverUrl: 'https://rail-warm.test', accountId: 'rail-account', currentAccount: true }],
         route: request => request.path === '/v1/features' ? Response.json(createRootLayoutFeaturesResponse()) : undefined });
 });
@@ -84,28 +88,55 @@ function setHomeMachines(machines: readonly Machine[]) {
     }));
 }
 
+function railScopeKey() {
+    return serverAccountScopeKeySuffix(storage.getState().profileScope!);
+}
+
 describe('AppRailMachines', () => {
+    it('keeps guard acknowledgements local to the exact Account and Home without writing settings', async () => {
+        const previous = storage.getState();
+        const acted = machine('guard-machine', { daemonState: { resources: { ...published('calm', []),
+            lastAutomaticAction: { kind: 'stopped_session', at: Date.now() - 1000, entryId: 'idle-session', undoable: true,
+                facts: { rule: 'idle_sessions' } },
+        } } as never });
+        try {
+            setHomeMachines([acted]);
+            const { AppRailMachines } = await import('./AppRailMachines');
+            const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
+            const screen = await renderScreen(<AppRailMachines />);
+            expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
+            const before = storage.getState().localSettings;
+            await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onOpenIntent?.());
+            expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
+            await act(async () => storage.setState(state => ({ profileScope: { ...state.profileScope!, accountId: 'unseen-guard-account' } })));
+            expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
+            expect(storage.getState().localSettings).toBe(before);
+            await act(async () => storage.setState(state => ({ profileScope: { ...state.profileScope!, accountId: 'rail-account' } })));
+            expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
+        } finally { storage.setState(previous); }
+    });
     it('forgets a seen look reason on closed recovery so the same reason badges on recurrence', async () => {
         const previousState = storage.getState();
         const reason = { key: 'disk:data', kind: 'disk_nearly_full', level: 'look', metric: 'disk', since: 1,
             volumeId: 'data', volumeLabel: 'Data', nextStep: 'free_up_space' };
         const look = machine('edge-1', { daemonState: { resources: published('look', [reason]) } as never });
         try {
-            storage.getState().applyLocalSettings({ machinesRailSeenV1: { look: { '["another-home","other"]': ['memory'] }, guardSeenAt: 0 } });
             setHomeMachines([look]);
+            const key = railScopeKey();
+            machinesRailSeenState.set(key, { look: { '["another-home","other"]': ['memory'] }, guardSeenAt: 0 });
             const { AppRailMachines } = await import('./AppRailMachines');
             const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
             const screen = await renderScreen(<AppRailMachines />);
             expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
             await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onOpenIntent?.());
             expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
-            const acknowledgedAt = storage.getState().localSettings.machinesRailSeenV1.guardSeenAt;
-            await act(async () => storage.getState().applyLocalSettings({ machinesRailSeenV1: {
-                ...storage.getState().localSettings.machinesRailSeenV1,
-                look: { ...storage.getState().localSettings.machinesRailSeenV1.look, '["another-home","other"]': ['memory'] },
-            } }));
+            const acknowledgedAt = machinesRailSeenState.read(key)!.guardSeenAt;
+            await act(async () => machinesRailSeenState.set(key, {
+                ...machinesRailSeenState.read(key)!,
+                look: { ...machinesRailSeenState.read(key)!.look, '["another-home","other"]': ['memory'] },
+            }));
             await act(async () => setHomeMachines([machine('edge-1', { daemonState: { resources: published('calm', []) } as never })]));
-            expect(storage.getState().localSettings.machinesRailSeenV1).toEqual({ look: { '["another-home","other"]': ['memory'] }, guardSeenAt: acknowledgedAt });
+            expect(machinesRailSeenState.read(key)).toEqual({ look: { '["another-home","other"]': ['memory'] }, guardSeenAt: acknowledgedAt });
             await act(async () => setHomeMachines([look]));
             expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
             expect(screen.findByTestId('sidebar-machines-popover-content')).toBeNull();
@@ -120,13 +151,13 @@ describe('AppRailMachines', () => {
             volumeId: 'data', volumeLabel: 'Data' };
         const look = machine('edge-1', { daemonState: { resources: published('look', [reason]) } as never });
         try {
-            storage.getState().applyLocalSettings({ machinesRailSeenV1: { look: {}, guardSeenAt: 0 } });
             setHomeMachines([look]);
+            const key = railScopeKey();
             const { AppRailMachines } = await import('./AppRailMachines');
             const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
             const screen = await renderScreen(<AppRailMachines />);
             await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onOpenIntent?.());
-            const seen = storage.getState().localSettings.machinesRailSeenV1;
+            const seen = machinesRailSeenState.read(key);
             await act(async () => {
                 if (condition === 'account_switch') {
                     setHomeMachines([machine('edge-1', { daemonState: { resources: published('calm', []) } as never })]);
@@ -135,7 +166,7 @@ describe('AppRailMachines', () => {
                     : condition === 'missing_publication' ? { ...look, daemonState: null }
                     : { ...look, daemonState: { resources: { ...published('calm', []), vitals: { state: 'unavailable', reason: 'reader_failed', since: 1 } } } as never }]);
             });
-            expect(storage.getState().localSettings.machinesRailSeenV1).toBe(seen);
+            expect(machinesRailSeenState.read(key)).toBe(seen);
             await act(async () => setHomeMachines([look]));
             expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
         } finally {

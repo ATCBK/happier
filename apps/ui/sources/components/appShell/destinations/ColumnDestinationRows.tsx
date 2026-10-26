@@ -1,18 +1,11 @@
 import * as React from 'react';
-import { usePathname } from 'expo-router';
+import { useDestinationPathname } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Platform, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
-import { BotsEntrySummary } from '@/components/sessions/bots/BotsEntrySummary';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
-import { useNavigationSurfacePlacement } from '@/components/ui/navigation/useNavigationSurfacePlacement';
-import { resolveNavigationPlacements, type NavigationPlacement } from '@/sync/domains/settings/mobileSurfacePinning';
-import { Modal } from '@/modal';
-import { t } from '@/text';
-import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import {
     BROWSE_EXISTING_SESSIONS_DESTINATION_ID,
@@ -30,7 +23,6 @@ import {
 import { CompactAppDestinationBadge } from '@/components/appShell/destinations/CompactAppDestinationBadge';
 import type { UniversalSearchScopeSeed } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { TAB_TYPES } from '@/components/ui/navigation/tabTypes';
 import {
     resolveSessionListDensityViewState,
@@ -42,11 +34,6 @@ import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { useIsTablet } from '@/utils/platform/responsive';
 
 const stylesheet = StyleSheet.create(() => ({
-    launcher: {
-        // The group carries no title, so it draws a top spacer in its place; these rows sit flush
-        // against the surface above, so cancel exactly that spacer — not an approximation of it.
-        marginTop: -(Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX) ?? 0),
-    },
     // Beside the rail the column's own entries keep a small gap under the title strip, on the same
     // plane the column paints (`appShellColumnSurface`), so the column reads as one surface.
     column: {
@@ -55,20 +42,7 @@ const stylesheet = StyleSheet.create(() => ({
 }));
 
 const ROW_FILL_SHAPE_STYLE = { borderRadius: SESSION_LIST_ROW_SELECTION_RADIUS } as const;
-const NO_DESTINATIONS: readonly CompactAppDestination[] = Object.freeze([]);
-
-/**
- * What the phone launcher pins before anyone customizes it: four rows, so "My work" starts in the first
- * third of the screen (lab xrail P1). Search finds anything, Bots carries what needs you, Workflows and
- * Artifacts are what a phone is used to check. Everything else starts in More.
- */
-const PHONE_LAUNCHER_DEFAULT_PINNED_IDS: ReadonlySet<string> = new Set([SEARCH_DESTINATION_ID, 'workflows', 'artifacts', 'bots']);
-
-function phoneLauncherDefaultPlacement(destination: CompactAppDestination): NavigationPlacement {
-    return PHONE_LAUNCHER_DEFAULT_PINNED_IDS.has(destination.id) ? 'pinned' : 'overflow';
-}
-
-/** The phone's tab bar reaches these destinations itself, so its launcher does not repeat them. */
+/** The phone's tab bar reaches these destinations itself, so its shortcuts menu does not repeat them. */
 const PHONE_TAB_BAR_DESTINATION_IDS: ReadonlySet<string> = new Set(TAB_TYPES);
 
 function selectPhoneLauncherDestinations(catalog: readonly CompactAppDestination[]): readonly CompactAppDestination[] {
@@ -78,19 +52,20 @@ function selectPhoneLauncherDestinations(catalog: readonly CompactAppDestination
         && !(destination.placement.kind === 'rail' && destination.placement.region === 'account'));
 }
 
-/**
- * The destinations listed in one column (or, without `column`, the phone launcher), the one that is
- * open, and the one way to open them. Every column draws these rows from here; a column only chooses
- * its row anatomy.
- */
 const NO_LEADING_ROWS: readonly ColumnLeadingRow[] = Object.freeze([]);
+
+/**
+ * The destinations listed in one column (or, without `column`, the phone's shortcuts menu), the one
+ * that is open, and the one way to open them. Every column draws these rows from here; a column only
+ * chooses its row anatomy.
+ */
 
 export function useColumnDestinations(column: PlaceableAppShellColumnId | undefined): Readonly<{
     destinations: readonly CompactAppDestination[];
     currentId: string | null;
     activate: ActivateAppDestination;
 }> {
-    const pathname = usePathname();
+    const pathname = useDestinationPathname();
     const activate = useActivateAppDestination();
     const catalog = useCompactAppDestinations();
     const destinations = React.useMemo(
@@ -114,12 +89,6 @@ export function destinationRowTestId(destination: CompactAppDestination): string
 }
 
 /**
- * The destinations a column lists under its header (user ruling U1: "Browse external sessions" in the
- * Sessions column, a plugin page placed in any column), or — without `column` — the phone launcher,
- * which lists every destination the tab bar does not show. Rows, selection and activation come from
- * the one catalog; the column decides only where they stand.
- */
-/**
  * A row the column shows before its destinations with the same anatomy (a board pinned in the
  * Sessions column, INT §5.1). The column's owner supplies it; selection and press stay with it.
  */
@@ -135,18 +104,23 @@ export type ColumnLeadingRow = Readonly<{
     onPress: () => void;
 }>;
 
+/**
+ * The destinations a column lists under its header (user ruling U1: "Browse external sessions" in the
+ * Sessions column, a plugin page placed in any column). Rows, selection and activation come from the one
+ * catalog; the column decides only where they stand. The phone reaches the same catalog through its
+ * shortcuts menu (`PhoneDestinationsMenu`).
+ */
 export const ColumnDestinationRows = React.memo(function ColumnDestinationRows(props: Readonly<{
-    /** The column whose entries these are; absent: the phone launcher. */
-    column?: PlaceableAppShellColumnId;
+    /** The column whose entries these are. */
+    column: PlaceableAppShellColumnId;
     universalSearchScope?: UniversalSearchScopeSeed;
     leadingRows?: readonly ColumnLeadingRow[];
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     // These rows are the first entries of the column's list, not a separate control strip, so they
-    // take the session row's height from the same owner the session list reads. Desktop-web LIST
-    // rows follow that grid; a native touch surface is raised to the platform minimum from the same
-    // policy owner the rest of the app reads, never a local 44/48 copy.
+    // take the session row's height from the same owner the session list reads, on every platform.
+    // A finger reaches past the row through the shared hit area; the row itself stays at the design.
     const sessionListDensity = useSetting('sessionListDensity');
     const isTablet = useIsTablet();
     const { width: windowWidth } = useWindowDimensions();
@@ -155,87 +129,23 @@ export const ColumnDestinationRows = React.memo(function ColumnDestinationRows(p
         platform: Platform.OS,
         windowWidth,
     }).rowHeight;
-    const rowHeight = Platform.OS === 'ios' || Platform.OS === 'android'
-        ? Math.max(densityRowHeight, resolveMinimumInteractiveTargetSize(Platform.OS))
-        : densityRowHeight;
+    const rowHeight = densityRowHeight;
     const rowHeightStyle = React.useMemo(
         () => ({ height: rowHeight, minHeight: rowHeight }),
         [rowHeight],
     );
-    const column = props.column;
-    const { destinations, currentId, activate } = useColumnDestinations(column);
+    const { destinations, currentId, activate } = useColumnDestinations(props.column);
     const leadingRows = props.leadingRows ?? NO_LEADING_ROWS;
-    // The phone launcher has its own Pinned / More / Hidden placements (device-local, like the rails'):
-    // a short pinned set, the rest in More until pinned.
-    const launcherPlacement = useNavigationSurfacePlacement('phoneLauncher');
-    const [moreOpen, setMoreOpen] = React.useState(false);
-    const launcher = column === undefined
-        ? resolveNavigationPlacements(destinations.map((destination) => ({
-            id: destination.id, destination, defaultPlacement: phoneLauncherDefaultPlacement(destination),
-        })), launcherPlacement.preferences)
-        : null;
-    const shown = launcher ? launcher.pinned.map((entry) => entry.destination) : destinations;
-    const more = launcher ? launcher.overflow.map((entry) => entry.destination) : NO_DESTINATIONS;
-    const customize = React.useCallback(() => {
-        const items = destinations.map((destination) => ({
-            id: destination.id, title: destination.title, icon: destination.icon,
-            defaultPlacement: phoneLauncherDefaultPlacement(destination),
-        }));
-        fireAndForget(import('@/components/ui/navigation/NavigationPlacementCustomizer').then(({ NavigationPlacementCustomizer }) => {
-            Modal.show({ component: NavigationPlacementCustomizer,
-                props: { surfaceId: 'phoneLauncher', items, testID: 'phone-launcher-customizer' } });
-        }), { tag: 'ColumnDestinationRows.customize' });
-    }, [destinations]);
     if (destinations.length === 0 && leadingRows.length === 0) return null;
 
-    // A row in More is dimmed when unavailable and does not repeat why: one generic reason per row would say
-    // the same thing several times. A pinned row the person chose keeps its reason.
-    const renderDestination = (destination: CompactAppDestination, inMore: boolean) => (
-        <WorkspaceDestinationRow key={destination.id}
-            href={destination.activation === 'navigate' && destination.availability === 'available' ? destination.routePath : null}>
-        <LauncherRow phone={column === undefined}><Item
-            key={destination.id}
-            testID={destinationRowTestId(destination)}
-            title={destination.title}
-            subtitle={!inMore && destination.kind === 'plugin' && destination.availability === 'unavailable'
-                ? resolveReasonCopy({
-                    reasonCode: destination.unavailableReason,
-                    kind: 'pluginRuntime',
-                }).message
-                : undefined}
-            // `icon`, not `leftElement`: only `icon` is resized to the density's glyph scale.
-            icon={<Icon name={destination.icon} color={theme.colors.text.secondary} />}
-            rightElement={destination.kind === 'plugin' && destination.badge ? (
-                <CompactAppDestinationBadge destination={destination} />
-            ) : column === undefined && destination.activation === 'botsRoster' ? (
-                // The phone's one Bots entry carries the faces and what needs you (lab b-rail Ap).
-                <BotsEntrySummary />
-            ) : undefined}
-            // A navigation row keeps its chevron after a live value (the Bots faces, a badge).
-            keepChevronWithRightElement={column === undefined}
-            density={column === undefined ? 'comfortable' : 'tight'}
-            showChevron={column === undefined}
-            showDivider={column === undefined}
-            // `style` lands last on the row CONTAINER, so it beats the density minimum and
-            // the Pressable hugs it exactly; `pressableStyle` would leave dead space.
-            style={rowHeightStyle}
-            pressableStyle={ROW_FILL_SHAPE_STYLE}
-            disabled={destination.availability !== 'available'}
-            selected={destination.id === currentId}
-            onPress={destination.availability === 'available'
-                ? () => activate(destination, { searchScope: props.universalSearchScope })
-                : undefined}
-        /></LauncherRow>
-        </WorkspaceDestinationRow>
-    );
-    const group = (
+    return (
         <ItemGroup
-            style={column === undefined ? styles.launcher : styles.column}
-            // Columns keep their own plane; the phone launcher is one readable navigation sheet.
-            surface={column === undefined ? 'sheet' : 'none'}
+            style={styles.column}
+            // Columns keep their own plane.
+            surface="none"
             constrainToContentWidth={false}
             // The column's sheet edge (the shared column frame), where the session sheets start.
-            containerStyle={column === undefined ? undefined : sessionListStyles.groupSheetInset}
+            containerStyle={sessionListStyles.groupSheetInset}
         >
             {leadingRows.map((row) => (
                 <WorkspaceDestinationRow key={row.id} href={row.href ?? null}><Item
@@ -243,53 +153,45 @@ export const ColumnDestinationRows = React.memo(function ColumnDestinationRows(p
                     title={row.title}
                     icon={<Icon name={row.icon} color={theme.colors.text.secondary} />}
                     rightElement={row.rightElement}
-                    density={column === undefined ? 'comfortable' : 'tight'}
-                    showChevron={column === undefined}
-                    showDivider={column === undefined}
+                    density="tight"
+                    showChevron={false}
+                    showDivider={false}
                     style={rowHeightStyle}
                     pressableStyle={ROW_FILL_SHAPE_STYLE}
                     selected={row.selected}
                     onPress={row.onPress}
                 /></WorkspaceDestinationRow>
             ))}
-            {shown.map((destination) => renderDestination(destination, false))}
-            {launcher ? (
-                <LauncherRow phone><Item
-                    testID="phone-launcher-more"
-                    title={t('navigationPlacement.overflow')}
-                    icon={<Icon name="dots-three" color={theme.colors.text.secondary} />}
-                    density="comfortable"
-                    showDivider
-                    style={rowHeightStyle}
-                    pressableStyle={ROW_FILL_SHAPE_STYLE}
-                    accessibilityExpanded={moreOpen}
-                    onPress={() => setMoreOpen((open) => !open)}
-                /></LauncherRow>
-            ) : null}
-            {launcher && moreOpen ? more.map((destination) => renderDestination(destination, true)) : null}
-            {launcher && moreOpen ? (
-                <LauncherRow phone><Item
-                    testID="phone-launcher-customize"
-                    title={t('navigationPlacement.customize')}
-                    icon={<Icon name="sliders-horizontal" color={theme.colors.text.secondary} />}
-                    density="comfortable"
+            {destinations.map((destination) => (
+                <WorkspaceDestinationRow key={destination.id}
+                    href={destination.activation === 'navigate' && destination.availability === 'available' ? destination.routePath : null}><Item
+                    testID={destinationRowTestId(destination)}
+                    title={destination.title}
+                    subtitle={destination.kind === 'plugin' && destination.availability === 'unavailable'
+                        ? resolveReasonCopy({
+                            reasonCode: destination.unavailableReason,
+                            kind: 'pluginRuntime',
+                        }).message
+                        : undefined}
+                    // `icon`, not `leftElement`: only `icon` is resized to the density's glyph scale.
+                    icon={<Icon name={destination.icon} color={theme.colors.text.secondary} />}
+                    rightElement={destination.kind === 'plugin' && destination.badge ? (
+                        <CompactAppDestinationBadge destination={destination} />
+                    ) : undefined}
+                    density="tight"
                     showChevron={false}
-                    showDivider
+                    showDivider={false}
+                    // `style` lands last on the row CONTAINER, so it beats the density minimum and
+                    // the Pressable hugs it exactly; `pressableStyle` would leave dead space.
                     style={rowHeightStyle}
                     pressableStyle={ROW_FILL_SHAPE_STYLE}
-                    onPress={customize}
-                /></LauncherRow>
-            ) : null}
+                    disabled={destination.availability !== 'available'}
+                    selected={destination.id === currentId}
+                    onPress={destination.availability === 'available'
+                        ? () => activate(destination, { searchScope: props.universalSearchScope })
+                        : undefined}
+                /></WorkspaceDestinationRow>
+            ))}
         </ItemGroup>
     );
-    return group;
 });
-
-/**
- * A phone launcher row is a navigation row like the phone's Settings index rows (the navigation glyph's size
- * and colour, not the grouped list's large settings glyph), on the launcher's own card: the same white sheet
- * the session sheets under it use.
- */
-function LauncherRow(props: Readonly<{ phone: boolean; children: React.ReactElement }>) {
-    return props.phone ? <ListPresentationProvider value="page">{props.children}</ListPresentationProvider> : props.children;
-}

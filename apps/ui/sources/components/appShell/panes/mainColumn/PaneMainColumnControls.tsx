@@ -51,6 +51,8 @@ export const PaneMainHideButton = React.memo(function PaneMainHideButton(
     glyphSize?: number;
     color?: string;
     testID?: string;
+    /** The gap to the neighbouring header action: their finger frames split it. */
+    interactiveTargetGapPx?: number;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -65,6 +67,7 @@ export const PaneMainHideButton = React.memo(function PaneMainHideButton(
       testID={props.testID ?? 'pane-main-hide'}
       variant="plain"
       size={props.size}
+      interactiveTargetGapPx={props.interactiveTargetGapPx}
       accessibilityLabel={main.labels.hideLabel}
       tooltip={withShortcut(main.labels.hideLabel, shortcut)}
       tooltipPlacement="bottom"

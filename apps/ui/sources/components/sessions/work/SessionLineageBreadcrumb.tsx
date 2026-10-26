@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierBreadcrumb, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
@@ -7,13 +6,14 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { HEADER_BAND_SUBTITLE_TEXT } from '@/components/ui/layout/headerBand';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 
 import { describeSessionLineage, useSessionLineage, type SessionLineageAncestor } from './sessionLineage';
 
 type SessionLineagePresentation = 'breadcrumb' | 'manager';
+
+const TITLE_BELOW_HIT_REACH = { bottom: 0 } as const;
 
 /**
  * The lineage breadcrumb of a Session that reports to a lead (ORC §3.8 header; lab `session-E`): the
@@ -56,7 +56,9 @@ export const SessionLineageNavigation = React.memo(
           testID={`session-header-lineage:${lead.sessionId}`}
           accessibilityRole="link"
           accessibilityLabel={label}
-          style={[styles.row, { minHeight: resolveMinimumInteractiveTargetSize(Platform.OS) }]}
+          style={styles.row}
+          // Drawn at its text line; the finger's reach is the hit area, kept off the title flush beneath.
+          hitReach={TITLE_BELOW_HIT_REACH}
           onPress={() => openAncestor(lead.sessionId)}
         >
           <Icon name="tree-structure" size={11} color={theme.colors.text.tertiary} />
@@ -78,6 +80,8 @@ export const SessionLineageNavigation = React.memo(
         separator={<Icon name="caret-right" size={10} color={theme.colors.text.tertiary} />}
         colors={{ focus: theme.colors.border.focus, hover: theme.colors.surface.pressed }}
         linkStyle={styles.crumb}
+        // The header title sits flush below the crumbs: its hit area keeps that side.
+        linkHitReach={TITLE_BELOW_HIT_REACH}
         items={lineage.map((ancestor) => ({ key: ancestor.sessionId, label: ancestor.title, testID: `session-header-lineage:${ancestor.sessionId}`, onPress: () => openAncestor(ancestor.sessionId) }))}
         renderLabel={(item) => <Text numberOfLines={1} style={styles.label}>{item.label}</Text>}
       />

@@ -1,13 +1,12 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { hrefForDestinationRef, resolveCurrentAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, resolveCurrentAppDestination, useDestinationInstanceTitles, useDestinationInstanceTitleSources, type CompactAppDestination, type DestinationRef, type DestinationInstanceTitleEntry } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { DocumentTabStrip, DOCUMENT_TAB_BAR_METRICS as B, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
 import type { PopoverAnchor } from '@/components/ui/popover';
 import { resolvePointerMenuAnchor } from '@/components/ui/popover/resolvePointerMenuAnchor';
@@ -30,8 +29,14 @@ import { presentPaneDropAdmission } from '@/components/appShell/splitCanvas/pres
 import { usePaneDropStripCue } from '@/components/appShell/splitCanvas/presentation/usePaneDropStripCue';
 import { createWorkspaceDropScene } from '../workspaceDropScene';
 
-type WorkspaceDocumentTab = DocumentTabItem & Readonly<{ icon: IconName }>;
+type WorkspaceDocumentTab = DocumentTabItem & Readonly<{
+    icon: IconName;
+    target: DestinationRef;
+    catalog: readonly CompactAppDestination[];
+    href: string | null;
+}>;
 type MenuState = Readonly<{ tabId: string; anchor: PopoverAnchor | undefined }>;
+const EMPTY_TITLE_ENTRIES: readonly DestinationInstanceTitleEntry[] = [];
 
 /**
  * One pane's tabs, wherever the pane's tabs live: in the window's top strip over a top-row pane
@@ -69,7 +74,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
     const titleResolutionEntries = React.useMemo(() => overflowOpen
         ? [...titleEntries, ...workspace.state.recentlyClosed.map(entry => ({ key: `closed:${entry.tab.id}`, instanceKey: entry.tab.id, ref: entry.tab.target, fallbackTitle: entry.fallbackTitle }))]
         : titleEntries, [overflowOpen, titleEntries, workspace.state.recentlyClosed]);
-    const liveTitles = useDestinationInstanceTitles(props.catalog, titleResolutionEntries);
+    const titleSources = useDestinationInstanceTitleSources(props.catalog, titleResolutionEntries);
+    const liveTitles = useDestinationInstanceTitles(props.catalog, overflowOpen ? titleResolutionEntries : EMPTY_TITLE_ENTRIES);
     const hasRecentlyClosed = workspace.state.recentlyClosed.length > 0;
     const previousTabs = React.useRef<ReadonlyMap<string, WorkspaceDocumentTab>>(new Map());
     const tabs = React.useMemo(() => {
@@ -77,17 +83,23 @@ export function WorkspaceGroupTabs(props: Readonly<{
         for (const id of group.tabIds) {
             const tab = workspace.state.tabs[id];
             if (!tab) continue;
-            const href = hrefForDestinationRef(props.catalog, tab.target);
-            const destination = href ? resolveCurrentAppDestination(props.catalog, href) : null;
+            const previous = previousTabs.current.get(id);
+            const sameTarget = previous?.target === tab.target && previous.catalog === props.catalog;
+            const href = sameTarget ? previous.href : hrefForDestinationRef(props.catalog, tab.target);
+            const icon = sameTarget ? previous.icon : (href ? resolveCurrentAppDestination(props.catalog, href)?.icon : null) ?? 'file';
+            const titleSource = titleSources.get(id);
             const next: WorkspaceDocumentTab = {
                 key: tab.id,
-                title: liveTitles.get(id) ?? t(href ? 'common.loading' : 'common.unavailable'),
+                title: previous && previous.titleSource === titleSource ? previous.title : titleSource?.getSnapshot() ?? t(href ? 'common.loading' : 'common.unavailable'),
+                titleSource,
                 isPinned: tab.pinned, isPreview: tab.preview, canPin: !tab.pinned,
-                icon: destination?.icon ?? 'file',
+                icon, target: tab.target, catalog: props.catalog, href,
             };
-            const previous = previousTabs.current.get(id);
             byId.set(id, previous
                 && previous.title === next.title
+                && previous.titleSource === next.titleSource
+                && previous.target === next.target
+                && previous.catalog === next.catalog
                 && previous.isPinned === next.isPinned
                 && previous.isPreview === next.isPreview
                 && previous.canPin === next.canPin
@@ -96,7 +108,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
         // Reconcile the lightweight projection so another tab's publication leaves this tab unchanged.
         previousTabs.current = byId;
         return byId;
-    }, [group.tabIds, liveTitles, props.catalog, workspace.state.fallbackTitlesByTabId, workspace.state.tabs]);
+    }, [group.tabIds, titleSources, props.catalog, workspace.state.tabs]);
 
     const stripTabs = React.useMemo(() => group.tabIds.flatMap((id) => tabs.get(id) ?? []), [group.tabIds, tabs]);
     const livePresentations = useDestinationInstanceTabPresentations(titleEntries);
@@ -176,8 +188,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
     }, [close, execute, group.id, menu?.tabId, workspace.state.maximizedGroupId]);
 
     // The menu lists the tabs in the strip's order: pinned marks lead, and each says so.
-    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...[...stripTabs].sort((a, b) => Number(b.isPinned) - Number(a.isPinned)).map((tab) => ({
-        id: tab.key, testID: `workspace-overflow-tab-${toTestIdSafeValue(tab.key)}`, title: tab.title,
+    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => overflowOpen ? [...[...stripTabs].sort((a, b) => Number(b.isPinned) - Number(a.isPinned)).map((tab) => ({
+        id: tab.key, testID: `workspace-overflow-tab-${toTestIdSafeValue(tab.key)}`, title: liveTitles.get(tab.key) ?? tab.title,
         icon: <Icon name={tab.icon} size={16} color={theme.colors.text.secondary} />,
         ...(tab.isPinned ? {
             rightElement: <View style={styles.menuTabMarks}>
@@ -195,8 +207,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
         category: t('workspaceTabs.recentlyClosed'),
         icon: <Icon name="clock-counter-clockwise" size={16} color={theme.colors.text.secondary} />,
         ...(index === 0 ? { shortcut: shortcutLabels['workspace.tab.reopen'] } : {}),
-    })), ...closeItems(group.activeTabId, 'workspace-overflow').map(item => ({ ...item, category: t('workspaceBar.tabMenuLabel') }))],
-    [closeItems, group.activeTabId, hasRecentlyClosed, liveTitles, shortcutLabels, stripTabs, styles.menuTabMarks, theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary, workspace.state.recentlyClosed]);
+    })), ...closeItems(group.activeTabId, 'workspace-overflow').map(item => ({ ...item, category: t('workspaceBar.tabMenuLabel') }))] : [],
+    [overflowOpen, closeItems, group.activeTabId, hasRecentlyClosed, liveTitles, shortcutLabels, stripTabs, styles.menuTabMarks, theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary, workspace.state.recentlyClosed]);
 
     const entityDragDrop: DocumentTabEntityDragDrop | undefined = scope ? {
         runtime, id: `workspace-tabs:${group.id}`, scope, acceptedKinds: WORKSPACE_ENTITY_KINDS,
@@ -238,8 +250,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
     const dropTargetIds = React.useMemo(() => [splitCanvasEntityTargetId('workspace', group.id, 'center'), `workspace-strip:${group.id}`], [group.id]);
     const dropCue = usePaneDropStripCue(scope ? runtime : null, { targetIds: dropTargetIds, tabIds: group.tabIds });
 
-    const touchFloor = resolveTouchTargetFloorPx(Platform.OS);
-    const actionSize = Math.max(props.placement === 'bar' ? 28 : M.actionSizePx, touchFloor ?? 0);
+    // The new-tab square keeps its design size; a finger reaches it through the shared hit area.
+    const actionSize = props.placement === 'bar' ? 28 : M.actionSizePx;
     return (
         <View ref={attachStrip} testID={`workspace-tabs-${safeGroup}`} style={styles.row}>
             <DocumentTabStrip
@@ -274,6 +286,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 accessibilityLabel={t('workspaceBar.newTab')}
                 tooltip={t('workspaceBar.newTab')}
                 tooltipPlacement="bottom"
+                interactiveTargetEdgesPx={NEW_TAB_EDGES_PX}
                 onPress={() => execute({ actionId: 'workspace.tabs.open', input: { groupId: group.id } })}
             />
             <View style={styles.grow} />
@@ -306,6 +319,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
                         tooltipPlacement="bottom"
                         hasPopup="menu"
                         expanded={overflowOpen}
+                        interactiveTargetEdgesPx={ALL_TABS_EDGES_PX}
                         onPress={toggle}
                     />
                 )}
@@ -331,6 +345,15 @@ export function WorkspaceGroupTabs(props: Readonly<{
     );
 }
 
+/** The empty spacer between + New tab and the controls at the pane's end never gets narrower than this. */
+const SPACER_MIN_PX = 8;
+/**
+ * The row's hit areas tile its gaps: + New tab takes the whole 2 px gap to the last tab (whose close stays inside the
+ * tab) and half of the narrowest spacer, All tabs the other half and half the gap to the pane's trailing control.
+ */
+const NEW_TAB_EDGES_PX = { leading: B.stripGapPx, trailing: (B.stripGapPx * 2 + SPACER_MIN_PX) / 2 } as const;
+const ALL_TABS_EDGES_PX = { leading: (B.stripGapPx * 2 + SPACER_MIN_PX) / 2, trailing: B.stripGapPx / 2 } as const;
+
 const stylesheet = StyleSheet.create(() => ({
     row: {
         flex: 1,
@@ -341,7 +364,7 @@ const stylesheet = StyleSheet.create(() => ({
     },
     grow: {
         flex: 1,
-        minWidth: 8,
+        minWidth: SPACER_MIN_PX,
     },
     menuTabMarks: {
         flexDirection: 'row',

@@ -168,6 +168,8 @@ const PictureCaption = React.memo(function PictureCaption(
         hasPopup="dialog"
         expanded={open}
         onPress={() => setOpen((previous) => !previous)}
+        // Half the 6 px gap to the Look chip beside it.
+        hitReach={{ left: 3, right: 3 }}
         style={HAPPIER_FOCUS_RING_DELEGATED_STYLE}
       >
         {({ pressed, focused }) => (

@@ -14,6 +14,8 @@ import {
 } from './atmosphereEditor';
 import { LookPanel } from './LookPanel';
 
+const LOOK_CHIP_EDGES_PX = { leading: 3, trailing: 3, bottom: 4 } as const;
+
 /** The lab's popover width; on a phone the shared sheet takes the screen's width. */
 const LOOK_POPOVER_WIDTH_PX = 380;
 const LOOK_POPOVER_MAX_HEIGHT_PX = 720;
@@ -82,7 +84,9 @@ export function LookPopover(
           content
         ) : (
           <View testID="look-popover">
+            {/* A large anchored editor (Look, a profile's Details and Public data): the panel coat keeps its captions legible over a band. */}
             <FloatingOverlay
+              role="panel"
               maxHeight={Math.min(maxHeight, LOOK_POPOVER_MAX_HEIGHT_PX)}
               edgeFades={{ top: true, bottom: true, size: 18 }}
               surfaceChrome="theme"
@@ -132,6 +136,9 @@ export const LookChip = React.memo(function LookChip(
           tooltip={open ? undefined : label}
           selected={open}
           expanded={open}
+          // The top-right slot keeps 6 px between the caption chip and this one, and 9 px above the composer's
+          // field accessories: this chip takes 4 px of that, the accessories the other 5.
+          interactiveTargetEdgesPx={LOOK_CHIP_EDGES_PX}
           onPress={() => setOpen(!open)}
         />
       </GlassSurface>

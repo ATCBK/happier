@@ -27,6 +27,8 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 import { AppRailSurface } from './AppRail';
 import { buildAppRailEntries } from './appRailModel';
+import { WorkspaceNavigationProvider, type WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { createWorkspaceState } from '@/components/appShell/workspace/workspaceState';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -140,6 +142,36 @@ function railTestIds(
 }
 
 describe('AppRail Bots', () => {
+  it('selects the pinned Bot from the workspace before Expo mirrors navigation and clears it on Search return', async () => {
+    const entries = railWithPinnedBot();
+    const bot = entries.bots[0]!;
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+      externalSessions: false, inbox: false, workflows: false, friends: false,
+    } });
+    const workspace: WorkspaceNavigationContextValue = {
+      active: true, catalog,
+      state: createWorkspaceState({ id: 'bot-tab', target: { kind: 'session', params: { id: bot.sessionId, serverId: bot.serverId } }, pinned: false, preview: false }),
+      canGoBack: false, canGoForward: false, openHref: () => true,
+      activateTab: () => {}, closeTab: () => {}, closeTabs: () => {}, dispatch: () => {},
+      navigationForTab: () => ({ push: () => {}, replace: () => {}, back: () => {} }),
+      registerBackStep: () => () => {}, back: () => {}, forward: () => {},
+    };
+    const render = (value: WorkspaceNavigationContextValue) => (
+      <BotsRosterRuntimeProvider><InjectedAuthProvider credentials={null}><InboxSummaryProvider>
+        <WorkspaceNavigationProvider value={value}>
+          <AppRailSurface entries={entries} activeId={null} onOpen={() => {}}
+            renderFooter={item => <View testID={item.id} />} />
+        </WorkspaceNavigationProvider>
+      </InboxSummaryProvider></InjectedAuthProvider></BotsRosterRuntimeProvider>
+    );
+    const screen = await renderScreen(render(workspace));
+    await act(async () => screen.findByTestId('app-rail')?.props.onLayout?.(layout(810)));
+    expect(screen.findHostByTestId(`app-rail:${bot.id}`)?.props['aria-pressed']).toBe(true);
+    await screen.update(render({ ...workspace, state: createWorkspaceState({ id: 'search-tab',
+      target: { kind: 'search', params: {} }, pinned: false, preview: false }) }));
+    expect(screen.findHostByTestId(`app-rail:${bot.id}`)?.props['aria-pressed']).toBe(false);
+  });
+
   it('keeps Bot attention contextual without another global numeric badge', async () => {
     const serverId = getActiveServerSnapshot().serverId;
     const bot = createSessionListRenderableSessionFixture({

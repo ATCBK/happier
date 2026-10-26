@@ -4,6 +4,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { readHitFrameReach } from '@/dev/testkit/harness/hitFrameReach';
+import { HappierUiPlatformProvider } from '@happier-dev/plugin-ui/environment';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { InboxSummaryProvider } from '@/hooks/inbox/useInboxSummary';
 import { stubServerFeaturesFetch } from '@/hooks/server/serverFeaturesTestUtils';
@@ -12,9 +14,10 @@ import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { getStorage } from '@/sync/domains/state/storage';
+import { INBOX_ARTIFACT_KINDS } from '@/sync/domains/artifacts/inboxArtifacts';
 import { t } from '@/text';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
-import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
+import type { PluginPage } from '@/components/plugins/pages/pluginPages';
 import { AppRailSurface } from './AppRail';
 import { AppRailAccount } from './AppRailAccount';
 import { buildAppRailEntries, buildAppRailPlacementItems } from './appRailModel';
@@ -38,10 +41,12 @@ afterEach(() => {
 });
 
 function entries() {
-    const pages = ['channels', 'inspector', 'triage'].map((id): PluginAppPage => ({
+    const pages = ['channels', 'inspector', 'triage'].map((id): PluginPage => ({
+        target: { kind: 'app' },
+        visible: true,
         id: `plugin:acme.${id}:${id}`, pluginId: `acme.${id}`, descriptorId: id, localId: id,
         label: id, icon: 'note', order: 10, disabledReason: null,
-        placement: {} as PluginAppPage['placement'], routePath: `/plugins/acme.${id}/${id}`,
+        placement: {} as PluginPage['placement'], routePath: `/plugins/acme.${id}/${id}`,
     }));
     return buildAppRailEntries(resolveCompactAppDestinations({
         builtins: { externalSessions: true, inbox: true, workflows: true, friends: true }, pages,
@@ -53,6 +58,35 @@ const layout = (height: number): LayoutChangeEvent => ({
 } as LayoutChangeEvent);
 
 describe('AppRail measured room', () => {
+    // Rail slots are 40 px tall around a 36 px button: a finger's hit area takes half the 4 px gap above and below
+    // (and the rail's free width beside it), so two stacked buttons' hit areas meet without overlapping.
+    it('splits the gap between stacked rail buttons instead of reaching into the next one', async () => {
+        const screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+            <InjectedAuthProvider credentials={null}><InboxSummaryProvider><AppRailSurface entries={entries()} activeId={null} onOpen={() => {}}
+                renderFooter={item => <View testID={item.id} />} /></InboxSummaryProvider></InjectedAuthProvider>
+        </HappierUiPlatformProvider>);
+        const reach = readHitFrameReach(screen.findByTestId('app-rail:search')!);
+        expect(reach?.top).toBe(2);
+        expect(reach?.bottom).toBe(2);
+        expect(reach?.left).toBe(4);
+    });
+
+    it('keeps the existing Inbox dot while its real summary is unknown and removes it only for known empty membership', async () => {
+        const store = getStorage();
+        store.setState({ isDataReady: false, artifacts: {}, artifactsLoaded: false,
+            artifactInventoryKindsLoaded: [], artifactInventoryKindsPartial: [] });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><InboxSummaryProvider>
+            <AppRailSurface entries={entries()} activeId="inbox" onOpen={() => {}} renderFooter={item => <View testID={item.id} />} />
+        </InboxSummaryProvider></InjectedAuthProvider>);
+        try {
+            const badge = screen.findHostByTestId('app-rail:inbox-badge');
+            expect(badge).not.toBeNull();
+            expect(badge?.props.children).toBeUndefined();
+            await act(async () => { store.setState({ isDataReady: true, artifactInventoryKindsLoaded: INBOX_ARTIFACT_KINDS }); });
+            await vi.waitFor(() => expect(screen.findHostByTestId('app-rail:inbox-badge')).toBeNull());
+        } finally { await screen.unmount(); }
+    });
+
     it('keeps the mounted Account trigger quiet for unrelated Profile changes and observes its name', async () => {
         const store = getStorage();
         store.setState(state => ({ profile: { ...state.profile, id: 'rail-account', name: 'Ada' } }));

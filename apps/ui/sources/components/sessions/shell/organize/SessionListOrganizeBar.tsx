@@ -1,16 +1,13 @@
 import { HAPPIER_COLLECTION_LIST_TEXT, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 import { sessionListStyles } from '../sessionListStyles';
-
-const MINIMUM_TARGET = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 const stylesheet = StyleSheet.create((theme) => ({
     title: {
@@ -20,10 +17,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     done: {
-        minHeight: MINIMUM_TARGET,
-        minWidth: MINIMUM_TARGET,
         alignItems: 'flex-end',
         justifyContent: 'center',
+    },
+    newSectionText: {
+        ...Typography.default(),
+        color: theme.colors.text.secondary,
     },
     doneText: {
         ...Typography.default('semiBold'),
@@ -35,7 +34,7 @@ const stylesheet = StyleSheet.create((theme) => ({
  * The title row while the phone list is in Organize mode (lab K1h): the list says what mode it is in,
  * and one Done ends it. It takes the search chrome's place and metrics, so nothing below moves.
  */
-export function SessionListOrganizeBar(props: Readonly<{ onDone: () => void }>): React.ReactElement {
+export function SessionListOrganizeBar(props: Readonly<{ onDone: () => void; onNewSection?: () => void }>): React.ReactElement {
     const styles = stylesheet;
     return (
         <View style={sessionListStyles.searchChrome} testID="session-list-organize-bar">
@@ -45,6 +44,17 @@ export function SessionListOrganizeBar(props: Readonly<{ onDone: () => void }>):
                         {t('entityDragDrop.organize.title')}
                     </Text>
                 </View>
+                {props.onNewSection ? (
+                    <HappierPressable
+                        testID="session-list-organize-new-section"
+                        accessibilityRole="button"
+                        accessibilityLabel={t('sessionsList.newSection')}
+                        onPress={props.onNewSection}
+                        style={styles.done}
+                    >
+                        <Text style={styles.newSectionText}>{t('sessionsList.newSection')}</Text>
+                    </HappierPressable>
+                ) : null}
                 <HappierPressable
                     testID="session-list-organize-done"
                     accessibilityLabel={t('entityDragDrop.organize.done')}

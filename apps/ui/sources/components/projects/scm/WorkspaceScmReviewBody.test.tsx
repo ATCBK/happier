@@ -1,14 +1,26 @@
 import * as React from 'react';
-import { Text } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
-import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installNavigationCommonModuleMocks();
+const windowSize = vi.hoisted(() => ({ width: 1200 }));
+// The window size is the platform boundary the pre-measure layout reads. The file-level mock serves
+// the static imports; the helper re-registers react-native for later imports, so it gets the same one.
+const mockReactNativeWithWindow = vi.hoisted(() => async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: windowSize.width, height: 844, scale: 1, fontScale: 1 }),
+  });
+});
+vi.mock('react-native', () => mockReactNativeWithWindow());
+installNavigationCommonModuleMocks({ reactNative: mockReactNativeWithWindow });
+// Install the navigation factory before either consumer loads react-native. A static
+// import resolves the helper's default factory before its options have been configured.
+const { Text } = await import('react-native');
+const { renderScreen } = await import('@/dev/testkit');
 
 describe('WorkspaceScmReviewBody', () => {
   it('offers no review actions while a state stands in for the files (not a repository, unreachable)', async () => {
@@ -104,5 +116,27 @@ describe('WorkspaceScmReviewBody', () => {
     expect(row).toBeDefined();
     await act(async () => { menu.props.onSelect(row!.id); });
     expect(onStartReview).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { window: 390, expected: 'phone' },
+    { window: 1440, expected: 'narrow' },
+  ])('lays a $window px window out as $expected before the body is measured', async ({ window, expected }) => {
+    windowSize.width = window;
+    try {
+      const { WorkspaceScmReviewBody } = await import('./WorkspaceScmReviewBody');
+      const layouts: string[] = [];
+      await renderScreen(
+        <WorkspaceScmReviewBody comparison={null} view="walkthrough" scopeLabel="Pending changes" scopeOptions={[]}
+          onSelectComparison={vi.fn()} onSelectView={vi.fn()} explain={false} onExplainChange={vi.fn()}
+          renderFiles={() => null}
+          renderWalkthrough={({ layout }) => { layouts.push(layout); return null; }} />,
+      );
+      // A phone never draws the wide reading first (it did after Retry at 390); a wide window waits for its measure.
+      expect(layouts.length).toBeGreaterThan(0);
+      expect(new Set(layouts)).toEqual(new Set([expected]));
+    } finally {
+      windowSize.width = 1200;
+    }
   });
 });

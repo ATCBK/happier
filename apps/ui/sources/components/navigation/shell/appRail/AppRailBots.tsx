@@ -1,4 +1,4 @@
-import { usePathname } from 'expo-router';
+import { useDestinationPathname } from '@/components/appShell/workspace/DestinationInstanceHost';
 import * as React from 'react';
 import { View } from 'react-native';
 import Animated, {
@@ -53,6 +53,7 @@ import { AppRailIcon } from './AppRailIcon';
 import { AppRailSlot } from './AppRailSlot';
 import {
   APP_RAIL_ICON_GLYPH_SIZE_PX,
+  APP_RAIL_ITEM_EDGES_PX,
   APP_RAIL_ITEM_SIZE_PX,
 } from './appRailMetrics';
 import type {
@@ -151,6 +152,7 @@ export const AppRailBots = React.memo(function AppRailBots(
         placement="right"
         anchorAlignVertical="start"
         buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
+        interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
         iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
         popoverWidthPx={ROSTER_WIDTH_PX}
         renderContent={renderRoster}
@@ -242,7 +244,7 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
   const navigateToSession = useNavigateToSession();
-  const pathname = usePathname();
+  const pathname = useDestinationPathname();
   const { bot } = props;
   const reorder = useAppRailBotReorder(bot);
   const [orderMenuOpen, setOrderMenuOpen] = React.useState(false);
@@ -302,6 +304,7 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
           testID={`app-rail:${bot.id}`}
           variant="plain"
           size={APP_RAIL_ITEM_SIZE_PX}
+          interactiveTargetEdgesPx={APP_RAIL_ITEM_EDGES_PX}
           accessibilityLabel={label}
           tooltip={name}
           tooltipPlacement="right"
