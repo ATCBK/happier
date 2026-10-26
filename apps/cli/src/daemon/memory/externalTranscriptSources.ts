@@ -35,7 +35,7 @@ type NativeInventory = {
 
 /** One ordered work list shares the existing allowance between refresh and backfill. */
 export function createMemoryExternalTranscriptTraversal() {
-  type Entry = { candidate: MemoryExternalTranscriptCandidate; state?: 'current' | 'more' | 'removed' | 'error'; refresh: boolean;
+  type Entry = { candidate: MemoryExternalTranscriptCandidate; state?: 'current' | 'more' | 'removed' | 'error' | 'invalidated'; refresh: boolean;
     failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'> };
   const candidates = new Map<string, Entry>();
   let preferRefresh = true;
@@ -66,15 +66,16 @@ export function createMemoryExternalTranscriptTraversal() {
       }
     },
     size() { return candidates.size; },
+    sourceIds: () => candidates.keys(),
     hasPendingWork() {
-      for (const entry of candidates.values()) if (entry.refresh || entry.state === undefined || entry.state === 'more') return true;
+      for (const entry of candidates.values()) if (entry.refresh || entry.state === undefined || entry.state === 'invalidated' || entry.state === 'more') return true;
       return false;
     },
     invalidate(agentId?: string, sourceKey?: string) {
       for (const entry of candidates.values()) {
         const candidate = entry.candidate;
         if ((agentId === undefined || candidate.source.agentId === agentId)
-          && (sourceKey === undefined || candidate.source.sourceKey === sourceKey)) entry.state = undefined;
+          && (sourceKey === undefined || candidate.source.sourceKey === sourceKey)) entry.state = 'invalidated';
       }
     },
     changed(agentId: string, sourceKey: string, nativeSessionIds?: readonly string[]) {
@@ -108,11 +109,14 @@ export function createMemoryExternalTranscriptTraversal() {
         const previous = groups.get(key);
         if (!previous) groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'ready' });
         if (state === 'error') groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'error', ...failure });
-        else if (state !== 'current' && state !== 'more' && previous?.state !== 'error') {
+        else if (state !== undefined && state !== 'current' && state !== 'more' && previous?.state !== 'error') {
           groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'indexing' });
         }
       }
-      for (const { candidate, state: result } of candidates.values()) {
+      // Qualify fresh identities first. A missing frontier can settle its group
+      // without revisiting all the already-settled siblings ahead of it.
+      for (const unattempted of [true, false]) for (const { candidate, state: result } of candidates.values()) {
+        if ((result === undefined) !== unattempted) continue;
         const { agentId, sourceKey } = candidate.source;
         const key = JSON.stringify([agentId, sourceKey]);
         const previous = groups.get(key);
@@ -121,7 +125,10 @@ export function createMemoryExternalTranscriptTraversal() {
         const retained = db?.getExternalSourceState({ sessionId: id });
         // An append may have several tail pages; it does not reopen completed
         // initial history. Replacement deletes this persisted frontier.
-        const initialComplete = retained?.coverageComplete === true && (result === 'current' || (retained.cursor
+        // A fresh child has not attempted these admitted identities yet. Their
+        // durable initial coverage survives its birth; new identities and
+        // replacements still have no completed retained frontier.
+        const initialComplete = retained?.coverageComplete === true && (result === undefined || result === 'current' || (retained.cursor
           && (JSON.parse(retained.cursor) as { type?: unknown }).type === 'tail'));
         if (!initialComplete) groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'indexing' });
       }
@@ -141,11 +148,11 @@ export function createMemoryExternalTranscriptTraversal() {
           if (selected.has(pair[0])) continue;
           first ??= pair;
           if (pair[1].refresh) {
-            if (pair[1].state === undefined) unstartedRefresh ??= pair;
+            if (pair[1].state === undefined || pair[1].state === 'invalidated') unstartedRefresh ??= pair;
             else refresh ??= pair;
           }
           if (pair[1].state !== 'current') backfill ??= pair;
-          if (pair[1].state === undefined) unstarted ??= pair;
+          if (pair[1].state === undefined || pair[1].state === 'invalidated') unstarted ??= pair;
           if (pair[1].state === 'more' && !pair[1].refresh) continuation ??= pair;
           if (refresh && continuation) break;
         }
@@ -298,7 +305,9 @@ export function createMemoryExternalTranscriptReader(input: Readonly<{
     for (const { native } of records) {
       const key = JSON.stringify([native.agentId, native.sourceKey]);
       const state = inventories.get(key)!;
-      if (state.needsInventory && state.pending === null) {
+      // Incompleteness is retained coverage, not another admission. Only an
+      // actual observation/policy refresh may reopen a finished or failed scan.
+      if (state.needsInventory && state.pending === null && state.refreshRequested) {
         state.pending = new Map();
         state.pendingIdentitiesComplete = true;
         state.cursor = undefined;
@@ -418,6 +427,11 @@ export function createMemoryExternalTranscriptReader(input: Readonly<{
     inventory,
     // A periodic inventory request does not invalidate an unfinished crawl.
     invalidate() { invalidateInventory(undefined, undefined, false); },
+    retryIncompleteInventory() {
+      for (const state of inventories.values()) {
+        if (state.needsInventory && state.pending === null) state.refreshRequested = true;
+      }
+    },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
       const changed = traversal.noteSyncResult(source, state, failure);
       if (state === 'removed' && changed) {
@@ -440,6 +454,7 @@ export function createMemoryExternalTranscriptReader(input: Readonly<{
       });
     },
     getReadySourceCount: traversal.size,
+    sourceIds: traversal.sourceIds,
     take: traversal.take,
     async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {
       signal.throwIfAborted();

@@ -347,20 +347,26 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
 
   it('keeps archive exclusion pending and rethrows when a live archive purge fails', async () => {
     mockSessionsHttp(() => ({ sessions: [], nextCursor: null, hasNext: false }));
-    const purgeError = new Error('archive_purge_failed');
-    vi.doMock('./removeMemorySessionIndexes', () => ({
-      removeMemorySessionIndexes: vi.fn(() => {
-        throw purgeError;
-      }),
-    }));
     const worker = await startWorker({ includeArchivedSessions: false });
+    const tier1DbPath = worker.getTier1DbPath()!;
+    await seedIndexedSession(tier1DbPath, 'archive-purge-failure');
+    // Fail the real persistent database boundary, keeping purge/admission
+    // logic real and ensuring this Session actually has something to remove.
+    const { openProtectedSqliteDatabaseSync } = await import('../persistence/sqliteSync');
+    const db = openProtectedSqliteDatabaseSync(tier1DbPath);
+    try {
+      db.exec(`CREATE TRIGGER reject_archive_purge BEFORE DELETE ON summary_shards
+        WHEN OLD.sessionId = 'archive-purge-failure'
+        BEGIN SELECT RAISE(ABORT, 'archive_purge_failed'); END;`);
+    } finally { db.close(); }
 
     await expect(worker.applySessionArchivedState({
       sessionId: 'archive-purge-failure',
       archived: true,
-    })).rejects.toBe(purgeError);
+    })).rejects.toThrow('archive_purge_failed');
 
     expect(worker.getSettings().includeArchivedSessions).toBe(true);
+    expect(await listIndexedSessionIds(tier1DbPath)).toContain('archive-purge-failure');
   });
 
   it('retains a session that becomes archived while archived eligibility is on', async () => {
@@ -432,11 +438,11 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
     worker.stop();
   });
 
-  it('keeps reporting archived-inclusive eligibility until the exclusion reconciliation succeeds', async () => {
+  it('keeps archived-inclusive eligibility until an explicit demand reconciles the exclusion', async () => {
     vi.useFakeTimers();
     mockDaemonProcess();
     let archivedListingFails = true;
-    mockSessionsHttp((args) => {
+    const { calls } = mockSessionsHttp((args) => {
       if (!args.archivedOnly) return { sessions: [], nextCursor: null, hasNext: false };
       if (archivedListingFails) throw new Error('transient_archived_listing_failure');
       return { sessions: [sessionRow('stale_archived')], nextCursor: null, hasNext: false };
@@ -452,8 +458,19 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
     expect(worker.getSettings().includeArchivedSessions).toBe(true);
     expect(await searchIndexedSessionIds(tier1DbPath)).toContain('stale_archived');
 
+    // Settle the initial policy demand while the boundary is still failing.
+    await vi.advanceTimersByTimeAsync(6_000);
+    const archivedReads = calls.filter(call => call.archivedOnly).length;
     archivedListingFails = false;
     await vi.advanceTimersByTimeAsync(6_000);
+
+    // PLAN r309 / X7 T7.4: Account/Session changes and explicit demands wake
+    // reconciliation; the removed inventory cadence must not retry at idle.
+    expect(calls.filter(call => call.archivedOnly)).toHaveLength(archivedReads);
+    expect(worker.getSettings().includeArchivedSessions).toBe(true);
+    expect(await searchIndexedSessionIds(tier1DbPath)).toContain('stale_archived');
+
+    await worker.reloadSettings();
 
     expect(worker.getSettings().includeArchivedSessions).toBe(false);
     expect(await searchIndexedSessionIds(tier1DbPath)).not.toContain('stale_archived');

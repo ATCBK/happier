@@ -1,4 +1,11 @@
-import { HappierDisclosure, HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import {
+  HappierDisclosure,
+  HappierSkeletonBlock,
+  happierPageTextMetrics,
+  resolveHappierFutureLocalDateTime,
+  toHappierLocalDateTimeDraft,
+  type HappierLocalDateTimeDraft,
+} from '@happier-dev/plugin-ui/presentation';
 import {
   HappierMemoryDuplicateChoice,
   HappierMemoryFactRow,
@@ -11,6 +18,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import {
   MEMORY_ARCHIVE_TOPIC_TITLE_V1,
+  isMemoryFactRenewableV1,
   type MemoryFactV1,
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
@@ -19,6 +27,7 @@ import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -27,6 +36,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ManagedSectionCount } from '@/components/settings/machines/managed/ManagedSectionCount';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { SegmentedChoiceItem, type SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -37,7 +47,6 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { useSessionSelector } from '@/sync/domains/state/storage';
 import {
   memoryDocumentActions,
   readMemoryActionOutcome,
@@ -48,13 +57,14 @@ import {
   type MemorySessionTarget,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { t } from '@/text';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
 import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
+import { MemoryDuplicateSavedFact } from './MemoryDuplicateSavedFact';
 import { MemoryMachineChoice } from './MemoryMachineChoice';
+import { memoryDecisionSheetRowStyle } from './SaveMemoryDecisionTarget';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
 import { readMemoryFactSource } from './useMemoryFactSource';
 import { formatMemoryDate, useMemoryFactAttribution } from './useMemoryFactAttribution';
@@ -64,6 +74,22 @@ export { formatMemoryDate } from './useMemoryFactAttribution';
 
 /** A fact this fresh reads "Just now" rather than today's date. */
 const JUST_NOW_MS = 60_000;
+/** Where a new expiry date starts: the Save as decision sheet's own default. */
+const DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+
+type Expiry = 'never' | 'date';
+/** The edit form's expiry: a fact's own date while it lies ahead; a lapsed or open-ended one starts a month out. */
+type ExpiryDraft = Readonly<{ kind: Expiry; date: HappierLocalDateTimeDraft; nowMs: number }>;
+
+function expiryDraftFor(fact: MemoryFactV1, nowMs: number): ExpiryDraft {
+  const ahead = fact.expiresAtMs !== undefined && fact.expiresAtMs > nowMs;
+  return {
+    // A renewal keeps the fact's intent to end, at a new date the person sees before saving.
+    kind: fact.expiresAtMs === undefined ? 'never' : 'date',
+    date: toHappierLocalDateTimeDraft(new Date(ahead ? fact.expiresAtMs! : nowMs + DEFAULT_EXPIRY_MS)),
+    nowMs,
+  };
+}
 
 type Notice = 'pending' | 'conflict' | 'refused' | null;
 
@@ -234,6 +260,10 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const [storedReview, setReview] = React.useState<DuplicateReview | null>(null);
   const [choiceKind, setChoiceKind] = React.useState<DuplicateChoiceKind>('update');
   const [candidateId, setCandidateId] = React.useState<string | null>(null);
+  // The saved fact a review is looking at, in place of the comparison; the draft and effect stay.
+  const [viewingFactId, setViewingFactId] = React.useState<string | null>(null);
+  // The edited fact's expiry: an explicit Never or a date, written with its text (C6 renew).
+  const [expiryDraft, setExpiryDraft] = React.useState<ExpiryDraft | null>(null);
   // An Undo whose restore met a related saved fact: the same comparison asks before it comes back.
   const [restoring, setRestoring] = React.useState<Readonly<{
     fact: MemoryFactV1; target: MemoryDocumentTarget; topic?: string;
@@ -271,6 +301,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           setReview(review);
           setCandidateId(leadingCandidateId(review));
           setChoiceKind('update');
+          setViewingFactId(null);
           props.onDuplicateReview?.(review);
         }
         // A refusal is said in place, beside what it did not change, until the next attempt.
@@ -298,6 +329,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     setDraft('');
     setDraftTopic('');
     setReview(null);
+    setViewingFactId(null);
+    setExpiryDraft(null);
     setRestoring(null);
     onComposingChange(false);
   }, [onComposingChange]);
@@ -330,15 +363,21 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     if (!target && !canCreate) return;
     const duplicateChoice = review ? reviewedDuplicateChoice(review, choiceKind, candidateId) : undefined;
     const choice = duplicateChoice ? { duplicateChoice } : {};
+    const expiresAtMs = editingId ? resolveExpiry(expiryDraft) : null;
+    if (expiresAtMs === undefined) return;
     // Replaying a choice through a Session or scope names the document that was reviewed.
     const reviewed = review ? { reviewedTarget: { ref: review.ref, expectedRevision: review.revision } } : {};
     fireAndForget(
       (async () => {
         const { applied } = await settle(() => {
           if (editingId && target)
-            return memoryDocumentActions.update(target, {
+            // An expired fact is read on the Archive page (the read projection moves it there) but is
+            // still stored where it was saved, so its renewal is a document-level edit, not an archive one.
+            return memoryDocumentActions.update(archive ? { ...target, topic: undefined } : target, {
               factId: editingId,
               text,
+              // Always explicit: Never clears the expiry, a date sets it (an expired fact is renewed).
+              expiresAtMs,
               ...choice,
             });
           if (target) {
@@ -376,6 +415,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     draftCustody,
     source.draftCustody,
     editingId,
+    expiryDraft,
     canCreate,
     scopeTarget,
     serverId,
@@ -489,16 +529,20 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       onComposingChange(false);
       setRestoring(null);
       setReview(null);
+      setViewingFactId(null);
       setDraftCustody(source.draftCustody);
       setEditingId(fact.id);
       setDraft(fact.text);
+      setExpiryDraft(expiryDraftFor(fact, Date.now()));
     },
     [onComposingChange, source.draftCustody],
   );
   // A fact page's Edit lands here once its fact and an admitted version are on screen.
   const requestedEdit = React.useRef<string | null>(null);
   const editFact = props.editFactId ? orderedFacts.find((fact) => fact.id === props.editFactId) ?? null : null;
-  const canEdit = writable && target !== null && Boolean(source.draftCustody?.isCurrent());
+  // An expired fact read on the Archive page can still be renewed (its edit is the renewal).
+  const canEdit = (writable || (!props.readOnly && editFact !== null && isMemoryFactRenewableV1(editFact, now)))
+    && target !== null && Boolean(source.draftCustody?.isCurrent());
   React.useEffect(() => {
     if (!editFact || !canEdit || requestedEdit.current === editFact.id) return;
     requestedEdit.current = editFact.id;
@@ -535,57 +579,113 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     facts,
   );
   const topics = view?.topics ?? [];
+  const editingFact = editingId ? facts.find((fact) => fact.id === editingId) ?? null : null;
+  const renewing = editingFact !== null && isExpiredFact(editingFact, now);
+  const viewing = review && review.candidates.some((entry) => entry.factId === viewingFactId) ? viewingFactId : null;
+  const expiryOptions = React.useMemo(
+    (): ReadonlyArray<SegmentedChoiceOption<Expiry>> => [
+      { id: 'never', label: t('memoryContext.memory.sheetExpiresNever') },
+      { id: 'date', label: t('memoryContext.memory.sheetExpiresOnDate') },
+    ],
+    [],
+  );
   const draftForm = (
     <InlineAddExpander
       isOpen
       onOpenChange={() => {}}
       trigger={null}
-      title={t('memoryContext.memory.remember')}
+      title={renewing ? t('memoryContext.memory.renew')
+        : editingId ? t('common.edit') : t('memoryContext.memory.remember')}
       onCancel={closeDraft}
       onSave={save}
-      saveDisabled={busy || draft.trim().length === 0}
+      saveDisabled={busy || draft.trim().length === 0 || (editingId !== null && resolveExpiry(expiryDraft) === undefined)}
       cancelLabel={t('common.cancel')}
       saveLabel={
         review ? duplicateSaveLabel(choiceKind)
-          : editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
+          : renewing ? t('memoryContext.memory.renew')
+            : editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
       }
       autoFocusRef={draftRef}
       saveTestID={`${testID}.draft.save`}
       cancelTestID={`${testID}.draft.cancel`}
     >
-      {review ? (
-        <MemoryDuplicateChoice
-          testID={`${testID}.draft.duplicate`}
+      {review && viewing ? (
+        <MemoryDuplicateSavedFact
+          testID={`${testID}.draft.savedFact`}
           review={review}
-          newText={draft}
-          candidateId={candidateId}
-          onCandidateChange={setCandidateId}
-          choice={choiceKind}
-          onChoiceChange={setChoiceKind}
-          disabled={busy}
+          factId={viewing}
+          serverId={view?.ref.serverId ?? serverId}
+          viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
+          onBack={() => setViewingFactId(null)}
+          onOpenSession={props.onOpenSession}
         />
       ) : null}
-      <FieldTextInput
-        ref={draftRef}
-        testID={`${testID}.draft`}
-        value={draft}
-        onChangeText={changeDraft}
-        accessibilityLabel={t('memoryContext.memory.remember')}
-        placeholder={t('memoryContext.memory.rememberPlaceholder')}
-        multiline
-        minLines={2}
-      />
-      {!editingId && !topic ? (
+      {/* While a saved fact is open the draft stays mounted, so its text, caret and effect come back as left. */}
+      <View style={viewing ? styles.hidden : null}>
+        {review ? (
+          <MemoryDuplicateChoice
+            testID={`${testID}.draft.duplicate`}
+            review={review}
+            newText={draft}
+            candidateId={candidateId}
+            onCandidateChange={setCandidateId}
+            choice={choiceKind}
+            onChoiceChange={setChoiceKind}
+            onViewCandidate={setViewingFactId}
+            disabled={busy}
+          />
+        ) : null}
         <FieldTextInput
-          testID={`${testID}.draftTopic`}
-          style={styles.topicField}
-          value={draftTopic}
-          onChangeText={changeDraftTopic}
-          accessibilityLabel={t('memoryContext.memory.topicPlaceholder')}
-          placeholder={t('memoryContext.memory.topicPlaceholder')}
-          onSubmitEditing={save}
+          ref={draftRef}
+          testID={`${testID}.draft`}
+          value={draft}
+          onChangeText={changeDraft}
+          accessibilityLabel={t('memoryContext.memory.remember')}
+          placeholder={t('memoryContext.memory.rememberPlaceholder')}
+          multiline
+          minLines={2}
         />
-      ) : null}
+        {!editingId && !topic ? (
+          <FieldTextInput
+            testID={`${testID}.draftTopic`}
+            style={styles.topicField}
+            value={draftTopic}
+            onChangeText={changeDraftTopic}
+            accessibilityLabel={t('memoryContext.memory.topicPlaceholder')}
+            placeholder={t('memoryContext.memory.topicPlaceholder')}
+            onSubmitEditing={save}
+          />
+        ) : null}
+        {editingId && expiryDraft ? (
+          <>
+            <SegmentedChoiceItem<Expiry>
+              title={t('memoryContext.memory.sheetExpires')}
+              options={expiryOptions}
+              value={expiryDraft.kind}
+              onChange={(kind) => setExpiryDraft((current) => current && { ...current, kind })}
+              testIDPrefix={`${testID}.draft.expiry`}
+              accessoryLayout="adaptive"
+              showDivider={false}
+              // On the form's edge, like the fields above it.
+              style={memoryDecisionSheetRowStyle}
+              disabled={busy}
+            />
+            {expiryDraft.kind === 'date' ? (
+              <LocalDateTimeEditor
+                nowMs={expiryDraft.nowMs}
+                value={expiryDraft.date}
+                onChange={(date) => setExpiryDraft((current) => current && { ...current, date })}
+                testIDPrefix={`${testID}.draft.expiresAt`}
+                labels={{
+                  date: t('memoryContext.memory.sheetExpiryDate'),
+                  time: t('memoryContext.memory.sheetExpiryTime'),
+                  pastInstant: t('memoryContext.memory.sheetExpiryPast'),
+                }}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </View>
     </InlineAddExpander>
   );
 
@@ -634,6 +734,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
               serverId={view?.ref.serverId ?? serverId}
               archived={archive}
               writable={writable && target !== null && !leaving}
+              renewable={!props.readOnly && target !== null && !leaving && isMemoryFactRenewableV1(fact, now)}
               disabled={busy}
               arrived={arrivedFactIds.has(fact.id)}
               viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
@@ -684,10 +785,11 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       ) : null}
       {/* A stale view keeps its facts; it has no counts to reserve a line for, so the line steps aside. */}
       {/* An open duplicate comparison is the one thing in progress; the count line steps aside until it closes. */}
-      {view && (fresh || topic || summary.state === 'ready') && !(review && !topic) ? (
-        summary.state === 'unavailable' && fresh && !topic && summary.cause?.reason === 'machine_not_chosen' ? (
+      {/* A topic page counts its facts on its section title; only the index reports what agents load. */}
+      {view && !topic && (fresh || summary.state === 'ready') && !review ? (
+        summary.state === 'unavailable' && fresh && summary.cause?.reason === 'machine_not_chosen' ? (
           <MemoryMachineChoice testID={`${testID}.machine`} invitation={t('memoryContext.memory.countsNeedMachine')} />
-        ) : summary.state === 'unavailable' && fresh && !topic && summary.cause?.reason === 'not_in_use' ? (
+        ) : summary.state === 'unavailable' && fresh && summary.cause?.reason === 'not_in_use' ? (
           // Counts only mean something while the memory is in use; off, the slot says so and nothing looks broken.
           <Item
             testID={`${testID}.summaryOff`}
@@ -697,7 +799,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             showDivider={false}
             title={<Text style={styles.summary}>{t('memoryContext.memory.countsOff')}</Text>}
           />
-        ) : summary.state === 'unavailable' && fresh && !topic ? (
+        ) : summary.state === 'unavailable' && fresh ? (
           <SurfaceStateCard
             testID={`${testID}.summaryUnavailable`}
             size="line"
@@ -712,20 +814,15 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             density="compact"
             showChevron={false}
             showDivider={false}
-            title={topic || summary.state === 'ready' ? (
+            title={summary.state === 'ready' ? (
               <Text style={styles.summary}>
-                {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
+                {`${t('memoryContext.memory.alwaysRemembered')} `}
                 <Text style={styles.summaryValue}>
-                  {topic ? countLabel(facts.length)
-                    // Unknown is not zero: a count the machine does not report keeps its slot as a dash.
-                    : summary.state === 'ready' && summary.loadedFactCount !== undefined ? countLabel(summary.loadedFactCount) : '—'}
+                  {/* Unknown is not zero: a count the machine does not report keeps its slot as a dash. */}
+                  {summary.loadedFactCount !== undefined ? countLabel(summary.loadedFactCount) : '—'}
                 </Text>
-                {!topic && summary.state === 'ready' ? (
-                  <>
-                    {` · ${t('memoryContext.memory.searchable')} `}
-                    <Text style={styles.summaryValue}>{countLabel(summary.indexedFactCount)}</Text>
-                  </>
-                ) : null}
+                {` · ${t('memoryContext.memory.searchable')} `}
+                <Text style={styles.summaryValue}>{countLabel(summary.indexedFactCount)}</Text>
               </Text>
             ) : (
               // One reserved line the height of the summary, so the counts land without moving the facts.
@@ -849,7 +946,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const leadingForm = (props.composing && !editingId && !restoring && writable && Boolean(target || canCreate))
     || (restoring !== null && review !== null)
     || (editingId !== null && view !== null && !rows.some(({ fact }) => fact.id === editingId));
-  const live = rows.filter(({ fact, leaving }) => leaving || !isExpiredFact(fact, now) || showExpired);
+  // A fact being renewed stays in place while its form is open, even with expired facts folded away.
+  const live = rows.filter(({ fact, leaving }) => leaving || !isExpiredFact(fact, now) || showExpired || fact.id === editingId);
   const expiredFacts = facts.filter((fact) => isExpiredFact(fact, now));
   const decisionRows = live.filter(({ fact }) => fact.decision !== undefined);
   const noteRows = live.filter(({ fact }) => fact.decision === undefined);
@@ -912,6 +1010,12 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
 
 function ignoreExpandedChange() {}
 
+/** The expiry to write: `null` for Never, a future instant for a date; `undefined` while the date is not one. */
+function resolveExpiry(draft: ExpiryDraft | null): number | null | undefined {
+  if (!draft || draft.kind === 'never') return null;
+  return resolveHappierFutureLocalDateTime(draft.date, draft.nowMs) ?? undefined;
+}
+
 /** The reviewed effect bound to the exact revision it was reviewed at. */
 function reviewedDuplicateChoice(review: DuplicateReview, kind: DuplicateChoiceKind, candidateId: string | null) {
   const factId = candidateId ?? leadingCandidateId(review);
@@ -940,6 +1044,8 @@ export function MemoryDuplicateChoice(props: Readonly<{
   onCandidateChange: (factId: string) => void;
   choice: DuplicateChoiceKind;
   onChoiceChange: (choice: DuplicateChoiceKind) => void;
+  /** Opens the saved fact (its source, approval, history) in the same form. */
+  onViewCandidate?: (factId: string) => void;
   disabled: boolean;
 }>) {
   const { theme } = useUnistyles();
@@ -967,6 +1073,7 @@ export function MemoryDuplicateChoice(props: Readonly<{
       onCandidateChange={props.onCandidateChange}
       choice={props.choice}
       onChoiceChange={props.onChoiceChange}
+      onViewCandidate={props.onViewCandidate}
       disabled={props.disabled}
       labels={{
         title: candidates.length > 1
@@ -985,6 +1092,7 @@ export function MemoryDuplicateChoice(props: Readonly<{
           replace: t('memoryContext.memory.duplicateReplaceHint'),
           keep_both: t('memoryContext.memory.duplicateKeepBothHint'),
         },
+        view: t('memoryContext.memory.duplicateView'),
       }}
       Text={DuplicateChoiceText}
       Choice={DuplicateChoiceControl}
@@ -999,6 +1107,7 @@ export function MemoryDuplicateChoice(props: Readonly<{
 function DuplicateChoiceText(props: HappierMemoryDuplicateChoiceTextProps) {
   const styles = stylesheet;
   const style = props.role === 'title' ? styles.duplicateTitle
+    : props.role === 'action' ? styles.duplicateAction
     : props.role === 'label' ? styles.duplicateLabel
       : props.role === 'meta' ? styles.factMeta
         : props.role === 'effect' ? styles.duplicateEffect
@@ -1017,7 +1126,6 @@ function DuplicateChoiceControl(props: HappierMemoryDuplicateChoiceControlProps)
       activeTabId={props.value}
       onSelectTab={props.onChange}
       segmentSizing="content"
-      targetSize="platform"
       role="radiogroup"
       accessibilityLabel={props.accessibilityLabel}
       disabled={props.disabled}
@@ -1094,6 +1202,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     serverId: string;
     archived: boolean;
     writable: boolean;
+    /** It has expired and this reader may renew it (also on the Archive page, where expired facts are read). */
+    renewable: boolean;
     disabled: boolean;
     /** It landed while the list was on screen: it arrives with a soft wash that fades. */
     arrived: boolean;
@@ -1119,13 +1229,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   const factSource = readMemoryFactSource(fact);
   const source = factSource?.kind === 'session'
     ? { ...factSource.session, ...(factSource.messageId ? { messageId: factSource.messageId } : {}) } : null;
-  // Row-local: only this fact's source Session title, and only when that Session is loaded here.
-  const sourceName = useSessionSelector(
-    source?.sessionId ?? '',
-    source?.serverId ?? props.serverId,
-    (session) =>
-      session && source ? getSessionName(session, source.serverId) : null,
-  );
+  // A retained Session title is not current source admission. Detail reads its title on demand.
   const now = Date.now();
   const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
   const attribution = useMemoryFactAttribution(fact, props.serverId);
@@ -1178,7 +1282,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
       text={fact.text}
       metadata={facts}
       detail={decision?.reason}
-      source={source ? { label: sourceName || t('memoryContext.memory.openSource'), accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
+      source={source ? { label: t('memoryContext.memory.openSource'), accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
       archived={props.archived}
       expired={expired}
       onPress={onOpenFact ? () => onOpenFact(fact) : undefined}
@@ -1186,13 +1290,29 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
       host={memoryFactHost}
       arrival={highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
       actions={
-        actions.length > 0 ? (
-          <ItemRowActions
-            title={fact.text}
-            actions={actions}
-            overflowOnly
-            overflowTriggerTestID={`${props.testID}.more`}
-          />
+        actions.length > 0 || props.renewable ? (
+          <View style={stylesheet.rowActions}>
+            {/* An expired fact names its one next step beside its menu (lab L9 expired: Renew). */}
+            {props.renewable ? (
+              <Pressable
+                testID={`${props.testID}.renew`}
+                accessibilityRole="button"
+                disabled={props.disabled}
+                onPress={() => onEdit(fact)}
+                hitSlop={8}
+              >
+                <Text style={stylesheet.showAll}>{t('memoryContext.memory.renew')}</Text>
+              </Pressable>
+            ) : null}
+            {actions.length > 0 ? (
+              <ItemRowActions
+                title={fact.text}
+                actions={actions}
+                overflowOnly
+                overflowTriggerTestID={`${props.testID}.more`}
+              />
+            ) : null}
+          </View>
         ) : undefined
       }
     />
@@ -1298,6 +1418,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('rowTitle'),
     color: theme.colors.text.primary,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+  },
+  duplicateAction: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
+  hidden: {
+    display: 'none',
   },
   duplicateEffect: {
     ...Typography.default(),

@@ -18,20 +18,83 @@ function setDaemonProcess(configuration: { readonly isDaemonProcess: boolean }, 
 }
 
 describe('memoryWorker', () => {
+  it('wakes selected native-source observation only for its declared Account keys', async () => {
+    const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
+    const { normalizeMemorySettings } = await import('@happier-dev/protocol/memory/memorySettings');
+    const account = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+    const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+    const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+    const { resolveBuiltInContributions } = await import('@/plugins/projection/registry/resolveBuiltInContributions');
+    const { createMemoryExternalTranscriptObservation } = await import('./externalTranscriptObservation');
+    account.resetActiveAccountSettingsSnapshotForTests();
+    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { contributes: createResolvedContributionRegistry(resolveBuiltInContributions()), pluginIds: ['happier.agent.pi'] } });
+    const base = { source: 'network' as const, scopeKey: 'memory-native-account', settingsVersion: 1,
+      loadedAtMs: 1, settings: accountSettingsParse({}), settingsSecretsReadKeys: [] };
+    account.setActiveAccountSettingsSnapshot(base);
+    const changed = vi.fn();
+    const observation = createMemoryExternalTranscriptObservation({ credentials: { token: 'fixture', encryption: null }, onChange: changed });
+    try {
+      await observation.configure(normalizeMemorySettings({ v: 1, enabled: true,
+        conversationSearch: { indexExternal: { enabled: true, agents: ['pi'] } } }), normalizeMemorySettings({ v: 1 }));
+      for (let index = 0; index < 25; index++) account.setActiveAccountSettingsSnapshot({ ...base,
+        settingsVersion: index + 2, settings: accountSettingsParse({ analyticsOptOut: index % 2 === 0 }) });
+      expect(changed).not.toHaveBeenCalled();
+      account.setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 27,
+        settings: accountSettingsParse({ piAgentDir: '/memory-native-source' }) });
+      expect(changed).toHaveBeenCalledOnce();
+    } finally { await observation.dispose(); await runtime.dispose(); account.resetActiveAccountSettingsSnapshotForTests(); }
+  });
+  it('does not send indexer work for 25 unrelated Account preference writes', async () => {
+    const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
+    const account = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    account.resetActiveAccountSettingsSnapshotForTests();
+    const base = { source: 'network' as const, scopeKey: 'memory-account', settingsVersion: 1,
+      loadedAtMs: 1, settings: accountSettingsParse({}), settingsSecretsReadKeys: [] };
+    account.setActiveAccountSettingsSnapshot(base);
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep',
+      embeddings: { mode: 'custom', custom: { kind: 'openai_compatible', baseUrl: 'https://embedding.test/v1', model: 'test' } } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { connectInProcessMemoryIndexer } = await import('./testkit/inProcessMemoryIndexer');
+    const credentials: StoredCredentials = { token: 'fixture', encryption: null };
+    let retries = 0;
+    const worker = await startMemoryWorker({ credentials, machineId: 'machine_1', deps: {
+      connectIndexer: async host => {
+        const connection = await connectInProcessMemoryIndexer({ credentials, machineId: 'machine_1', host });
+        // Observe messages at the OS indexer-placement boundary, preserving its real implementation.
+        return { ...connection, retryEmbeddings: async signal => { retries++; await connection.retryEmbeddings(signal); } };
+      },
+    } });
+    try {
+      const initial = retries;
+      for (let index = 0; index < 25; index++) account.setActiveAccountSettingsSnapshot({ ...base,
+        settingsVersion: index + 2, settings: accountSettingsParse({ analyticsOptOut: index % 2 === 0 }) });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(retries).toBe(initial);
+      account.setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 27, source: 'cache' });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(retries).toBe(initial);
+    } finally { await worker.stop(); account.resetActiveAccountSettingsSnapshotForTests(); }
+  });
   it.each(['new_only', 'all_history'] as const)('keeps idle 6/6/5 readiness stable when only Session metadata changes (%s)', async backfillPolicy => {
     // The process logger's delayed file flush is not owned by worker.stop().
     // This fake-timer fixture deletes its home immediately after worker shutdown.
     applyEnvValues({ HAPPIER_LOG_LEVEL: 'silent' });
     const session = { id: 'metadata-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
       active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };
-    let inventoryGate: Promise<void> | null = null;
-    let inventoryEntered = () => {};
+    let sessionGate: Promise<void> | null = null;
+    let sessionEntered = () => {};
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
-      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => {
-        if (!archivedOnly && inventoryGate) { inventoryEntered(); await inventoryGate; }
-        return { sessions: archivedOnly ? [] : [{ ...session }], nextCursor: null, hasNext: false };
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => ({
+        sessions: archivedOnly ? [] : [{ ...session }], nextCursor: null, hasNext: false,
+      }),
+      fetchSessionById: async ({ sessionId }: { sessionId: string }) => {
+        if (sessionId !== session.id) return null;
+        if (sessionGate) { sessionEntered(); await sessionGate; }
+        return { ...session };
       },
-      fetchSessionById: async () => ({ ...session }),
     }));
     let text = 'quartz retained reply';
     vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
@@ -53,35 +116,36 @@ describe('memoryWorker', () => {
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     const { configuration } = await import('@/configuration');
     const previousDaemon = configuration.isDaemonProcess;
-    let releaseInventory = () => {};
+    let releaseSession = () => {};
+    let metadataChange: Promise<void> | undefined;
     try {
       await worker.ensureUpToDate(session.id);
       await worker.ensureUpToDate(session.id);
       const initial = worker.getWorkerStatus();
       expect(initial).toMatchObject({ state: 'idle', activeOperations: [],
         sessionProgress: [{ sessionId: session.id, observedSeq: 6, checkedSeq: 6, indexedSeq: 5 }] });
-      // Let the work wake finish against the old inventory while the real HTTP
-      // boundary holds the new metadata row. Then publish inventory alone.
+      // Hold only the changed Session's authorized HTTP read. Metadata alone
+      // must not withdraw the retained transcript coverage or admit a tick.
       setDaemonProcess(configuration, true);
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
       await worker.reloadSettings();
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
       session.updatedAt++;
-      inventoryGate = new Promise<void>(resolve => { releaseInventory = resolve; });
-      const entered = new Promise<void>(resolve => { inventoryEntered = resolve; });
-      await vi.advanceTimersByTimeAsync(5000);
+      sessionGate = new Promise<void>(resolve => { releaseSession = resolve; });
+      const entered = new Promise<void>(resolve => { sessionEntered = resolve; });
+      metadataChange = worker.noteSessionChanged!({ sessionId: session.id });
       await entered;
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
       const before = worker.getWorkerStatus();
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
-      releaseInventory();
-      await new Promise<void>(resolve => setImmediate(resolve));
+      releaseSession();
+      await metadataChange;
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
       const after = worker.getWorkerStatus();
       expect(after.sessionProgress).toEqual(initial.sessionProgress);
       expect(after.lastTickAtMs).toBe(before.lastTickAtMs);
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
-      inventoryGate = null;
+      sessionGate = null;
       setDaemonProcess(configuration, previousDaemon);
       // The direct Session path consumes the same metadata contract.
       session.updatedAt++;
@@ -99,7 +163,13 @@ describe('memoryWorker', () => {
       expect(stale.ok && stale.hits).toEqual([]);
       expect(worker.getWorkerStatus().sessionProgress).toEqual(initial.sessionProgress);
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
-    } finally { releaseInventory(); await worker.stop(); setDaemonProcess(configuration, previousDaemon); vi.useRealTimers(); }
+    } finally {
+      releaseSession();
+      await Promise.allSettled([metadataChange]);
+      await worker.stop();
+      setDaemonProcess(configuration, previousDaemon);
+      vi.useRealTimers();
+    }
   });
   it.each(['new_only', 'all_history'] as const)('keeps a checked 6/5 event-tail Session ready while another Session in the %s batch is reading', async backfillPolicy => {
     const covered = { id: 'event-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
@@ -250,6 +320,7 @@ describe('memoryWorker', () => {
         }
         await refresh;
       }
+      console.info('R237_UNCHANGED_SNAPSHOT', JSON.stringify({ fetchedBytes, elapsedMs: performance.now() - started }));
       expect(fetchedBytes).toBe(0);
       expect([...observedStates]).toEqual(['ready']);
       const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
@@ -272,16 +343,14 @@ describe('memoryWorker', () => {
       } finally { db.close(); }
     } finally { await worker.stop(); }
   });
-  it('finishes retained snapshot revisions across inventory refreshes instead of restarting the scheduling cursor', async () => {
+  it('finishes retained snapshot revisions without restarting the scheduling cursor on a later Session observation', async () => {
     let inventoryReads = 0;
     const transcriptReads = new Map<string, { selected: number; legacy: number }>();
     const sessions = Array.from({ length: 16 }, (_, index) => ({ id: `retained-${index}`, machineId: 'machine_1',
       seq: 4, createdAt: 2000, updatedAt: 3000, active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' }));
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => {
-        // A normal HTTP response may arrive after the inventory's work wake
-        // has finished. Exercise that ordering instead of relying on microtasks.
-        if (++inventoryReads > 1) await new Promise(resolve => setTimeout(resolve, 200));
+        inventoryReads++;
         return { sessions: archivedOnly ? [] : sessions, nextCursor: null, hasNext: false };
       },
       fetchSessionById: async ({ sessionId }: { sessionId: string }) => sessions.find(row => row.id === sessionId),
@@ -350,8 +419,10 @@ describe('memoryWorker', () => {
         }
       } finally { current.close(); }
       const completedInventoryReads = inventoryReads;
-      await vi.waitFor(() => expect(inventoryReads).toBeGreaterThan(completedInventoryReads), { timeout: 15_000 });
+      sessions[0]!.updatedAt++;
+      await worker.noteSessionChanged!({ sessionId: sessions[0]!.id });
       await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
+      expect(inventoryReads).toBe(completedInventoryReads);
       expect(worker.getIndexSources?.().filter(row => row.state !== 'ready')).toEqual([]);
       expect([...transcriptReads.values()]).toEqual(sessions.map(() => ({ selected: 1, legacy: 1 })));
     } finally { await worker.stop(); setDaemonProcess(configuration, previousDaemon); }
@@ -569,6 +640,9 @@ describe('memoryWorker', () => {
       HAPPIER_HOME_DIR: homeDir,
       HAPPIER_SERVER_URL: 'https://api.example.test',
       HAPPIER_WEBAPP_URL: 'https://app.example.test',
+      // The process logger's delayed filesystem flush outlives worker.stop().
+      // Keep it from recreating the test-owned home during fixture cleanup.
+      HAPPIER_LOG_LEVEL: 'silent',
     });
     vi.resetModules();
     const axios = (await import('axios')).default;
@@ -631,14 +705,20 @@ describe('memoryWorker', () => {
     const opens = vi.spyOn(nacl.secretbox, 'open');
     try {
       await vi.waitFor(() => expect(fetchSessionsPage.mock.calls.length).toBeGreaterThan(0));
-      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
       const previousReads = fetchSessionsPage.mock.calls.length;
       opens.mockClear();
-      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
-      await vi.waitFor(() => expect(fetchSessionsPage.mock.calls.length).toBeGreaterThan(previousReads));
       const ownerBodies = sessions.map(session => Buffer.from(session.metadata, 'base64').subarray(nacl.secretbox.nonceLength));
-      const localityOpens = opens.mock.calls.filter(([body]) => ownerBodies.some(expected => expected.equals(Buffer.from(body))));
-      expect(localityOpens.length).toBe(sessions.length);
+      const localityOpens = () => opens.mock.calls.filter(([body]) => ownerBodies.some(expected => expected.equals(Buffer.from(body))));
+      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs * 2);
+      expect(fetchSessionsPage.mock.calls.length).toBe(previousReads);
+      expect(localityOpens()).toHaveLength(0);
+      for (const session of sessions) await worker.noteSessionChanged!({ sessionId: session.id });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
+      expect(localityOpens()).toHaveLength(sessions.length);
+      expect(fetchSessionsPage.mock.calls.length).toBe(previousReads);
     } finally { opens.mockRestore(); await worker.stop(); setDaemonProcess(configuration, daemonBefore); vi.useRealTimers(); }
   });
 
@@ -935,7 +1015,7 @@ describe('memoryWorker', () => {
     }
   });
 
-  it('admits documents on demand rather than on unchanged background inventory ticks', async () => {
+  it('admits documents on demand and performs no inventory reads while idle', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     vi.doMock('@/configuration', async () => {
       const actual = await vi.importActual<typeof import('@/configuration')>('@/configuration');
@@ -980,12 +1060,12 @@ describe('memoryWorker', () => {
     const diagnostics = vi.spyOn(logger, 'infoFile');
     const worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
     try {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
       const initialInventoryReads = inventoryReads;
       await vi.advanceTimersByTimeAsync(15_000);
-      // Await the actual inventory transport: the concurrent work tick can
-      // report idle while an inventory is still awaiting catalog/FS work.
-      await vi.waitFor(() => expect(inventoryReads).toBeGreaterThan(initialInventoryReads));
-      expect(promptReads, 'No document consumer requested admission during idle inventory').toBe(0);
+      expect(inventoryReads).toBe(initialInventoryReads);
+      expect(promptReads, 'No document consumer requested admission while idle').toBe(0);
       expect(await worker.resolveDocumentSearchScope!({ type: 'global' })).toMatchObject({ state: 'ready', eligibleDocuments: [] });
       expect(promptReads).toBeGreaterThan(0);
       const admittedReads = promptReads;
@@ -1183,7 +1263,7 @@ describe('memoryWorker', () => {
     await worker.stop();
   });
 
-  it('reuses failed embeddings across idle work and unchanged reloads but retries on publication and explicit use', async () => {
+  it('reuses failed embeddings across idle work, Account publications and unchanged reloads but retries on explicit use', async () => {
     vi.useFakeTimers();
     const argvBackup = process.argv.slice();
     let publishInventory = () => {};
@@ -1248,6 +1328,7 @@ describe('memoryWorker', () => {
         await fetchSessionsPage.mock.results[0]!.value;
         await vi.advanceTimersByTimeAsync(2_500);
         expect(pipeline).toHaveBeenCalledTimes(1);
+        expect(worker.getEmbeddingsDiagnostics()).toMatchObject({ runtimeState: 'error', usingFallback: true });
 
         setActiveAccountSettingsSnapshot({
           source: 'cache',
@@ -1256,17 +1337,17 @@ describe('memoryWorker', () => {
           loadedAtMs: Date.now(),
           settingsSecretsReadKeys: [],
         });
-        await vi.waitFor(() => expect(pipeline).toHaveBeenCalledTimes(2));
         await vi.advanceTimersByTimeAsync(1_000);
-        expect(pipeline).toHaveBeenCalledTimes(2);
+        expect(pipeline).toHaveBeenCalledTimes(1);
+        expect(worker.getEmbeddingsDiagnostics()).toMatchObject({ runtimeState: 'error', usingFallback: true });
 
         await worker.ensureUpToDate('sess-1');
-        await vi.waitFor(() => expect(pipeline).toHaveBeenCalledTimes(3));
+        await vi.waitFor(() => expect(pipeline).toHaveBeenCalledTimes(2));
         await vi.advanceTimersByTimeAsync(1_500);
-        expect(pipeline).toHaveBeenCalledTimes(3);
+        expect(pipeline).toHaveBeenCalledTimes(2);
 
         await worker.reloadSettings();
-        expect(pipeline).toHaveBeenCalledTimes(3);
+        expect(pipeline).toHaveBeenCalledTimes(2);
       } finally {
         publishInventory();
         await worker.stop();
@@ -1597,7 +1678,7 @@ describe('memoryWorker', () => {
     } finally { await worker.stop(); }
   });
 
-  it('keeps status/settings RPCs registered after a startup inventory failure and recovers on the existing loop', async () => {
+  it('keeps status/settings RPCs registered after a startup inventory failure and recovers on an access reset', async () => {
     vi.useFakeTimers();
     const session = { id: 'retained', machineId: 'machine_1', seq: 1, createdAt: 1000, updatedAt: 2000,
       active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
@@ -1636,7 +1717,7 @@ describe('memoryWorker', () => {
       expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`, params: {} })).toMatchObject({ enabled: true });
       expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: {} })).toMatchObject({ enabled: true, worker: { state: 'error' } });
       unavailable = false;
-      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      await worker.reconcileRetainedSessionAccess();
       expect(worker.getTier1DbPath()).not.toBeNull();
       expect(worker.getWorkerStatus().state).not.toBe('error');
     } finally { await worker.stop(); setDaemonProcess(configuration, daemonBefore); vi.useRealTimers(); }
@@ -2038,23 +2119,16 @@ describe('memoryWorker', () => {
         { seq: 1, createdAtMs: 1_000, role: 'user' as const, content: { type: 'text', text: 'initial deep memory row' } },
       ];
       let secondPageRequested = false;
+      const session = () => ({
+        id: 'sess-1', machineId: 'machine_1', seq: observedSeq, createdAt: 1_000, updatedAt: 9_000,
+        active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain',
+      });
       const fetchSessionsPage = vi.fn(async ({ activeOnly }: { activeOnly?: boolean }) => ({
-        sessions: activeOnly
-          ? []
-          : [
-            {
-              id: 'sess-1',
-              machineId: 'machine_1',
-              seq: observedSeq,
-              createdAt: 1_000,
-              updatedAt: 9_000,
-              activeAt: 0,
-            },
-          ],
+        sessions: activeOnly ? [] : [session()],
         nextCursor: null,
         hasNext: false,
       }));
-      const fetchSessionById = vi.fn(async () => ({ encryptionMode: 'plain' }));
+      const fetchSessionById = vi.fn(async ({ sessionId }: { sessionId: string }) => sessionId === 'sess-1' ? session() : null);
       const fetchEncryptedTranscriptMessagesPage = vi.fn(async (args: { roles?: readonly string[]; afterSeq?: number; beforeSeq?: number }) => {
         const selected = args.roles
           ? rows.filter((row) => row.seq > (args.afterSeq ?? 0) && row.seq < (args.beforeSeq ?? Number.POSITIVE_INFINITY))
@@ -2099,6 +2173,11 @@ describe('memoryWorker', () => {
       });
 
       await worker.reloadSettings();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => {
+        expect(fetchSessionsPage).toHaveBeenCalled();
+        expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] });
+      });
 
       const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
       const tier1Before = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
@@ -2114,11 +2193,14 @@ describe('memoryWorker', () => {
       });
       observedSeq = 2;
 
-      await vi.advanceTimersByTimeAsync(5_000);
-      for (let attempt = 0; attempt < 20 && !secondPageRequested; attempt += 1) {
-        await vi.advanceTimersByTimeAsync(500);
-      }
+      const initialInventoryReads = fetchSessionsPage.mock.calls.length;
+      await worker.noteSessionChanged!({ sessionId: 'sess-1' });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(secondPageRequested).toBe(true));
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
       expect(fetchSessionsPage).toHaveBeenCalled();
+      expect(fetchSessionsPage.mock.calls.length).toBe(initialInventoryReads);
+      expect(fetchSessionById).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-1', reason: 'memory-change' }));
       expect(secondPageRequested).toBe(true);
       expect(fetchEncryptedTranscriptMessagesPage).toHaveBeenCalledWith(expect.objectContaining({ roles: ['user', 'agent'], scope: 'main' }));
       const tier1DbPath = worker.getTier1DbPath()!;

@@ -188,13 +188,9 @@ export function useMemorySearchProvider(
         const capability = effectiveFeaturesSnapshot.status === 'ready'
             ? effectiveFeaturesSnapshot.features.capabilities.homeSearch
             : undefined;
-        const nextDaemonTarget = requestedServerId
-            ? daemonServerId && daemonMachineId
-                ? { serverId: daemonServerId, machineId: daemonMachineId }
-                : null
-            : daemonServerId && daemonMachineId
-                ? { serverId: daemonServerId, machineId: daemonMachineId }
-                : null;
+        const nextDaemonTarget = daemonServerId && daemonMachineId
+            ? { serverId: daemonServerId, machineId: daemonMachineId }
+            : null;
         const resolvedHomeReadiness = resolveHomeMemorySearchReadiness(capability);
         const selectionIdentity = selectedDaemonServerId && selectedDaemonMachineId ? { selectedDaemonTarget: {
             serverId: selectedDaemonServerId, machineId: selectedDaemonMachineId,

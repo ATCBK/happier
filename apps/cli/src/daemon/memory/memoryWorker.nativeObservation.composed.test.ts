@@ -1,10 +1,21 @@
 import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+
+const accountingDiscovery = vi.hoisted(() => ({ openedDirectories: [] as string[], abortRead: null as (() => void) | null }));
+// Count real native directory reads without replacing discovery or observation logic.
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...fs, opendir: (...args: Parameters<typeof fs.opendir>) => {
+    accountingDiscovery.openedDirectories.push(String(args[0]));
+    accountingDiscovery.abortRead?.();
+    return fs.opendir(...args);
+  } };
+});
 
 // Transform the real source graph before the per-scenario hook deadline.
 // Each scenario still reloads modules after selecting its isolated Home.
@@ -19,13 +30,14 @@ describe('registered native transcript source observation', () => {
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'happier-memory-source-observation-'));
     const agentDir = join(directory, 'agent');
-    env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'PI_CODING_AGENT_DIR', 'HOME', 'USERPROFILE', 'XDG_DATA_HOME', 'GEMINI_CLI_HOME', 'QWEN_RUNTIME_DIR', 'COPILOT_HOME', 'CODEBUDDY_CONFIG_DIR', 'GROK_HOME', 'KIRO_HOME', 'KIMI_CODE_HOME', 'CODEX_HOME', 'HAPPIER_CODEX_HOME']);
+    env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'PI_CODING_AGENT_DIR', 'HOME', 'USERPROFILE', 'XDG_DATA_HOME', 'GEMINI_CLI_HOME', 'QWEN_RUNTIME_DIR', 'COPILOT_HOME', 'CODEBUDDY_CONFIG_DIR', 'GROK_HOME', 'KIRO_HOME', 'KIMI_CODE_HOME', 'CODEX_HOME', 'HAPPIER_CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HAPPIER_CLAUDE_CONFIG_DIR']);
     env.patch({ HAPPIER_HOME_DIR: join(directory, 'home'), HAPPIER_SERVER_URL: 'https://home.test',
       HAPPIER_WEBAPP_URL: 'https://home.test', PI_CODING_AGENT_DIR: agentDir, HOME: directory, USERPROFILE: directory,
       XDG_DATA_HOME: join(directory, 'data'), GEMINI_CLI_HOME: directory, QWEN_RUNTIME_DIR: join(directory, '.qwen'),
       COPILOT_HOME: join(directory, '.copilot'), CODEBUDDY_CONFIG_DIR: join(directory, '.codebuddy'),
       GROK_HOME: join(directory, '.grok'), KIRO_HOME: join(directory, '.kiro'), KIMI_CODE_HOME: join(directory, '.kimi-code'),
-      CODEX_HOME: join(directory, '.codex'), HAPPIER_CODEX_HOME: join(directory, '.codex') });
+      CODEX_HOME: join(directory, '.codex'), HAPPIER_CODEX_HOME: join(directory, '.codex'),
+      CLAUDE_CONFIG_DIR: join(directory, '.claude'), HAPPIER_CLAUDE_CONFIG_DIR: join(directory, '.claude') });
     vi.resetModules();
     // Reset first, then load the real graph against this case's isolated Home.
     // Loading it before reset charged a second cold graph to the reader test.
@@ -34,9 +46,96 @@ describe('registered native transcript source observation', () => {
     await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
   });
   afterEach(async () => {
+    accountingDiscovery.abortRead = null;
     env?.restore();
     vi.resetModules();
     if (directory) await rm(directory, { recursive: true, force: true });
+  });
+  it('rediscovers only the accounting source whose topology changed', async () => {
+    const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+    const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+    const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+    const { resolveBuiltInContributions } = await import('@/plugins/projection/registry/resolveBuiltInContributions');
+    const { createMemoryExternalTranscriptObservation } = await import('./externalTranscriptObservation');
+    const { createExternalSessionObservationDaemonProjection } = await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
+    const { normalizeMemorySettings } = await import('@happier-dev/protocol/memory/memorySettings');
+    const claudeRoot = join(directory, '.claude', 'projects');
+    const codexRoot = join(directory, '.codex', 'sessions');
+    await mkdir(claudeRoot, { recursive: true });
+    await writeFile(join(claudeRoot, 'existing.jsonl'), '{}\n');
+    await Promise.all(Array.from({ length: 64 }, async (_, index) => {
+      const day = join(codexRoot, String(index));
+      await mkdir(day, { recursive: true });
+      await Promise.all(Array.from({ length: 16 }, (_, file) => writeFile(join(day, `${file}.jsonl`), '{}\n')));
+    }));
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [] } };
+      throw new Error('Unexpected HTTP request in accounting discovery fixture');
+    });
+    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { contributes: createResolvedContributionRegistry(resolveBuiltInContributions()),
+        pluginIds: ['happier.agent.claude', 'happier.agent.codex'] } });
+    const topology = new Map<string, (changedPath?: string) => void>();
+    const observation = createExternalSessionObservationDaemonProjection({
+      publishField: async () => { throw new Error('Accounting discovery cannot create a linked Session'); },
+      // The OS watcher delivers the same structural notification as a native rename.
+      watchTopologyDirectory: (path, notify) => {
+        topology.set(path, notify);
+        return () => { if (topology.get(path) === notify) topology.delete(path); };
+      },
+      watchFile: () => () => {},
+    });
+    const sources = createMemoryExternalTranscriptObservation({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
+    const settings = normalizeMemorySettings({ v: 1, enabled: true,
+      conversationSearch: { indexExternal: { enabled: true, agents: ['claude', 'codex'] } } });
+    const signal = new AbortController().signal;
+    const codexReads = () => accountingDiscovery.openedDirectories.filter(path => path === codexRoot || path.startsWith(codexRoot + sep)).length;
+    sources.attach(observation);
+    try {
+      accountingDiscovery.openedDirectories.length = 0;
+      await sources.refresh(settings, signal);
+      expect(sources.takeSnapshot().sources).toHaveLength(2);
+      expect(codexReads()).toBe(65);
+      accountingDiscovery.openedDirectories.length = 0;
+      const added = join(claudeRoot, 'added.jsonl');
+      await writeFile(added, '{}\n');
+      expect(topology.has(claudeRoot)).toBe(true);
+      topology.get(claudeRoot)!(added);
+      expect(sources.hasPendingChanges()).toBe(true);
+      await sources.refresh(settings, signal);
+      const snapshot = sources.takeSnapshot();
+      expect(snapshot.sources).toHaveLength(2);
+      expect(snapshot.changes).toEqual([expect.objectContaining({ agentId: 'claude', refreshSources: true })]);
+      expect(accountingDiscovery.openedDirectories).toContain(claudeRoot);
+      expect(codexReads()).toBe(0);
+      // The retained source still observes its next change and gets its own fresh inventory.
+      accountingDiscovery.openedDirectories.length = 0;
+      const codexAdded = join(codexRoot, 'added.jsonl');
+      await writeFile(codexAdded, '{}\n');
+      expect(topology.has(codexRoot)).toBe(true);
+      topology.get(codexRoot)!(codexAdded);
+      // A failed replacement must leave unchanged source observation alive.
+      const cancelledRefresh = new AbortController();
+      accountingDiscovery.abortRead = () => cancelledRefresh.abort(new Error('fixture_discovery_cancelled'));
+      await expect(sources.refresh(settings, cancelledRefresh.signal)).rejects.toThrow('fixture_discovery_cancelled');
+      accountingDiscovery.abortRead = null;
+      expect(topology.has(claudeRoot)).toBe(true);
+      accountingDiscovery.openedDirectories.length = 0;
+      await sources.refresh(settings, signal);
+      expect(sources.takeSnapshot().changes).toEqual([expect.objectContaining({ agentId: 'codex', refreshSources: true })]);
+      expect(codexReads()).toBe(65);
+      expect(accountingDiscovery.openedDirectories).not.toContain(claudeRoot);
+      // An explicit refresh without a source-scoped hint still discovers every selected source.
+      accountingDiscovery.openedDirectories.length = 0;
+      await sources.refresh(settings, signal);
+      sources.takeSnapshot();
+      expect(codexReads()).toBe(65);
+    } finally {
+      await sources.dispose();
+      await observation.dispose();
+      await runtime.dispose();
+      get.mockRestore();
+    }
   });
   it.each(['all_history', 'new_only'] as const)('publishes pre-opt-in Codex history, append and rewrite in both linked and user partitions with %s Happier backfill', async backfillPolicy => {
     const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
@@ -228,6 +327,8 @@ describe('registered native transcript source observation', () => {
       await put('ffffffff-ffff-4fff-8fff-ffffffffffff', 2, 'r261sibling');
       await vi.waitFor(() => expect(changes).toBeGreaterThan(before));
       for (let turn = 0; turn < 4 && search('r261sibling').length === 0; turn++) await tick();
+      console.info('R261_NATIVE_SIBLING', JSON.stringify({ changes: changes - before,
+        hits: search('r261sibling').length, elapsedMs: performance.now() - started }));
       expect(search('r261sibling')).toHaveLength(2);
       expect(sources.getIndexSources(db).some(source => source.state === 'indexing')).toBe(true);
       // A topology refresh replaces the accounting demand but keeps admitted

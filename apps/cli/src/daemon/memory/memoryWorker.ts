@@ -9,18 +9,18 @@ import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
 import type { DecryptedTranscriptRow } from '@/session/replay/decryptTranscriptRows';
 import { DEFAULT_MEMORY_SETTINGS, readMemorySettingsFromDisk, type MemorySettingsV1 } from '@/settings/memorySettings';
-import { subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { subscribeOptionalRuntimeInstallSuccess } from '@/packagedRuntime/installables/optionalRuntimes';
 import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } from '@/daemon/lifecycle/singleFlightIntervalLoop';
 import { resolveSessionEncryptionContextFromCredentials, resolveSessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { AccountEncryptionMaterialUnavailableError } from '@/api/client/encryptionKey';
-import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { readRequesterAccountEncryptionCurrentness, waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { collectRetainedSessionInventoryVisibility, fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
 import { commitMemorySystemRecords } from '@/session/systemRecords/memory/commitMemorySystemRecords';
 import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
 import { ensureProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
 import { logger } from '@/ui/logger';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 import { resolveMemoryIndexPaths } from './memoryIndexPaths';
 import { openSummaryShardIndexReader, type SummaryShardIndexReader } from './summaryShardIndexDb';
@@ -30,15 +30,20 @@ import { isExternalMemoryStorageId } from './externalTranscriptIndex';
 import { buildUnavailableMemoryEmbeddingsDiagnostics, type OperationalMemoryEmbeddingsDiagnostics } from './resolveOperationalMemoryEmbeddingsSettings';
 import { syncMemoryDocuments, type MemoryDocumentSearchScope } from './syncMemoryDocuments';
 import { runMemoryHintsExecutionRun } from './hints/runMemoryHintsExecutionRun';
-import type { ConnectMemoryIndexer, MemoryIndexerConnection, MemoryIndexerHost, MemoryIndexerSnapshot } from './memoryIndexerBoundary';
-import { INITIAL_MEMORY_INVENTORY_STATE, isMemorySessionOnMachine, refreshMemoryInventoryOnce } from './inventory/refreshMemoryInventory';
+import type { ConnectMemoryIndexer, MemoryIndexerConnection, MemoryIndexerHost, MemoryIndexerSnapshot, MemorySessionInventoryObservation } from './memoryIndexerBoundary';
+import { applyMemoryIndexerPublication } from './memoryIndexerBoundary';
+import { isMemorySessionOnMachine, resolveMemoryInventorySessionEligibility } from './inventory/refreshMemoryInventory';
 
 export type MemoryWorkerHandle = Readonly<{
+  /** Joins the incumbent settings admission, including initial process policy. */
+  waitForReady: (signal?: AbortSignal) => Promise<void>;
   stop: () => void | Promise<void>;
   reloadSettings: (signal?: AbortSignal) => Promise<void>;
   /** Clears derived indexes and progress without changing saved settings or the model-cache policy. */
   clearIndex: (signal?: AbortSignal) => Promise<void>;
   ensureUpToDate: (sessionId?: string, signal?: AbortSignal) => Promise<void>;
+  /** Exact authorized changes arrive through the incumbent Account carrier. */
+  noteSessionChanged?: (change: Readonly<{ sessionId: string }>) => Promise<void>;
   /** Transcript revisions arrive through the incumbent durable Account change stream. */
   noteSessionTranscriptRevised?: (change: Readonly<{ sessionId: string; seq: number; messageId?: string }>) => Promise<void>;
   attachExternalObservation?: (observation: MemoryExternalObservation) => () => void;
@@ -79,7 +84,7 @@ export type MemoryWorkerHandle = Readonly<{
 
 
 /** Daemon policy, wake sources and read projection. Index writes belong to the connection. */
-export async function startMemoryWorker(params: Readonly<{
+export async function prepareMemoryWorker(params: Readonly<{
   credentials: StoredCredentials;
   machineId: string;
   env?: NodeJS.ProcessEnv;
@@ -92,26 +97,37 @@ export async function startMemoryWorker(params: Readonly<{
   let stopped = false;
   let desired = DEFAULT_MEMORY_SETTINGS;
   let snapshot: MemoryIndexerSnapshot = {
-    settings: desired, embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(desired.embeddings),
-    worker: { state: 'disabled', lastTickAtMs: null, lastInventoryAtMs: null, currentSessionId: null, currentPhase: null },
+    // This private projection is not readable by product RPCs until admission.
+    settings: DEFAULT_MEMORY_SETTINGS, embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(DEFAULT_MEMORY_SETTINGS.embeddings),
+    worker: { state: 'indexing', lastTickAtMs: null, lastInventoryAtMs: null, currentSessionId: null, currentPhase: null },
     indexesQualified: false, candidateSessionIds: [], observedSeqBySessionId: [], editedSessionIds: [], externalSources: [],
   };
   let connection: MemoryIndexerConnection | null = null;
   let connecting: Promise<MemoryIndexerConnection> | null = null;
   let connectionLifetime = new AbortController();
   let retirement: Promise<void> = Promise.resolve();
-  let inventoryLoop: SingleFlightIntervalLoopHandle | null = null;
   let workLoop: SingleFlightIntervalLoopHandle | null = null;
   let loopPolicy: string | null = null;
   let policyWorkRequested = false;
   let settingsApplied = false;
   let settingsOperation: Promise<void> = Promise.resolve();
+  type Withdrawal = Readonly<{ kind: 'remove'; sessionIds: readonly string[] }>
+    | Readonly<{ kind: 'archive'; sessionId: string }>
+    | Readonly<{ kind: 'reset' }>;
+  // The failed authoritative fact stays unsatisfied until its actual replay
+  // succeeds. An unrelated no-op or settings reload cannot erase a revoke.
+  let failedWithdrawal: Withdrawal | undefined;
   let clearPromise: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let externalNeedsRefresh = true;
   let retireForPluginChange = false;
   const observedSessionIds = new Set<string>();
-  const pendingRevisions = new Map<string, Readonly<{ sessionId: string; seq: number; messageId?: string }>>();
+  // Exact requests are owned here before their first await or child publication.
+  const activeSessionRequests = new Set<{ sessionId: string; removed: boolean }>();
+  const pendingRevisions = new Map<string, Readonly<{
+    sessionId: string; seq: number; messageId?: string; revised?: boolean;
+    eligibility?: MemorySessionInventoryObservation['eligibility'];
+  }>>();
   const observation = createMemoryExternalTranscriptObservation({ credentials: params.credentials,
     onChange: (refresh, cause) => {
       externalNeedsRefresh ||= refresh;
@@ -123,20 +139,19 @@ export async function startMemoryWorker(params: Readonly<{
     } });
   const markFailure = (_error: unknown) => {
     observedSessionIds.clear();
-    snapshot = { ...snapshot, worker: { ...snapshot.worker, state: 'error', currentSessionId: null, currentPhase: null } };
+    snapshot = { ...snapshot, worker: { ...snapshot.worker, state: 'error', currentSessionId: null, currentPhase: null, idleGraceUntilMs: null } };
   };
   const host: MemoryIndexerHost = {
     publish: next => {
       const priorDeadline = snapshot.nextWorkAtMs;
-      snapshot = { ...next,
-        ...(next.nextWorkAtMs === undefined ? { nextWorkAtMs: priorDeadline } : {}) };
+      snapshot = applyMemoryIndexerPublication(snapshot, next);
       if (snapshot.nextWorkAtMs !== priorDeadline) workLoop?.trigger();
     },
     failed: markFailure,
     settled: () => {
       if (snapshot.worker.state === 'error') return;
       snapshot = { ...snapshot, worker: { ...snapshot.worker, state: desired.enabled ? 'idle' : 'disabled',
-        currentSessionId: null, currentPhase: null, activeOperations: [] },
+        currentSessionId: null, currentPhase: null, idleGraceUntilMs: null, activeOperations: [] },
         embeddings: snapshot.embeddings.runtimeState === 'ready' || snapshot.embeddings.runtimeState === 'downloading'
           ? { ...snapshot.embeddings, runtimeState: 'idle' } : snapshot.embeddings };
     },
@@ -157,7 +172,7 @@ export async function startMemoryWorker(params: Readonly<{
       cwd: configuration.activeServerDir, credentials: params.credentials, signal }),
     commitHint: async (request, signal) => {
       signal?.throwIfAborted();
-      const raw = await fetchSessionById({ token: params.credentials.token, sessionId: request.sessionId, signal });
+      const raw = await fetchSessionById({ reason: 'memory-change', token: params.credentials.token, sessionId: request.sessionId, signal });
       signal?.throwIfAborted();
       if (!raw) return;
       const mode = resolveSessionStoredContentEncryptionMode(raw);
@@ -178,6 +193,7 @@ export async function startMemoryWorker(params: Readonly<{
       const next = params.deps?.connectIndexer
         ? await params.deps.connectIndexer(host)
         : await connectProcessIndexer();
+      if (stopped) { await next.retire(); throw new Error('memory_worker_stopped'); }
       connection = next;
       // The production service applies current policy in its private bootstrap;
       // only the source-test connection needs initialization at this boundary.
@@ -207,6 +223,8 @@ export async function startMemoryWorker(params: Readonly<{
       }
       const indexer = await connectProcessMemoryIndexer({ credentials: params.credentials, machineId: params.machineId,
         host, readSettings: () => desired,
+        readIndexesQualified: () => snapshot.indexesQualified
+          && snapshot.settings.includeArchivedSessions === desired.includeArchivedSessions,
         plugins: registry?.readAdmittedBackgroundServicePlugins?.(pluginIds),
         ...(registry?.prepareBackgroundServiceProcessAgentServices ? { pluginHost: {
           prepareAgentInvocationServices: request => registry.prepareBackgroundServiceProcessAgentServices!(request),
@@ -223,12 +241,16 @@ export async function startMemoryWorker(params: Readonly<{
     try { return await run(indexer, operationSignal); }
     catch (error) { if (!operationSignal.aborted) markFailure(error); throw error; }
   };
-  const callWithRevisions = (run: (indexer: MemoryIndexerConnection, signal: AbortSignal) => Promise<void>, signal?: AbortSignal) => (
+  const callWithRevisions = (run?: (indexer: MemoryIndexerConnection, signal: AbortSignal) => Promise<void>, signal?: AbortSignal) => (
     call(async (indexer, operationSignal) => {
       const revisions = new Map(pendingRevisions);
+      const observations = [...revisions.values()].flatMap(change => change.eligibility !== undefined
+        ? [{ sessionId: change.sessionId, eligibility: change.eligibility }] : []);
       await Promise.all([
-        ...[...revisions.values()].map(change => indexer.revise(change, operationSignal)),
-        run(indexer, operationSignal),
+        ...[...revisions.values()].filter(change => change.revised).map(({ sessionId, seq, messageId }) =>
+          indexer.revise({ sessionId, seq, ...(messageId ? { messageId } : {}) }, operationSignal)),
+        ...(observations.length ? [indexer.inventory(operationSignal, observations)] : []),
+        ...(run ? [run(indexer, operationSignal)] : []),
       ]);
       for (const change of revisions.values()) {
         if (pendingRevisions.get(change.sessionId) === change && !snapshot.editedSessionIds.includes(change.sessionId)) pendingRevisions.delete(change.sessionId);
@@ -237,12 +259,15 @@ export async function startMemoryWorker(params: Readonly<{
     }, signal)
   );
   const stopLoops = async () => {
-    const priorInventory = inventoryLoop;
     const priorWork = workLoop;
-    inventoryLoop = null; workLoop = null; loopPolicy = null;
-    await Promise.all([priorInventory?.stop(), priorWork?.stop()]);
+    workLoop = null; loopPolicy = null;
+    await priorWork?.stop();
   };
   const retireIndexer = async () => {
+    // A retired child cannot deliver another status publication. Retirement
+    // owns withdrawal of its volatile grace, just as failure does above.
+    snapshot = { ...snapshot, worker: { ...snapshot.worker, idleGraceUntilMs: null,
+      currentPhase: snapshot.worker.currentPhase === 'idle_grace' ? null : snapshot.worker.currentPhase } };
     connectionLifetime.abort();
     observedSessionIds.clear();
     const prior = connection;
@@ -281,49 +306,18 @@ export async function startMemoryWorker(params: Readonly<{
   const startLoops = async () => {
     if (!configuration.isDaemonProcess || !desired.enabled || stopped) return;
     const policy = JSON.stringify(desired.worker);
-    if (loopPolicy === policy && inventoryLoop && workLoop) return;
+    if (loopPolicy === policy && workLoop) return;
     await stopLoops();
     loopPolicy = policy;
-    inventoryLoop = startSingleFlightIntervalLoop({
-      // This existing freshness cadence observes metadata only. Unchanged
-      // inventory never admits transcript work or prepares a child service.
-      intervalMs: desired.worker.inventoryRefreshIntervalMs,
-      task: async signal => {
-        const observed = new Map(snapshot.observedSeqBySessionId);
-        const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-        let state = INITIAL_MEMORY_INVENTORY_STATE;
-        let changed = !desired.includeArchivedSessions && snapshot.settings.includeArchivedSessions
-          ? await hasArchivedChange(signal) : false;
-        do {
-          const refresh = await refreshMemoryInventoryOnce({
-            backfillPolicy: desired.backfillPolicy, includeArchivedSessions: desired.includeArchivedSessions,
-            enabledAtMs: desired.enabledAtMs ?? 0, pageLimit: desired.worker.sessionListPageLimit,
-            nowMs: Date.now(), state, seenSessionIds: new Set<string>(), signal,
-            fetchSessionsPage: args => fetchSessionInventoryPage({ token: params.credentials.token, ...args }),
-            isSessionEligible: session => {
-              // Do not retain opened metadata or recreate the child's locality memo.
-              const local = isMemorySessionOnMachine({ ...params, session, accountEncryptionMode });
-              if (!local && observed.has(session.id)) changed = true;
-              return local;
-            },
-          });
-          signal.throwIfAborted();
-          changed ||= [...refresh.observedSeqBySessionId].some(([id, seq]) => observed.get(id) !== seq);
-          state = refresh.state;
-          if (refresh.mode === 'snapshot') break;
-        } while (!changed && (state.active.hasNext || (desired.includeArchivedSessions && state.archived.hasNext)));
-        if (changed) await callWithRevisions((indexer, signal) => indexer.inventory(signal), signal);
-      },
-      onError: error => { markFailure(error); logger.debug('[memoryWorker] Inventory refresh failed', { message: error instanceof Error ? error.message : String(error) }); },
-    });
     workLoop = startSingleFlightIntervalLoop({
       intervalMs: desired.worker.tickIntervalMs,
       task: async signal => {
         const deadlineDue = snapshot.nextWorkAtMs != null && snapshot.nextWorkAtMs <= Date.now();
-        if (policyWorkRequested || pendingRevisions.size > 0 || externalNeedsRefresh
-          || observation.hasPendingChanges() || deadlineDue) {
+        const needsTick = policyWorkRequested || externalNeedsRefresh || observation.hasPendingChanges() || deadlineDue
+          || [...pendingRevisions.values()].some(change => change.revised && change.eligibility === undefined);
+        if (needsTick || pendingRevisions.size > 0) {
           policyWorkRequested = false;
-          try { await callWithRevisions((indexer, signal) => indexer.tick(signal), signal); }
+          try { await callWithRevisions(needsTick ? (indexer, signal) => indexer.tick(signal) : undefined, signal); }
           catch (error) {
             if (!signal.aborted) {
               markFailure(error);
@@ -341,10 +335,43 @@ export async function startMemoryWorker(params: Readonly<{
     // a concurrent observation here would re-admit that same initial frontier.
     workLoop.trigger();
   };
-  const serializeSettings = (run: () => Promise<void>) => {
-    const next = settingsOperation.then(run);
-    settingsOperation = next.catch(() => {});
+  const coversWithdrawal = (retry: Withdrawal, failed: Withdrawal): boolean => {
+    if (retry.kind === 'remove' && failed.kind === 'remove') {
+      const requested = new Set(retry.sessionIds);
+      return failed.sessionIds.every(id => requested.has(id));
+    }
+    if (retry.kind === 'archive' && failed.kind === 'archive') return retry.sessionId === failed.sessionId;
+    return retry.kind === 'reset' && failed.kind === 'reset';
+  };
+  const serializeSettings = (run: () => Promise<void>, recovery?: true | Withdrawal) => {
+    const next = settingsOperation.catch(error => {
+      if (failedWithdrawal) {
+        if (!recovery || recovery === true || !coversWithdrawal(recovery, failedWithdrawal)) throw error;
+      } else if (recovery !== true) throw error;
+    }).then(async () => {
+      try {
+        await run();
+        if (recovery && recovery !== true && failedWithdrawal && coversWithdrawal(recovery, failedWithdrawal)) {
+          failedWithdrawal = undefined;
+        }
+      } catch (error) {
+        // Only this operation's own started failure supplies an unsatisfied
+        // withdrawal, never a rejected preceding policy admission.
+        if (recovery && recovery !== true) failedWithdrawal = recovery;
+        throw error;
+      }
+    });
+    settingsOperation = next;
     return next;
+  };
+  const waitForReady = async (signal?: AbortSignal): Promise<void> => {
+    let incumbent: Promise<void>;
+    do {
+      incumbent = settingsOperation;
+      if (signal) await waitForObservation(incumbent, signal);
+      else await incumbent;
+    } while (incumbent !== settingsOperation);
+    if (stopped) throw new Error('memory_worker_stopped');
   };
   const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal) => {
     signal?.throwIfAborted();
@@ -362,8 +389,11 @@ export async function startMemoryWorker(params: Readonly<{
       // Prior-policy rows are not qualified for the replacement occurrence,
       // including when its process fails before publishing its first facts.
       snapshot = { ...snapshot, indexesQualified: false };
+      discardPendingEligibility();
       await retireIndexer();
+      const registryChanged = retireForPluginChange;
       retireForPluginChange = false;
+      await observation.configure(next, desired, registryChanged);
     }
     desired = next;
     externalNeedsRefresh ||= changed;
@@ -373,22 +403,24 @@ export async function startMemoryWorker(params: Readonly<{
       if (next.deleteOnDisable) await rm(paths.memoryDir, { recursive: true, force: true });
       snapshot = { ...snapshot, settings: next, indexesQualified: false,
         embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(next.embeddings),
-        worker: { ...snapshot.worker, state: 'disabled', currentSessionId: null, currentPhase: null, activeOperations: [] } };
+        worker: { ...snapshot.worker, state: 'disabled', currentSessionId: null, currentPhase: null, idleGraceUntilMs: null, activeOperations: [] } };
       settingsApplied = true;
       return;
     }
     await ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' });
     const existing = connection;
     const indexer = await getIndexer();
-    if (existing || !params.deps?.connectIndexer) await indexer.applySettings(next, signal);
+    if (existing || !params.deps?.connectIndexer) await timeWebLatencyPhase('memory.startup.policy',
+      () => indexer.applySettings(next, signal ? AbortSignal.any([signal, connectionLifetime.signal]) : connectionLifetime.signal));
     await startLoops();
     settingsApplied = true;
   };
   const reloadSettings = (signal?: AbortSignal) => serializeSettings(async () => {
     if (stopped) return;
     signal?.throwIfAborted();
-    await applySettings(await readMemorySettingsFromDisk(), signal);
-  });
+    try { await applySettings(await readMemorySettingsFromDisk(), signal); }
+    catch (error) { settingsApplied = false; throw error; }
+  }, true);
   const withReaders = <T>(read: (tier1: SummaryShardIndexReader | null, deep: DeepIndexReader | null) => T): T => {
     let tier1: SummaryShardIndexReader | null = null;
     let deep: DeepIndexReader | null = null;
@@ -404,7 +436,28 @@ export async function startMemoryWorker(params: Readonly<{
     for (const id of deep?.listIndexedSessionIds() ?? []) if (!externalIds.has(id)) ids.add(id);
     return [...ids];
   };
+  const hasAdmittedSessionWork = (sessionId: string) => observedSessionIds.has(sessionId) || pendingRevisions.has(sessionId)
+    || [...activeSessionRequests].some(request => request.sessionId === sessionId)
+    || snapshot.candidateSessionIds.includes(sessionId) || snapshot.editedSessionIds.includes(sessionId)
+    || snapshot.worker.currentSessionId === sessionId
+    || snapshot.worker.activeOperations?.some(operation => operation.sessionIds.includes(sessionId))
+    || snapshot.observedSeqBySessionId.some(([id]) => id === sessionId);
+  const hasSessionWork = (sessionId: string) => hasAdmittedSessionWork(sessionId)
+    || withReaders((tier1, deep) => tier1?.hasSessionIndexData(sessionId) === true || deep?.hasSessionIndexData(sessionId) === true);
+  function discardPendingEligibility() {
+    for (const [id, change] of pendingRevisions) {
+      if (change.revised) {
+        const { eligibility: _eligibility, ...revision } = change;
+        pendingRevisions.set(id, revision);
+      } else pendingRevisions.delete(id);
+    }
+  }
+  const forgetPendingSessionObservations = (sessionIds: readonly string[]) => {
+    for (const id of sessionIds) { observedSessionIds.delete(id); pendingRevisions.delete(id); }
+    for (const request of activeSessionRequests) if (sessionIds.includes(request.sessionId)) request.removed = true;
+  };
   const resolveDocumentSearchScope = async (scope: MemorySearchQueryV1['scope'], signal?: AbortSignal): Promise<MemoryDocumentSearchScope> => {
+    await waitForReady(signal);
     signal?.throwIfAborted();
     if (stopped || !desired.enabled || !snapshot.indexesQualified) return { state: 'unavailable', eligibleDocuments: [] };
     const basis = desired;
@@ -414,29 +467,42 @@ export async function startMemoryWorker(params: Readonly<{
       writeIndex: (update, signal) => call((indexer, signal) => indexer.indexDocuments(update, signal), signal),
       assertCurrent: () => { if (stopped || desired !== basis) throw new Error('memory_document_scope_changed'); } });
   };
-  const unsubscribeAccount = subscribeActiveAccountSettingsSnapshot((previous, next) => {
-    if (!desired.enabled || (previous?.source === next?.source && previous?.settings === next?.settings)) return;
-    externalNeedsRefresh = true;
-    inventoryLoop?.trigger();
-    workLoop?.trigger();
-    if (connection) void call((indexer, signal) => indexer.retryEmbeddings(signal)).catch(markFailure);
-  });
   const unsubscribeInstall = subscribeOptionalRuntimeInstallSuccess(key => {
     if (key !== INSTALLABLE_KEYS.LOCAL_EMBEDDINGS || !desired.enabled || !connection) return;
     void call((indexer, signal) => indexer.retryEmbeddings(signal)).catch(markFailure);
   });
-  await reloadSettings();
+  const initialization = serializeSettings(async () => {
+    if (stopped) return;
+    const initialSettings = await timeWebLatencyPhase('memory.startup.settingsRead', readMemorySettingsFromDisk);
+    if (stopped) return;
+    snapshot = { ...snapshot, settings: initialSettings,
+      embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(initialSettings.embeddings),
+      worker: { ...snapshot.worker, state: initialSettings.enabled ? 'indexing' : 'disabled' } };
+    await applySettings(initialSettings);
+  });
+  void initialization.catch(error => {
+    if (stopped) return;
+    markFailure(error);
+    logger.warn('[memoryWorker] Initial policy admission failed; awaiting explicit settings recovery');
+  });
   return {
+    waitForReady,
     reloadSettings,
     stop: () => {
       if (stopPromise) return stopPromise;
       stopped = true;
       connectionLifetime.abort();
-      unsubscribeAccount(); unsubscribeInstall();
-      stopPromise = (async () => { await settingsOperation; await retireIndexer(); await observation.dispose(); })();
+      unsubscribeInstall();
+      stopPromise = (async () => {
+        // Join failed/cancelled admission too; it must not skip physical cleanup.
+        await Promise.allSettled([settingsOperation]);
+        try { await retireIndexer(); }
+        finally { await observation.dispose(); }
+      })();
       return stopPromise;
     },
-    clearIndex: signal => {
+    clearIndex: async signal => {
+      await waitForReady(signal);
       signal?.throwIfAborted();
       if (stopped) return Promise.reject(new Error('memory_worker_stopped'));
       if (clearPromise) return clearPromise;
@@ -458,10 +524,13 @@ export async function startMemoryWorker(params: Readonly<{
     ensureUpToDate: async (sessionId, signal) => {
       signal?.throwIfAborted();
       if (stopped) return;
-      await reloadSettings(signal);
-      if (!desired.enabled) return;
+      const request = sessionId ? { sessionId, removed: false } : undefined;
+      if (request) activeSessionRequests.add(request);
       try {
+        await reloadSettings(signal);
+        if (!desired.enabled || request?.removed) return;
         const admittedRevisions = await callWithRevisions((indexer, signal) => indexer.refresh(sessionId, signal), signal);
+        if (request?.removed) return;
         // A real revision can arrive while a source read is in flight. Keep
         // that newer fact until its own command and scheduler turn settle.
         if ([...pendingRevisions].some(([id, change]) => admittedRevisions.get(id) !== change)) await callWithRevisions(async () => {}, signal);
@@ -474,14 +543,51 @@ export async function startMemoryWorker(params: Readonly<{
           else observedSessionIds.clear();
         }
         throw error;
-      }
+      } finally { if (request) activeSessionRequests.delete(request); }
+    },
+    noteSessionChanged: async change => {
+      await waitForReady();
+      if (stopped || !desired.enabled) return;
+      const request = { sessionId: change.sessionId, removed: false };
+      activeSessionRequests.add(request);
+      try {
+        const basis = desired;
+        const signal = connectionLifetime.signal;
+        // Only this request owns the admission; removal can withdraw it during IO.
+        const [session, currentness] = await Promise.all([
+          fetchSessionById({ reason: 'memory-change', token: params.credentials.token, sessionId: change.sessionId, signal }),
+          readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal }),
+        ]);
+        signal.throwIfAborted();
+        if (stopped || desired !== basis || request.removed) return;
+        const eligibility = session && isMemorySessionOnMachine({ ...params, session, accountEncryptionMode: currentness.mode })
+          ? resolveMemoryInventorySessionEligibility({ session, backfillPolicy: basis.backfillPolicy,
+            includeArchivedSessions: basis.includeArchivedSessions, enabledAtMs: basis.enabledAtMs ?? 0, nowMs: Date.now() }) : null;
+        if (!eligibility) {
+          // This ineligible read cannot write; only other admitted work needs removal.
+          activeSessionRequests.delete(request);
+          if (!hasSessionWork(change.sessionId)) return;
+          forgetPendingSessionObservations([change.sessionId]);
+          const loop = workLoop; loop?.pause();
+          // Removal stays in the Account cursor's custody window.
+          try { await call((indexer, signal) => indexer.inventory(signal, [{ sessionId: change.sessionId, eligibility: null }])); }
+          finally { if (!stopped && desired.enabled && workLoop === loop) loop?.resume(); }
+          return;
+        }
+        const pending = pendingRevisions.get(change.sessionId);
+        const observed = pending?.eligibility?.observedSeq ?? snapshot.observedSeqBySessionId.find(([id]) => id === change.sessionId)?.[1];
+        if (observed === eligibility.observedSeq) return;
+        pendingRevisions.set(change.sessionId, { ...pending, sessionId: change.sessionId,
+          seq: Math.max(pending?.seq ?? 0, eligibility.observedSeq), eligibility });
+        // Do not hold the change carrier behind transcript/index IO.
+        workLoop?.trigger();
+      } finally { activeSessionRequests.delete(request); }
     },
     noteSessionTranscriptRevised: async change => {
+      await waitForReady();
       if (stopped) return;
-      if (!snapshot.candidateSessionIds.includes(change.sessionId)
-        && !snapshot.observedSeqBySessionId.some(([id]) => id === change.sessionId)
-        && (!snapshot.indexesQualified || !withReaders(retainedIds).includes(change.sessionId))) return;
-      pendingRevisions.set(change.sessionId, change);
+      if (!hasSessionWork(change.sessionId)) return;
+      pendingRevisions.set(change.sessionId, { ...pendingRevisions.get(change.sessionId), ...change, revised: true });
       // Receipt must not hold the Account change stream behind transcript IO.
       // The incumbent single-flight work pump carries this fact to the child.
       workLoop?.trigger();
@@ -490,22 +596,63 @@ export async function startMemoryWorker(params: Readonly<{
       const detach = observation.attach(next);
       return detach;
     },
-    readExternalTranscriptPage: (request, signal) => call((indexer, signal) => indexer.readExternalPage(request, signal), signal),
+    readExternalTranscriptPage: async (request, signal) => {
+      await waitForReady(signal);
+      return await call((indexer, signal) => indexer.readExternalPage(request, signal), signal);
+    },
     embedQuery: async (text, signal) => {
+      await waitForReady(signal);
       const vector = await call((indexer, signal) => indexer.embedQuery(text, signal), signal);
       return vector ? Float32Array.from(vector) : null;
     },
     resolveDocumentSearchScope,
-    removeSessions: async ids => {
-      const selected = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
-      if (!selected.length) return;
-      for (const id of selected) { observedSessionIds.delete(id); pendingRevisions.delete(id); }
+    removeSessions: ids => {
+      const requested = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
+      const admitted = new Set(requested.filter(id => hasAdmittedSessionWork(id)
+        || failedWithdrawal?.kind === 'remove' && failedWithdrawal.sessionIds.includes(id)));
+      const withdrawal: { kind: 'remove'; sessionIds: readonly string[] } = { kind: 'remove', sessionIds: requested };
+      // Withdraw already-admitted writes immediately. Queue the physical purge
+      // before returning, so pending readers cannot overtake a pre-ready revoke.
+      forgetPendingSessionObservations(requested);
       const loop = workLoop; loop?.pause();
-      try { await call((indexer, signal) => indexer.removeSessions(selected, signal)); }
-      finally { if (!stopped && desired.enabled && workLoop === loop) loop?.resume(); }
+      return serializeSettings(async () => {
+        // Keep the selection made before withdrawing pending observations,
+        // and include any writer facts published while initial admission ran.
+        const selected = requested.filter(id => admitted.has(id) || hasSessionWork(id));
+        if (!selected.length) return;
+        withdrawal.sessionIds = selected;
+        forgetPendingSessionObservations(selected);
+        await call((indexer, signal) => indexer.removeSessions(selected, signal));
+      }, withdrawal).finally(() => { if (!stopped && desired.enabled && workLoop === loop) loop?.resume(); });
     },
-    reconcileRetainedSessionAccess: () => call((indexer, signal) => indexer.reconcileAccess(signal)),
-    applySessionArchivedState: change => call((indexer, signal) => indexer.archive(change, signal)),
+    reconcileRetainedSessionAccess: () => serializeSettings(async () => {
+      // Drain already-admitted work before requalifying after cursor loss.
+      snapshot = { ...snapshot, indexesQualified: false };
+      discardPendingEligibility();
+      await retireIndexer();
+      // Cursor loss also discards append/new-Session facts. Reconcile retained
+      // access in custody, then let the existing pump catch up current content.
+      policyWorkRequested = desired.enabled;
+      try { await call((indexer, signal) => indexer.reconcileAccess(signal)); }
+      finally { await startLoops(); }
+    }, { kind: 'reset' }),
+    applySessionArchivedState: change => {
+      const loop = workLoop;
+      if (settingsApplied && change.archived && !desired.includeArchivedSessions) {
+        forgetPendingSessionObservations([change.sessionId]);
+        loop?.pause();
+      }
+      return serializeSettings(async () => {
+        if (stopped || !change.archived || desired.includeArchivedSessions
+          || !hasSessionWork(change.sessionId) && !(failedWithdrawal?.kind === 'archive' && failedWithdrawal.sessionId === change.sessionId)) return;
+        // A queued authorization predates this exclusion; it cannot be sent
+        // after the child has purged the archived Session.
+        forgetPendingSessionObservations([change.sessionId]);
+        loop?.pause();
+        await call((indexer, signal) => indexer.archive(change, signal));
+      }, change.archived ? { kind: 'archive', sessionId: change.sessionId } : undefined)
+        .finally(() => { if (!stopped && desired.enabled && workLoop === loop) loop?.resume(); });
+    },
     listIndexedSessionIds: () => snapshot.indexesQualified ? withReaders(retainedIds) : [],
     getSettings: () => snapshot.settings,
     getEmbeddingsDiagnostics: () => snapshot.embeddings,
@@ -545,4 +692,11 @@ export async function startMemoryWorker(params: Readonly<{
     getTier1DbPhysicalPath: () => paths.tier1DbPath,
     getDeepDbPhysicalPath: () => paths.deepDbPath,
   };
+}
+
+/** Ready-owner convenience; daemon composition only needs the prepared handle. */
+export async function startMemoryWorker(params: Parameters<typeof prepareMemoryWorker>[0]): Promise<MemoryWorkerHandle> {
+  const worker = await prepareMemoryWorker(params);
+  try { await worker.waitForReady(); return worker; }
+  catch (error) { await worker.stop(); throw error; }
 }

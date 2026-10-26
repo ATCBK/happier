@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
 import type { MemoryIndexerConnection, MemoryIndexerHost, MemoryIndexerSnapshot } from './memoryIndexerBoundary';
 import type { SessionListPageV1 } from '@/session/transport/http/sessionsHttp';
 import type { MemorySettingsV1 } from '@/settings/memorySettings';
+import type { StoredCredentials } from '@/persistence';
 
 // Transform the source host graph outside the operation's deadline.
 await import('./memoryWorker');
+await import('./memoryIndexer');
+await import('@/plugins/testkit/admittedRuntime');
 
 function deferred() {
   let resolved = false;
@@ -46,7 +50,7 @@ describe('Memory daemon/indexer boundary', () => {
     await removeTempDir(home);
   });
 
-  async function setup(overrides: Partial<MemoryIndexerConnection> = {}, beforeConnect?: () => Promise<void>) {
+  async function setup(overrides: Partial<MemoryIndexerConnection> = {}, beforeConnect?: () => Promise<void>, credentials: StoredCredentials = { token: 'fixture', encryption: null }) {
     const { DEFAULT_MEMORY_SETTINGS, writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     let saved = await writeMemorySettingsToDisk({ ...DEFAULT_MEMORY_SETTINGS, enabled: false, deleteOnDisable: false });
     let host!: MemoryIndexerHost;
@@ -69,7 +73,7 @@ describe('Memory daemon/indexer boundary', () => {
       host = boundHost; requests.push('connect'); await beforeConnect?.(); publish(); return connection;
     };
     const { startMemoryWorker } = await import('./memoryWorker');
-    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1',
+    const worker = await startMemoryWorker({ credentials, machineId: 'machine_1',
       deps: { fetchDecryptedTranscriptPageAfterSeq: async () => [], connectIndexer } });
     workers.push(worker);
     return { worker, requests, publish, readExternalSources: (signal: AbortSignal) => host.readExternalSources(false, signal),
@@ -79,13 +83,154 @@ describe('Memory daemon/indexer boundary', () => {
     } };
   }
 
-  it('makes no child demands during fifteen settled enabled minutes or unchanged settings reloads', async () => {
+  async function seedSession(sessionId: string, kind: 'summary' | 'cursor' | 'queue' | 'chunk' | 'embedding' = 'cursor') {
+    const { resolveMemoryIndexPaths } = await import('./memoryIndexPaths');
+    const paths = resolveMemoryIndexPaths();
+    await mkdir(dirname(paths.tier1DbPath), { recursive: true });
+    if (kind === 'chunk' || kind === 'embedding') {
+      const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+      const db = openDeepIndexDb({ dbPath: paths.deepDbPath });
+      try {
+        if (kind === 'chunk') db.insertChunk({ sessionId, seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1, text: 'retained marker' });
+        else db.upsertEmbedding({ sessionId, seqFrom: 1, seqTo: 1, provider: 'fixture', modelId: 'fixture', embedding: new Float32Array([1]), updatedAtMs: 1 });
+      } finally { db.close(); }
+    } else {
+      const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+      const db = openSummaryShardIndexDb({ dbPath: paths.tier1DbPath });
+      try {
+        if (kind === 'summary') db.insertSummaryShard({ sessionId, seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1,
+          summary: 'retained marker', keywords: [], entities: [], decisions: [] });
+        else if (kind === 'queue') db.recordMemorySessionIndexState({ sessionId, status: 'queued', updatedAtMs: 1 });
+        else db.trySeedSessionCursorsIfMissing({ sessionId, nowMs: 1, lastHintedSeq: 0, lastDeepIndexedSeq: 0 });
+      } finally { db.close(); }
+    }
+  }
+
+  it('retains completed tick and inventory timestamps when a fresh child reports only its own work', async () => {
+    const { worker, publish } = await setup();
+    await worker.embedQuery?.('initialize transport');
+    publish('idle', true, [], { worker: { state: 'idle', lastTickAtMs: 100, lastInventoryAtMs: 90,
+      currentSessionId: null, currentPhase: null } });
+    // A query/purge child can finish without inventory or scheduler work.
+    publish();
+    expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', lastTickAtMs: 100, lastInventoryAtMs: 90 });
+    // A later tick updates that fact without erasing the last inventory run.
+    publish('idle', true, [], { worker: { state: 'idle', lastTickAtMs: 200, lastInventoryAtMs: null,
+      currentSessionId: null, currentPhase: null } });
+    expect(worker.getWorkerStatus()).toMatchObject({ lastTickAtMs: 200, lastInventoryAtMs: 90 });
+  });
+
+  it('drains finite native pages and admits zero further ticks without another source change', async () => {
+    const { createMemoryIndexer } = await import('./memoryIndexer');
+    const { normalizeMemorySettings } = await import('@happier-dev/protocol/memory/memorySettings');
+    const signal = new AbortController().signal;
+    let sourceReads = 0;
+    let pageReads = 0;
+    let tailReads = 0;
+    const engine = await createMemoryIndexer({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1',
+      host: { publish() {}, failed(error) { throw error; }, observeSessions: async ids => ids,
+        runHint: async () => { throw new Error('Unexpected hint'); }, commitHint: async () => {},
+        readExternalSources: async () => { sourceReads++; return { changes: [], configuredSourceKeys: ['["fixture","root"]'],
+          sources: [{ agentId: 'fixture', sourceKey: 'root', source: { kind: 'fixture' }, occurrenceId: 'fixture' }] }; } },
+      // Only the external native transcript transport is replaced. The engine,
+      // inventory, scheduler, traversal, frontiers and SQLite are real.
+      resolveExternalReader: async () => ({
+        async listCandidates() { return { ok: true, value: { candidates: Array.from({ length: 3 }, (_, index) => ({ remoteSessionId: `native-${index}` })), nextCursor: null } }; },
+        async resolveLinkIdentity({ source, remoteSessionId }) { return { ok: true, value: { source, remoteSessionId, linkData: {} } }; },
+        async pageTranscript({ cursor }) {
+          pageReads++;
+          return { ok: true, value: { items: [], hasMore: !cursor, nextCursor: cursor ? null : 'second-page', tailCursor: 'tail' } };
+        },
+        async readAfterTranscript() { tailReads++; return { ok: true, value: { outcome: 'already_current' } }; },
+      }),
+    });
+    try {
+      await engine.applySettings(normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep',
+        worker: { maxSessionsPerTick: 1 }, hints: { enabled: false },
+        conversationSearch: { indexExternal: { enabled: true, agents: ['fixture'] } } }), signal);
+      await engine.tick(signal);
+      await engine.runUntilSettled(signal);
+      expect(pageReads).toBe(6);
+      const drained = { sourceReads, pageReads, tailReads };
+      for (let request = 0; request < 5; request++) await engine.runUntilSettled(signal);
+      expect({ sourceReads, pageReads, tailReads }).toEqual(drained);
+    } finally { await engine.stop(); }
+  });
+
+  it('opens no owner metadata and reads no inventory pages over 15 settled minutes, admitting only changed local identities', async () => {
+    const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
+    const { buildSessionMetadataEnvelopeFields } = await import('@/session/metadata/buildSessionMetadataEnvelopeCreateFields');
+    const cipher = await import('@happier-dev/protocol/crypto/accountScopedCipher');
+    const secret = new Uint8Array(32).fill(19);
+    const credentials: StoredCredentials = { token: 'fixture', encryption: { type: 'legacy', secret } };
+    const session = (id: string, machineId: string, seq = 1) => {
+      const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'e2ee', storedContentMode: 'e2ee',
+        encryptionKey: secret, encryptionVariant: 'legacy', metadata: { machineId, path: '/workspace' }, agentState: null });
+      return createSessionRecordFixture({ id, seq, createdAt: Date.now(), updatedAt: Date.now(), encryptionMode: 'e2ee',
+        share: null, metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext, ownerMetadata: fields.ownerMetadata });
+    };
+    const sessions = new Map(Array.from({ length: 1_024 }, (_, index) => [`session-${index}`, session(`session-${index}`, 'machine_1')]));
+    let pages = 0;
+    const exactReads: string[] = [];
+    const axios = (await import('axios')).default;
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }) };
+      if (path === '/v2/sessions') { pages++; return { status: 200, data: { sessions: [...sessions.values()], hasNext: false, nextCursor: null } }; }
+      const id = decodeURIComponent(path.slice('/v2/sessions/'.length));
+      exactReads.push(id);
+      return sessions.has(id) ? { status: 200, data: { session: sessions.get(id) } } : { status: 404, data: { error: 'Session not found' } };
+    });
+    const admitted: unknown[] = [];
+    const { worker, enable, publish } = await setup({
+      inventory: async (_signal, observations) => { admitted.push(observations); },
+    }, undefined, credentials);
+    const { configuration } = await import('@/configuration');
+    const previous = configuration.isDaemonProcess;
+    Object.assign(configuration, { isDaemonProcess: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const opens = vi.spyOn(cipher, 'openAccountScopedBlobCiphertext');
+    try {
+      await enable({ backfillPolicy: 'all_history' });
+      await vi.advanceTimersByTimeAsync(0);
+      pages = 0; opens.mockClear(); admitted.length = 0;
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect({ pages, opens: opens.mock.calls.length }).toEqual({ pages: 0, opens: 0 });
+      sessions.set('new-local', session('new-local', 'machine_1', 2));
+      await worker.noteSessionChanged?.({ sessionId: 'new-local' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(admitted).toEqual([[{ sessionId: 'new-local', eligibility: expect.objectContaining({ sessionId: 'new-local', observedSeq: 2 }) }]]);
+      expect(exactReads).toEqual(['new-local']);
+      expect(opens).toHaveBeenCalledTimes(1);
+      publish('idle', true, [], { candidateSessionIds: ['new-local'], observedSeqBySessionId: [['new-local', 2]] });
+      sessions.set('new-local', session('new-local', 'machine_1', 3));
+      await worker.noteSessionChanged?.({ sessionId: 'new-local' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(admitted.at(-1)).toEqual([{ sessionId: 'new-local', eligibility: expect.objectContaining({ sessionId: 'new-local', observedSeq: 3 }) }]);
+      sessions.set('foreign', session('foreign', 'elsewhere'));
+      const count = admitted.length;
+      await worker.noteSessionChanged?.({ sessionId: 'foreign' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(admitted).toHaveLength(count);
+      sessions.set('new-local', session('new-local', 'elsewhere', 3));
+      await worker.noteSessionChanged?.({ sessionId: 'new-local' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(admitted.at(-1)).toEqual([{ sessionId: 'new-local', eligibility: null }]);
+      expect(pages).toBe(0);
+      expect(opens).toHaveBeenCalledTimes(4);
+    } finally { await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous }); }
+  });
+
+  it('makes no child demands during settled minutes, unchanged settings, or unused Account settings changes', async () => {
     const demands: string[] = [];
     const { worker, enable } = await setup({
       applySettings: async () => { demands.push('settings'); },
       inventory: async () => { demands.push('inventory'); },
       tick: async () => { demands.push('tick'); },
+      retryEmbeddings: async () => { demands.push('embeddings'); },
     });
+    const { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const { accountSettingsParse } = await import('@happier-dev/protocol');
     const { configuration } = await import('@/configuration');
     const previous = configuration.isDaemonProcess;
     Object.assign(configuration, { isDaemonProcess: true });
@@ -96,9 +241,133 @@ describe('Memory daemon/indexer boundary', () => {
       demands.length = 0;
       await worker.reloadSettings();
       await worker.reloadSettings();
+      // Neither native sources nor embeddings consume Account preferences in
+      // this policy. Availability and unrelated preference changes admit no work.
+      setActiveAccountSettingsSnapshot({ source: 'cache', scopeKey: 'memory-idle-account',
+        settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [] });
+      setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'memory-idle-account',
+        settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }),
+        settingsVersion: 2, loadedAtMs: Date.now(), settingsSecretsReadKeys: [] });
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(demands).toEqual([]);
-    } finally { await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous }); }
+    } finally {
+      await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous });
+      resetActiveAccountSettingsSnapshotForTests();
+    }
+  });
+
+  it('admits only consumed native source Account changes and never retries embeddings for them', async () => {
+    const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+    const { createAuthoredAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+    const { createPluginManifestV2Fixture } = await import('@/plugins/testkit/manifestV2Fixture');
+    const { resolvePluginContributes } = await import('@/plugins/projection/registry/resolvePluginContributions');
+    const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+    const pluginId = 'acme.memory-account-source';
+    const agentId = `${pluginId}/fixture`;
+    const runtime = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      happyHomeDir: home,
+      resolveContributes: async happyHomeDir => createResolvedContributionRegistry(await resolvePluginContributes({ happyHomeDir })),
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: pluginId,
+        runtime: { apiVersion: 1, agentFactories: [{ localAgentId: 'fixture', locator: {
+          module: './factory', export: 'createFixtureAgentRuntime', runtimeApiVersion: 1, externalSessionsExport: 'externalSessions',
+        }, normalizedModulePath: 'factory.mjs', loadMode: 'immutable-js' }] },
+        contributes: { agents: [{ id: 'fixture', title: 'Memory source', runtime: { kind: 'custom' }, primary: 'sessions',
+          capabilities: { surfaces: ['externalSessions'], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+          surfaces: { externalSession: { sources: [{ sourceKind: 'configuredHome', schema: { fields: [
+            { kind: 'literal', name: 'kind', value: 'configuredHome' }, { kind: 'string', name: 'homePath', nullish: true },
+          ] }, key: { segments: [{ kind: 'field', field: 'homePath' }] }, instances: [{ kind: 'default', constants: {} }, { kind: 'agentSettingOverride',
+            settingId: 'piAgentDir', byServerIdSettingId: 'piAgentDirByServerId', field: 'homePath', normalization: 'configuredPath' }] }] } },
+        }] } }), files: { 'factory.mjs': `export function createFixtureAgentRuntime() { return { sessions: {} }; }
+export const externalSessions = {
+  async resolveSource({ source }) { return { ok: true, value: { source } }; },
+  async listCandidates() { return { ok: true, value: { candidates: [], nextCursor: null } }; },
+  async resolveLinkIdentity({ source, remoteSessionId }) { return { ok: true, value: { source, remoteSessionId, linkData: {} } }; },
+  async resolveLinkedIdentity({ source, remoteSessionId, linkData }) { return { ok: true, value: { source, remoteSessionId, linkData } }; },
+  async pageTranscript() { return { ok: true, value: { items: [], nextCursor: null } }; },
+  async readAfterTranscript() { return { ok: true, value: { outcome: 'already_current' } }; },
+};`,
+          'daemon.mjs': `import { createFixtureAgentRuntime, externalSessions } from './factory.mjs';
+export function activate(api) { api.agents.register('fixture', createFixtureAgentRuntime, {
+  sessionRunnerFactory: { module: './factory', export: 'createFixtureAgentRuntime', runtimeApiVersion: 1, externalSessionsExport: 'externalSessions' }
+}); api.agents.registerExternalSessions('fixture', externalSessions); }` } }],
+    });
+    expect(runtime.registry.agentRuntimesByAgentId.get(agentId)?.externalSessions,
+      JSON.stringify(runtime.registry.pluginDiagnosticsByPluginId[pluginId])).toBeDefined();
+    const demands: string[] = [];
+    const { worker, enable } = await setup({
+      tick: async () => { demands.push('tick'); },
+      retryEmbeddings: async () => { demands.push('embeddings'); },
+    });
+    const { DEFAULT_MEMORY_SETTINGS } = await import('@/settings/memorySettings');
+    const { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const { accountSettingsParse } = await import('@happier-dev/protocol');
+    const { configuration } = await import('@/configuration');
+    const previous = configuration.isDaemonProcess;
+    Object.assign(configuration, { isDaemonProcess: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await enable({ conversationSearch: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch,
+        indexExternal: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch.indexExternal, enabled: true, agents: [agentId] } } });
+      await vi.advanceTimersByTimeAsync(0);
+      demands.length = 0;
+      const account = { source: 'network' as const, scopeKey: 'memory-consumer-account',
+        settings: accountSettingsParse({ piAgentDir: '/native/first', sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }),
+        settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [] };
+      setActiveAccountSettingsSnapshot(account);
+      await vi.advanceTimersByTimeAsync(0);
+      demands.length = 0;
+      setActiveAccountSettingsSnapshot({ ...account, settingsVersion: 2,
+        settings: accountSettingsParse({ piAgentDir: '/native/first', sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(demands).toEqual([]);
+      setActiveAccountSettingsSnapshot({ ...account, settingsVersion: 3,
+        settings: accountSettingsParse({ piAgentDir: '/native/second' }) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(demands).toEqual(['tick']);
+      const accountSnapshots = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+      const current = accountSnapshots.getActiveAccountSettingsSnapshot()!;
+      demands.length = 0;
+      setActiveAccountSettingsSnapshot({ ...current, source: 'cache', settingsVersion: 4 });
+      accountSnapshots.notifyActiveAccountConnectedServicesProjection(account.scopeKey);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(demands).toEqual([]);
+      const expectNativeDemand = async (update: () => void) => {
+        demands.length = 0;
+        update();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(demands).toEqual(['tick']);
+      };
+      await expectNativeDemand(() => setActiveAccountSettingsSnapshot({ ...current, source: 'none', settingsVersion: 5 }));
+      await expectNativeDemand(() => setActiveAccountSettingsSnapshot({ ...current, settingsVersion: 6 }));
+      await expectNativeDemand(() => setActiveAccountSettingsSnapshot({ ...current, settingsVersion: 7,
+        settingsSecretsReadKeys: [new Uint8Array([1])] }));
+      await expectNativeDemand(accountSnapshots.clearActiveAccountSettingsSnapshot);
+    } finally {
+      await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous });
+      resetActiveAccountSettingsSnapshotForTests();
+      await runtime.dispose();
+      await pluginReloadController.shutdown();
+    }
+  });
+
+  it('admits no Account preference demand for locally configured embeddings', async () => {
+    const demands: string[] = [];
+    const { worker, enable } = await setup({ tick: async () => { demands.push('tick'); },
+      retryEmbeddings: async () => { demands.push('embeddings'); } });
+    const { DEFAULT_MEMORY_SETTINGS } = await import('@/settings/memorySettings');
+    const { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const { accountSettingsParse } = await import('@happier-dev/protocol');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await enable({ embeddings: { ...DEFAULT_MEMORY_SETTINGS.embeddings, mode: 'preset' } });
+      await vi.advanceTimersByTimeAsync(0);
+      demands.length = 0;
+      setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'memory-embeddings-account',
+        settings: accountSettingsParse({ piAgentDir: '/native/first' }), settingsVersion: 1,
+        loadedAtMs: Date.now(), settingsSecretsReadKeys: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(demands).toEqual([]);
+    } finally { await worker.stop(); resetActiveAccountSettingsSnapshotForTests(); }
   });
 
   it('starts work once at the actual scheduler deadline and consumes a real wake after settling', async () => {
@@ -169,9 +438,9 @@ describe('Memory daemon/indexer boundary', () => {
       setActiveAccountSettingsSnapshot({ source: 'cache', settings: accountSettingsParse({}), settingsVersion: 1,
         loadedAtMs: Date.now(), settingsSecretsReadKeys: [] });
       await vi.advanceTimersByTimeAsync(0);
-      expect(ticks).toBe(3);
+      expect(ticks).toBe(2);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(ticks).toBe(3);
+      expect(ticks).toBe(2);
     } finally {
       release.resolve(); await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous });
       const { resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
@@ -179,7 +448,11 @@ describe('Memory daemon/indexer boundary', () => {
     }
   });
 
-  it.each(['new_only', 'all_history'] as const)('observes eligible appends without demanding children for metadata or other machines (%s)', async backfillPolicy => {
+  it.each([
+    { backfillPolicy: 'new_only', includeArchivedSessions: false },
+    { backfillPolicy: 'all_history', includeArchivedSessions: false },
+    { backfillPolicy: 'all_history', includeArchivedSessions: true },
+  ] as const)('observes eligible appends without demanding children for metadata or other machines ($backfillPolicy, archived: $includeArchivedSessions)', async ({ backfillPolicy, includeArchivedSessions }) => {
     const { createSessionRecordFixture } = await import('@/testkit/backends/sessionFixtures');
     const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
     const session = createSessionRecordFixture({ id: 'observed', seq: 4, createdAt: 500, updatedAt: 3000,
@@ -190,6 +463,18 @@ describe('Memory daemon/indexer boundary', () => {
     readInventory = url => url.searchParams.has('cursor')
       ? { sessions: [session], hasNext: false, nextCursor: null }
       : { sessions: [foreign], hasNext: true, nextCursor: 'older' };
+    const axios = (await import('axios')).default;
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (parsed.pathname === '/v2/sessions' || parsed.pathname === '/v2/sessions/archived') {
+        return { status: 200, data: readInventory(parsed) };
+      }
+      const id = decodeURIComponent(parsed.pathname.slice('/v2/sessions/'.length));
+      return { status: 200, data: { session: id === session.id ? session : foreign } };
+    });
     let inventoryDemands = 0;
     let settle!: () => void;
     const { worker, enable, publish } = await setup({ inventory: async () => { inventoryDemands++; settle(); } });
@@ -199,35 +484,180 @@ describe('Memory daemon/indexer boundary', () => {
     Object.assign(configuration, { isDaemonProcess: true });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
-      await enable({ backfillPolicy, enabledAtMs: 1000 });
+      await enable({ backfillPolicy, includeArchivedSessions, enabledAtMs: 1000 });
       await vi.advanceTimersByTimeAsync(0);
       settle();
       inventoryDemands = 0;
       session.updatedAt++;
       foreign.seq++;
-      await vi.advanceTimersByTimeAsync(120_000);
+      await worker.noteSessionChanged!({ sessionId: session.id });
+      await worker.noteSessionChanged!({ sessionId: foreign.id });
+      await vi.advanceTimersByTimeAsync(0);
       expect(inventoryDemands).toBe(0);
       session.seq++;
-      await vi.advanceTimersByTimeAsync(120_000);
+      await worker.noteSessionChanged!({ sessionId: session.id });
+      await vi.advanceTimersByTimeAsync(0);
       expect(inventoryDemands).toBe(1);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(inventoryDemands).toBe(1);
+      // An archive fact can arrive after authorization but before the work
+      // pump delivers that admitted observation to a child.
+      session.seq++;
+      await worker.noteSessionChanged!({ sessionId: session.id });
+      session.archivedAt = Date.now();
+      await worker.applySessionArchivedState({ sessionId: session.id, archived: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(inventoryDemands).toBe(includeArchivedSessions ? 2 : 1);
     } finally { await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous }); }
   });
 
-  it('starts an absent indexer and joins its purge before acknowledging removal', async () => {
+  it('makes zero demands for settled idle archive updates with native indexing off', async () => {
+    const archives: string[] = [];
+    const { worker, requests, enable, publish } = await setup({ archive: async change => { archives.push(change.sessionId); } });
+    await enable();
+    publish('idle', true, [], { candidateSessionIds: [], observedSeqBySessionId: [] });
+    const baseline = [...requests];
+    for (let index = 0; index < 1000; index++) {
+      await worker.applySessionArchivedState({ sessionId: `never-${index}`, archived: true });
+      await worker.applySessionArchivedState({ sessionId: `never-${index}`, archived: false });
+    }
+    expect(archives).toEqual([]);
+    expect(requests).toEqual(baseline);
+    await seedSession('retained');
+    await worker.applySessionArchivedState({ sessionId: 'retained', archived: false });
+    expect(archives).toEqual([]);
+    await worker.applySessionArchivedState({ sessionId: 'retained', archived: true });
+    expect(archives).toEqual(['retained']);
+    await enable({ includeArchivedSessions: true });
+    await worker.applySessionArchivedState({ sessionId: 'retained', archived: true });
+    expect(archives).toEqual(['retained']);
+  });
+
+  it('admits one current-inventory tick after an access reset loses Session change facts', async () => {
+    let ticks = 0;
+    let readSources!: (signal: AbortSignal) => ReturnType<MemoryIndexerHost['readExternalSources']>;
+    const { worker, enable, readExternalSources } = await setup({
+      tick: async signal => { ticks++; await readSources(signal!); },
+    });
+    readSources = readExternalSources;
+    const { configuration } = await import('@/configuration');
+    const previous = configuration.isDaemonProcess;
+    Object.assign(configuration, { isDaemonProcess: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await enable();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(1);
+      await worker.reconcileRetainedSessionAccess();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(2);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(ticks).toBe(2);
+    } finally { await worker.stop(); Object.assign(configuration, { isDaemonProcess: previous }); }
+  });
+
+  it('makes zero indexer demands for 1000 never-indexed Session removals, including beside unrelated work', async () => {
+    const { worker, requests, enable, publish } = await setup();
+    for (let index = 0; index < 1000; index++) await worker.removeSessions([`never-${index}`]);
+    expect(requests).toEqual([]);
+    await seedSession('unrelated');
+    await enable();
+    publish('indexing', true, [], { candidateSessionIds: [], observedSeqBySessionId: [],
+      worker: { state: 'indexing', lastTickAtMs: null, lastInventoryAtMs: null, currentSessionId: 'unrelated', currentPhase: 'deep',
+        activeOperations: [{ kind: 'transcript', sessionIds: ['unrelated'] }] } });
+    const baseline = [...requests];
+    for (let index = 0; index < 1000; index++) await worker.removeSessions([`never-${index}`]);
+    expect(requests).toEqual(baseline);
+  });
+
+  it.each(['summary', 'cursor', 'queue', 'chunk', 'embedding'] as const)('starts an absent indexer only for retained %s state and joins one purge before acknowledging removal', async kind => {
     const purge = deferred();
     const entered = deferred();
-    const { worker, requests } = await setup({ removeSessions: async () => { entered.resolve(); await purge.promise; } });
+    const selected: string[][] = [];
+    const { worker, requests } = await setup({ removeSessions: async ids => { selected.push([...ids]); entered.resolve(); await purge.promise; } });
+    await seedSession('removed', kind);
     expect(requests).toEqual([]);
     let acknowledged = false;
-    const removal = worker.removeSessions(['removed']).then(() => { acknowledged = true; });
+    const removal = worker.removeSessions(['never-indexed', ' removed ', 'removed']).then(() => { acknowledged = true; });
     try {
       await vi.waitFor(() => expect(requests).toContain('connect'));
       await entered.promise;
       expect(acknowledged).toBe(false);
     } finally { purge.resolve(); await removal; }
     expect(acknowledged).toBe(true);
+    expect(requests).toEqual(['connect']);
+    expect(selected).toEqual([['removed']]);
+  });
+
+  it('purges an exact in-flight writer once before it has published any retained state', async () => {
+    const entered = deferred();
+    const release = deferred();
+    const purges: string[][] = [];
+    const { worker, enable, publish } = await setup({ refresh: async () => { entered.resolve(); await release.promise; },
+      removeSessions: async ids => { purges.push([...ids]); release.resolve(); } });
+    await enable();
+    publish('idle', true, [], { candidateSessionIds: [], observedSeqBySessionId: [] });
+    const refreshing = worker.ensureUpToDate('writing');
+    try {
+      await entered.promise;
+      await worker.removeSessions(['never-indexed', 'writing', 'writing']);
+      expect(purges).toEqual([['writing']]);
+    } finally { release.resolve(); await refreshing; }
+  });
+
+  it('purges only Sessions held by pending observations, admitted projections or published writers in one mixed batch', async () => {
+    const { createSessionRecordFixture } = await import('@/testkit/backends/sessionFixtures');
+    const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+    const purges: string[][] = [];
+    const { worker, enable, publish, observeSessions } = await setup({ removeSessions: async ids => { purges.push([...ids]); } });
+    await enable({ backfillPolicy: 'all_history' });
+    publish('indexing', true, ['edited'], { candidateSessionIds: ['candidate'], observedSeqBySessionId: [['frontier', 0]],
+      worker: { state: 'indexing', lastTickAtMs: null, lastInventoryAtMs: null, currentSessionId: 'current', currentPhase: 'deep',
+        activeOperations: [{ kind: 'transcript', sessionIds: ['active'] }] } });
+    await observeSessions(['observed']);
+    const axios = (await import('axios')).default;
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      if (new URL(String(url)).pathname !== '/v2/sessions/pending') return get(url, options);
+      return { status: 200, data: { session: createSessionRecordFixture({ id: 'pending', seq: 1,
+        createdAt: Date.now(), updatedAt: Date.now(), encryptionMode: 'plain',
+        metadata: JSON.stringify(createTestMetadata({ machineId: 'machine_1' })) }) } };
+    });
+    await worker.noteSessionChanged!({ sessionId: 'pending' });
+    const selected = ['candidate', 'frontier', 'edited', 'current', 'active', 'observed', 'pending'];
+    await worker.removeSessions(['never-indexed', ...selected, 'active']);
+    expect(purges).toEqual([selected]);
+  });
+
+  it('purges a pending Session observation once and never readmits its stale result after removal', async () => {
+    const { createSessionRecordFixture } = await import('@/testkit/backends/sessionFixtures');
+    const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+    const entered = deferred();
+    const release = deferred();
+    const purges: string[][] = [];
+    const { worker, enable, publish } = await setup({ removeSessions: async ids => { purges.push([...ids]); } });
+    await enable();
+    publish('idle', true, [], { candidateSessionIds: [], observedSeqBySessionId: [] });
+    const axios = (await import('axios')).default;
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      if (new URL(String(url)).pathname !== '/v2/sessions/observing') return get(url, options);
+      entered.resolve();
+      await release.promise;
+      return { status: 200, data: { session: createSessionRecordFixture({ id: 'observing', seq: 1,
+        createdAt: Date.now(), updatedAt: Date.now(), encryptionMode: 'plain',
+        metadata: JSON.stringify(createTestMetadata({ machineId: 'machine_1' })) }) } };
+    });
+    const observing = worker.noteSessionChanged!({ sessionId: 'observing' });
+    try {
+      await entered.promise;
+      await worker.removeSessions(['observing', 'never-indexed']);
+      expect(purges).toEqual([['observing']]);
+      release.resolve();
+      await observing;
+      await worker.removeSessions(['observing']);
+      expect(purges).toEqual([['observing']]);
+    } finally { release.resolve(); await observing; }
   });
 
   it('waits for terminal writer acknowledgement before removing DB/WAL/SHM and restores saved settings', async () => {
@@ -254,7 +684,7 @@ describe('Memory daemon/indexer boundary', () => {
     const { worker, requests } = await setup({ retire: async () => { retired += 1; } }, async () => {
       connecting.resolve(); await release.promise;
     });
-    const first = worker.removeSessions(['before-disable']).catch(error => error);
+    const first = worker.embedQuery!('before-disable').catch(error => error);
     await connecting.promise;
     const clearing = worker.clearIndex();
     // clearIndex enters its serialized retire before any filesystem removal.
@@ -262,7 +692,7 @@ describe('Memory daemon/indexer boundary', () => {
     release.resolve();
     await Promise.all([first, clearing]);
     expect(retired).toBe(1);
-    await worker.removeSessions(['after-disable']);
+    await worker.embedQuery!('after-disable');
     expect(requests.filter(request => request === 'connect')).toHaveLength(2);
   });
 

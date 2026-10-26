@@ -22,6 +22,7 @@ import {
 import { decryptTranscriptRows } from '@/session/replay/decryptTranscriptRows';
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
 import { logger } from '@/ui/logger';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import {
   collectRetainedSessionInventoryVisibility,
   fetchSessionInventoryPage,
@@ -63,19 +64,18 @@ import { createMemoryExternalTranscriptReader } from './externalTranscriptSource
 import type { MemoryExternalSourceReader } from './externalTranscriptIndex';
 import { isExternalMemoryStorageId, resolveExternalMemoryIndexPolicy, syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
 import { runMemoryWorkerSourcesTick } from './runMemoryWorkerSourcesTick';
-import type { MemoryIndexerHost, MemoryDocumentIndexUpdate } from './memoryIndexerBoundary';
+import type { MemoryIndexerHost, MemoryDocumentIndexUpdate, MemoryIndexerPublication, MemorySessionInventoryObservation } from './memoryIndexerBoundary';
 
 export type MemoryIndexerEngine = Readonly<{
   stop(): Promise<void>;
   applySettings(settings: MemorySettingsV1, signal?: AbortSignal): Promise<void>;
-  inventory(signal: AbortSignal): Promise<void>;
+  inventory(signal: AbortSignal, observations?: readonly MemorySessionInventoryObservation[]): Promise<void>;
   tick(signal: AbortSignal): Promise<void>;
   runUntilSettled(signal: AbortSignal): Promise<void>;
   awaitModelInitialization(): Promise<void>;
   indexDocuments(update: MemoryDocumentIndexUpdate, signal?: AbortSignal): Promise<void>;
   retryEmbeddings(signal?: AbortSignal): Promise<void>;
   resolveEmbeddingsProvider(signal?: AbortSignal): Promise<EmbeddingsProviderResolution | null>;
-  publishSnapshot(): void;
   ensureUpToDate(sessionId?: string, signal?: AbortSignal): Promise<void>;
   noteSessionTranscriptRevised(change: Readonly<{ sessionId: string; seq: number; messageId?: string }>): Promise<void>;
   readExternalTranscriptPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, signal?: AbortSignal): Promise<AgentExternalSessionsTranscriptPage | null>;
@@ -112,6 +112,7 @@ export async function createMemoryIndexer(params: Readonly<{
   resolveExternalReader(agentId: string): Promise<MemoryExternalSourceReader['reader'] | null>;
   credentials: StoredCredentials;
   machineId: string;
+  indexesQualified?: boolean;
   env?: NodeJS.ProcessEnv;
   deps?: Readonly<{
     fetchDecryptedTranscriptPageAfterSeq: (args: Readonly<{ sessionId: string; afterSeq: number; limit: number; signal?: AbortSignal }>) => Promise<DecryptedTranscriptRow[]>;
@@ -124,6 +125,18 @@ export async function createMemoryIndexer(params: Readonly<{
   let tier1: SummaryShardIndexDbHandle | null = null;
   let deep: DeepIndexDbHandle | null = null;
   let indexesQualified = false;
+  let initialIndexesQualified = params.indexesQualified === true;
+  let publicationAdmitted = false;
+  let inventoryPublicationPending = false;
+  let externalPublicationPending = false;
+  let qualificationPublicationPending = false;
+  let deadlinePublicationPending = false;
+  const sessionPublicationUpdates = new Map<string, NonNullable<MemoryIndexerPublication['sessionUpdates']>[number]>();
+  const removedPublicationSessionIds = new Set<string>();
+  const updateSessionPublication = (sessionId: string, update: Omit<NonNullable<MemoryIndexerPublication['sessionUpdates']>[number], 'sessionId'>) => {
+    removedPublicationSessionIds.delete(sessionId);
+    sessionPublicationUpdates.set(sessionId, { ...sessionPublicationUpdates.get(sessionId), sessionId, ...update });
+  };
   let candidateSessionIds: string[] = [];
   let candidateCursor = 0;
   const candidateAllowInitialBackfillSessionIds = new Set<string>();
@@ -179,7 +192,7 @@ export async function createMemoryIndexer(params: Readonly<{
     const cached = sessionCryptoContextCache.get(sessionId);
     if (cached) return cached;
 
-    const raw = await fetchSessionById({ token: params.credentials.token, sessionId, signal });
+    const raw = await fetchSessionById({ reason: 'memory-change', token: params.credentials.token, sessionId, signal });
     signal?.throwIfAborted();
     if (!raw) return null;
 
@@ -205,6 +218,7 @@ export async function createMemoryIndexer(params: Readonly<{
     const embeddings = resolveOperationalMemoryEmbeddingsSettings(requestedSettings.embeddings);
     if (!embeddings?.enabled || !embeddings.providerConfig || !embeddings.providerKind || !embeddings.modelId) {
       embeddingsDiagnostics = buildUnavailableMemoryEmbeddingsDiagnostics(requestedSettings.embeddings);
+      publishSnapshot();
       return null;
     }
 
@@ -218,6 +232,7 @@ export async function createMemoryIndexer(params: Readonly<{
         usingFallback: true,
         lastError: null,
       };
+      publishSnapshot();
     }
 
     const cacheDir = resolveInferenceCacheDir({
@@ -377,14 +392,18 @@ export async function createMemoryIndexer(params: Readonly<{
       : value.contentPolicy,
   });
 
-  const observeSessions = async (sessionIds: readonly string[]): Promise<void> => {
+  const observeSessions = async (sessionIds: readonly string[], signal?: AbortSignal): Promise<void> => {
     const newlyObserved = await params.host.observeSessions(sessionIds);
+    signal?.throwIfAborted();
     // Revalidate retained content on first observation after startup. Subsequent
     // edits come from the durable transcript-change feed, not Session updatedAt
     // (which also changes for metadata without any transcript change).
     for (const sessionId of newlyObserved) {
       const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now(), readOnly: true });
-      if ((cursors?.lastHintedSeq ?? 0) > 0 || (cursors?.lastDeepIndexedSeq ?? 0) > 0) editedSessionIds.add(sessionId);
+      if ((cursors?.lastHintedSeq ?? 0) > 0 || (cursors?.lastDeepIndexedSeq ?? 0) > 0) {
+        editedSessionIds.add(sessionId);
+        updateSessionPublication(sessionId, { edited: true });
+      }
     }
   };
 
@@ -427,7 +446,7 @@ export async function createMemoryIndexer(params: Readonly<{
     if (refresh.mode === 'snapshot') {
       // Preserve the next selected identity across refreshed snapshots. Resetting
       // to zero can starve the suffix (including native slots) indefinitely
-      // when the inventory cadence is shorter than one traversal.
+      // when explicit inventory refreshes arrive before a traversal completes.
       const nextSessionId = candidateSessionIds[candidateCursor];
       const externalOffset = candidateCursor >= candidateSessionIds.length
         ? candidateCursor - candidateSessionIds.length : null;
@@ -458,6 +477,9 @@ export async function createMemoryIndexer(params: Readonly<{
     inventoryAdmitted = true;
     inventoryBackfillPolicy = settings.backfillPolicy;
     inventoryIncludeArchivedSessions = settings.includeArchivedSessions;
+    inventoryPublicationPending = true;
+    deadlinePublicationPending = true;
+    publishSnapshot();
     return refresh;
   };
 
@@ -475,7 +497,10 @@ export async function createMemoryIndexer(params: Readonly<{
       inventorySeenSessionIds.delete(sessionId);
       sessionCryptoContextCache.delete(sessionId);
       editedSessionIds.delete(sessionId);
+      sessionPublicationUpdates.delete(sessionId);
+      removedPublicationSessionIds.add(sessionId);
     }
+    deadlinePublicationPending = true;
   };
 
   const withRetainedIndexHandles = <T>(
@@ -521,6 +546,7 @@ export async function createMemoryIndexer(params: Readonly<{
       forgetWorkerSessionState(removed);
     } finally {
       for (const sessionId of doomed) removingSessionIds.delete(sessionId);
+      publishSnapshot();
     }
   };
 
@@ -570,6 +596,7 @@ export async function createMemoryIndexer(params: Readonly<{
       await removeSessions([change.sessionId]);
     } catch (error) {
       archivedExclusionPending = true;
+      publishSnapshot();
       throw error;
     }
   };
@@ -820,7 +847,10 @@ export async function createMemoryIndexer(params: Readonly<{
     if (admittedSessionIds.length === 0) return;
     for (const sessionId of admittedSessionIds) {
       const observed = input.observedSeqBySessionId.get(sessionId);
-      if (observed !== undefined) candidateObservedSeqBySessionId.set(sessionId, observed);
+      if (observed !== undefined && candidateObservedSeqBySessionId.get(sessionId) !== observed) {
+        candidateObservedSeqBySessionId.set(sessionId, observed);
+        updateSessionPublication(sessionId, { observedSeq: observed });
+      }
       // Considering a completed unchanged snapshot is a settled turn too.
       // Fresh children must not wait forever for intentionally skipped IO.
       attemptedSessionFrontiers.set(sessionId, tier1.getSessionCursors({ sessionId, nowMs }).lastDeepIndexedSeq);
@@ -864,7 +894,10 @@ export async function createMemoryIndexer(params: Readonly<{
     for (const sessionId of selected) {
       const isEdited = edited.includes(sessionId);
       // Consume only the revision this read owns. A later revision stays queued.
-      if (isEdited) editedSessionIds.delete(sessionId);
+      if (isEdited) {
+        editedSessionIds.delete(sessionId);
+        updateSessionPublication(sessionId, { edited: false });
+      }
       publishSnapshot();
       try {
         await syncHintsForSessions([sessionId], {
@@ -881,19 +914,18 @@ export async function createMemoryIndexer(params: Readonly<{
         if (isEdited) editedSessionIds.add(sessionId);
         throw error;
       } finally {
+        if (isEdited && editedSessionIds.has(sessionId)) updateSessionPublication(sessionId, { edited: true });
+        deadlinePublicationPending = true;
         input.indexingSessionIds.delete(sessionId);
         publishSnapshot();
       }
     }
   };
 
-  const runTrackedSyncEligibleSessions = (input: Readonly<{
+  const runTrackedSessionOperation = (input: Readonly<{
     sessionIds: readonly string[];
-    observedSeqBySessionId: ReadonlyMap<string, number>;
-    allowInitialBackfillSessionIds: readonly string[];
-    forcePolicySnapshot?: boolean;
     signal?: AbortSignal;
-  }>): Promise<void> => {
+  }>, run: (sessionIds: Set<string>, signal: AbortSignal) => Promise<void>): Promise<void> => {
     const sessionIds = input.sessionIds.filter((sessionId) => !removingSessionIds.has(sessionId));
     if (sessionIds.length === 0) return Promise.resolve();
     const included = new Set(sessionIds);
@@ -912,13 +944,9 @@ export async function createMemoryIndexer(params: Readonly<{
       controller,
       promise: Promise.resolve(),
     };
-    operation.promise = syncEligibleSessions({
-      ...input,
-      sessionIds,
-      indexingSessionIds: included,
-      signal,
-      allowInitialBackfillSessionIds: input.allowInitialBackfillSessionIds.filter((id) => included.has(id)),
-      ...(input.forcePolicySnapshot === true ? { forcePolicySnapshot: true } : {}),
+    operation.promise = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return run(included, signal);
     }).catch((error) => {
       // Session removal owns this child cancellation. It is a successful
       // supersession, not a worker failure; lifecycle/transport cancellation
@@ -927,14 +955,28 @@ export async function createMemoryIndexer(params: Readonly<{
       throw error;
     }).finally(() => {
       activeIndexOperations.delete(operation);
+      publishSnapshot();
     });
     activeIndexOperations.add(operation);
     publishSnapshot();
     return operation.promise;
   };
 
+  const runTrackedSyncEligibleSessions = (input: Readonly<{
+    sessionIds: readonly string[];
+    observedSeqBySessionId: ReadonlyMap<string, number>;
+    allowInitialBackfillSessionIds: readonly string[];
+    forcePolicySnapshot?: boolean;
+    signal?: AbortSignal;
+  }>): Promise<void> => runTrackedSessionOperation(input, (included, signal) => syncEligibleSessions({
+    ...input, sessionIds: [...included], indexingSessionIds: included, signal,
+    allowInitialBackfillSessionIds: input.allowInitialBackfillSessionIds.filter(id => included.has(id)),
+  }));
+
   const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal): Promise<void> => {
     signal?.throwIfAborted();
+    const inheritedIndexesQualified = initialIndexesQualified;
+    initialIndexesQualified = false;
     const previousSettings = settings;
     let tier1PolicyChanged = memoryIndexPolicyKey(resolveTier1IndexPolicy(previousSettings))
       !== memoryIndexPolicyKey(resolveTier1IndexPolicy(next));
@@ -987,8 +1029,12 @@ export async function createMemoryIndexer(params: Readonly<{
         currentSessionId: null,
         currentPhase: null,
       };
-    publishSnapshot();
       effectiveSettings = settings;
+      publicationAdmitted = true;
+      inventoryPublicationPending = true;
+      externalPublicationPending = true;
+      qualificationPublicationPending = true;
+      publishSnapshot();
       return;
     }
 
@@ -996,7 +1042,8 @@ export async function createMemoryIndexer(params: Readonly<{
     workerStatus = { ...workerStatus, state: 'idle' };
     publishSnapshot();
 
-    await ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' });
+    await timeWebLatencyPhase('memory.startup.indexDirectory',
+      () => ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' }));
     ensurePrivateInferenceDirectory(paths.modelsDir);
 
     if (
@@ -1037,6 +1084,12 @@ export async function createMemoryIndexer(params: Readonly<{
       external: JSON.stringify(settings.conversationSearch.indexExternal),
     };
     const retainedPolicyKeys = tier1.getIndexPolicyKeys();
+    // A settled same-policy child inherits the daemon's current access decision,
+    // not authority to qualify a reset or a differently scoped retained index.
+    const inheritsQualification = inheritedIndexesQualified && retainedPolicyKeys !== null
+      && retainedPolicyKeys.tier1 === policyKeys.tier1
+      && retainedPolicyKeys.deep === policyKeys.deep
+      && retainedPolicyKeys.external === policyKeys.external;
     // Row provenance preserves matching older indexes. Only cursor-only
     // progress lacks a previous policy; rewind it once when adopting the index.
     tier1PolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.tier1 !== policyKeys.tier1;
@@ -1072,6 +1125,7 @@ export async function createMemoryIndexer(params: Readonly<{
     if ((externalPolicyChanged || tier1PolicyChanged || deepPolicyChanged) && deep) {
       for (const retained of deep.listExternalSourceStates()) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
       externalSourcesNeedRefresh = true;
+      externalPublicationPending = true;
     }
     if (tier1PolicyChanged || deepPolicyChanged) {
       const retainedSessionIds = [...new Set([
@@ -1090,19 +1144,22 @@ export async function createMemoryIndexer(params: Readonly<{
     if (!retainedPolicyKeys || tier1PolicyChanged || deepPolicyChanged || externalPolicyChanged) {
       tier1.setIndexPolicyKeys(policyKeys);
     }
+    if (inheritsQualification) indexesQualified = true;
     if (!indexesQualified) {
       try {
         // Existing rows must be requalified before the daemon exposes its
         // opened index, including after an offline handoff or an older cache.
-        await reconcileRetainedSessionAccess(signal);
+        await timeWebLatencyPhase('memory.startup.retainedAccess', () => reconcileRetainedSessionAccess(signal));
         indexesQualified = true;
       } catch (error) {
         signal?.throwIfAborted();
         // Keep the worker/RPCs alive, but do not expose unqualified content.
-        // The existing inventory cadence retries this same access owner.
+        // A later explicit reconciliation/inventory demand retries this owner.
         workerStatus = { ...workerStatus, state: 'error' };
-    publishSnapshot();
-        logger.debug('[memoryWorker] Retained access qualification failed; retrying on inventory refresh', {
+        publicationAdmitted = true;
+        qualificationPublicationPending = true;
+        publishSnapshot();
+        logger.debug('[memoryWorker] Retained access qualification failed; awaiting reconciliation demand', {
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -1115,22 +1172,82 @@ export async function createMemoryIndexer(params: Readonly<{
       const message = error instanceof Error ? error.message : String(error);
       embeddingsDiagnostics = { ...embeddingsDiagnostics, runtimeState: 'error', usingFallback: true, lastError: message };
       logger.warn('[memoryWorker] Embeddings initialization failed; using keyword-search fallback', { message });
+      publishSnapshot();
     });
-    await applyArchivedEligibility(signal);
+    if (!inheritsQualification) await timeWebLatencyPhase('memory.startup.archiveExclusion', () => applyArchivedEligibility(signal));
 
     effectiveSettings = settings;
+    publicationAdmitted = true;
+    qualificationPublicationPending = true;
+    publishSnapshot();
 
   };
 
-  const inventory = async (signal: AbortSignal): Promise<void> => {
+  const applySessionObservations = async (
+    observations: readonly MemorySessionInventoryObservation[],
+    signal?: AbortSignal,
+    indexingSessionIds?: Set<string>,
+  ): Promise<void> => {
+    const observedSeqBySessionId = new Map<string, number>();
+    const allowInitialBackfillSessionIds: string[] = [];
+    const excludedSessionIds: string[] = [];
+    // Admission precedes the first await: another admitted command may tick in
+    // this same child, but must not mistake an addressed source for cold inventory.
+    for (const { sessionId, eligibility } of observations) {
+      if (!eligibility) {
+        excludedSessionIds.push(sessionId);
+        continue;
+      }
+      if (removingSessionIds.has(sessionId)) continue;
+      if (!candidateSessionIds.includes(sessionId)) {
+        candidateSessionIds.push(sessionId);
+        updateSessionPublication(sessionId, { candidate: true });
+      }
+      candidateObservedSeqBySessionId.set(sessionId, eligibility.observedSeq);
+      updateSessionPublication(sessionId, { observedSeq: eligibility.observedSeq });
+      attemptedSessionFrontiers.delete(sessionId);
+      observedSeqBySessionId.set(sessionId, eligibility.observedSeq);
+      if (eligibility.allowInitialBackfill) {
+        candidateAllowInitialBackfillSessionIds.add(sessionId);
+        allowInitialBackfillSessionIds.push(sessionId);
+      } else {
+        candidateAllowInitialBackfillSessionIds.delete(sessionId);
+      }
+    }
+    if (observedSeqBySessionId.size === 0) {
+      await removeSessions(excludedSessionIds);
+      return;
+    }
+    const sync = async (included: Set<string>, operationSignal: AbortSignal) => {
+      await removeSessions(excludedSessionIds);
+      operationSignal.throwIfAborted();
+      // An addressed admission cannot qualify unrelated retained rows after a
+      // failed bootstrap reconciliation. Keep that existing owner fail closed.
+      if (!indexesQualified) return;
+      const sessionIds = [...observedSeqBySessionId.keys()].filter(id => included.has(id));
+      await observeSessions(sessionIds, operationSignal);
+      operationSignal.throwIfAborted();
+      await syncEligibleSessions({ sessionIds, indexingSessionIds: included, observedSeqBySessionId,
+        allowInitialBackfillSessionIds, signal: operationSignal });
+    };
+    if (indexingSessionIds) await sync(indexingSessionIds, signal ?? new AbortController().signal);
+    else await runTrackedSessionOperation({ sessionIds: [...observedSeqBySessionId.keys()], signal }, sync);
+  };
+
+  const inventory = async (signal: AbortSignal, observations?: readonly MemorySessionInventoryObservation[]): Promise<void> => {
     schedulerAdmitted = true;
     if (stopped) return;
     if (!settings.enabled) return;
     signal.throwIfAborted();
+    if (observations !== undefined) {
+      await applySessionObservations(observations, signal);
+      return;
+    }
     attemptedSessionFrontiers.clear();
     if (!indexesQualified) {
       await reconcileRetainedSessionAccess(signal);
       indexesQualified = true;
+      qualificationPublicationPending = true;
     }
     externalSourcesNeedRefresh = true;
     externalSources.invalidate();
@@ -1151,7 +1268,7 @@ export async function createMemoryIndexer(params: Readonly<{
     }
   };
 
-  const tick = async (signal: AbortSignal): Promise<void> => {
+  const tick = async (signal: AbortSignal, initializeInventory = true): Promise<void> => {
     schedulerAdmitted = true;
     if (stopped) return;
     if (!settings.enabled) return;
@@ -1160,7 +1277,10 @@ export async function createMemoryIndexer(params: Readonly<{
     signal.throwIfAborted();
     // A deadline can start a new process, whose in-memory inventory is empty.
     // Explicit refresh already admits its addressed Session without a full scan.
-    if (!inventoryAdmitted && candidateSessionIds.length === 0) await inventory(signal);
+    // Only an actual tick demand admits cold full inventory. An addressed
+    // command's settlement may still have native work after its last Session
+    // was removed; that continuation is not a whole-Account inventory demand.
+    if (initializeInventory && !inventoryAdmitted && candidateSessionIds.length === 0) await inventory(signal);
     if (candidateSessionIds.length > 0 || settings.conversationSearch.indexExternal.enabled) {
       workerStatus = { ...workerStatus, state: 'indexing', lastTickAtMs: Date.now(), currentPhase: 'tick' };
     publishSnapshot();
@@ -1219,6 +1339,8 @@ export async function createMemoryIndexer(params: Readonly<{
     if (!settings.enabled || !settings.conversationSearch.indexExternal.enabled || !deep || !tier1) return;
     const inventory = await externalSources.inventory(signal);
     if (inventory) {
+      externalPublicationPending = true;
+      deadlinePublicationPending = true;
       for (const retained of deep.listExternalSourceStates()) {
         const key = JSON.stringify([retained.source.agentId, retained.source.sourceKey]);
         if (!inventory.configuredSourceKeys.has(key)
@@ -1229,7 +1351,11 @@ export async function createMemoryIndexer(params: Readonly<{
     const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
     const resolution = embeddings?.enabled ? await refreshEmbeddingsDiagnostics(signal) : null;
     await syncExternalMemoryTranscriptsBatch({ candidates: externalSources.take(maxSources), db: deep, tier1, settings, nowMs: Date.now(), signal,
-        onSourceResult: externalSources.noteSyncResult,
+        onSourceResult: (source, state, failure) => {
+          externalSources.noteSyncResult(source, state, failure);
+          externalPublicationPending = true;
+          deadlinePublicationPending = true;
+        },
         ...(resolution?.provider ? { embedDocuments: resolution.provider.embedDocuments } : {}),
         ...(embeddings?.enabled && embeddings.providerKind && embeddings.modelId
           ? { embeddings: { providerKind: embeddings.providerKind, modelId: embeddings.modelId } } : {}) });
@@ -1262,65 +1388,49 @@ export async function createMemoryIndexer(params: Readonly<{
     if (stopped) return;
     if (!settings.enabled) return;
     if (!tier1) return;
+    if (_sessionId) {
+      let excluded = false;
+      // Removal must own the complete exact operation, including authorized
+      // reads and observer transport, not just its eventual transcript writes.
+      await runTrackedSessionOperation({ sessionIds: [_sessionId], signal }, async (included, operationSignal) => {
+        embeddingsResolutionEpoch = null;
+        await refreshEmbeddingsDiagnostics(operationSignal);
+        operationSignal.throwIfAborted();
+        const session = await fetchSessionById({ reason: 'memory-change', token: params.credentials.token, sessionId: _sessionId, signal: operationSignal });
+        const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal: operationSignal })).mode;
+        operationSignal.throwIfAborted();
+        const eligibility = session && sessionLocality.isOnMachine(session, accountEncryptionMode)
+          ? resolveMemoryInventorySessionEligibility({ session, backfillPolicy: settings.backfillPolicy,
+            includeArchivedSessions: settings.includeArchivedSessions, enabledAtMs: settings.enabledAtMs ?? 0, nowMs: Date.now() })
+          : null;
+        if (!eligibility) { excluded = true; return; }
+        await applySessionObservations([{ sessionId: _sessionId, eligibility }], operationSignal, included);
+      });
+      // Do not make an operation join its own removal. An ineligible read owns
+      // no writes, and purging starts only after this operation drains.
+      if (excluded) await removeSessions([_sessionId]);
+      return;
+    }
     // Explicit refresh is a deliberate retry boundary, unlike a background
     // scheduler turn or an unchanged settings read.
     embeddingsResolutionEpoch = null;
     await refreshEmbeddingsDiagnostics(signal);
-    if (!_sessionId) await syncExternalSources(signal ?? new AbortController().signal);
-    if (!_sessionId) {
-      // Same eligibility/inventory owner as the background loop, so an
-      // explicit refresh can never inventory a scope the settings exclude.
-      const refresh = await refreshInventory({ ...(signal ? { signal } : {}) });
-      if (refresh.sessionIds.length === 0) return;
-      await runTrackedSyncEligibleSessions({
-        sessionIds: refresh.sessionIds,
-        observedSeqBySessionId: refresh.observedSeqBySessionId,
-        allowInitialBackfillSessionIds: refresh.allowInitialBackfillSessionIds,
-        ...(signal ? { signal } : {}),
-      });
-      return;
-    }
-
-    const session = await fetchSessionById({
-      token: params.credentials.token,
-      sessionId: _sessionId,
-      ...(signal ? { signal } : {}),
-    });
-    const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-    const eligibility = session && sessionLocality.isOnMachine(session, accountEncryptionMode)
-      ? resolveMemoryInventorySessionEligibility({
-          session,
-          backfillPolicy: settings.backfillPolicy,
-          includeArchivedSessions: settings.includeArchivedSessions,
-          enabledAtMs: settings.enabledAtMs ?? 0,
-          nowMs: Date.now(),
-        })
-      : null;
-    if (!eligibility) {
-      await removeSessions([_sessionId]);
-      return;
-    }
-
-    await observeSessions([_sessionId]);
-
-    // Explicit refresh admits this source to the same cursor as inventory.
-    // Its incremental page may need another turn before the demand settles.
-    if (!candidateSessionIds.includes(eligibility.sessionId)) candidateSessionIds.push(eligibility.sessionId);
-    if (eligibility.allowInitialBackfill) candidateAllowInitialBackfillSessionIds.add(eligibility.sessionId);
-
+    externalSources.retryIncompleteInventory();
+    await syncExternalSources(signal ?? new AbortController().signal);
+    // Same eligibility/inventory owner as the background loop, so an
+    // explicit refresh can never inventory a scope the settings exclude.
+    const refresh = await refreshInventory({ ...(signal ? { signal } : {}) });
+    if (refresh.sessionIds.length === 0) return;
     await runTrackedSyncEligibleSessions({
-      sessionIds: [eligibility.sessionId],
-      observedSeqBySessionId: new Map([[eligibility.sessionId, eligibility.observedSeq]]),
-      allowInitialBackfillSessionIds: eligibility.allowInitialBackfill
-        ? [eligibility.sessionId]
-        : [],
+      sessionIds: refresh.sessionIds,
+      observedSeqBySessionId: refresh.observedSeqBySessionId,
+      allowInitialBackfillSessionIds: refresh.allowInitialBackfillSessionIds,
       ...(signal ? { signal } : {}),
     });
   };
 
   const handle: MemoryIndexerEngine = {
     stop,
-    publishSnapshot: () => publishSnapshot(),
     applySettings,
     inventory,
     tick,
@@ -1351,7 +1461,7 @@ export async function createMemoryIndexer(params: Readonly<{
         const moreInventory = inventoryAdmitted && settings.backfillPolicy !== 'new_only'
           && (inventoryState.active.hasNext || (settings.includeArchivedSessions && inventoryState.archived.hasNext));
         if (!pending && !externalSources.hasPendingWork() && !moreInventory) break;
-        await tick(signal);
+        await tick(signal, false);
       }
     },
     indexDocuments: async (update, signal) => {
@@ -1368,7 +1478,9 @@ export async function createMemoryIndexer(params: Readonly<{
       // Sessions read their current source when first admitted normally.
       if (!candidateSessionIds.includes(sessionId) && !listIndexedSessionIds().includes(sessionId)) return;
       editedSessionIds.add(sessionId);
+      updateSessionPublication(sessionId, { edited: true });
       schedulerAdmitted = true;
+      publishSnapshot();
     },
     readExternalTranscriptPage: async (request, signal) => {
       const operationSignal = signal ?? new AbortController().signal;
@@ -1381,25 +1493,47 @@ export async function createMemoryIndexer(params: Readonly<{
     applySessionArchivedState,
     resolveEmbeddingsProvider: refreshEmbeddingsDiagnostics,
   };
-  const publishSnapshot = () => params.host.publish({
+  const publishSnapshot = () => {
+    // A new process has no admitted inventory. Its bootstrap status must not
+    // replace the daemon's retained, qualified facts for the same policy.
+    if (!publicationAdmitted) return;
+    const includeInventory = inventoryPublicationPending;
+    const includeExternal = externalPublicationPending;
+    const includeQualification = qualificationPublicationPending;
+    const includeDeadline = deadlinePublicationPending && schedulerAdmitted;
+    const updates = [...sessionPublicationUpdates.values()];
+    const removed = [...removedPublicationSessionIds];
+    inventoryPublicationPending = false;
+    externalPublicationPending = false;
+    qualificationPublicationPending = false;
+    deadlinePublicationPending = false;
+    sessionPublicationUpdates.clear();
+    removedPublicationSessionIds.clear();
+    params.host.publish({
     settings: archivedExclusionPending ? { ...effectiveSettings, includeArchivedSessions: true } : effectiveSettings,
     embeddings: embeddingsDiagnostics,
     worker: { ...workerStatus, activeOperations: [...activeIndexOperations]
       .map(operation => ({ kind: operation.kind, sessionIds: [...operation.sessionIds] })) },
-    indexesQualified,
-    candidateSessionIds: [...candidateSessionIds], observedSeqBySessionId: [...candidateObservedSeqBySessionId],
-    editedSessionIds: [...editedSessionIds],
-    externalSources: externalSources.getIndexSources(indexesQualified ? deep : null),
-    ...(schedulerAdmitted ? { nextWorkAtMs: (() => {
+    ...(includeQualification ? { indexesQualified } : {}),
+    ...(includeInventory ? { candidateSessionIds: [...candidateSessionIds], observedSeqBySessionId: [...candidateObservedSeqBySessionId],
+      editedSessionIds: [...editedSessionIds] } : updates.length ? { sessionUpdates: updates } : {}),
+    ...(removed.length ? { removedSessionIds: removed } : {}),
+    ...(includeExternal ? { externalSources: externalSources.getIndexSources(indexesQualified ? deep : null) } : {}),
+    ...(includeDeadline ? { nextWorkAtMs: (() => {
       let next: number | null = null;
       for (const atMs of hintWorkAtBySessionId.values()) if (atMs > Date.now()) next = Math.min(next ?? atMs, atMs);
-      for (const sessionId of tier1?.listIndexedSessionIds() ?? []) {
-        const atMs = tier1!.getSessionCursors({ sessionId, nowMs: Date.now(), readOnly: true }).nextDeepEligibleAtMs;
-        if (atMs > Date.now()) next = Math.min(next ?? atMs, atMs);
+      // Retained failures outside this run's inventory/policy are not work.
+      // In particular, disabling native opt-in must retire its retry deadlines.
+      for (const ids of [candidateSessionIds, externalSources.sourceIds()]) {
+        for (const sessionId of ids) {
+          const atMs = tier1?.getSessionCursors({ sessionId, nowMs: Date.now(), readOnly: true }).nextDeepEligibleAtMs ?? 0;
+          if (atMs > Date.now()) next = Math.min(next ?? atMs, atMs);
+        }
       }
       return next;
     })() } : {}),
-  });
+    });
+  };
   return handle;
 }
 

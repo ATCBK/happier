@@ -30,7 +30,8 @@ async function withInventory(run: (sources: ReturnType<typeof createMemoryExtern
   signal: AbortSignal, settings: ReturnType<typeof normalizeMemorySettings>, demands: WeakRef<Disposable>[], db: ReturnType<typeof openDeepIndexDb>,
   notifyTopology: (kind?: 'file' | 'topology') => void,
   inspectSplit?: Readonly<{ stopReader(): Promise<void>; readSnapshot(): unknown; createReader(): Promise<number>;
-    readCounts(): Readonly<{ inventory: number; transcript: number }>; readTranscript(): Promise<unknown> }>) => Promise<void>, split = false) {
+    readCounts(): Readonly<{ inventory: number; transcript: number }>; readTranscript(): Promise<unknown> }>) => Promise<void>, split = false,
+  onChange: (refreshSources: boolean) => void = () => {}) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-memory-inventory-'));
   const db = openDeepIndexDb({ dbPath: join(directory, 'index.sqlite') });
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -133,7 +134,7 @@ export function activate(api) {
       const daemon = createMemoryExternalTranscriptObservation({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
       const makeReader = () => createMemoryExternalTranscriptReader({
         resolveReader: async id => runtime?.registry.agentRuntimesByAgentId.get(id)?.externalSessions ?? null,
-        onChange() {},
+        onChange,
       });
       let reader = makeReader();
       sources = { ...reader, attach: daemon.attach,
@@ -155,7 +156,7 @@ export function activate(api) {
           await reader.inventory(signal);
           return reader.getReadySourceCount();
         } };
-    } else sources = createSources({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
+    } else sources = createSources({ credentials: { token: 'fixture', encryption: null }, onChange });
     const demands: WeakRef<Disposable>[] = [];
     sources.attach({ registerAccountingSource: async input => {
       const demand = await observation.registerAccountingSource(input);
@@ -187,6 +188,7 @@ const cursor = (page: number) => encodeCodexExternalSessionIndexCursor({ ...crea
 
 describe('native inventory cursor lifetime', () => {
   it('does not re-demand an already removed native source retained by incomplete inventory', async () => {
+    let refreshRequested = false;
     await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
       configure(() => null, { watchedFiles: 1, candidates: true });
       await sources.refresh(settings, signal);
@@ -196,19 +198,28 @@ describe('native inventory cursor lifetime', () => {
       configure(() => null, { watchedFiles: 1, searchIncomplete: true });
       notifyTopology();
       await sources.inventory(signal);
+      refreshRequested = false;
       sources.noteSyncResult(candidate.source, 'removed');
       expect(sources.hasPendingWork()).toBe(true);
+      // Match the process engine: a reader refresh request reaches the daemon
+      // topology owner before the next admitted inventory turn.
+      if (refreshRequested) await sources.refresh(settings, signal);
       await sources.inventory(signal);
       sources.noteSyncResult(candidate.source, 'removed');
       expect(sources.hasPendingWork()).toBe(false);
-    });
+    }, false, refreshSources => { refreshRequested ||= refreshSources; });
   });
   it('settles an incomplete terminal inventory and retries on a later source observation', async () => {
     await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
-      configure(() => null, { watchedFiles: 1, searchIncomplete: true });
+      let inventoryPages = 0;
+      configure(() => { inventoryPages++; return null; }, { watchedFiles: 1, searchIncomplete: true });
       await sources.refresh(settings, signal);
       expect((await sources.inventory(signal))?.completeSources.size).toBe(0);
       expect(sources.hasPendingWork()).toBe(false);
+      // An ordinary source-processing turn is not a new observation. Retained
+      // incomplete coverage must not restart vendor IO while another source drains.
+      await sources.inventory(signal);
+      expect(inventoryPages).toBe(1);
       configure(() => null, { watchedFiles: 1 });
       notifyTopology();
       expect((await sources.inventory(signal))?.completeSources.size).toBe(1);
@@ -323,15 +334,17 @@ describe('native inventory cursor lifetime', () => {
   });
 
   it.each([1, 3])('rejects a repeated cursor across a %i-page cycle and recovers on a new crawl', async length => {
-    await withInventory(async (sources, configure, signal, _settings, _demands, db) => {
-      configure(page => cursor(page < length ? page + 1 : 1));
+    await withInventory(async (sources, configure, signal, settings, _demands, db, notifyTopology) => {
+      configure(page => cursor(page < length ? page + 1 : 1), { watchedFiles: 1 });
+      await sources.refresh(settings, signal);
       for (let page = 0; page <= length; page++) {
         const result = await sources.inventory(signal);
         expect(result?.completeSources.size).toBe(0);
       }
       // The error remains observable, and a restarted crawl may reuse cursors.
         expect(sources.getIndexSources(db)).toMatchObject([{ state: 'error' }]);
-        configure(page => page < length ? cursor(page + 1) : null);
+        configure(page => page < length ? cursor(page + 1) : null, { watchedFiles: 1 });
+        notifyTopology();
         for (let page = 0; page <= length; page++) await sources.inventory(signal);
         expect(sources.getIndexSources(db)).toMatchObject([{ state: 'ready' }]);
         expect(await sources.inventory(signal)).toBeNull();

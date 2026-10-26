@@ -58,13 +58,13 @@ describe('external memory transcript ingestion', () => {
       // Instrument the real SQLite frontier boundary; no read is substituted.
       const reads = vi.spyOn(db, 'getExternalSourceState');
       expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
-      expect(reads.mock.calls.length).toBe(0);
+      expect(reads.mock.calls.length).toBe(1);
       const pending = candidates[0]!;
       traversal.replace([]);
       traversal.replace([...candidates.slice(1), pending]);
       for (const candidate of candidates.slice(1)) traversal.noteSyncResult(candidate.source, 'current');
       expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
-      expect(reads.mock.calls.length).toBe(0);
+      expect(reads.mock.calls.length).toBe(2);
       db.setExternalSourceState({ sessionId: externalMemoryStorageId(pending.source), source: pending.source,
         cursor: JSON.stringify({ type: 'tail' }), nextOrdinal: 1 });
       traversal.noteSyncResult(pending.source, 'current');
@@ -235,6 +235,8 @@ describe('external memory transcript ingestion', () => {
       // The existing alternating allowance admits new history without making
       // a continuation wait for all 300 conversations to take their first page.
       for (let turn = 3; turn < pages * 2; turn++) await sync();
+      console.info('R252_INITIAL_COVERAGE', JSON.stringify({ bytes: (await stat(path)).size, turns: pages * 2,
+        indexedMessages: db.getExternalSourceState({ sessionId })!.nextOrdinal - 1, elapsedMs: performance.now() - started }));
       expect(db.getExternalSourceState({ sessionId })!.nextOrdinal).toBe(201);
       expect(db.getExternalSourceState({ sessionId })!.coverageComplete).toBe(true);
       const indexed = db.search({ query: 'coastal', scope: { type: 'session', sessionId }, maxResults: 201, includeExternal: true });
@@ -263,6 +265,8 @@ describe('external memory transcript ingestion', () => {
         const baseline = ordinal === 0 ? await readWindow(false) : undefined;
         const { window, reads, elapsedMs } = await readWindow(true);
         expect(window.externalSnippets?.some(item => item.sourceItemId === hit.sourceItemId)).toBe(true);
+        console.info('R261_WINDOW', JSON.stringify({ ordinal, reads, elapsedMs,
+          ...(baseline ? { baselineReads: baseline.reads, baselineElapsedMs: baseline.elapsedMs } : {}) }));
         // An indexed head hit already has a reader-owned page locator. Omitting
         // the optional wire cursor must not decode the entire history again.
         if (ordinal === 0) expect(reads).toBe(1);
@@ -284,6 +288,8 @@ describe('external memory transcript ingestion', () => {
       expect(db.search({ query: 'coastal', scope: { type: 'session', sessionId }, maxResults: 201, includeExternal: true })
         .map(hit => Number(/r252ordinal(\d+)\b/.exec(hit.text)?.[1])).sort((a, b) => a - b))
         .toEqual(Array.from({ length: 201 }, (_, index) => index));
+      console.info('R252_BACKFILL', JSON.stringify({ bytes: (await stat(path)).size, firstPageMessages: first.nextOrdinal - 1,
+        pages, messages: 201, elapsedMs: performance.now() - started }));
     } finally { lifetime.abort(); db.close(); await rm(dir, { recursive: true, force: true }); }
   });
   it.each([2, 200])('retires an unlinked Codex rollout in every source partition after %i messages', async count => {

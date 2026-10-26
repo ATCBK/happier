@@ -135,7 +135,11 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   const contentPolicy = policy.contentPolicy;
   if (input.db.hasSessionArtifactsOutsidePolicy({ sessionId, policyKey })) input.db.deleteSessionIndexData({ sessionId });
   const state = input.db.getExternalSourceState({ sessionId });
-  const frontier: Frontier = state?.cursor ? JSON.parse(state.cursor) : { type: 'page' };
+  let frontier: Frontier = state?.cursor ? JSON.parse(state.cursor) : { type: 'page' };
+  // Readers without a tail watermark can refresh only from the page head.
+  // That read replaces their snapshot; it is not an append at new ordinals.
+  const restartSnapshot = frontier.type === 'tail' && !frontier.cursor;
+  if (restartSnapshot) frontier = { type: 'page' };
   const effectiveCutoff = resolveMemoryCoverageCreatedAtCutoffMs({ policy: policy.coveragePolicy,
     nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs, historyDays: external.historyDays });
   input.db.pruneSessionArtifacts({ sessionId, policyKey, ...(effectiveCutoff === null ? {} : { createdAtCutoffMs: effectiveCutoff }) });
@@ -184,7 +188,11 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
       ? { type: 'page', cursor: result.value.nextCursor, ...(tailCursor ? { tailCursor } : {}) }
       : { type: 'tail', ...(tailCursor ? { cursor: tailCursor } : {}) };
   }
-  const nextOrdinal = state?.nextOrdinal ?? 1;
+  // Preserve the previous searchable snapshot when the boundary read fails.
+  // Once a replacement page is available, retire its old text and cursor as
+  // one projection through the existing source-removal owner.
+  if (restartSnapshot) input.db.deleteSessionIndexData({ sessionId });
+  const nextOrdinal = restartSnapshot ? 1 : state?.nextOrdinal ?? 1;
   const semanticItems = extractExternalMemoryTranscriptItems(items, contentPolicy);
   const extracted = semanticItems.map((item, index) => ({ ...item, seq: nextOrdinal + index,
     sourceOrder: frontier.type === 'tail' ? nextOrdinal + index : -(nextOrdinal - 1) - semanticItems.length + index }));

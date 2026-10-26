@@ -106,6 +106,7 @@ describe('memory worker native source readiness', () => {
       const item = { phase, ...process.memoryUsage(), details: { isolates: heapReport(report), databases,
         loopDelayMaxMs: loopDelay.max / 1e6, sources: worker?.getIndexSources?.().length, watchedFiles: fileChanges.size } };
       measurements.push(item);
+      console.info('R237_MEMORY', JSON.stringify(item));
     };
     try {
       const project = join(directory, 'claude', 'projects', 'project');
