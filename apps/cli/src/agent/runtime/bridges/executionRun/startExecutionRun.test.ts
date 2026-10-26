@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { accountSettingsParse, BUILT_IN_ROLES_V1, resolveRoleSelectionV1, ProviderBoundModelRefSchema } from '@happier-dev/protocol';
 import { tmpdir } from 'node:os';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,7 +23,6 @@ import type { ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunStructuredMeta } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
-import { accountSettingsParse, BUILT_IN_ROLES_V1, resolveRoleSelectionV1, ProviderBoundModelRefSchema } from '@happier-dev/protocol';
 import { TaskProfile } from '@/agent/executionRuns/profiles/task/TaskProfile';
 import { projectRetainedExecutionRunState, projectExecutionRunHostLoss } from './retainedState';
 import { projectExecutionRunPublicState } from './publicState';
@@ -741,8 +741,10 @@ describe('startExecutionRun', () => {
       expect(projectExecutionRunPublicState(terminal.state)).not.toHaveProperty('workflowScope');
     } finally { await voiceAgentManager.dispose(); }
   });
-  it('refuses a role start without Account role-override authority before creating a run', async () => {
+  it.each(['unavailable', 'ready'] as const)('refuses a role start without an admitted snapshot before creating a run (Account %s)', async accountAuthority => {
+    const previous = getActiveAccountSettingsSnapshot();
     clearActiveAccountSettingsSnapshot();
+    if (accountAuthority === 'ready') publishEmptyAccountRoleOverrides();
     const runs = new Map<string, ExecutionRunState>();
     const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('unused'); } });
     try {
@@ -755,9 +757,15 @@ describe('startExecutionRun', () => {
         getNowMs: () => 1, budgetRegistry: null, runs, controllers: new Map(),
         enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {}, finishRun: async () => {},
         executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
-      })).rejects.toMatchObject({ code: 'account_role_overrides_unavailable' });
+      })).rejects.toMatchObject({ code: accountAuthority === 'ready' ? 'target_unavailable' : 'account_role_overrides_unavailable',
+        details: { executionRunStart: { runCreation: 'noRunCreated', ...(accountAuthority === 'ready' ? { refusal: {
+          code: 'agent_start_context_unavailable', phase: 'agent_start_context',
+        } } : {}) } } });
       expect(runs.size).toBe(0);
-    } finally { await voiceAgentManager.dispose(); }
+    } finally {
+      await voiceAgentManager.dispose();
+      if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+    }
   });
 
   it('starts Second opinion with its canonical role plan, read-only ceiling and strict verdict contract', async () => {
@@ -1510,6 +1518,12 @@ describe('startExecutionRun', () => {
           runClass: 'bounded',
           ioMode: 'streaming',
         },
+        finalizeStartParamsForRuntime: async params => {
+          const patch = await ScmDiffSummaryProfile.finalizeStartParams?.({ sessionId: params.sessionId,
+            request: params as unknown as Parameters<NonNullable<typeof ScmDiffSummaryProfile.finalizeStartParams>>[0]['request'],
+            cwd: tmpdir() });
+          return { ...params, ...patch };
+        },
         parentProvider: TEST_BACKEND_ID,
         sendAcp: async () => {},
         streamedTranscriptSession: null,
@@ -1533,6 +1547,7 @@ describe('startExecutionRun', () => {
         startSettled = true;
       });
       await vi.waitFor(() => {
+        expect(createRuntime).not.toHaveBeenCalled();
         expect(finishRun).toHaveBeenCalledOnce();
       });
       expect(startSettled).toBe(false);

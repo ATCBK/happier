@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Collection, DetailsPaneFooter } from '@happier-dev/plugin-ui/components';
 import {
@@ -18,7 +17,6 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -102,6 +100,7 @@ export function capabilityAddChrome(frame: Readonly<{ title: string; subtitle?: 
     title: frame.title,
     // Explicit nulls: the chrome owner merges patches, so leaving Registries must clear its back link and subtitle.
     leading: null,
+    leadingPlacement: null,
     subtitle: frame.subtitle ?? null,
     testID: frame.testID,
     closeButtonTestID: `${frame.testID}:close`,
@@ -238,6 +237,8 @@ export function CapabilityAddModalBody<Item>(
                 title: level.header.title,
                 ...(level.header.subtitle === undefined ? {} : { subtitle: level.header.subtitle }),
                 leading: <CapabilityAddBackLink label={title} onPress={level.back} testID={`${testID}:back`} />,
+                // A phone's way back takes its own row; the title and purpose then stand on the gutter beneath it.
+                leadingPlacement: 'above' as const,
               }
             : {}),
       });
@@ -286,7 +287,6 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s4,
-    minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
     paddingRight: theme.space.s16,
   },
 }));

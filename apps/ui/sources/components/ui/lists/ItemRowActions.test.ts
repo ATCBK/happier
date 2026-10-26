@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { collectUnexpectedRawTextNodes, renderScreen } from '@/dev/testkit';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
@@ -12,12 +12,22 @@ const viewport = vi.hoisted(() => ({ width: 320, height: 800 }));
 // The focus ring is keyboard-only: its owner records the last input at the document when it loads, so the
 // document boundary exists before any import and the case below presses a key through its listener.
 const documentInput = vi.hoisted(() => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const listeners = new Map<string, (event: unknown) => void>();
     const document = {
         addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, listener); },
+        getElementById: (_id: string) => null,
     };
     (globalThis as { document?: unknown }).document = document;
-    return { listeners, document };
+    // The pointer owner reads hardware identity once, including during imports of shared chrome.
+    (globalThis as { window?: unknown }).window = {
+        matchMedia: (query: string) => ({ matches: query === '(pointer: coarse)' || query === '(hover: none)', media: query }),
+    };
+    return { listeners, document, previousWindow };
+});
+afterAll(() => {
+    if (documentInput.previousWindow) Object.defineProperty(globalThis, 'window', documentInput.previousWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
 });
 installUiListsCommonModuleMocks({
     reactNative: async () => {
@@ -25,7 +35,7 @@ installUiListsCommonModuleMocks({
         return createReactNativeWebMock({
             // Exercise fallback scheduling when this native boundary never invokes its callback.
             InteractionManager: { runAfterInteractions: () => ({ cancel: () => {} }) },
-            useWindowDimensions: () => ({ ...viewport, scale: 1, fontScale: 1 }),
+            Dimensions: { get: () => ({ ...viewport, scale: 1, fontScale: 1 }) },
         });
     },
 });
@@ -566,7 +576,7 @@ describe('ItemRowActions', () => {
         }
     });
 
-    it('gives inline icon actions a 44px target and visible web focus ring', async () => {
+    it('draws inline icon actions at their own size with a visible web focus ring', async () => {
         const { ItemRowActions } = await import('./ItemRowActions');
 
         const screen = await renderScreen(React.createElement(ItemRowActions, {
@@ -594,58 +604,20 @@ describe('ItemRowActions', () => {
         const base = flatten(action!.props.style({ pressed: false, focused: false }));
         const focused = flatten(action!.props.style({ pressed: false, focused: true }));
 
-        // The target is the rendered frame and nothing else. `hitSlop` cannot contribute
-        // to it: react-native-web 0.21 implements it only in the legacy `Touchable`
-        // export, so on web — which is what the desktop app ships — a slop-declared
-        // target is a target that does not exist.
-        expect(action!.props.hitSlop).toBeUndefined();
-        expect(Number(base.width)).toBeGreaterThanOrEqual(44);
-        expect(Number(base.height)).toBeGreaterThanOrEqual(44);
+        // The drawn control is the whole box; its hit area belongs to the shared owner.
+        expect(Number(base.width)).toBe(28);
+        expect(Number(base.height)).toBe(28);
         expect(focused.outlineStyle).toBe('solid');
         expect(focused.outlineWidth).toBeGreaterThanOrEqual(2);
         expect(focused.outlineColor).toBeTruthy();
     });
 
-    it('gives inline icon actions a 48dp Android target', async () => {
+    // A touch target is a hit area, never a drawn size: the row measures the drawn control, and the
+    // shared hit-area owner reaches the target past it (native hitSlop, an invisible web frame),
+    // sideways only half the row gap so neighbouring targets never overlap.
+    it('reaches the touch target past a dense control without moving the row or overlapping its neighbour', async () => {
         const { Platform } = await import('react-native');
-        const previousPlatform = Platform.OS;
-        (Platform as { OS: string }).OS = 'android';
-        try {
-            const { ItemRowActions } = await import('./ItemRowActions');
-            const screen = await renderScreen(React.createElement(ItemRowActions, {
-                title: 'Plugin',
-                compactThreshold: 200,
-                actions: [
-                    {
-                        id: 'disable',
-                        title: 'Disable plugin',
-                        icon: 'x-circle',
-                        inlineTestID: 'disable-plugin-android',
-                        onPress: vi.fn(),
-                    },
-                ],
-            }));
-
-            const action = screen.findByTestId('disable-plugin-android');
-            expect(action).toBeTruthy();
-            const flatten = (style: unknown) => (Array.isArray(style)
-                ? Object.assign({}, ...style.filter(Boolean))
-                : (style ?? {})) as Record<string, unknown>;
-            const base = flatten(action!.props.style({ pressed: false, focused: false }));
-            expect(action!.props.hitSlop).toBeUndefined();
-            expect(Number(base.width)).toBeGreaterThanOrEqual(48);
-            expect(Number(base.height)).toBeGreaterThanOrEqual(48);
-        } finally {
-            (Platform as { OS: string }).OS = previousPlatform;
-        }
-    });
-
-    // A row that owns its own density can opt out of the 44px *drawn* box, but it may not opt out
-    // of the touch target. `hitSlop` cannot carry that target — react-native-web ignores it on
-    // Pressable — so the press box is a real, larger frame paired with an equal negative margin:
-    // the pointer gets the frame, the row still measures the drawn 32.
-    it('expands the dense control’s press box without moving the row or overlapping its neighbour', async () => {
-        const { Platform } = await import('react-native');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const previousPlatform = Platform.OS;
         const flatten = (style: unknown) => (Array.isArray(style)
             ? Object.assign({}, ...style.filter(Boolean))
@@ -655,51 +627,44 @@ describe('ItemRowActions', () => {
 
         try {
             for (const platform of [
-                { os: 'web', minimumTargetSize: 44 },
-                { os: 'android', minimumTargetSize: 48 },
+                { os: 'android', target: 48 },
+                { os: 'ios', target: 44 },
             ] as const) {
                 (Platform as { OS: string }).OS = platform.os;
                 const { ItemRowActions } = await import('./ItemRowActions');
                 const testIDs = [`dense-a-${platform.os}`, `dense-b-${platform.os}`] as const;
-                const screen = await renderScreen(React.createElement(ItemRowActions, {
-                    title: 'Sidebar',
-                    compactThreshold: 200,
-                    actionControlSizePx: DRAWN_SIZE,
-                    gap: ROW_GAP,
-                    actions: [
-                        { id: 'newSession', title: 'New session', icon: 'plus', inlineTestID: testIDs[0], onPress: vi.fn() },
-                        { id: 'favorite', title: 'Favorite', icon: 'star', inlineTestID: testIDs[1], onPress: vi.fn() },
-                    ],
-                }));
+                const screen = await renderScreen(React.createElement(
+                    HappierUiPlatformProvider,
+                    { platform: { platform: platform.os, colorScheme: 'light' } },
+                    React.createElement(ItemRowActions, {
+                        title: 'Sidebar',
+                        compactThreshold: 200,
+                        actionControlSizePx: DRAWN_SIZE,
+                        gap: ROW_GAP,
+                        actions: [
+                            { id: 'newSession', title: 'New session', icon: 'plus', inlineTestID: testIDs[0], onPress: vi.fn() },
+                            { id: 'favorite', title: 'Favorite', icon: 'star', inlineTestID: testIDs[1], onPress: vi.fn() },
+                        ],
+                    }),
+                ));
 
                 for (const inlineTestID of testIDs) {
                     const action = screen.findByTestId(inlineTestID);
                     expect(action, inlineTestID).toBeTruthy();
-                    expect(action!.props.hitSlop, inlineTestID).toBeUndefined();
-
                     const box = flatten(action!.props.style({ pressed: false, focused: false }));
-                    const width = Number(box.width);
-                    const height = Number(box.height);
-                    // The frame gives back exactly what it took, per side.
-                    const expandX = -Number(box.marginHorizontal ?? 0);
-                    const expandY = -Number(box.marginVertical ?? 0);
+                    // 1. The row's layout footprint is the drawn control.
+                    expect(Number(box.width), `${inlineTestID} layout width`).toBe(DRAWN_SIZE);
+                    expect(Number(box.height), `${inlineTestID} layout height`).toBe(DRAWN_SIZE);
+                    expect(box.marginHorizontal ?? 0, `${inlineTestID} no compensating margin`).toBe(0);
 
-                    // 1. The press box carries the platform floor on the axis that has room.
-                    //    Vertical is free: an icon row has no vertical neighbour.
-                    expect(height, `${inlineTestID} press height`).toBe(platform.minimumTargetSize);
-                    expect(width, `${inlineTestID} press width`).toBeGreaterThan(DRAWN_SIZE);
-                    // Dense pointer layout floor, WCAG 2.2 AA SC 2.5.8.
-                    expect(width, `${inlineTestID} SC 2.5.8`).toBeGreaterThanOrEqual(24);
-
-                    // 2. The row's layout footprint is unchanged — still the drawn 32.
-                    expect(width - (expandX * 2), `${inlineTestID} layout width`).toBe(DRAWN_SIZE);
-                    expect(height - (expandY * 2), `${inlineTestID} layout height`).toBe(DRAWN_SIZE);
-
-                    // 3. Adjacent targets tile, never overlap: each reaches `expandX` into the
-                    //    shared gap, so two of them may not consume more than the gap itself.
-                    //    This is the assertion the previous hitSlop arithmetic could not make.
-                    expect(expandX * 2, `${inlineTestID} overlap`).toBeLessThanOrEqual(ROW_GAP);
+                    // 2. Vertically the hit area takes the whole platform target.
+                    const slop = action!.props.hitSlop as Record<string, number>;
+                    expect(DRAWN_SIZE + slop.top + slop.bottom, `${inlineTestID} hit height`).toBe(platform.target);
+                    // 3. Sideways it reaches half the gap, so adjacent targets tile and never overlap.
+                    expect(slop.left + slop.right, `${inlineTestID} overlap`).toBeLessThanOrEqual(ROW_GAP);
+                    expect(DRAWN_SIZE + slop.left + slop.right, `${inlineTestID} SC 2.5.8`).toBeGreaterThanOrEqual(24);
                 }
+                await screen.unmount();
             }
         } finally {
             (Platform as { OS: string }).OS = previousPlatform;

@@ -297,6 +297,9 @@ describe('Settings › Roles detail', () => {
         });
         const screen = await renderRole(roleId);
         const input = () => screen.findByTestId('settings.roles.detail.instructions')!;
+        // The instructions read as structured text first; pressing them opens the field.
+        expect(screen.findByTestId('settings.roles.detail.instructions')).toBeFalsy();
+        await screen.pressByTestIdAsync('settings.roles.detail.instructions.read');
         expect(input().props.editable).not.toBe(false);
         await act(async () => { input().props.onChangeText('Reader instructions'); });
         await act(async () => { input().props.onBlur(); });

@@ -21,13 +21,10 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('InlineAddExpander actions', () => {
-  it('are the shared button family: touch floor under a finger, a disabled Save that cannot be pressed', async () => {
+  it('are the shared button family: drawn at design size under a finger, a disabled Save that cannot be pressed', async () => {
     // The primary pointer is a browser boundary: a phone browser reports touch points and no hover.
     vi.stubGlobal('navigator', { maxTouchPoints: 5 });
     const { InlineAddExpander } = await import('./InlineAddExpander');
-    const { resolveMinimumInteractiveTargetSize } =
-      await import('../interactiveTargetSize');
-    const floor = resolveMinimumInteractiveTargetSize('web');
     const onSave = vi.fn();
     const onCancel = vi.fn();
     const screen = await renderScreen(
@@ -49,13 +46,9 @@ describe('InlineAddExpander actions', () => {
     );
     const save = screen.findByTestId('add-save')!;
     const cancel = screen.findByTestId('add-cancel')!;
-    expect(floor).toBe(44);
-    expect(flattenStyle(save.props.style).minHeight).toBeGreaterThanOrEqual(
-      floor,
-    );
-    expect(flattenStyle(cancel.props.style).minHeight).toBeGreaterThanOrEqual(
-      floor,
-    );
+    // A touch target is a hit area, not a drawn size: neither button is drawn at 44.
+    expect(flattenStyle(save.props.style).minHeight).toBeUndefined();
+    expect(flattenStyle(cancel.props.style).minHeight).toBeUndefined();
     expect(
       save.props.accessibilityState?.disabled ?? save.props['aria-disabled'],
     ).toBe(true);

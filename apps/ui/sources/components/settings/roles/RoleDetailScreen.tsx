@@ -22,7 +22,9 @@ import { useRoleSessionCount } from '@/components/roles/catalog/useRoleSessionCo
 import { useRoleMark } from '@/components/roles/catalog/useRoleMark';
 import { describeRoleRunsAs, describeRoleSource } from '@/components/roles/catalog/rolePresentation';
 import { resolvedRoleToArtifact } from '@/sync/domains/roles/roleCatalog';
-import { HAPPIER_PAGE_METRICS, HappierPressable, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierFieldTextBox, HappierPressable, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -46,8 +48,8 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { Pressable, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Modal } from '@/modal';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -60,6 +62,7 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
+import { readRoleInstructionsMarkdown } from './roleInstructionsMarkdown';
 import {
   ROLES_COLLECTION_ROOT,
   recordRoleCollectionVisit,
@@ -136,8 +139,9 @@ async function reportFailure(
 
 /**
  * One role in Settings › Roles: its identity, its instructions, how it runs and its Launch profile.
- * Built-in, plugin and shared roles save the reader's changes as a `rolesV1` override (Reset removes
- * it); the reader's own roles save to their Artifact under its revision.
+ * Built-in, plugin and view-only shared roles save the reader's changes in the prompt-library
+ * role-overrides row (Reset removes the override); editable user/shared roles save to their Artifact
+ * under its revision.
  */
 export const RoleDetailScreen = React.memo(function RoleDetailScreen(
   props: Readonly<{ target: RoleDetailTarget }>,
@@ -383,13 +387,8 @@ const RoleDetail = React.memo(function RoleDetail(
           ) : undefined
         }
       >
-        <CommitOnBlurField
-          testID="settings.roles.detail.instructions"
+        <RoleInstructionsField
           value={role.instructions}
-          multiline
-          presentation="document"
-          minLines={4}
-          accessibilityLabel={t('roles.settings.instructionsTitle')}
           onCommit={(instructions) => {
             void commit({ instructions });
           }}
@@ -632,6 +631,9 @@ function CommitOnBlurField(
     testID?: string;
     onDraftChange?: (value: string) => void;
     presentation?: 'field' | 'document';
+    autoFocus?: boolean;
+    /** Focus left the field, after any changed draft was committed. */
+    onBlurred?: () => void;
   }>,
 ) {
   const [draft, setDraft] = React.useState(props.value);
@@ -650,7 +652,9 @@ function CommitOnBlurField(
       }}
       onBlur={() => {
         if (draft !== props.value) props.onCommit(draft);
+        props.onBlurred?.();
       }}
+      autoFocus={props.autoFocus}
       accessibilityLabel={props.accessibilityLabel}
       multiline={props.multiline}
       minLines={props.minLines}
@@ -658,6 +662,55 @@ function CommitOnBlurField(
       placeholder={props.placeholder}
       presentation={props.presentation}
     />
+  );
+}
+
+/**
+ * A role's instructions: read as a list, one rule per line (lab `settings-R`), and edited in place by
+ * pressing them. The stored text is exactly what the field holds; only the reading is structured.
+ */
+function RoleInstructionsField(
+  props: Readonly<{ value: string; onCommit: (value: string) => void }>,
+) {
+  const { theme } = useUnistyles();
+  const [editing, setEditing] = React.useState(false);
+  const markdown = React.useMemo(() => readRoleInstructionsMarkdown(props.value), [props.value]);
+  const startEditing = React.useCallback(() => setEditing(true), []);
+  const stopEditing = React.useCallback(() => setEditing(false), []);
+  if (editing || props.value.trim().length === 0) {
+    return (
+      <CommitOnBlurField
+        testID="settings.roles.detail.instructions"
+        value={props.value}
+        multiline
+        presentation="document"
+        minLines={4}
+        autoFocus={editing}
+        accessibilityLabel={t('roles.settings.instructionsTitle')}
+        onCommit={props.onCommit}
+        onBlurred={stopEditing}
+      />
+    );
+  }
+  return (
+    <Pressable
+      testID="settings.roles.detail.instructions.read"
+      accessibilityRole="button"
+      accessibilityLabel={t('roles.settings.instructionsTitle')}
+      accessibilityHint={t('common.edit')}
+      onPress={startEditing}
+    >
+      <HappierFieldTextBox
+        presentation="document"
+        multiline
+        colors={resolveFieldBoxColors(theme, 'idle', 'document')}
+      >
+        {/* The field box centres what it holds; the reading fills its width, left-aligned. */}
+        <View style={styles.instructionsRead}>
+          <MarkdownView markdown={markdown} textStyle={styles.instructionsBody} />
+        </View>
+      </HappierFieldTextBox>
+    </Pressable>
   );
 }
 
@@ -749,6 +802,16 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s4,
+  },
+  instructionsRead: {
+    alignSelf: 'stretch',
+    // The press target is a <button> on web, which centres its text; the reading is left-aligned.
+    textAlign: 'left',
+  },
+  instructionsBody: {
+    ...Typography.variant('body'),
+    color: theme.colors.text.primary,
+    textAlign: 'left',
   },
   instructionsState: {
     flexDirection: 'row',

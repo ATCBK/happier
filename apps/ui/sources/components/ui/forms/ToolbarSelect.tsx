@@ -6,7 +6,6 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 
@@ -103,7 +102,7 @@ export const ToolbarSelect = React.memo(function ToolbarSelect(props: Readonly<{
                     accessibilityLabel={`${props.label}: ${selectedTitle}`}
                     expanded={open}
                     hasPopup="menu"
-                    style={{ minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), minWidth: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center', ...(props.fill ? { width: '100%' } : null) }}
+                    style={{ justifyContent: 'center', ...(props.fill ? { width: '100%' } : null) }}
                 >
                     {renderDropdownItemTriggerRightElement({
                         detail: selectedTitle,

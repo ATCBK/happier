@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 import { installModalComponentCommonModuleMocks } from '../modalComponentTestHelpers';
@@ -51,6 +50,7 @@ beforeEach(() => {
 afterEach(async () => {
     await standardCleanup();
     restoreBrowserGlobals?.();
+    vi.unstubAllGlobals();
     runtime.platform = 'web';
 });
 
@@ -59,18 +59,31 @@ describe('ModalCloseButton', () => {
         ['touch web', 'web', 44],
         ['iOS', 'ios', 44],
         ['Android', 'android', 48],
-    ] as const)('keeps a physical, focusable %s close target without relying on hitSlop', async (_name, platform, minimum) => {
+    ] as const)('draws the %s close square at its design size and reaches the finger target with the hit area', async (_name, platform, minimum) => {
         runtime.platform = platform;
+        // A browser's primary pointer is a boundary: a phone browser reports touch points and no hover.
+        vi.stubGlobal('navigator', { maxTouchPoints: 5 });
         const { ModalCloseButton } = await import('./ModalCloseButton');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const onPress = vi.fn();
-        const screen = await renderScreen(<ModalCloseButton onPress={onPress} />);
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                <ModalCloseButton onPress={onPress} />
+            </HappierUiPlatformProvider>,
+        );
 
-        const close = screen.findByTestId('modal-card-close');
-        expect(close?.props.accessibilityRole).toBe('button');
-        expect(close?.props.focusable).toBe(true);
-        expect(close?.props.hitSlop).toBeUndefined();
-        expect(readPhysicalTarget(close!)).toEqual({ width: minimum, height: minimum });
-        expect(resolveMinimumInteractiveTargetSize(platform)).toBe(minimum);
+        const close = () => screen.findByTestId('modal-card-close')!;
+        expect(close().props.accessibilityRole).toBe('button');
+        expect(close().props.focusable).toBe(true);
+        // A touch target is a hit area, not a drawn size (DESIGN.md): the 20px glyph sits in a 28px square.
+        expect(readPhysicalTarget(close())).toEqual({ width: 28, height: 28 });
+        const inset = (minimum - 28) / 2;
+        if (platform === 'web') {
+            const frame = screen.root.findAll((node) => node.props?.dataSet?.happierHitArea === 'true')[0];
+            expect(frame?.props.style).toMatchObject({ top: -inset, bottom: -inset, left: -inset, right: -inset });
+        } else {
+            expect(close().props.hitSlop).toEqual({ top: inset, bottom: inset, left: inset, right: inset });
+        }
 
         screen.pressByTestId('modal-card-close');
         expect(onPress).toHaveBeenCalledOnce();

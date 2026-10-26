@@ -31,6 +31,8 @@ export interface InlineAddExpanderProps {
     saveLabel: string;
     cancelTestID?: string;
     saveTestID?: string;
+    /** Further secondary operations on the form's value (Clear), between Save and Cancel. */
+    extraActions?: React.ReactNode;
 
     autoFocusRef?: React.RefObject<React.ElementRef<typeof TextInput> | null>;
     expandedContainerStyle?: StyleProp<ViewStyle>;
@@ -52,6 +54,7 @@ export function InlineAddExpander({
     saveLabel,
     cancelTestID,
     saveTestID,
+    extraActions,
     autoFocusRef,
     expandedContainerStyle,
 }: InlineAddExpanderProps) {
@@ -90,6 +93,7 @@ export function InlineAddExpander({
                         <RoundButtonSizeScope size="normal" presentation="uniform">
                             <SectionButtonRow>
                                 <RoundButton testID={saveTestID} title={saveLabel} accessibilityLabel={saveLabel} onPress={onSave} disabled={saveDisabled} />
+                                {extraActions}
                                 <RoundButton testID={cancelTestID} display="secondary" title={cancelLabel} accessibilityLabel={cancelLabel} onPress={onCancel} />
                             </SectionButtonRow>
                         </RoundButtonSizeScope>

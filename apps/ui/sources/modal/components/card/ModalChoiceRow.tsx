@@ -1,9 +1,8 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { HappierPressable, happierFocusRingStyle } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 
 export type ModalChoice = Readonly<{
@@ -19,13 +18,13 @@ export type ModalChoice = Readonly<{
 /**
  * The alert idiom's choices: full-bleed text rows under a hairline, two side by side, three or more
  * stacked in the caller's order (DESIGN-9 N33). The one owner for the web alert and prompt cards.
- * Each choice is the shared pressable (focus ring, press lifecycle) at the device's target floor:
- * the platform touch floor under a finger, the dense row under a precise pointer.
+ * Each choice is the shared pressable (focus ring, press lifecycle) drawn at the row's own height;
+ * under a finger its hit area reaches the touch target above and below a side-by-side pair, and the
+ * stacked rows, which tile their column, stay on their drawn boxes.
  */
 export function ModalChoiceRow(props: Readonly<{ choices: readonly ModalChoice[] }>) {
     const { theme } = useUnistyles();
     const column = props.choices.length > 2;
-    const minHeight = resolveMinimumInteractiveTargetSize(Platform.OS);
     return (
         <View style={[styles.container, column ? styles.column : styles.row]}>
             {props.choices.map((choice, index) => (
@@ -36,9 +35,10 @@ export function ModalChoiceRow(props: Readonly<{ choices: readonly ModalChoice[]
                         accessibilityLabel={choice.text}
                         onPressIn={choice.onPressIn}
                         onPress={choice.onPress}
+                        // Choices are flush, so nothing reaches sideways; a stacked column is flush above and below too.
+                        hitReach={column ? 0 : { left: 0, right: 0 }}
                         style={({ pressed, focused }) => [
                             styles.choice,
-                            { minHeight },
                             pressed ? styles.choicePressed : null,
                             happierFocusRingStyle({ visible: focused, color: theme.colors.border.focus, placement: 'inset' }),
                         ]}

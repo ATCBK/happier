@@ -454,7 +454,7 @@ describe('OnboardingJourneyHost', () => {
     it.each([
         ['ios', 44],
         ['android', 48],
-    ] as const)('uses the canonical %s native bypass target size of %i', async (platform, minimumTargetSize) => {
+    ] as const)('keeps the %s native bypass at its design size, never at the %i target', async (platform, touchTarget) => {
         demoWorldState.bypassWorldMutation = true;
         platformState.os = platform;
         const { OnboardingJourneyHost } = await import('./OnboardingJourneyHost');
@@ -473,8 +473,9 @@ describe('OnboardingJourneyHost', () => {
         const bypass = screen.findByTestId('journey-host-skip-to-content');
 
         expect(bypass?.props.accessibilityRole).toBe('button');
-        expect(bypass?.props.style).toEqual(expect.arrayContaining([
-            expect.objectContaining({ minHeight: minimumTargetSize }),
+        expect(touchTarget).toBeGreaterThanOrEqual(44);
+        expect(bypass?.props.style).not.toEqual(expect.arrayContaining([
+            expect.objectContaining({ minHeight: touchTarget }),
         ]));
     });
 

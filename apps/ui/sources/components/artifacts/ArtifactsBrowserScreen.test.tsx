@@ -2,9 +2,9 @@ import * as React from 'react';
 import * as ReactNative from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, invokeTestInstanceHandler, pressTestInstanceAsync, renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, invokeTestInstanceHandler, pressTestInstanceAsync, renderHook, renderScreen } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactListHttpResponse, createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { ArtifactQuotaExceededError } from '@/sync/api/artifacts/apiArtifacts';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
@@ -289,28 +289,91 @@ describe('Artifacts browser recovery', () => {
             expect(served.requests.some(request => request.path === '/v1/artifacts/read')).toBe(false);
         } finally { await disconnect(); }
     });
+    it('keeps browser totals unknown until its listed inventory arrives without claiming a full census', async () => {
+        const accountId = 'owner';
+        const plain = (id: string, kind: string, title: string, at: number) => ({ id, ownerAccountId: accountId, access: 'owner' as const,
+            kind: 'other' as const, kindHint: kind, encryptionMode: 'plain' as const, publicAudience: 'none' as const,
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent({ kind, title }),
+            headerVersion: 1, bodyVersion: 1, seq: at, createdAt: at, updatedAt: at });
+        const rows = [
+            plain('11111111-1111-4111-8111-000000000001', 'prompt_doc.v2', 'Review checklist', 1),
+            plain('11111111-1111-4111-8111-000000000002', 'prompt_doc.v2', 'Release notes voice', 2),
+            plain('11111111-1111-4111-8111-000000000003', 'markdown', 'Quarterly plan', 3),
+        ];
+        const browserInventory = createDeferred<Response>();
+        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-browser-pending.test', accountId }],
+            route: request => {
+                if (request.path !== '/v1/artifacts' || request.method !== 'GET') return undefined;
+                if (request.url.searchParams.has('kinds')) return createArtifactListHttpResponse(request.url, rows);
+                return browserInventory.promise;
+            } });
+        disposeHome = served.dispose;
+        const disconnect = await served.restoreActiveConnection();
+        const { sync } = await import('@/sync/sync');
+        try {
+            // Context's exact-kind read admitted only the Prompt headers; the Account's full inventory is still unread.
+            await sync.fetchArtifactsList({ kinds: ['prompt_doc.v2'] });
+            expect(Object.keys(getStorage().getState().artifacts)).toHaveLength(2);
+            expect(getStorage().getState().artifactsLoaded).toBe(false);
+            const screen = await renderScreen(<AppPaneProvider><ArtifactsBrowserScreen /></AppPaneProvider>);
+            try {
+                await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:collection:stage'), 'onLayout', {
+                    nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } } }); });
+                // The rows stay usable under one plain "still loading" line; the count is not a final total.
+                expect(screen.findHostByTestId('artifacts:row:11111111-1111-4111-8111-000000000001')).not.toBeNull();
+                expect(screen.findByTestId('artifacts:pending')).not.toBeNull();
+                expect(screen.getTextContent()).not.toContain('artifacts.countPlural');
+                // A search the unread remainder could still answer is not a definitive "no match".
+                await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:search'), 'onChangeText', 'Quarterly'); });
+                expect(screen.findByTestId('artifacts:noMatch')).toBeNull();
+                expect(screen.findByTestId('artifacts:noMatchSoFar')).not.toBeNull();
+                expect(screen.findByTestId('artifacts:pending')).not.toBeNull();
+
+                await act(async () => { browserInventory.resolve(createArtifactListHttpResponse(
+                    new URL('https://artifact-browser-pending.test/v1/artifacts?browserListed=true'), rows)); });
+                await vi.waitFor(() => expect(screen.findByTestId('artifacts:pending')).toBeNull());
+                expect(screen.findByTestId('artifacts:noMatchSoFar')).toBeNull();
+                expect(screen.findHostByTestId('artifacts:row:11111111-1111-4111-8111-000000000003')).not.toBeNull();
+                await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:search'), 'onChangeText', 'zzz'); });
+                expect(screen.findByTestId('artifacts:noMatch')).not.toBeNull();
+                await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:search'), 'onChangeText', ''); });
+                expect(screen.getTextContent()).toContain('artifacts.countPlural(count=3)');
+                expect(getStorage().getState().artifactsLoaded).toBe(false);
+                expect(getStorage().getState().artifactBrowserLoaded).toBe(true);
+                const browserReads = served.requests.filter(request => request.path === '/v1/artifacts'
+                    && !request.url.searchParams.has('kinds'));
+                expect(browserReads.length).toBeGreaterThan(0);
+                expect(browserReads.every(request => request.url.searchParams.get('browserListed') === 'true')).toBe(true);
+            } finally { await screen.unmount(); }
+        } finally { await disconnect(); }
+    });
+
     it.each(['phone', 'panes-disabled'] as const)('retains selected details on %s and routes fresh opens', async transition => {
-        const dimensions = vi.spyOn(ReactNative, 'useWindowDimensions')
-            .mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        let viewport = { width: 1440, height: 1000, scale: 1, fontScale: 1 };
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockImplementation(() => viewport);
+        vi.spyOn(ReactNative.Dimensions, 'get').mockImplementation(() => viewport);
         getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: true } }));
         const artifacts = [artifactFixture('retained-view'), artifactFixture('fresh-view')];
         const element = () => <AppPaneProvider><ArtifactsBrowser artifacts={artifacts} initialOpenId="retained-view"
             loaded loadFailed={false} onRetry={() => {}} usage={null} /></AppPaneProvider>;
         const screen = await renderScreen(element());
         const viewer = screen.root.findByType(ArtifactView);
-        if (transition === 'phone') dimensions.mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        if (transition === 'phone') viewport = { width: 390, height: 844, scale: 1, fontScale: 1 };
         else await act(async () => getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: false } })));
         await screen.update(element());
         expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
         expect(viewer.props.artifactId).toBe('retained-view');
+        await screen.pressByTestIdAsync('artifacts:detailPane:openAsPage');
+        expect(router.push).toHaveBeenLastCalledWith('/artifacts/retained-view');
         // A new selection still follows the phone/disabled-pane route contract.
         await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:collection:stage'), 'onLayout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } },
         }); });
-        await act(async () => { invokeTestInstanceHandler(rowMenu(screen, 'fresh-view'), 'onSecondaryAction', 'open'); });
+        // A phone's row carries no overflow, so opening is the row's own press.
+        await screen.pressByTestIdAsync('artifacts:row:fresh-view');
         expect(router.push).toHaveBeenLastCalledWith('/artifacts/fresh-view');
         expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
-        dimensions.mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        viewport = { width: 1440, height: 1000, scale: 1, fontScale: 1 };
         await act(async () => getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: true } })));
         await screen.update(element());
         expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
@@ -319,6 +382,19 @@ describe('Artifacts browser recovery', () => {
     it('names a code document by its language, as its own page does, rather than as a plain document', async () => {
         const screen = await renderRows([artifactFixture('code-1', { title: 'relayHandshake.ts', header: { title: 'relayHandshake.ts' }, body: 'export const retries = 5;' })]);
         expect(screen.findAll(node => node.props.accessibilityLabel === 'relayHandshake.ts, TypeScript').length).toBeGreaterThan(0);
+    });
+
+    it('says where a row came from only when it was not simply written by the viewer', async () => {
+        const screen = await renderRows([
+            artifactFixture('own'),
+            artifactFixture('received', { access: 'view' }),
+            artifactFixture('from-session', { provenance: { savedBy: { kind: 'person', accountId: 'owner' }, source: {
+                machineId: 'machine', rootPath: '/repo', path: 'docs/note.txt', sha: 'a'.repeat(64) } } }),
+        ]);
+        expect(screen.findByTestId('artifacts:row:own:provenance')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('artifacts.browser.provenance.savedByYou');
+        expect(screen.getTextContent()).toContain('artifacts.browser.provenance.sharedWithYou');
+        expect(screen.findByTestId('artifacts:row:from-session:provenance')).not.toBeNull();
     });
 
     it('shows wide list headings for the actual anatomy and retains row operations when narrowed', async () => {
@@ -334,7 +410,9 @@ describe('Artifacts browser recovery', () => {
     });
 
     it('keeps phone search, choices and count while omitting the redundant introduction', async () => {
-        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        const viewport = { width: 390, height: 844, scale: 1, fontScale: 1 };
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue(viewport);
+        vi.spyOn(ReactNative.Dimensions, 'get').mockReturnValue(viewport);
         const screen = await renderRows([artifactFixture('document')]);
         expect(screen.getTextContent()).not.toContain('artifacts.browser.description');
         expect(screen.findByTestId('artifacts:search')).not.toBeNull();
@@ -342,8 +420,23 @@ describe('Artifacts browser recovery', () => {
         expect(screen.findByTestId('artifacts:present')).not.toBeNull();
     });
 
+    it('starts a phone document from the floating + and keeps rows free of a permanent overflow (lab A1p)', async () => {
+        const viewport = { width: 390, height: 844, scale: 1, fontScale: 1 };
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue(viewport);
+        vi.spyOn(ReactNative.Dimensions, 'get').mockReturnValue(viewport);
+        const screen = await renderRows([artifactFixture('document')]);
+        expect(screen.findByTestId('artifacts:new')).toBeNull();
+        expect(screen.findAll(node => node.props.accessibilityLabel === 'artifacts.browser.newDocument'
+            && typeof node.props.onPress === 'function').length).toBeGreaterThan(0);
+        expect(screen.findAll(node => node.props.testID === 'artifacts:row:document' && Array.isArray(node.props.secondaryActions))).toHaveLength(0);
+        // The view switch sits with the choices, so the search keeps the whole row above them.
+        expect(screen.findByTestId('artifacts:view:list')).not.toBeNull();
+    });
+
     it('draws the phone Folders toolbar as one compact row: kind · icon-only New folder · view (lab c-art Tp)', async () => {
-        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        const viewport = { width: 390, height: 844, scale: 1, fontScale: 1 };
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue(viewport);
+        vi.spyOn(ReactNative.Dimensions, 'get').mockReturnValue(viewport);
         const screen = await renderRows([artifactFixture('document')]);
         await screen.pressByTestIdAsync('artifacts:view:folders');
         expect(screen.findByTestId('artifacts:kind')).not.toBeNull();

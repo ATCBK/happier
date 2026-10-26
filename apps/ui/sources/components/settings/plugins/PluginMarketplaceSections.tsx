@@ -1185,7 +1185,6 @@ export function DiscoverListingsSection(props: Readonly<{
                             testIDPrefix="settings.plugins.marketplace.category"
                             accessibilityLabel={t('settingsPlugins.surfaces.categoriesLabel')}
                             segmentSizing="content"
-                            targetSize="platform"
                         />
                     </ScrollView>
                 </View>

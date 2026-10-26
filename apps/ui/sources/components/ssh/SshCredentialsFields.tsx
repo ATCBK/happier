@@ -316,7 +316,6 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
                             testIDPrefix={testIDs.sshAuthMethod ?? resolveTestID('sshAuthMethod')}
                             accessibilityLabel={t('settings.machineSetupRemoteSshAuthMethodLabel')}
                             segmentSizing="content"
-                            targetSize="platform"
                         />
                     </ScrollView>
                     <MachineSetupFieldSupport>

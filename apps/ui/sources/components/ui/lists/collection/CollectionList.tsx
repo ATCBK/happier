@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
     HAPPIER_COLLECTION_LIST_ROW_STYLE,
     HAPPIER_COLLECTION_LIST_METRICS,
     HAPPIER_COLLECTION_LIST_TEXT,
     resolveHappierCollectionListRowPadding,
+    resolveHappierCollectionTreeChildIndentPx,
     HappierCollectionList,
+    HappierDisclosureChevron,
     HappierCollectionListGroupLabel,
     useHappierCollectionDraftRowTitle,
     type HappierCollectionDraftTitleStore,
@@ -15,6 +17,8 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -22,6 +26,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 /**
  * Happier core's binding of the Collection `list` presentation: the app's own text, grouped list
@@ -82,6 +87,36 @@ const styles = StyleSheet.create((theme) => ({
     dimmedTitle: {
         color: theme.colors.text.secondary,
     },
+    // A tree row's leading cluster: the caret's column, then the parent's bare mark in the glyph box.
+    treeLead: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: HAPPIER_COLLECTION_LIST_METRICS.treeCaretGap,
+    },
+    treeCaret: {
+        width: HAPPIER_COLLECTION_LIST_METRICS.treeCaretBox,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    treeMark: {
+        width: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // The row's end column: the status slot, then the quiet count, on one right edge.
+    trailing: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s6,
+    },
+    trailingCount: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.tertiary,
+        fontVariant: ['tabular-nums'],
+    },
+    describedRow: {
+        minHeight: HAPPIER_COLLECTION_LIST_METRICS.describedRowMinHeight,
+    },
     // A path under a row's title (the open checkout's folder): mono, at the subtitle's size.
     monoSubtitle: {
         ...Typography.mono(),
@@ -119,6 +154,7 @@ const collectionListHost: HappierCollectionListHost = {
             style={textRoleStyles[props.role]}
             {...(props.numberOfLines === undefined ? {} : { numberOfLines: props.numberOfLines })}
             {...(props.accessibilityRole === undefined ? {} : { accessibilityRole: props.accessibilityRole })}
+            {...(props.testID === undefined ? {} : { testID: props.testID })}
         >
             {props.children}
         </Text>
@@ -130,11 +166,33 @@ const collectionListHost: HappierCollectionListHost = {
             onChangeText={props.onChangeText}
             placeholder={props.placeholder}
             style={props.style as StyleProp<ViewStyle>}
+            {...(props.trailing == null ? {} : { trailing: props.trailing })}
+            {...(props.anchorRef === undefined ? {} : { anchorRef: props.anchorRef })}
             {...(props.testID === undefined ? {} : { testID: props.testID })}
+            {...(props.autoFocus ? { autoFocus: true } : {})}
+        />
+    ),
+    // A column's Search icon, drawn like the Sessions header's and the filter beside it; selected while open.
+    SearchToggle: (props) => (
+        <IconButton
+            {...(props.testID === undefined ? {} : { testID: props.testID })}
+            accessibilityLabel={props.accessibilityLabel}
+            tooltip={props.accessibilityLabel}
+            variant="plain"
+            iconSize={ICON_SIZE.sm}
+            selected={props.open}
+            iconName="magnifying-glass"
+            onPress={props.onPress}
         />
     ),
     surfaceStyle: styles.surface,
+    useGroupGlyphColor: useCollectionListGroupGlyphColor,
 };
+
+/** A group label's own glyphs (its disclosure chevron): the quiet tertiary ink of its count. */
+function useCollectionListGroupGlyphColor(): string {
+    return useUnistyles().theme.colors.text.tertiary;
+}
 
 const collectionListPlaneHost: HappierCollectionListHost = { ...collectionListHost, surfaceStyle: styles.plane };
 
@@ -156,22 +214,12 @@ export const CollectionList = React.memo(function CollectionList(props: Omit<Hap
     return <HappierCollectionList host={surface === 'plane' ? collectionListPlaneHost : collectionListHost} {...listProps} />;
 });
 
-/** A group heading inside a collection list: what the rows share, and how many there are. */
-export function CollectionListGroupLabel(props: Readonly<{
-    title: string;
-    count?: number;
-    first?: boolean;
-    /** A 16px glyph before the title (the event a group of triggers answers). */
-    mark?: React.ReactNode;
-    /** One small control or state at the label's end (a group's "+"). */
-    trailing?: React.ReactNode;
-    /** `menu`: the label heads menu-role rows (a popover or sheet) and starts on their text edge. */
-    presentation?: 'list' | 'menu';
-    testID?: string;
-}>) {
-    const { testID, ...label } = props;
-    if (testID === undefined) return <HappierCollectionListGroupLabel host={collectionListHost} {...label} />;
-    return <View testID={testID}><HappierCollectionListGroupLabel host={collectionListHost} {...label} /></View>;
+/**
+ * A group heading inside a collection list: what the rows share, and how many there are. A navigation
+ * column's groups may fold (`disclosure`), carry their own hover actions and a collapsed rollup.
+ */
+export function CollectionListGroupLabel(props: Omit<React.ComponentProps<typeof HappierCollectionListGroupLabel>, 'host'>) {
+    return <HappierCollectionListGroupLabel host={collectionListHost} {...props} />;
 }
 
 /**
@@ -201,38 +249,92 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
     leftElementWhenHovered?: React.ReactNode;
-    /** A quiet value at the row's end (a count). */
+    /** A quiet value at the row's end (a count, an age). */
     detail?: string;
+    /**
+     * The row's status slot at its end (lab `clstatus`): a work state's glyph or the live work mark, in place
+     * of `detail` while the state speaks. It is part of the row's press; the row's name says the state.
+     */
+    status?: React.ReactNode;
     selected: boolean;
     /** A disclosed level's indent, added to the content inset. */
     indentPx?: number;
+    /**
+     * A disclosure tree (a service and its accounts): the caret before the row's bare mark (`icon`), turning with
+     * `expanded`. `null` keeps the caret's column empty so a leaf's mark aligns with its expandable siblings.
+     */
+    disclosure?: Readonly<{ expanded: boolean }> | null;
+    /** A disclosed child: no mark of its own, its title on its parent's title edge. */
+    child?: boolean;
+    /**
+     * What the row lies on. `plane` (default): a navigation column on the shell's plane, whose open row lifts to
+     * the elevated chip with a heavier title. `page`: a collection column on the page surface (a Settings rail),
+     * whose open row takes the soft selection fill.
+     */
+    surface?: 'plane' | 'page';
+    /** A quiet count at the row's end, after the status slot (a service's accounts, a pool's members). */
+    count?: number | string | null;
+    /** The row's name when its title alone does not say it (the service an account belongs to, its state). */
     accessibilityLabel?: string;
     /** The row's own menu, at its end, outside the row's press (a project's rename, pin, remove). */
     rightElement?: React.ReactNode;
     onPress: () => void;
 }>) {
+    const { theme } = useUnistyles();
+    const reducedMotion = useReducedMotionPreference();
+    const onPlane = props.surface !== 'page';
+    const hasCount = props.count !== undefined && props.count !== null && props.count !== '';
+    const trailing = props.status && hasCount ? (
+        <View style={styles.trailing}>
+            {props.status}
+            <Text style={styles.trailingCount}>{String(props.count)}</Text>
+        </View>
+    ) : props.status ?? (hasCount ? <Text style={styles.trailingCount}>{String(props.count)}</Text> : null);
+    const treeLead = props.disclosure !== undefined ? (
+        <View style={styles.treeLead}>
+            <View style={styles.treeCaret}>
+                {props.disclosure ? (
+                    <HappierDisclosureChevron
+                        expanded={props.disclosure.expanded}
+                        color={theme.colors.text.tertiary}
+                        reducedMotion={reducedMotion}
+                    />
+                ) : null}
+            </View>
+            <View style={styles.treeMark}>{props.icon}</View>
+        </View>
+    ) : null;
+    const indentPx = (props.indentPx ?? 0) + (props.child ? resolveHappierCollectionTreeChildIndentPx() : 0);
     const row = (
         <Item
             testID={props.testID}
-            {...(props.rightElement ? { rightElement: props.rightElement, rightElementOutsidePressable: true } : {})}
+            {...(props.rightElement ? { rightElement: props.rightElement, rightElementOutsidePressable: true }
+                : trailing ? { rightElement: trailing } : {})}
             title={props.title}
+            // A column row keeps one line (lab `clfamily`): a long name truncates rather than breaking the rhythm.
+            titleLines={1}
             subtitle={props.subtitle}
             subtitleLeading={props.subtitleLeading}
             titleAccessory={props.titleAccessory}
             titleQualifier={props.titleQualifier}
+            accessibilityExpanded={props.disclosure ? props.disclosure.expanded : undefined}
             {...props.treeItem}
             subtitleStyle={props.subtitleMono ? styles.monoSubtitle : undefined}
-            {...(props.leftElement
+            {...(treeLead
+                ? { leftElement: treeLead }
+                : props.leftElement
                 ? { leftElement: props.leftElement, leftElementWhenHovered: props.leftElementWhenHovered }
                 : { icon: props.icon })}
             accessibilityLabel={props.accessibilityLabel}
-            detail={props.detail}
+            detail={props.status || hasCount ? undefined : props.detail}
             density="compact"
             selected={props.selected}
             showChevron={false}
-            pressableStyle={props.selected ? [HAPPIER_COLLECTION_LIST_ROW_STYLE, styles.navigationRowSelected] : HAPPIER_COLLECTION_LIST_ROW_STYLE}
-            titleStyle={props.selected ? styles.navigationRowTitleSelected : props.dimmed ? styles.dimmedTitle : undefined}
-            style={resolveHappierCollectionListRowPadding(props.indentPx ?? 0)}
+            pressableStyle={props.selected && onPlane ? [HAPPIER_COLLECTION_LIST_ROW_STYLE, styles.navigationRowSelected] : HAPPIER_COLLECTION_LIST_ROW_STYLE}
+            titleStyle={props.selected && onPlane ? styles.navigationRowTitleSelected : props.dimmed ? styles.dimmedTitle : undefined}
+            style={props.subtitle
+                ? [resolveHappierCollectionListRowPadding(indentPx), styles.describedRow]
+                : resolveHappierCollectionListRowPadding(indentPx)}
             onPress={props.onPress}
         />
     );
@@ -247,6 +349,7 @@ export const collectionListStyles: Readonly<{
     dimmedTitle: typeof styles.dimmedTitle;
     troubleDot: typeof styles.troubleDot;
     stateLine: typeof styles.stateLine;
+    describedRow: typeof styles.describedRow;
 }> = {
     /** A row's pressable: inset from the list's edges, with a soft rounded selection. */
     row: HAPPIER_COLLECTION_LIST_ROW_STYLE,
@@ -258,6 +361,8 @@ export const collectionListStyles: Readonly<{
     troubleDot: styles.troubleDot,
     /** Wraps a `SurfaceStateCard size="line"` so it sits on the rows' text edge. */
     stateLine: styles.stateLine,
+    /** A row with one context line under its title: the described row's floor (P8, R8-2). */
+    describedRow: styles.describedRow,
 } as const;
 
 /** A navigation column's row geometry for the shared loading rows: the rows' text edge and glyph column. */
@@ -294,7 +399,10 @@ export const CollectionDraftRow = React.memo(function CollectionDraftRow(props: 
     testID?: string;
     titles: HappierCollectionDraftTitleStore;
     placeholder: string;
-    mark: React.ReactNode;
+    /** The kind's mark; a disclosed child (an account being added under its service) has none. */
+    mark?: React.ReactNode;
+    /** Drawn as a disclosed child of its group's parent row, on the parent's title edge. */
+    child?: boolean;
 }>) {
     const draft = useHappierCollectionDraftRowTitle(props.titles, props.placeholder);
     return (
@@ -309,6 +417,9 @@ export const CollectionDraftRow = React.memo(function CollectionDraftRow(props: 
             density="compact"
             showChevron={false}
             pressableStyle={HAPPIER_COLLECTION_LIST_ROW_STYLE}
+            style={props.child
+                ? [resolveHappierCollectionListRowPadding(resolveHappierCollectionTreeChildIndentPx()), styles.describedRow]
+                : styles.describedRow}
             // The draft is already the open detail; a press has nothing left to open, but the row stays a
             // row (Item draws the selection only on pressable rows).
             onPress={keepDraftOpen}

@@ -9,10 +9,9 @@ import { ActionListSection, type ActionListItem } from '@/components/ui/lists/Ac
 import { t } from '@/text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import type { FocusReturnTarget } from '@/keyboard/focusReturn';
-import { resolveHappierFocusRingVisible, useHappierItemOverflowState } from '@happier-dev/plugin-ui/presentation';
+import { resolveHappierFocusRingVisible, useHappierHitArea, useHappierItemOverflowState } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 
 export interface ItemRowActionsProps {
@@ -206,56 +205,29 @@ export function ItemRowActions(props: ItemRowActionsProps) {
     }, [overflowActionItems, overflowActions, props.title]);
 
     const iconSize = props.iconSize ?? 20;
-    const minimumActionTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const actionControlSize = Math.max(
-        props.actionControlSizePx
-        ?? (Platform.OS === 'web' || Platform.OS === 'android'
-            ? minimumActionTargetSize
-            : DEFAULT_ACTION_CONTROL_SIZE),
-        iconSize,
-    );
+    const actionControlSize = Math.max(props.actionControlSizePx ?? DEFAULT_ACTION_CONTROL_SIZE, iconSize);
     const gap = props.gap ?? 16;
 
     /**
-     * The press frame, when the drawn control is smaller than the platform target.
+     * The drawn control is the whole layout box; its hit area is the shared pressable owner's
+     * (`useHappierHitArea`: native `hitSlop`, an invisible frame on the web). Above and below an
+     * icon row nothing competes, so the hit area takes the whole target; sideways it reaches half
+     * the row's gap, so neighbouring targets meet and never overlap. Under a precise pointer the
+     * WCAG 2.2 floor (24) applies, which every drawn control here already meets.
      *
-     * **Not `hitSlop`.** react-native-web 0.21 implements `hitSlop` only in its legacy
-     * `Touchable` export — `Pressable` and `View` never read it — and the desktop app *is*
-     * the web bundle, which the tablet drawer path also reaches by touch. A slop-declared
-     * target there is a target that does not exist. So the frame is real box model: a larger
-     * width/height plus an equal negative margin, which grows the pointer box on every
-     * platform while the row still measures the drawn size.
-     *
-     * Two different budgets, because the two axes have different neighbours:
-     *
-     *  - **Vertical is free.** An icon row has nothing above or below it inside the row, so
-     *    the frame takes the whole platform floor (44 on web/iOS, 48dp on Android).
-     *  - **Horizontal is bounded by the gap.** Each control may reach at most half the row's
-     *    gap on each side, so two adjacent targets meet exactly and never overlap — which
-     *    DESIGN.md's accessibility rule forbids outright.
-     *
-     * CEILING: the desktop sidebar draws 32px controls at `gap: 4`, so its target is 36×44,
-     * not 44×44. Four non-overlapping 44px targets need 176px and that cluster is deliberately
-     * 140px wide; the requirement that actually governs a dense pointer layout is WCAG 2.2 AA
-     * SC 2.5.8 (24×24 CSS px), which 36×44 clears with room. Raising the cluster's width budget
-     * to 176px is the exact and only condition that would let the horizontal cap reach 44.
+     * CEILING: the desktop sidebar draws 32px controls at `gap: 4`, so its touch target is 36×44,
+     * not 44×44; raising the cluster's width budget is the only thing that would let it reach 44.
      */
-    const targetDeficitPerSide = Math.max(0, (minimumActionTargetSize - actionControlSize) / 2);
-    const targetExpandY = targetDeficitPerSide;
-    const targetExpandX = Math.min(targetDeficitPerSide, gap / 2);
-    const actionControlFrame = React.useMemo(() => {
-        const width = actionControlSize + (targetExpandX * 2);
-        const height = actionControlSize + (targetExpandY * 2);
-        return {
-            width,
-            height,
-            marginHorizontal: -targetExpandX,
-            marginVertical: -targetExpandY,
-            // The frame carries the focus ring, so it stays a capsule around the narrow axis
-            // rather than a rounded rectangle.
-            borderRadius: Math.min(width, height) / 2,
-        };
-    }, [actionControlSize, targetExpandX, targetExpandY]);
+    const actionControlFrame = React.useMemo(() => ({
+        width: actionControlSize,
+        height: actionControlSize,
+        // The ring follows the drawn control.
+        borderRadius: actionControlSize / 2,
+    }), [actionControlSize]);
+    const actionHitArea = useHappierHitArea({
+        restingStyle: () => actionControlFrame,
+        hitReach: { left: gap / 2, right: gap / 2 },
+    });
     // An anchored ⋯ menu is non-blocking (DESIGN.md: never dim the world for parallel work; lab
     // wgmenu M): it opens below its trigger with its trailing edge on the trigger's, flips above near
     // the window's foot, and leaves the page sharp. An outside tap still closes it.
@@ -287,6 +259,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                 key={action.id}
                 testID={action.inlineTestID}
                 disabled={action.disabled || !action.onPress}
+                hitSlop={actionHitArea.hitSlop}
                 onPressIn={() => props.onActionPressIn?.()}
                 onPress={(e: GestureResponderEvent) => {
                     e?.stopPropagation?.();
@@ -311,12 +284,13 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                     ? { 'aria-pressed': action.selected }
                     : {})}
             >
+                {actionHitArea.frame}
                 {normalizeNodeForView(
                     iconNode,
                 )}
             </Pressable>
         );
-    }, [actionControlFrame, iconSize, props, theme.colors.border.focus, theme.colors.button.secondary.tint, theme.colors.state.danger.foreground]);
+    }, [actionControlFrame, actionHitArea, iconSize, props, theme.colors.border.focus, theme.colors.button.secondary.tint, theme.colors.state.danger.foreground]);
 
     const renderOverflow = React.useCallback(() => {
         const accessibilityLabel = props.overflowTriggerAccessibilityLabel ?? t('common.moreActions');
@@ -347,6 +321,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                             <Pressable
                                 ref={(target) => props.onOverflowTriggerFocusTargetChange?.(target)}
                                 testID={props.overflowTriggerTestID}
+                                hitSlop={actionHitArea.hitSlop}
                                 style={(interactionState) => {
                                     const webState = interactionState as typeof interactionState & { focused?: boolean };
                                     return [
@@ -369,6 +344,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                                 // @ts-expect-error - react-native types do not model the web-only `title` attribute; RN Web forwards it.
                                 title={accessibilityLabel}
                             >
+                                {actionHitArea.frame}
                                 {normalizeNodeForView(
                                     <Icon
                                         name="dots-three"
@@ -410,7 +386,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                 ) : null}
             </View>
         );
-    }, [actionControlFrame, iconSize, onOverflowTriggerKeyDown, overflowActionSections, overflowPlacement, overflowPortal, props, showOverflow, theme.colors.border.focus, theme.colors.button.secondary.tint]);
+    }, [actionControlFrame, actionHitArea, iconSize, onOverflowTriggerKeyDown, overflowActionSections, overflowPlacement, overflowPortal, props, showOverflow, theme.colors.border.focus, theme.colors.button.secondary.tint]);
 
     return (
         <View style={[styles.container, { gap }]}>

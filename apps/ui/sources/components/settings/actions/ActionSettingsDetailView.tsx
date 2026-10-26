@@ -423,7 +423,6 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                                 role="radiogroup"
                                 accessibilityLabel={plugin.title}
                                 testIDPrefix={`settings-actions:host-capture:${plugin.pluginId}:mode`}
-                                targetSize="platform"
                                 tabs={[
                                     { id: 'ask_first', label: t('settingsActions.modes.askFirst') },
                                     { id: 'allowed', label: t('settingsActions.modes.allowed') },

@@ -54,7 +54,7 @@ function texts(screen: Awaited<ReturnType<typeof renderScreen>>): string[] {
 }
 
 describe('SegmentedChoiceItem', () => {
-    it.each([['ios', 44], ['android', 48]] as const)('gives each %s settings choice a non-overlapping platform touch target', async (os, minimum) => {
+    it.each([['ios', 44], ['android', 48]] as const)('reaches the %s touch target with its press frame, never by drawing the choice taller', async (os, minimum) => {
         const { Platform, StyleSheet } = await import('react-native');
         const previous = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: os });
@@ -67,8 +67,11 @@ describe('SegmentedChoiceItem', () => {
                 const frame = screen.findByTestId(`mode:${option.id}`)!;
                 const frameStyle = StyleSheet.flatten(frame.props.style);
                 const surfaceStyle = StyleSheet.flatten(frame.findAllByType('View' as never)[0]!.props.style);
-                expect(frameStyle.minWidth).toBeGreaterThanOrEqual(minimum);
-                expect(surfaceStyle.minHeight + frameStyle.paddingVertical * 2).toBeGreaterThanOrEqual(minimum);
+                // Flush choices never reach sideways; the transparent frame reaches above and below only.
+                expect(frameStyle.minWidth).toBeLessThan(minimum);
+                expect(surfaceStyle.minHeight).toBeUndefined();
+                expect(frameStyle.paddingVertical).toBeGreaterThan(0);
+                expect(frameStyle.marginVertical).toBe(-frameStyle.paddingVertical);
             }
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });

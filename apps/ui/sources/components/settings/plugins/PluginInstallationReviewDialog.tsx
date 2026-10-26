@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Switch } from '@/components/ui/forms/Switch';
@@ -7,7 +7,7 @@ import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Typography } from '@/constants/Typography';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
@@ -16,9 +16,6 @@ import type {
     PluginChangePendingReviewResult,
     PluginInstallationReview,
 } from '@happier-dev/protocol/marketplace/internal';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
-import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { describePluginInstallationReviewFacts, type PluginInstallationReviewFactSection } from './model/pluginInstallationReviewFacts';
 
@@ -108,36 +105,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
         color: theme.colors.text.secondary,
     },
-    switch: {
-        minWidth: 44,
-        minHeight: 44,
-    },
     actions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
         gap: theme.space.s8,
-    },
-    action: {
-        minHeight: 44,
-        flexShrink: 1,
-        justifyContent: 'center',
-        paddingHorizontal: theme.space.s16,
-        borderRadius: 12,
-    },
-    cancelAction: {
-        backgroundColor: theme.colors.surface.inset,
-    },
-    confirmAction: {
-        backgroundColor: theme.colors.button.primary.background,
-    },
-    cancelText: {
-        ...Typography.default('semiBold'),
-        color: theme.colors.text.primary,
-    },
-    confirmText: {
-        ...Typography.default('semiBold'),
-        color: theme.colors.button.primary.tint,
     },
 }));
 
@@ -156,7 +128,6 @@ function ReviewSection(props: Readonly<{
 export function PluginInstallationReviewDialog(props: PluginInstallationReviewDialogProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const [selectedByAccessId, setSelectedByAccessId] = React.useState<Readonly<Record<string, boolean>>>({});
     const [evidenceExpanded, setEvidenceExpanded] = React.useState(false);
     const isAuthorityExpansion = props.reason === 'authorityExpansion';
@@ -228,7 +199,6 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                                     accessibilityRole="switch"
                                     accessibilityLabel={accessibilityLabel}
                                     accessibilityState={{ checked: selected }}
-                                    style={[styles.switch, { minWidth: minimumInteractiveTargetSize, minHeight: minimumInteractiveTargetSize }]}
                                     value={selected}
                                     onValueChange={(next) => {
                                         setSelectedByAccessId((current) => ({
@@ -264,42 +234,19 @@ export function PluginInstallationReviewDialog(props: PluginInstallationReviewDi
                 </View>
             </ExpandableItem>
             <View style={styles.actions}>
-                <Pressable
+                <RoundButton
                     testID="settings.plugins.installReview.cancel"
-                    accessibilityRole="button"
+                    display="secondary"
+                    title={t('common.cancel')}
                     accessibilityLabel={t('common.cancel')}
                     onPress={() => resolve({ approved: false, optionalSelections: [] })}
-                    style={(interactionState) => {
-                        const webState = interactionState as typeof interactionState & { focused?: boolean };
-                        return [
-                            styles.action,
-                            { minHeight: minimumInteractiveTargetSize },
-                            styles.cancelAction,
-                            { opacity: interactionState.pressed ? motionTokens.press.opacity : 1 },
-                            focusRingStyle({ focused: resolveHappierFocusRingVisible(webState.focused), color: theme.colors.border.focus }),
-                        ];
-                    }}
-                >
-                    <Text style={styles.cancelText}>{t('common.cancel')}</Text>
-                </Pressable>
-                <Pressable
+                />
+                <RoundButton
                     testID="settings.plugins.installReview.confirm"
-                    accessibilityRole="button"
+                    title={isAuthorityExpansion ? t('common.update') : t('settingsPlugins.installAndTrust')}
                     accessibilityLabel={isAuthorityExpansion ? t('common.update') : t('settingsPlugins.installAndTrust')}
                     onPress={approve}
-                    style={(interactionState) => {
-                        const webState = interactionState as typeof interactionState & { focused?: boolean };
-                        return [
-                            styles.action,
-                            { minHeight: minimumInteractiveTargetSize },
-                            styles.confirmAction,
-                            { opacity: interactionState.pressed ? motionTokens.press.opacitySubtle : 1 },
-                            focusRingStyle({ focused: resolveHappierFocusRingVisible(webState.focused), color: theme.colors.border.focus }),
-                        ];
-                    }}
-                >
-                    <Text style={styles.confirmText}>{isAuthorityExpansion ? t('common.update') : t('settingsPlugins.installAndTrust')}</Text>
-                </Pressable>
+                />
             </View>
         </ScrollView>
     );

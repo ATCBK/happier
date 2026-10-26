@@ -1,11 +1,9 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierNoticeLine, type HappierNoticeLineTextRender } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { Text } from '@/components/ui/text/Text';
 import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -53,7 +51,6 @@ export const NoticeLine = React.memo(function NoticeLine(props: Readonly<{
                     variant="plain"
                     size={24}
                     iconSize={ICON_SIZE.sm}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     disabled={props.action.disabled}
                     onPress={props.action.onPress}
                 />

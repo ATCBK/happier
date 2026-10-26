@@ -1,4 +1,4 @@
-import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_TYPE_SCALE, HappierPressable, happierRaisedEdgeStyle, type HappierPressableProps, type HappierTypeRole } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_PAGE_METRICS, HAPPIER_TYPE_SCALE, HappierPressable, happierRaisedEdgeStyle, type HappierPressableProps, type HappierTypeRole } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Platform, StyleProp, TextStyle, View, type ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -6,12 +6,12 @@ import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { GradientSurface, type SurfaceGradient } from '@/components/ui/surfaces/GradientSurface';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { HappierSurfaceGradientLayer, happierSurfaceGradientWebStyle } from '@happier-dev/plugin-ui/presentation';
 import { usePressFeedback } from '@/components/ui/interactions/usePressFeedback';
-import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { happierMaterialGradient, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { parseThemeColor } from '@/theme/parseThemeColor';
@@ -73,6 +73,15 @@ const sizes: { [key in RoundButtonSize]: { role: HappierTypeRole, hitSlop: numbe
     small: { role: 'body', hitSlop: 12, pad: Platform.select({ ios: -1, android: -1, default: 0 }) },
     mini: { role: 'meta', hitSlop: 8, pad: 0 },
 }
+/**
+ * The drawn height of the sizes that follow the page control metrics, the same two the plugin-ui button
+ * draws (`resolveHappierButtonChrome`), so the two owners of a button's size cannot drift. `large` and
+ * `mini` are padding-designed; a touch target is never drawn, the pressable's hit area reaches it.
+ */
+const DRAWN_HEIGHT_PX: { [key in RoundButtonSize]?: number } = {
+    normal: HAPPIER_PAGE_METRICS.controlHeightPx,
+    small: HAPPIER_PAGE_METRICS.smallControlHeightPx,
+};
 /** A contextual inline action (bordered, beside a label) never reads larger than `body`. */
 function resolveRoundButtonTextRole(role: HappierTypeRole, compactInline: boolean): HappierTypeRole {
     return compactInline && HAPPIER_TYPE_SCALE[role].fontSize > HAPPIER_TYPE_SCALE.body.fontSize ? 'body' : role;
@@ -120,9 +129,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s12,
         paddingVertical: theme.space.s6,
     },
+    // `normal` and `small` draw at the page control heights (see `DRAWN_HEIGHT_PX`); their label is centred
+    // in that height, and a wrapped label still grows the pill.
+    contentContainerNormal: {
+        paddingVertical: theme.space.s4,
+    },
     contentContainerSmall: {
         paddingHorizontal: theme.space.s10,
-        paddingVertical: 3,
+        paddingVertical: 0,
     },
     // The smallest inline action; inside a capsule it shares the capsule's height band instead.
     contentContainerMini: {
@@ -150,7 +164,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    // Centres a fixed-height capsule inside whatever touch floor the pressable imposes.
+    // Centres a fixed-height capsule inside a caller's taller box (a header action's own target).
     capsuleBox: {
         justifyContent: 'center',
     },
@@ -175,6 +189,9 @@ function resolveRoundButtonEdge(
 }
 
 type RoundButtonStyle = Exclude<HappierPressableProps['style'], (state: never) => unknown>;
+
+/** The mark size a busy spinner takes the place of (the quiet inline actions draw their glyph at 14). */
+const BUSY_MARK_SIZE = 14;
 
 const TRANSPARENT_LAYOUT_BOX = { backgroundColor: 'transparent' } as const;
 
@@ -213,8 +230,8 @@ export const RoundButton = React.memo((props: {
     trailing?: React.ReactNode,
     /**
      * Draws the visible pill at exactly this height with fully round ends — a capsule's inline
-     * action standing level with the round wells beside it. The touch floor around it stays the
-     * pressable's, so a 34pt pill keeps its 44pt target without growing to fill it.
+     * action standing level with the round wells beside it. Under a finger the pressable's hit area
+     * reaches the touch target past it, so a 34pt pill keeps its 44pt target without growing.
      */
     capsuleHeight?: number,
     style?: RoundButtonStyle,
@@ -296,14 +313,12 @@ export const RoundButton = React.memo((props: {
     const compactInlineDisplay = scopedSizing.presentation !== 'uniform'
         && (props.display === 'secondary' || props.display === 'destructive');
     const textTypography = Typography.variant(resolveRoundButtonTextRole(size.role, compactInlineDisplay), 'semiBold');
-    // Native floors belong to the shared Pressable. A phone browser needs the same physical target;
-    // keep pointer density on desktop and reserve real space instead of overlapping hit slop.
-    const webTouchFloor = Platform.OS === 'web' ? resolveTouchTargetFloorPx() : null;
-    // One target, one mechanism: a real box at the platform's minimum (the touch floor, or a caller's
-    // own target box such as a header action) is the press target; slop is only for a pill smaller than that.
+    // The pill draws at its design size under every pointer. Under a finger the shared Pressable reaches
+    // the touch target with its hit area (native hitSlop, the web's invisible frame), never by growing
+    // the button (DESIGN.md → touch targets are hit areas). The slop below is a precise pointer's extra
+    // reach only, and none when a caller's own box (a header action) is already the target.
     const callerMinHeight = readSurfaceStyleProperty(props.style, 'minHeight');
-    const slopDeclared = webTouchFloor === null
-        && !(typeof callerMinHeight === 'number' && callerMinHeight >= resolveMinimumInteractiveTargetSize(Platform.OS));
+    const slopDeclared = !(typeof callerMinHeight === 'number' && callerMinHeight >= HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE);
     const baseDisplay = displays[props.display || 'default'];
     // A disabled primary is still the primary: its own fill and words, receded into the page
     // (unified-work lab `.uwr-dis`), so the one action of a view stays recognisable while it waits
@@ -318,6 +333,9 @@ export const RoundButton = React.memo((props: {
     const ownFillOnPicture = useGlassOwnFillOnPicture(pillBackgroundColor !== 'transparent');
     const inkScope = React.useContext(GlassBackedInkContext);
     const paintRole = (props.display ?? 'default') === 'default' || callerBackgroundColor !== undefined ? 'solidControl' : 'surface';
+    // A button with a mark and words keeps its words while it works: the spinner takes the mark's place.
+    // A words-only or mark-only button has nothing to trade, so its spinner covers it at the same width.
+    const busyTradesMark = props.leading != null && props.title != null && props.title !== '';
     const titleLines = props.titleNumberOfLines ?? 1;
     // `undefined` is React Native's "as many lines as it takes"; `0` is not portable
     // across the platforms this primitive renders on.
@@ -337,12 +355,10 @@ export const RoundButton = React.memo((props: {
             // whole fill rather than only its label.
             // Declared-disabled dims; merely pending does not. A button that fades
             // the moment it is pressed reads as unavailable rather than working.
-            // The native floor is `HappierPressable`'s; coarse web consumes the same target policy.
             style={[
                 { opacity: props.disabled && !disabledPrimary ? 0.35 : 1 },
                 props.capsuleHeight !== undefined ? styles.capsuleBox : null,
                 props.style,
-                webTouchFloor === null ? null : { minWidth: webTouchFloor, minHeight: webTouchFloor },
                 TRANSPARENT_LAYOUT_BOX,
                 // The ring belongs to the pill inside the hit area.
                 HAPPIER_FOCUS_RING_DELEGATED_STYLE,
@@ -361,7 +377,7 @@ export const RoundButton = React.memo((props: {
                         },
                         props.capsuleHeight !== undefined
                             ? { flexGrow: 0, height: props.capsuleHeight, borderRadius: props.capsuleHeight / 2 }
-                            : null,
+                            : { minHeight: DRAWN_HEIGHT_PX[resolvedSize] },
                         focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
                         happierRaisedEdgeStyle(resolveRoundButtonEdge(theme, props.display ?? 'default', { pressed: state.pressed, focused: state.focused, disabled: state.disabled })),
                         Platform.OS === 'web' && !display.gradient ? happierSurfaceGradientWebStyle(resolveThemeSurfaceFinish(theme, (props.display ?? 'default') === 'default' ? 'primaryButton' : 'secondaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled || props.display === 'inverted' }), !theme.dark) : null,
@@ -389,20 +405,23 @@ export const RoundButton = React.memo((props: {
                             styles.contentContainer,
                             props.leading || props.trailing ? styles.contentContainerWithMark : null,
                             resolvedSize === 'large' ? styles.contentContainerLarge : null,
+                            resolvedSize === 'normal' ? styles.contentContainerNormal : null,
                             compactInlineDisplay ? styles.contentContainerSecondary : null,
                             resolvedSize === 'small' ? styles.contentContainerSmall : null,
                             props.size === 'mini' ? styles.contentContainerMini : null,
                             props.capsuleHeight !== undefined ? styles.contentContainerInCapsule : null,
                         ]}
                     >
-                        {state.busy && (
+                        {state.busy && !busyTradesMark && (
                             <View style={styles.loadingContainer}>
                                 <ActivitySpinner color={textColor} size='small' />
                             </View>
                         )}
                         {props.leading ? (
-                            <View style={[styles.markSlot, { opacity: state.busy ? 0 : 1 }]}>
-                                {props.leading}
+                            <View style={[styles.markSlot, { opacity: state.busy && !busyTradesMark ? 0 : 1 }]}>
+                                {state.busy && busyTradesMark
+                                    ? <ActivitySpinner color={textColor} size={iconMatchedSpinnerSize(BUSY_MARK_SIZE)} />
+                                    : props.leading}
                             </View>
                         ) : null}
                         <Text
@@ -411,7 +430,7 @@ export const RoundButton = React.memo((props: {
                                 styles.text,
                                 {
                                     marginTop: size.pad,
-                                    opacity: state.busy ? 0 : 1,
+                                    opacity: state.busy && !busyTradesMark ? 0 : 1,
                                     color: textColor,
                                 },
                                 // A wrapped label is a paragraph inside a centred pill, so
@@ -426,7 +445,7 @@ export const RoundButton = React.memo((props: {
                             {props.title}
                         </Text>
                         {props.trailing ? (
-                            <View style={[styles.markSlot, { opacity: state.busy ? 0 : 1 }]}>
+                            <View style={[styles.markSlot, { opacity: state.busy && !busyTradesMark ? 0 : 1 }]}>
                                 {props.trailing}
                             </View>
                         ) : null}

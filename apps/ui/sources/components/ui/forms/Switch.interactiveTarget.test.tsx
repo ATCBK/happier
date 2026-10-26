@@ -51,7 +51,7 @@ describe('Switch interactive target', () => {
         expect((style.height as number) + 2 * (style.marginVertical as number)).toBe(trackHeight);
     });
 
-    it('keeps default and compact native switch interaction nodes on the canonical native target', async () => {
+    it('never inflates the native switch interaction nodes to the touch target (their wrapper pressable owns the reach)', async () => {
         const { Switch } = await import('./Switch');
         const screen = await renderScreen(
             <>
@@ -81,9 +81,11 @@ describe('Switch interactive target', () => {
                 minHeight: targetStyle.minHeight,
             };
         });
+        expect(minimumTargetSize).toBe(48);
+        // The platform switch keeps the size its caller declared; a target is a hit area, not a drawn size.
         expect(targetSizes).toEqual([
-            { minWidth: minimumTargetSize, minHeight: minimumTargetSize },
-            { minWidth: minimumTargetSize, minHeight: minimumTargetSize },
+            { minWidth: 1, minHeight: 1 },
+            { minWidth: 1, minHeight: 1 },
         ]);
     });
 });

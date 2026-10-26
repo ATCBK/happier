@@ -41,7 +41,6 @@ import {
     ITEM_TITLE_TEXT_METRICS,
 } from '@/components/ui/lists/itemDensityMetrics';
 import {
-    isTouchPrimaryPointer,
     resolvePageRowDensityInput,
     resolvePageRowMetrics,
     type PageRowMetrics,
@@ -124,6 +123,12 @@ export interface ItemProps {
      * leading glyph or mark, so a row's own figures (a bar, a verdict) read as part of its text.
      */
     bottomElementInset?: 'row' | 'text';
+    /**
+     * Render `bottomElement` below the row's Pressable instead of inside it. Use this when the bottom
+     * content holds its own controls (a repair button, a link): each keeps its own activation and the
+     * row never nests one button inside another on React Native Web.
+     */
+    bottomElementOutsidePressable?: boolean;
     /** An inline mark after a string title, such as a "Beta" badge. */
     titleAccessory?: React.ReactNode;
     /**
@@ -339,7 +344,7 @@ function resolvePageRowStyles(metrics: PageRowMetrics): PageRowStyles {
     const styles: PageRowStyles = {
         box: { minHeight: metrics.minHeightPx },
         padding: { paddingVertical: metrics.paddingVerticalPx },
-        title: { ...metrics.title, ...Typography.default('medium') },
+        title: { ...metrics.title, ...Typography.default(metrics.titleWeight) },
         subtitle: { ...metrics.subtitle },
         // A value summary reads at the title's size, in the regular face.
         detail: { ...metrics.title },
@@ -463,6 +468,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...ITEM_TITLE_TEXT_METRICS.tight,
     },
     titleNormal: {
+        color: theme.colors.text.primary,
+    },
+    // An inspector fact's label steps back and its value leads (`PageRowMetrics.valueLeads`).
+    titleFact: {
+        color: theme.colors.text.secondary,
+    },
+    detailFact: {
         color: theme.colors.text.primary,
     },
     titleSelected: {
@@ -657,6 +669,7 @@ export const Item = React.memo<ItemProps>((props) => {
         subtitleAccessory,
         bottomElement,
         bottomElementInset,
+        bottomElementOutsidePressable = false,
         titleAccessory,
         titleQualifier,
         titleMeta,
@@ -946,7 +959,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const showSelectedBackground = sharedItemBehavior.selectionVisible;
     const groupCornerRadius = GROUPED_SURFACE_RADIUS_PX;
 
-    const titleColor = destructive ? styles.titleDestructive : (selected ? styles.titleSelected : styles.titleNormal);
+    const titleColorBase = destructive ? styles.titleDestructive : (selected ? styles.titleSelected : styles.titleNormal);
     const isCozy = resolvedDensity === 'cozy';
     const isCompact = resolvedDensity === 'compact';
     const isTight = resolvedDensity === 'tight';
@@ -963,10 +976,11 @@ export const Item = React.memo<ItemProps>((props) => {
                 requested: resolvedDensity,
                 requestedExplicitly: densityInputs.requested,
             }),
-            touch: isTouchPrimaryPointer(),
         })
         : null;
     const pageRowStyles = pageRowMetrics ? resolvePageRowStyles(pageRowMetrics) : null;
+    const factRow = pageRowMetrics?.valueLeads === true && !destructive;
+    const titleColor = factRow ? styles.titleFact : titleColorBase;
     const [isNarrowRow, setIsNarrowRow] = React.useState(false);
     const [rowWidthPx, setRowWidthPx] = React.useState<number | null>(null);
     const [accessoryWidthPx, setAccessoryWidthPx] = React.useState<number | null>(null);
@@ -1201,7 +1215,13 @@ export const Item = React.memo<ItemProps>((props) => {
     const subtitleSizeStyle = pageRowStyles
         ? pageRowStyles.subtitle
         : isTight ? styles.subtitleTight : isCompact ? styles.subtitleCompact : isCozy ? styles.subtitleCozy : null;
-    const detailSizeStyle = pageRowStyles ? pageRowStyles.detail : isTight ? styles.detailTight : isCompact ? styles.detailCompact : isCozy ? styles.detailCozy : null;
+    const factDetailStyle = React.useMemo(
+        () => (factRow && pageRowStyles ? [pageRowStyles.detail, styles.detailFact] : null),
+        [factRow, pageRowStyles, styles.detailFact],
+    );
+    const detailSizeStyle = pageRowStyles
+        ? (factDetailStyle ?? pageRowStyles.detail)
+        : isTight ? styles.detailTight : isCompact ? styles.detailCompact : isCozy ? styles.detailCozy : null;
 
     const [isHovered, setIsHovered] = React.useState(false);
     // The pointer over an accessory that sits beside the press target (a row's own menu) still engages the row.
@@ -1266,12 +1286,16 @@ export const Item = React.memo<ItemProps>((props) => {
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
     const titleMetaNode = normalizeNodeForView(titleMeta ?? null);
     const [titleMetaPlacement, setTitleMetaPlacement] = React.useState<'inline' | 'beneath'>('inline');
-    const titleMetaMeasure = React.useRef({ row: 0, meta: 0 });
-    const placeTitleMeta = React.useCallback((next: Partial<{ row: number; meta: number }>) => {
+    // A text title is measured out of flow, so a short name keeps its meta on its line where the two fit; until
+    // that width arrives the name counts at the floor a title meta keeps.
+    const titleMetaMeasure = React.useRef({ row: 0, meta: 0, titleNatural: Number.NaN });
+    const placeTitleMeta = React.useCallback((next: Partial<{ row: number; meta: number; titleNatural: number }>) => {
         titleMetaMeasure.current = { ...titleMetaMeasure.current, ...next };
+        const { titleNatural } = titleMetaMeasure.current;
         setTitleMetaPlacement(resolveHappierRowTitleMetaPlacement({
             rowContentWidthPx: titleMetaMeasure.current.row,
-            titleNaturalWidthPx: Number.POSITIVE_INFINITY,
+            // Layout reports whole pixels: the name needs one more than its measured width not to clip.
+            titleNaturalWidthPx: Number.isNaN(titleNatural) ? Number.POSITIVE_INFINITY : titleNatural + 1,
             metaNaturalWidthPx: titleMetaMeasure.current.meta,
             titleMinWidthPx: ITEM_TITLE_META_TITLE_MIN_PX,
         }));
@@ -1412,6 +1436,12 @@ export const Item = React.memo<ItemProps>((props) => {
                             {titleMetaPlacement === 'inline' ? titleMetaCell : null}
                         </View>
                         {titleMetaPlacement === 'beneath' ? <View style={styles.titleMetaBeneath}>{titleMetaCell}</View> : null}
+                        <Text style={[styles.title, titleSizeStyle, titleStyle, styles.detailMeasure]} numberOfLines={1}
+                            onLayout={(event: LayoutChangeEvent) => {
+                                const widthPx = event.nativeEvent.layout.width;
+                                if (Number.isFinite(widthPx) && widthPx > 0) placeTitleMeta({ titleNatural: widthPx });
+                            }}
+                            aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{title}</Text>
                     </>
                 ) : (typeof title === 'string' || typeof title === 'number') && titleTrailing ? (
                     <View style={styles.inlineMarkRow}>
@@ -1656,18 +1686,21 @@ export const Item = React.memo<ItemProps>((props) => {
         ? MENU_ROW_METRICS.paddingHorizontalPx + MENU_ROW_METRICS.iconBoxSizePx + MENU_ROW_METRICS.iconMarginRightPx
         : listBottomTextStart ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset;
     const bottom = bottomElement ? <View style={{ paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingLeft: bottomPaddingLeft, paddingBottom: PAGE_LIST_METRICS.rowPaddingVerticalPx }}>{bottomElement}</View> : null;
+    // The row's own activation covers the row alone; its bottom content and divider follow it as siblings.
+    const bottomBelowPressable = Boolean(bottom && bottomElementOutsidePressable && isInteractive);
     const content = React.useMemo(() => (
         <>
             <View style={[containerCore, containerPadding, style]} onLayout={measuresRowWidth ? handleRowLayout : undefined}>
                 {renderRowContent()}
             </View>
 
-            {bottom}
-            {dividerNode}
+            {bottomBelowPressable ? null : bottom}
+            {bottomBelowPressable ? null : dividerNode}
         </>
     ), [
         containerCore,
         bottom,
+        bottomBelowPressable,
         containerPadding,
         dividerNode,
         handleRowLayout,
@@ -1870,7 +1903,7 @@ export const Item = React.memo<ItemProps>((props) => {
     }
 
     if (isInteractive) {
-        return (
+        const pressable = (
             <Pressable
                 ref={assignPressableRef}
                 testID={testID}
@@ -1936,6 +1969,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 {content}
             </Pressable>
         );
+        return bottomBelowPressable ? <>{pressable}{bottom}{dividerNode}</> : pressable;
     }
 
     return (

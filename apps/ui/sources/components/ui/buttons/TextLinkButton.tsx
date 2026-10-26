@@ -6,7 +6,6 @@ import {
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
@@ -33,8 +32,11 @@ export const TextLinkButton = React.memo(function TextLinkButton(
   props: Readonly<{
     label: string;
     onPress: () => unknown;
-    /** `quiet` reads as part of the sentence; `strong` is the sentence's one recovery. */
-    tone?: 'quiet' | 'strong';
+    /**
+     * `quiet` reads as part of the sentence; `strong` is the sentence's one recovery; `accent` is the
+     * active-state link that closes a band the user's own search opened (Find's note link colour).
+     */
+    tone?: 'quiet' | 'strong' | 'accent';
     /** `meta` ends a compact meta or status line (the composer's status row) at the row-meta step. */
     size?: 'row' | 'meta';
     accessibilityLabel?: string;
@@ -46,6 +48,7 @@ export const TextLinkButton = React.memo(function TextLinkButton(
 ) {
   const { theme } = useUnistyles();
   const strong = props.tone === 'strong';
+  const accent = props.tone === 'accent' ? theme.colors.state.active.foreground : undefined;
   return (
     <HappierTextLinkButton
       {...props}
@@ -53,11 +56,10 @@ export const TextLinkButton = React.memo(function TextLinkButton(
       labelStyle={{
         ...Typography.default('semiBold'),
         ...(props.size === 'meta' ? resolveMetaMetrics() : happierPageTextMetrics('rowDescription')),
-        color: strong ? theme.colors.text.primary : theme.colors.text.secondary,
+        color: accent ?? (strong ? theme.colors.text.primary : theme.colors.text.secondary),
       }}
-      hoverColor={theme.colors.text.primary}
+      hoverColor={accent ?? theme.colors.text.primary}
       focusColor={theme.colors.border.focus}
-      minimumTargetSize={resolveTouchTargetFloorPx() ?? undefined}
     />
   );
 });

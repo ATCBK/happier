@@ -1,8 +1,6 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
 
 /**
@@ -28,7 +26,6 @@ export const ConnectedAccountPrivacyToggle = React.memo(function ConnectedAccoun
             accessibilityRole="switch"
             checked={props.hidden}
             tooltip={props.hidden ? t('sidebarFooter.accountIdentitiesHidden') : label}
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
             selectedBackground={false}
             onPress={() => props.onChange(!props.hidden)}
         />

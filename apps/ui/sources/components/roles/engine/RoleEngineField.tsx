@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { RoleEngineV1 } from '@happier-dev/protocol';
@@ -11,7 +11,6 @@ import { buildSessionAgentPickerDetailContent } from '@/components/sessions/agen
 import { buildSessionAgentPickerOptions } from '@/components/sessions/agentPicker/buildSessionAgentPickerOptions';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useActiveServerAccountScope, useAuthoringMemoryField, useSettings } from '@/sync/domains/state/storage';
 import { useAllMachines } from '@/sync/store/hooks';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
@@ -73,15 +72,15 @@ export const RoleEngineField = React.memo(function RoleEngineField(props: Readon
                 accessibilityRole="button"
                 accessibilityLabel={props.pending ? t('roles.settings.engineTitle') : `${t('roles.settings.engineTitle')}: ${props.accessibleLabel ?? props.label ?? t('roles.rail.defaultEngine')}`}
                 disabled={props.disabled || unavailable}
-                // The chip is drawn compact; its press box keeps the platform's target size.
-                {...(props.presentation === 'chip' ? { style: { minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center' as const } } : {})}
+                // The chip is drawn compact; the pressable's hit area reaches the platform's target size.
+                {...(props.presentation === 'chip' ? { style: { justifyContent: 'center' as const } } : {})}
                 onPress={() => { if (!unavailable) setOpen(true); }}
             >
                 {trigger}
             </HappierPressable>
-            {open && !unavailable ? (
-                <RoleEnginePopover
-                    capabilityServerId={scope?.serverId ?? ''}
+            {open ? (
+                <RoleEnginePicker
+                    serverId={props.serverId}
                     machineId={props.machineId}
                     directory={props.directory}
                     anchorRef={anchorRef}
@@ -94,6 +93,26 @@ export const RoleEngineField = React.memo(function RoleEngineField(props: Readon
         </View>
     );
 });
+
+/**
+ * The engine popover on its own, for a surface whose row is the trigger (Session Info › Roles: the
+ * row opens it, lab csinfo I2). Mount it only while open; it draws nothing when the role's Home has
+ * no Account scope on this device.
+ */
+export function RoleEnginePicker(props: Readonly<{
+    serverId?: string | null;
+    machineId?: string | null;
+    directory?: string | null;
+    anchorRef: React.RefObject<View | null>;
+    engine: RoleEngineV1 | undefined;
+    onChange: (engine: RoleEngineV1) => void;
+    roleSelection?: RolesRailPickerOptionParams;
+    onRequestClose: () => void;
+}>) {
+    const scope = useActiveServerAccountScope(props.serverId);
+    if (props.serverId !== undefined && scope === null) return null;
+    return <RoleEnginePopover {...props} capabilityServerId={scope?.serverId ?? ''} />;
+}
 
 /** Mounted only while open: the Agent catalog and model probes belong to the open popover. */
 function RoleEnginePopover(props: Readonly<{

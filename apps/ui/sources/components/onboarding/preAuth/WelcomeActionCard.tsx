@@ -1,7 +1,6 @@
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { resolveHappierMinimumInteractiveTargetSize } from '@happier-dev/plugin-ui/environment';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -169,7 +168,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     textBlock: { flex: 1, gap: 0 },
     button: { minHeight: 50, justifyContent: 'center', gap: theme.space.s8 },
-    link: { minHeight: resolveHappierMinimumInteractiveTargetSize(Platform.OS), paddingHorizontal: 0, paddingVertical: theme.space.s8, borderWidth: 0 },
+    link: { paddingHorizontal: 0, paddingVertical: theme.space.s8, borderWidth: 0 },
     buttonText: { gap: 0, alignItems: 'center', flexShrink: 1 },
     // The same frame, quieter: its words still read while its action waits.
     unavailableText: { opacity: 0.6 },

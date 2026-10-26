@@ -82,7 +82,6 @@ export function SegmentedChoiceItem<T extends string>(props: SegmentedChoiceItem
                     // Content width in every placement: under its label too, equal segments across the row
                     // read as a tab bar, not a value choice (lab tsAuth-A, R-TH-5).
                     segmentSizing="content"
-                    targetSize="platform"
                     disabled={disabled}
                     accessibilityLabel={title}
                     role="radiogroup"

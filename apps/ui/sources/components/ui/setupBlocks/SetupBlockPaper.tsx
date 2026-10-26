@@ -9,6 +9,13 @@ import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 
 export type SetupBlockLayout = 'card' | 'row' | 'wide';
 
+/**
+ * A card's ✕ sits 8 px under the card's top edge, right below its section's ⋯ (15 px between the two
+ * drawn controls, the ⋯'s own hit area taking 8 px of it). The ✕ takes the 7 px left above it, so the
+ * two meet and never overlap; sideways and below, nothing competes, so it keeps the full reach.
+ */
+const CARD_DISMISS_EDGES_PX = { leading: 10, trailing: 10, top: 7 } as const;
+
 /** The block's quiet ✕: always visible (hover is never the only way to find it). */
 export type SetupBlockDismiss = Readonly<{
     /** "Hide “Add your phone”". */
@@ -59,6 +66,7 @@ export function SetupBlockPaper(props: Readonly<{
                         tooltip={props.dismiss.tooltip}
                         tooltipPlacement="bottom"
                         onPress={props.dismiss.onPress}
+                        interactiveTargetEdgesPx={card ? CARD_DISMISS_EDGES_PX : undefined}
                     />
                 </View>
             ) : null}

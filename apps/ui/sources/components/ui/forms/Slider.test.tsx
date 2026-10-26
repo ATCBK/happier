@@ -103,13 +103,17 @@ describe('Slider', () => {
         await act(async () => {
             invokeTestInstanceHandler(track, 'onResponderGrant', { nativeEvent: { locationX: 101, pageX: 301 } });
         });
-        expect(onValueChange).toHaveBeenLastCalledWith(1.15);
+        expect(onValueChange).not.toHaveBeenCalled();
+        expect(screen.findByTestId('slider')!.props.accessibilityValue.now).toBe(1.15);
 
         // The drag keeps measuring from the track even when the pointer leaves it.
         await act(async () => {
             invokeTestInstanceHandler(track, 'onResponderMove', { nativeEvent: { locationX: 4, pageX: 520 } });
         });
-        expect(onValueChange).toHaveBeenLastCalledWith(1.5);
+        expect(onValueChange).not.toHaveBeenCalled();
+        expect(screen.findByTestId('slider')!.props.accessibilityValue.now).toBe(1.5);
+        await act(async () => invokeTestInstanceHandler(track, 'onResponderRelease'));
+        expect(onValueChange).toHaveBeenCalledExactlyOnceWith(1.5);
     });
 
     it('ignores input while disabled', async () => {
@@ -121,5 +125,20 @@ describe('Slider', () => {
         });
 
         expect(onValueChange).not.toHaveBeenCalled();
+    });
+
+    it('withdraws an interrupted drag without committing and ignores duplicate release events', async () => {
+        const preview = vi.fn();
+        const { screen, onValueChange } = await renderSlider({ onValuePreview: preview });
+        const track = screen.findByTestId('slider-track')!;
+        await act(async () => {
+            track.props.onLayout({ nativeEvent: { layout: { width: 100 } } });
+            track.props.onResponderGrant({ nativeEvent: { locationX: 100, pageX: 300 } });
+        });
+        expect(preview).toHaveBeenLastCalledWith(6);
+        await act(async () => { track.props.onResponderTerminate(); track.props.onResponderRelease(); });
+        expect(preview).toHaveBeenLastCalledWith(undefined);
+        expect(onValueChange).not.toHaveBeenCalled();
+        expect(screen.findByTestId('slider')!.props.accessibilityValue.now).toBe(3);
     });
 });

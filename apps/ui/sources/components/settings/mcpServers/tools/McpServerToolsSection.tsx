@@ -246,11 +246,11 @@ export const McpServerToolsSection = React.memo(function McpServerToolsSection(
         />
       )}
       {tools.length === 0 ? (
-        <Item
-          testID={`${props.testID}:notListed`}
-          title={t('capabilities.mcp.tools.notListed')}
-          showChevron={false}
-        />
+        <SectionContentRow testID={`${props.testID}:notListed`}>
+          <Text variant="meta" style={styles.note}>
+            {t('capabilities.mcp.tools.notListed')}
+          </Text>
+        </SectionContentRow>
       ) : (
         <>
           {list.tokens !== null && !props.stale ? (
@@ -472,7 +472,6 @@ const McpToolRow = React.memo(function McpToolRow(props: Readonly<{
                             activeTabId={value}
                             onSelectTab={props.onChange}
                             segmentSizing="content"
-                            targetSize="platform"
                             compact
                             disabled={!props.editable}
                             accessibilityLabel={title}

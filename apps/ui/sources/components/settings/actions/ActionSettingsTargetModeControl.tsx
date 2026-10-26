@@ -103,7 +103,6 @@ export const ActionSettingsTargetModeControl = React.memo(function ActionSetting
             activeTabId={activeTabId}
             valueSource={inheriting ? 'inherited' : 'set'}
             segmentSizing="content"
-            targetSize="platform"
             onSelectTab={props.onChange}
         />
     );

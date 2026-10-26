@@ -8,8 +8,7 @@ import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeFor
 import { t } from '@/text';
 import { TextInput } from '@/components/ui/text/Text';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, useHappierHitArea, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 
 export interface SearchHeaderProps {
@@ -27,15 +26,6 @@ export interface SearchHeaderProps {
 
 const INPUT_BORDER_RADIUS = 10;
 const SEARCH_HEADER_PADDING_BOTTOM = 12;
-
-/**
- * The search field is a touch target, so it carries the platform minimum from
- * the canonical owner rather than whatever its padding and line height happen to
- * add up to. Padding alone left it at roughly 38pt on iOS and 40dp on Android,
- * under the 44/48 the accessibility contract requires. This is a floor, not a
- * fixed height: larger text still grows the field.
- */
-const SEARCH_INPUT_MIN_HEIGHT = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -57,7 +47,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: INPUT_BORDER_RADIUS,
         paddingHorizontal: theme.space.s12,
         paddingVertical: theme.space.s8,
-        minHeight: SEARCH_INPUT_MIN_HEIGHT,
     },
     textInput: {
         flex: 1,
@@ -89,11 +78,30 @@ export function SearchHeader({
     const paintColor = useHappierMaterialColorResolver();
     const maxWidth = useLayoutMaxWidth();
     const styles = stylesheet;
+    // The field draws at its padding and line height (about 38 on iOS, 40 elsewhere). Under a finger
+    // the shared hit area reaches the touch target past it, and a tap anywhere in it focuses the input.
+    const input = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
+    const setInput = React.useCallback((node: React.ElementRef<typeof TextInput> | null) => {
+        input.current = node;
+        if (typeof inputRef === 'function') inputRef(node);
+        else if (inputRef) (inputRef as React.MutableRefObject<React.ElementRef<typeof TextInput> | null>).current = node;
+    }, [inputRef]);
+    const focusInput = React.useCallback(() => input.current?.focus?.(), []);
+    const wrapperHitArea = useHappierHitArea({ restingStyle: () => styles.inputWrapper });
 
     return (
         <View testID={testID} style={[styles.container, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }, containerStyle]}>
             <View style={[styles.content, { maxWidth }]}>
-                <View style={[styles.inputWrapper, { backgroundColor: paintColor(theme.colors.input.background) }]}>
+                <Pressable
+                    onPress={focusInput}
+                    accessible={false}
+                    focusable={false}
+                    tabIndex={-1}
+                    hitSlop={wrapperHitArea.hitSlop}
+                    onLayout={wrapperHitArea.onLayout}
+                    style={[styles.inputWrapper, { backgroundColor: paintColor(theme.colors.input.background) }]}
+                >
+                    {wrapperHitArea.frame}
                     {normalizeNodeForView(
                         <Icon
                             name="magnifying-glass"
@@ -104,7 +112,7 @@ export function SearchHeader({
                     )}
                     <TextInput
                         testID={testID ? `${testID}:input` : undefined}
-                        ref={inputRef}
+                        ref={setInput}
                         value={value}
                         onChangeText={onChangeText}
                         placeholder={placeholder}
@@ -116,9 +124,9 @@ export function SearchHeader({
                         style={styles.textInput}
                     />
                     {value.length > 0 && (
-                        <Pressable
+                        <HappierPressable
                             onPress={() => onChangeText('')}
-                            hitSlop={8}
+                            hitTarget={24}
                             accessibilityRole="button"
                             accessibilityLabel={t('common.clearSearch')}
                         >
@@ -130,9 +138,9 @@ export function SearchHeader({
                                     style={styles.clearIcon}
                                 />,
                             )}
-                        </Pressable>
+                        </HappierPressable>
                     )}
-                </View>
+                </Pressable>
             </View>
         </View>
     );

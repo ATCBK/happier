@@ -20,7 +20,7 @@ import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { useItemDensityInputs } from '@/components/ui/lists/useResolvedItemDensity';
-import { isTouchPrimaryPointer, resolvePageRowDensityInput, resolvePageRowMetrics } from '@/components/ui/lists/pageRowMetrics';
+import { resolvePageRowDensityInput, resolvePageRowMetrics } from '@/components/ui/lists/pageRowMetrics';
 
 // RNW defaults to break-word; option names and captions wrap at normal word boundaries instead.
 const WEB_VISUAL_TEXT_WRAPPING: TextStyle & { overflowWrap: 'normal'; wordBreak: 'normal' } = {
@@ -186,7 +186,7 @@ function AppActionSelectionTiles<T extends string>(props: HappierActionSelection
     const uiFontScale = useLocalSetting('uiFontScale');
     const density = useItemDensityInputs();
     const pageDensity = resolvePageRowDensityInput({ preferred: density.preferred, requested: density.resolved, requestedExplicitly: density.requested });
-    const pageRowMetrics = resolvePageRowMetrics({ ...pageDensity, touch: isTouchPrimaryPointer() });
+    const pageRowMetrics = resolvePageRowMetrics({ ...pageDensity });
     return (
         <HappierUiTypographyProvider typography={readPluginUiHostTypography()}>
             <HappierSelectionTiles {...props} pageRowMetrics={pageRowMetrics} textScale={Platform.OS === 'web' ? 1 : uiFontScale} />

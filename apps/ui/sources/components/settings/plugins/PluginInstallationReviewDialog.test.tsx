@@ -91,37 +91,6 @@ describe('PluginInstallationReviewDialog', () => {
         await expect(pending).resolves.toEqual({ approved: false, optionalSelections: [] });
     });
 
-    it('paints a visible keyboard focus ring on the install decision controls on web', async () => {
-        const { PluginInstallationReviewDialog } = await import('./PluginInstallationReviewDialog');
-        const screen = await renderScreen(
-            <PluginInstallationReviewDialog
-                review={review}
-                target={{ machine: 'Laptop', server: 'Server A' }}
-                onResolve={vi.fn()}
-                onClose={vi.fn()}
-            />,
-        );
-
-        for (const testID of [
-            'settings.plugins.installReview.cancel',
-            'settings.plugins.installReview.confirm',
-        ]) {
-            const focusTarget = document.createElement('button');
-            document.body.appendChild(focusTarget);
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-            focusTarget.focus();
-            const control = screen.findByTestId(testID);
-            expect(control?.props.style({ pressed: false, focused: true })).toEqual(expect.arrayContaining([
-                expect.objectContaining({
-                    outlineStyle: 'solid',
-                    outlineWidth: expect.any(Number),
-                    outlineColor: expect.any(String),
-                }),
-            ]));
-            focusTarget.remove();
-        }
-    });
-
     it('names the exact machine and server the install-and-trust decision lands on', async () => {
         const { PluginInstallationReviewDialog } = await import('./PluginInstallationReviewDialog');
         const screen = await renderScreen(

@@ -1,11 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeFormatV1';
 import { ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 import { createArtifactStoreBoundary } from './artifactStoreBoundary';
 
 describe('Artifact store HTTP boundary', () => {
+    it('serves coarse kind and exact presence instead of echoing the stored write hint', async () => {
+        for (const mode of ['plain', 'e2ee'] as const) {
+            const boundary = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: mode });
+            const input = {
+                id: 'indexed-prompt', kind: 'v1:prompt:prompt_doc.v2',
+                header: mode === 'plain' ? encodePlainArtifactStoredContent({ kind: 'prompt_doc.v2', title: 'Private title' }) : 'encrypted-header',
+                body: mode === 'plain' ? encodePlainArtifactStoredContent({ body: 'Private body' }) : 'encrypted-body',
+                dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
+                    : Buffer.alloc(ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES, 1).toString('base64'),
+            };
+            const created = await boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify(input) });
+            expect(created?.status).toBe(200);
+            const served = await created!.json();
+            expect(served).toMatchObject({ id: input.id, kind: 'prompt', kindHint: 'prompt_doc.v2',
+                header: input.header, body: input.body });
+            expect(boundary.read(input.id)).toEqual(served);
+            expect(await (await boundary.handle(`/v1/artifacts/${input.id}`))!.json()).toEqual(served);
+            if (mode === 'e2ee') {
+                const legacy = await boundary.handle('/v1/artifacts', { method: 'POST',
+                    body: JSON.stringify({ ...input, id: 'legacy-prompt', kind: 'prompt' }) });
+                expect(legacy?.status).toBe(200);
+                const row = await legacy!.json();
+                expect(row).toMatchObject({ kind: 'prompt' });
+                expect(Object.hasOwn(row, 'kindHint')).toBe(false);
+            }
+        }
+    });
+
     it('serves selected batch reads in request order through the same Account and content-mode owner', async () => {
         for (const mode of ['plain', 'e2ee'] as const) {
             let accountId: string | null = 'owner';

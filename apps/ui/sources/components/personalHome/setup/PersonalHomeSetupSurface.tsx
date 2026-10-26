@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 
 import type { SystemTaskRunState } from '@/components/systemTasks/types';
 import { presentActiveCliAcquisition, resolveCliAcquisitionFailureMessage } from '@/components/systemTasks/cliAcquisitionPresentation';
@@ -49,7 +50,7 @@ const styles = StyleSheet.create((theme) => ({
         textAlign: 'center',
     },
     recovery: { width: '100%', maxWidth: RECOVERY_MAX_WIDTH, alignItems: 'center' },
-    detailsButton: { alignSelf: 'center', minHeight: 44, paddingHorizontal: theme.space.s12, justifyContent: 'center' },
+    detailsButton: { alignSelf: 'center', paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s10, justifyContent: 'center' },
     detailsText: {  color: theme.colors.text.secondary, ...Typography.variant('label', 'semiBold') },
     details: { width: '100%', maxWidth: RECOVERY_MAX_WIDTH },
 }));
@@ -182,6 +183,7 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
         }
     }, [recoveryFocusState]);
 
+    const detailsHitArea = useHappierHitArea({ restingStyle: () => null });
     const detailsToggle = (
         <Pressable
             ref={detailsRef}
@@ -190,8 +192,11 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
             accessibilityLabel={t('common.details')}
             accessibilityState={{ expanded: detailsOpen }}
             onPress={toggleDetails}
+            hitSlop={detailsHitArea.hitSlop}
+            onLayout={detailsHitArea.onLayout}
             style={styles.detailsButton}
         >
+            {detailsHitArea.frame}
             <Text style={styles.detailsText}>{detailsOpen ? t('common.collapse') : t('common.details')}</Text>
         </Pressable>
     );

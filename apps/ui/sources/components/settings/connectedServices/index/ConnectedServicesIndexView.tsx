@@ -7,9 +7,9 @@ import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-d
 import { CardGrid } from '@/components/ui/cardGrid/CardGrid';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
-import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ExpandableItem, type ExpandableItemHeaderState } from '@/components/ui/lists/ExpandableItem';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -32,7 +32,6 @@ import type {
 import { presentConnectedServicesIndexAccount, presentConnectedServicesIndexPool } from '../model/presentConnectedServicesIndexAccount';
 import { ConnectedAccountCardView } from './ConnectedAccountCard';
 import {
-    CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX,
     ConnectedAccountIndexRowView,
     type ConnectedAccountIndexEntry,
     type ConnectedAccountIndexFacts,
@@ -41,10 +40,14 @@ import {
 import { ConnectedServicesSummaryLine } from './ConnectedServicesSummaryLine';
 import type { ConnectedServicePoolIndexEntry } from './ConnectedServicePoolIndexItem';
 
-/** Leading box that puts a sheet row's title on the account rows' edge: their inset less the row padding and leading gap. */
-const SUPPORT_DETAILS_LEADING_BOX_PX = CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX
-    - PAGE_LIST_METRICS.rowPaddingHorizontalPx
-    - PAGE_LIST_METRICS.rowLeadingGapPx;
+
+/**
+ * Leading box that puts a section row's title on the account rows' edge: the accounts start on the heading's optical
+ * inset with their mark column and gap, a page row on its own padding and gap.
+ */
+const SUPPORT_DETAILS_LEADING_BOX_PX = PAGE_LIST_METRICS.headingOpticalInsetPx
+    + PAGE_LIST_METRICS.rowLeadingColumnPx
+    - PAGE_LIST_METRICS.rowPaddingHorizontalPx;
 
 export type ConnectedServicesIndexPresentation = 'list' | 'grid';
 
@@ -132,7 +135,6 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
             testIDPrefix="connected-services-index.view"
             accessibilityLabel={t('connectedServicesCollection.viewLabel')}
             segmentSizing={props.compact ? 'equal' : 'content'}
-            targetSize="platform"
         />
     );
 
@@ -219,9 +221,15 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
         };
     };
 
-    const renderAccounts = (sheet: ConnectedServicesIndexSheet) => (
+    // Signed-out accounts lead the page in Needs you (lab `s2svc:home`), each once; their services list the rest.
+    const isSignedOut = (account: ConnectedServicesIndexAccount) => normalizeConnectedServiceCredentialHealthStatus(account.status) === 'needs_reauth';
+    const flatList = !props.compact && !grid;
+    const listedAccounts = (sheet: ConnectedServicesIndexSheet) => flatList
+        ? sheet.accounts.filter((account) => !isSignedOut(account))
+        : sheet.accounts;
+    const renderAccounts = (sheet: ConnectedServicesIndexSheet, accounts: readonly ConnectedServicesIndexAccount[] = listedAccounts(sheet)) => (
         <>
-            {sheet.accounts.map((account, index) => {
+            {accounts.map((account, index) => {
                 const entry = entryFor(sheet, account);
                 const settled = props.settled?.serviceKey === sheet.serviceKey && props.settled.accountId === account.accountId;
                 return (
@@ -230,7 +238,7 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                             sheet,
                             account,
                             render: (facts) => (
-                                <ConnectedAccountIndexRowView {...entry} facts={facts} now={props.now} compact={props.compact} showDivider={!settled && (index < sheet.accounts.length - 1 || Boolean(sheet.supportDetails))} />
+                                <ConnectedAccountIndexRowView {...entry} facts={facts} now={props.now} compact={props.compact} showDivider={!settled && (index < accounts.length - 1 || Boolean(sheet.supportDetails))} />
                             ),
                         })}
                         {settled ? props.settled!.node : null}
@@ -242,10 +250,12 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                 <Item
                     testID={`connected-services-index:${sheet.serviceKey}:support-details`}
                     title={t('common.details')}
-                    subtitle={sheet.statusLine ?? t('settingsPlugins.diagnosticsTitle')}
+                    // The service header already states its one fact; the row names what it opens.
+                    subtitle={t('settingsPlugins.diagnosticsTitle')}
+                    // A leading box that puts this title on the account names' edge (their mark column + gap).
+                    iconBoxSize={props.compact ? undefined : SUPPORT_DETAILS_LEADING_BOX_PX}
                     // The sheet's leading column, widened so this title starts on the account names' edge
                     // (measured live: 48 vs 58 px), not on the generic row's.
-                    iconBoxSize={props.compact ? undefined : SUPPORT_DETAILS_LEADING_BOX_PX}
                     onPress={() => openDiagnostics(sheet)}
                 />
             ) : null}
@@ -290,9 +300,59 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
         ) : <React.Fragment key={sheet.serviceKey}>{serviceRow()}{renderAccounts(sheet)}</React.Fragment>;
     };
 
-    const renderListSheet = (sheet: ConnectedServicesIndexSheet, sectionTitle?: string) => (
-        <ItemGroup key={sheet.serviceKey} title={sectionTitle}>{renderListSheetContent(sheet)}</ItemGroup>
-    );
+    // All services is a flat index (P7 W3 "browse flat", P8 §8): each service is a section headed by its mark,
+    // name, who uses it and Add account; its accounts are rows on the page, each led by the service's mark.
+    const renderListSheet = (sheet: ConnectedServicesIndexSheet) => {
+        const header = serviceHeader(sheet);
+        return (
+            <ItemGroup
+                key={sheet.serviceKey}
+                testID={`connected-services-service:${sheet.serviceKey}`}
+                title={sheet.label}
+                titleLeading={<ConnectedServiceMark legacyServiceId={sheet.legacyServiceId} size="inline" />}
+                description={header.summary}
+                action={header.addAccount}
+                surface="none"
+            >
+                {renderAccounts(sheet)}
+            </ItemGroup>
+        );
+    };
+    const needsYou = flatList
+        ? model.sheets.flatMap((sheet) => sheet.accounts.filter(isSignedOut).map((account) => ({ sheet, account })))
+        : [];
+    const needsYouGroup = needsYou.length > 0 ? (
+        <ItemGroup
+            testID="connected-services-index:needs-you"
+            title={t('connectedServicesCollection.needsYouGroup')}
+            surface="none"
+        >
+            {needsYou.map(({ sheet, account }, index) => {
+                const entry = entryFor(sheet, account);
+                // One primary per view: only the first fix in Needs you is filled; the rest stay secondary.
+                const fixProminence = index === 0 ? entry.fixProminence : 'secondary';
+                return (
+                    <React.Fragment key={`${sheet.serviceKey}:${account.accountId}`}>
+                        {props.renderAccount({
+                            sheet,
+                            account,
+                            render: (facts) => (
+                                <ConnectedAccountIndexRowView
+                                    {...entry}
+                                    fixProminence={fixProminence}
+                                    identityLabel={[sheet.label, entry.identityLabel].filter(Boolean).join(' · ')}
+                                    facts={facts}
+                                    now={props.now}
+                                    compact={false}
+                                    showDivider={index < needsYou.length - 1}
+                                />
+                            ),
+                        })}
+                    </React.Fragment>
+                );
+            })}
+        </ItemGroup>
+    ) : null;
 
     const renderGridSheet = (sheet: ConnectedServicesIndexSheet, sectionTitle?: string) => {
         const header = serviceHeader(sheet);
@@ -331,7 +391,7 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                 </CardGrid>
                 {sheet.supportDetails ? (
                     <Item testID={`connected-services-index:${sheet.serviceKey}:support-details`}
-                        title={t('common.details')} subtitle={sheet.statusLine ?? t('settingsPlugins.diagnosticsTitle')}
+                        title={t('common.details')} subtitle={t('settingsPlugins.diagnosticsTitle')}
                         onPress={() => openDiagnostics(sheet)} />
                 ) : null}
                 {props.settled?.serviceKey === sheet.serviceKey ? <View style={styles.gridSettle}>{props.settled.node}</View> : null}
@@ -344,9 +404,14 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
     // rather than a stack of one-row cards; wider panes give each service its own sheet of accounts.
     const renderSheets = (sheets: readonly ConnectedServicesIndexSheet[], sectionTitle?: string) => props.compact && !grid
         ? (sheets.length > 0 ? <ItemGroup title={sectionTitle}>{sheets.map(renderListSheetContent)}</ItemGroup> : null)
-        : sheets.map((sheet, index) => (
-            grid ? renderGridSheet(sheet, index === 0 ? sectionTitle : undefined) : renderListSheet(sheet, index === 0 ? sectionTitle : undefined)
-        ));
+        : grid
+            ? sheets.map((sheet, index) => renderGridSheet(sheet, index === 0 ? sectionTitle : undefined))
+            : sheets.length > 0 ? (
+                <>
+                    {sectionTitle ? <ItemGroup title={sectionTitle} surface="none">{null}</ItemGroup> : null}
+                    {sheets.map((sheet) => renderListSheet(sheet))}
+                </>
+            ) : null;
 
     const poolsTitle = t('connectedServicesCollection.poolsGroup');
     const newPool = props.renderNewPool ? props.renderNewPool((onPress) => (
@@ -411,6 +476,7 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                 )}
             />
             {props.banner ?? null}
+            {needsYouGroup}
             {renderSheets(agentSheets)}
             {props.connectMore}
             {pools}

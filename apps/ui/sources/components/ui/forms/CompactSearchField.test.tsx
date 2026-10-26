@@ -112,7 +112,7 @@ describe('CompactSearchField', () => {
         expect(frame.props.focusable).toBe(false);
     });
 
-    it('takes the native touch floor on phones and keeps pointer density on web', async () => {
+    it('draws the compact 32px field on every platform; a finger reaches it through the hit area', async () => {
         const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const { CompactSearchField } = await import('./CompactSearchField');
         const { flattenTestStyle } = await import('@/dev/testkit');
@@ -126,9 +126,9 @@ describe('CompactSearchField', () => {
             await screen.unmount();
             return value;
         };
-        expect(await minHeightOn('ios')).toBe(44);
-        expect(await minHeightOn('android')).toBe(48);
-        // A precise pointer gets the lab's compact 32px field.
+        // A touch target is a hit area, not a drawn size (DESIGN.md): the well keeps the lab's 32px.
+        expect(await minHeightOn('ios')).toBe(32);
+        expect(await minHeightOn('android')).toBe(32);
         expect(await minHeightOn('web')).toBe(32);
     });
 

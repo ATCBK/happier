@@ -23,6 +23,10 @@ import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
+import { resolveRoleDefinitionV1, resolveRoleSelectionV1, resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { rememberLastUsedBackendSelection } from '@/sync/domains/state/newSessionTargetUiState';
 
 // Native portal/window measurement is the system boundary; the picker and catalog stay real.
 vi.mock('@/components/ui/popover', async (importOriginal) => {
@@ -48,6 +52,7 @@ beforeEach(() => {
         backendEnabledByTargetKey: { [engine.agentTargetKey]: true },
     } });
     const scope = { serverId: 'focused-home', accountId: 'focused-account' };
+    rememberLastUsedBackendSelection(scope, { lastUsedAgent: null, lastUsedBackendTarget: null });
     storage.setState({ settingsScope: scope });
     applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
         v: 1, definitions: [{
@@ -114,9 +119,9 @@ describe('role engine exact Home qualification', () => {
     });
     it('names an explicitly preferred bundled Agent without waiting for the independent configured catalog', async () => {
         resetAcpCatalogSnapshotsForTests();
-        storage.setState({ settings: { ...storage.getState().settings,
+        rememberLastUsedBackendSelection(storage.getState().settingsScope, {
             lastUsedBackendTarget: { kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude },
-        } });
+        });
         const hook = await renderHook(() => useRoleEnginePresentation());
         const presented = hook.getCurrent()(undefined);
         expect(presented).toMatchObject({ label: 'Claude', choiceLabel: 'Claude', pending: false, unavailable: false });
@@ -127,9 +132,9 @@ describe('role engine exact Home qualification', () => {
     });
     it('does not replace an explicitly preferred configured Agent while its catalog is loading', async () => {
         resetAcpCatalogSnapshotsForTests();
-        storage.setState({ settings: { ...storage.getState().settings,
+        rememberLastUsedBackendSelection(storage.getState().settingsScope, {
             lastUsedBackendTarget: { kind: 'backend', backendId: 'focused-review', configuredBackendId: 'focused-review' },
-        } });
+        });
         const hook = await renderHook(() => useRoleEnginePresentation());
         expect(hook.getCurrent()(undefined)).toMatchObject({ label: null, pending: true });
     });
@@ -158,6 +163,42 @@ describe('role engine exact Home qualification', () => {
             publishAppliedActiveServerSnapshot({ serverId: 'focused-home', serverUrl: 'https://focused-home.test', generation: 3 });
         });
         expect(session.getCurrent()(engine).unavailable).toBe(false);
+    });
+
+    it('names the Account declaration separately from the engine captured in a Session Role snapshot', async () => {
+        const declaration = resolveRoleDefinitionV1({
+            roleId: 'reviewer',
+            settingsOverrides: { reviewer: { roleId: 'reviewer', engine } },
+        });
+        if (!declaration.ok) throw new Error('Expected an editable Role declaration');
+        const capturedEngine = {
+            agentTargetKey: resolveBackendTargetKeyV2({ kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.codex }),
+            modelId: 'gpt-6-luna',
+        };
+        const sessionRoles = snapshotSessionRolesAtSpawnV1({
+            leadSessionId: 'lead-session',
+            roles: resolveRolesSnapshotV1({ defaultEngine: capturedEngine }),
+        });
+        const resolved = resolveRoleSelectionV1({
+            roleId: 'reviewer',
+            settingsOverrides: { reviewer: { roleId: 'reviewer', engine } },
+            sessionRoles,
+        });
+        expect(resolved.ok ? resolved.selection.engine : null).toEqual(capturedEngine);
+        const settings = await renderHook(() => useRoleEnginePresentation());
+        const rail = await renderHook(() => useRoleRailItems(undefined, 'focused-home', sessionRoles, true));
+        await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
+
+        const accountEngine = settings.getCurrent()(declaration.selection.engine);
+        expect(accountEngine.label).toBe('Focused Review · stored-model · high');
+        // A configured definition declares Custom ACP, never a backing Agent inferred from its command.
+        expect(React.isValidElement<{ entry: { identity: unknown } }>(accountEngine.icon)
+            ? accountEngine.icon.props.entry.identity : null).toEqual(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1);
+        expect(rail.getCurrent().find(item => item.roleId === 'reviewer')).toMatchObject({
+            agentTargetKey: capturedEngine.agentTargetKey,
+            engineLabel: 'Codex · gpt-6-luna',
+        });
+        expect(declaration.selection.engine).toEqual(engine);
     });
 
     it('retains a session-authored role in an unavailable Home rail without naming focused Account engines', async () => {

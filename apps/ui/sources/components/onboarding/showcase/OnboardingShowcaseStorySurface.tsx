@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { AskHappierNote } from '@/components/sessions/bots/AskHappierOfferCard';
 import type { OnboardingShowcaseManifest } from '@/onboarding/showcase/types';
@@ -11,11 +11,10 @@ import { Typography } from '@/constants/Typography';
 
 const stylesheet = StyleSheet.create((theme) => ({
     skip: {
-        minWidth: 44,
-        minHeight: 44,
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s8,
     },
     skipText: {
         color: theme.colors.text.secondary,
@@ -41,7 +40,7 @@ export function OnboardingShowcaseStorySurface(props: OnboardingShowcaseStorySur
             testID={testID}
             onDismiss={props.onDismiss}
             topRightAction={(
-                <Pressable
+                <HappierPressable
                     testID={`${testID}-skip`}
                     onPress={props.onDismiss}
                     style={styles.skip}
@@ -49,7 +48,7 @@ export function OnboardingShowcaseStorySurface(props: OnboardingShowcaseStorySur
                     accessibilityLabel={t('common.skip')}
                 >
                     <Text style={styles.skipText}>{t('common.skip')}</Text>
-                </Pressable>
+                </HappierPressable>
             )}
         >
             <StoryDeckSurface

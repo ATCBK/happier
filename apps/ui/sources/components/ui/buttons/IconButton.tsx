@@ -6,6 +6,7 @@ import {
     type HappierPressableRole,
     useHappierMaterialColorResolver,
 } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -91,10 +92,10 @@ const stylesheet = StyleSheet.create((theme) => ({
  * Tones map to theme state colors; `variant: 'plain'` drops the border/fill
  * for dense toolbars.
  *
- * `size` is the VISIBLE square and nothing else. A caller that needs a bigger
- * physical target declares `minimumInteractiveTargetSize` (plus the row gap it
- * owns) and gets a real press frame around the unchanged drawn square — see
- * the frame comment below for why this is not `hitSlop`.
+ * `size` is the VISIBLE square and its whole layout box. Under a finger the shared
+ * pressable's hit area reaches the touch target past it (native `hitSlop`, an
+ * invisible frame on the web); a caller that asks for a larger hit area declares
+ * `minimumInteractiveTargetSize`, and the free space it may reach into.
  */
 /**
  * Exactly one glyph source. `iconName` covers the common case of a single seam-registered glyph;
@@ -125,34 +126,31 @@ export function IconButton(props: Readonly<{
     /** VISIBLE container square in px; the glyph is the icon-scale step that fits it. Default 28. */
     size?: number;
     /**
-     * Required physical press target while preserving the compact visual square.
-     * Callers obtain this from the shared platform policy rather than encoding
-     * platform-sized hit slop locally.
+     * A hit area this control asks for beyond the defaults: the environment's touch target under a
+     * finger and the WCAG pointer floor under a precise pointer. It never changes the drawn square
+     * or its layout.
      */
     minimumInteractiveTargetSize?: number;
     /**
-     * Horizontal gap this control's own row leaves between it and its nearest
-     * neighbour, in px. Horizontal press-frame growth is capped at half of it so
-     * adjacent targets never overlap. Omitted means the whole declared target
-     * takes its own layout space. The full vertical target always stays in flow:
-     * an inline row gap does not describe a stacked neighbor's spacing.
+     * Horizontal gap this control's row leaves to its nearest neighbour, in px. The hit area reaches
+     * at most half of it sideways, so adjacent targets never overlap; above and below it reaches the
+     * whole target, so the caller must not clip that space.
      */
     interactiveTargetGapPx?: number;
     /**
-     * `overhang`: the press frame takes no layout beyond the drawn square, for a control whose
-     * container must not grow (a floating capsule). It spends the declared row gap sideways and
-     * overhangs above and below, so the caller must own that free space and must not clip it. The
-     * target is then as wide as the row's pitch allows, which can be less than the declared floor.
-     * Its hover and press tint stay on the drawn square. Default `reserve`: layout allocates
-     * whatever the row gap cannot cover.
+     * The free space on each side the hit area may take (half of each neighbour gap, or the
+     * container's padding at its ends), so a row of controls tiles its container with targets and
+     * none overlap. Overrides `interactiveTargetGapPx`. `top` and `bottom` bound the vertical reach
+     * where a clipping edge sits closer than the target (a control in a clipped block); omitted, the
+     * hit area reaches the whole target above and below.
      */
-    interactiveTargetLayout?: 'reserve' | 'overhang';
+    interactiveTargetEdgesPx?: Readonly<{ leading: number; trailing: number; top?: number; bottom?: number }>;
     /**
-     * With `overhang`: the free space on each side this control may take (half of each neighbour
-     * gap, or the container's padding at its ends), so a row of controls tiles its container with
-     * targets and none overlap. Defaults to half of `interactiveTargetGapPx` on both sides.
+     * Vertical gap this control's column leaves to the neighbours above and below, in px. The hit area
+     * reaches at most half of it up and down (a stacked rail of controls); omitted, it reaches the
+     * whole target, so a caller that stacks controls declares it.
      */
-    interactiveTargetEdgesPx?: Readonly<{ leading: number; trailing: number }>;
+    interactiveTargetVerticalGapPx?: number;
     iconSize?: number;
     tone?: IconButtonTone;
     variant?: IconButtonVariant;
@@ -234,55 +232,30 @@ export function IconButton(props: Readonly<{
             focus: theme.colors.border.focus,
         },
     });
-    const minimumInteractiveTargetSize = Number.isFinite(props.minimumInteractiveTargetSize)
-        ? Math.max(size, Math.round(props.minimumInteractiveTargetSize!))
-        : null;
-    /**
-     * The press frame, when the declared target is larger than the drawn square.
-     *
-     * **Not `hitSlop`.** react-native-web 0.21 implements `hitSlop` only in its
-     * legacy `Touchable` export — `Pressable` and `View` never read it — and the
-     * desktop app IS the web bundle, so a slop-declared target there is a target
-     * that does not exist (on Android it is additionally clipped to the parent).
-     * The frame is therefore real box model: a larger width/height, which grows
-     * the press box on every platform. Horizontal negative margins use the
-     * declared row gap first, and layout allocates the remaining width and full
-     * height. Same horizontal technique as `components/ui/lists/ItemRowActions.tsx`.
-     *
-     * The same control can be stacked on a narrow composer, whose vertical gap
-     * is independent of the inline row. Never spend the row gap vertically.
-     */
-    const targetDeficitPerSide = minimumInteractiveTargetSize === null
-        ? 0
-        : Math.max(0, (minimumInteractiveTargetSize - size) / 2);
-    const neighborGapPx = Number.isFinite(props.interactiveTargetGapPx)
-        ? Math.max(0, props.interactiveTargetGapPx!)
-        : 0;
-    const targetExpandX = Math.min(targetDeficitPerSide, neighborGapPx / 2);
-    const overhang = props.interactiveTargetLayout === 'overhang' && minimumInteractiveTargetSize !== null;
-    // An overhanging frame spends exactly the free space it was given on each side (never more than
-    // the floor asks), padded so the drawn square stays where layout put it.
-    const edgeX = (free: number | undefined) => Math.min(targetDeficitPerSide, Math.max(0, free ?? neighborGapPx / 2));
-    const leadingX = overhang ? edgeX(props.interactiveTargetEdgesPx?.leading) : targetExpandX;
-    const trailingX = overhang ? edgeX(props.interactiveTargetEdgesPx?.trailing) : targetExpandX;
-    // The declared floor is a physical target, never shrunk to fit the row gap, unless the caller
-    // declared that its container cannot grow: then the frame stops at what the row's pitch offers.
-    const frameWidth = overhang ? size + leadingX + trailingX : minimumInteractiveTargetSize ?? size;
-    const frameHeight = minimumInteractiveTargetSize ?? size;
-    const pressFrame = {
-        width: frameWidth,
-        height: frameHeight,
-        // `-0` is a distinct value to strict equality; keep an ungrown frame at a plain 0.
-        ...(overhang && leadingX !== trailingX
-            ? { marginLeft: -leadingX, marginRight: -trailingX, paddingLeft: leadingX, paddingRight: trailingX }
-            : { marginHorizontal: targetExpandX === 0 && leadingX === 0 ? 0 : -leadingX }),
-        marginVertical: overhang && targetDeficitPerSide > 0 ? -targetDeficitPerSide : 0,
-    };
-    // Where the drawn square sits inside the frame: the tooltip anchors to what the user sees.
-    const drawnOffsetLeft = overhang ? leadingX : (frameWidth - size) / 2;
-    const drawnOffsetTop = (frameHeight - size) / 2;
-    // A declared target is owned by the frame; nothing is delegated to inert slop.
-    const hitSlop = minimumInteractiveTargetSize === null ? 8 : 0;
+    const hitTarget = Number.isFinite(props.minimumInteractiveTargetSize)
+        ? Math.round(props.minimumInteractiveTargetSize!)
+        : HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
+    const halfGap = Number.isFinite(props.interactiveTargetGapPx)
+        ? Math.max(0, props.interactiveTargetGapPx!) / 2
+        : undefined;
+    const edges = props.interactiveTargetEdgesPx;
+    // The hit area is the shared pressable's: the drawn square is the whole layout box and the hit
+    // area reaches past it into the free space declared here, never into a neighbour's.
+    const halfVerticalGap = Number.isFinite(props.interactiveTargetVerticalGapPx)
+        ? Math.max(0, props.interactiveTargetVerticalGapPx!) / 2
+        : undefined;
+    const horizontalReach = edges
+        ? {
+            left: Math.max(0, edges.leading),
+            right: Math.max(0, edges.trailing),
+            ...(edges.top === undefined ? null : { top: Math.max(0, edges.top) }),
+            ...(edges.bottom === undefined ? null : { bottom: Math.max(0, edges.bottom) }),
+        }
+        : halfGap === undefined ? undefined : { left: halfGap, right: halfGap };
+    const hitReach = halfVerticalGap === undefined
+        ? horizontalReach
+        : { ...horizontalReach, top: halfVerticalGap, bottom: halfVerticalGap };
+    const pressFrame = { width: size, height: size };
 
     const tooltipContent = props.disabled === true && props.disabledReason
         ? props.disabledReason
@@ -343,7 +316,9 @@ export function IconButton(props: Readonly<{
             controlRef={props.controlRef}
             onKeyDown={props.onKeyDown}
             tabIndex={props.tabIndex}
-            hitSlop={hitSlop}
+            hitSlop={8}
+            hitTarget={hitTarget}
+            hitReach={hitReach}
             onPress={props.onPress}
             onLongPress={props.onLongPress}
             onPressIn={handlePressIn}
@@ -359,7 +334,7 @@ export function IconButton(props: Readonly<{
             overlay={hasTooltip ? (state) => (
                 showReason || ((state.hovered || state.focused) && !tooltipQuiet) ? (Platform.OS === 'web' ? (
                     <>
-                        <View ref={tooltipAnchorRef} style={{ pointerEvents: 'none', position: 'absolute', top: drawnOffsetTop, left: drawnOffsetLeft, width: size, height: size }} />
+                        <View ref={tooltipAnchorRef} style={{ pointerEvents: 'none', position: 'absolute', top: 0, left: 0, width: size, height: size }} />
                         <DeferredAnchoredTooltip activationKey={`${state.hovered}:${state.focused}:${showReason}`} anchorRef={tooltipAnchorRef} placement={props.tooltipPlacement} label={tooltipContent ?? props.accessibilityLabel} content={richTooltipContent} testID={props.testID ? `${props.testID}-tooltip` : undefined} />
                     </>
                 ) : (

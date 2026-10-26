@@ -450,6 +450,16 @@ describe('executionRuns protocol', () => {
       .toEqual({ executionRunStart: { v: 1, runCreation: 'noRunCreated' } });
   });
 
+  it('preserves validated Provider refusal details without retaining private diagnostics', () => {
+    const providerError = { v: 1, code: 'provider_model_config_option_unsupported', retryable: false,
+      action: 'choose_model' };
+    const details = withExecutionRunStartFailureDetails({ providerError, privateDiagnostic: 'private' }, 'noRunCreated');
+    expect(details).toEqual({ executionRunStart: { v: 1, runCreation: 'noRunCreated' }, providerError });
+    expect(ExecutionRunStartFailureDetailsV1Schema.parse(details)).toEqual(details);
+    expect(withExecutionRunStartFailureDetails({ providerError: { ...providerError, retryable: true } }, 'noRunCreated'))
+      .toEqual({ executionRunStart: { v: 1, runCreation: 'noRunCreated' } });
+  });
+
   it('preserves a closed Start exception class through failure projection without accepting private names', () => {
     const details = { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'TypeError' } };
     expect(ExecutionRunStartFailureDetailsV1Schema.parse(details)).toEqual(details);
@@ -462,6 +472,25 @@ describe('executionRuns protocol', () => {
     expect(withExecutionRunStartFailureDetails(privateDetails, 'noRunCreated')).toEqual({
       executionRunStart: { v: 1, runCreation: 'noRunCreated' },
     });
+  });
+
+  it('preserves a closed, content-free role admission refusal through start projection', () => {
+    const details = { executionRunStart: { v: 1, runCreation: 'noRunCreated',
+      refusal: { code: 'role_overrides_unavailable', phase: 'agent_start_context' } } };
+    expect(withExecutionRunStartFailureDetails(details, 'noRunCreated')).toEqual(details);
+    expect(ExecutionRunStartFailureDetailsV1Schema.parse(details)).toEqual(details);
+    expect(readExecutionRunStartRunCreation(details)).toBe('noRunCreated');
+    for (const refusal of [
+      { code: 'private role content', phase: 'agent_start_context' },
+      { code: 'role_overrides_unavailable', phase: 'private phase content' },
+      { code: 'role_overrides_unavailable', phase: 'agent_start_context', instructions: 'private role content' },
+    ]) {
+      const unsafe = { executionRunStart: { ...details.executionRunStart, refusal } };
+      expect(ExecutionRunStartFailureDetailsV1Schema.safeParse(unsafe).success).toBe(false);
+      expect(withExecutionRunStartFailureDetails(unsafe, 'noRunCreated')).toEqual({
+        executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+      });
+    }
   });
 
   it('exposes one strict detached start request projection for durable callers', () => {
@@ -1775,6 +1804,7 @@ describe('executionRuns protocol', () => {
 
   it('pins canonical execution-run transport error codes', () => {
     expect(ExecutionRunTransportErrorCodeSchema.parse('execution_run_not_allowed')).toBe('execution_run_not_allowed');
+    expect(ExecutionRunTransportErrorCodeSchema.parse('execution_run_input_required')).toBe('execution_run_input_required');
     expect(ExecutionRunTransportErrorCodeSchema.parse('execution_run_not_found')).toBe('execution_run_not_found');
     expect(ExecutionRunTransportErrorCodeSchema.parse('execution_run_action_not_supported')).toBe('execution_run_action_not_supported');
     expect(ExecutionRunTransportErrorCodeSchema.parse('execution_run_invalid_action_input')).toBe('execution_run_invalid_action_input');

@@ -59,7 +59,7 @@ describe('FieldTextInput', () => {
         expect(invalid.findByTestId('token-invalid')?.props.accessibilityHint).toBe('Too short');
     });
 
-    it('takes the native touch floor on phones and keeps pointer density on web', async () => {
+    it('fills its drawn field box on every platform rather than growing to a finger target', async () => {
         const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const { FieldTextInput } = await import('./FieldTextInput');
         const { flattenTestStyle } = await import('@/dev/testkit');
@@ -73,9 +73,10 @@ describe('FieldTextInput', () => {
             await screen.unmount();
             return value;
         };
-        expect(await minHeightOn('ios')).toBe(44);
-        expect(await minHeightOn('android')).toBe(48);
-        expect(await minHeightOn('web')).toBeLessThan(44);
+        // A touch target is a hit area, not a drawn size: the input fills the 32 px box on phones too.
+        expect(await minHeightOn('ios')).toBe(30);
+        expect(await minHeightOn('android')).toBe(30);
+        expect(await minHeightOn('web')).toBe(30);
     });
     it('grows a multiline field with its text only when asked, so a whole decision stays visible', async () => {
         const { FieldTextInput } = await import('./FieldTextInput');

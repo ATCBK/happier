@@ -1745,6 +1745,10 @@ describe('VoiceAgentManager', () => {
   describe.each([
     { action: { t: 'session_stop', args: { sessionId: 'other-session' } }, read: false },
     { action: { t: 'settings_invoke', args: { anchor: 'voicePrivacy.forgetVoiceAgentMemory' } }, read: false },
+    { action: { t: 'approval_request_decide', args: { artifactId: 'voice-pending-approval', decision: 'approve' } }, read: false },
+    { action: { t: 'approval_request_decide', args: { artifactId: 'voice-pending-approval', decision: 'reject' } }, read: false },
+    { action: { t: 'session_permission_respond', args: { sessionId: 'coding-session', requestId: 'native-permission', turnId: 'native-turn', decision: 'allow' } }, read: false },
+    { action: { t: 'session_permission_respond', args: { sessionId: 'coding-session', requestId: 'native-permission', turnId: 'native-turn', decision: 'deny' } }, read: false },
     { action: { t: 'listServers', args: {} }, read: true },
     { action: { t: 'invokeAction', args: { action: { pluginId: 'example.plugin', localId: 'test' }, input: {} } }, read: false },
   ])('semantic Voice Action admission ($action.t)', ({ action, read }) => {

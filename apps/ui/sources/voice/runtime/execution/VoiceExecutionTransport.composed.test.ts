@@ -16,6 +16,50 @@ await prepareStandaloneVoicePolicyHarness();
 await import('@/voice/adapters/localConversation/localConversationAdapter');
 
 describe('real Local Voice Agent activation', () => {
+    it.each(['handle', 'metadata', 'running', 'unobservable'] as const)('reconciles a refused Stop only against authoritative terminal state (%s)', async (source) => {
+        const daemon = await createRetainedVoiceAgentRpcBoundary();
+        let refuseStop = false;
+        const fixture = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: async (method, input) => {
+            // Genuine daemon boundary: Stop rejects a non-running Run. The
+            // same code alone cannot prove terminal state to the client.
+            if (refuseStop && method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) {
+                return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not running' };
+            }
+            if (refuseStop && source === 'unobservable' && method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) {
+                return { ok: false, errorCode: 'execution_run_read_unavailable', error: 'Unavailable' };
+            }
+            return daemon.dispatch(method, input);
+        } });
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        const { readVoiceAgentRunMetadataFromSession } = await import('@/voice/persistence/voiceAgentRunMetadata');
+        const transport = createVoiceExecutionTransport();
+        const caller = new AbortController();
+        try {
+            if (source !== 'metadata') await transport.ensureRunning(fixture.sessionId);
+            const run = daemon.readRetainedRun();
+            if (!run) throw new Error('Expected admitted daemon Run');
+            // This mutable wire fixture is the external daemon's record, not
+            // UI state or a mocked internal lifecycle decision.
+            if (source !== 'running') run.status = 'failed';
+            refuseStop = true;
+            const stopping = transport.stop(fixture.sessionId, undefined, caller.signal);
+            if (source === 'running' || source === 'unobservable') {
+                await expect(stopping).rejects.toMatchObject({ rpcErrorCode: 'execution_run_not_allowed' });
+                expect(readVoiceAgentRunMetadataFromSession({ sessionId: fixture.sessionId,
+                    serverId: fixture.handle.accountLifetime.scope.serverId })?.runId).toBe(run.runId);
+            } else {
+                await expect(stopping).resolves.toBeUndefined();
+                expect(transport.isActive(fixture.sessionId)).toBe(false);
+                expect(daemon.readRetainedRun()?.status).toBe('failed');
+                expect(readVoiceAgentRunMetadataFromSession({ sessionId: fixture.sessionId,
+                    serverId: fixture.handle.accountLifetime.scope.serverId })).toBeNull();
+            }
+        } finally {
+            refuseStop = false;
+            await fixture.dispose();
+        }
+    });
+
     it.each(['cancel', 'disconnect', 'cleanup_disconnect'] as const)('keeps failed Stop ordered before retry after %s', async (outcome) => {
         const daemon = await createRetainedVoiceAgentRpcBoundary();
         let stall = false;

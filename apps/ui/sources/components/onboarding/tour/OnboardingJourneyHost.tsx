@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AccessibilityInfo, findNodeHandle, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Pressable, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useAuth } from '@/auth/context/AuthContext';
@@ -14,7 +14,6 @@ import { useMachine } from '@/sync/domains/state/storage';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { usePendingSetupIntent } from '@/components/onboarding/state/usePendingSetupIntent';
 import { Text } from '@/components/ui/text/Text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
 import { installDemoFirewall, uninstallDemoFirewall } from '@/demoMode/guards/demoFirewall';
 import { clearDemoWorld, seedDemoWorld } from '@/demoMode/seed/seedDemoWorld';
@@ -372,7 +371,6 @@ export function OnboardingJourneyHost(props: OnboardingJourneyHostProps): React.
     const testID = props.testID ?? 'onboarding-journey';
     const isNativeSurface = props.surface === 'native';
     const mainContentTargetId = `${testID}-main-content`;
-    const bypassMinimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const mainContentRef = React.useRef<React.ComponentRef<typeof View> | null>(null);
     const [isBypassFocused, setBypassFocused] = React.useState(false);
     const windowWidth = useWindowDimensions().width;
@@ -749,7 +747,6 @@ export function OnboardingJourneyHost(props: OnboardingJourneyHostProps): React.
                     onPress={focusJourneyContent}
                     style={[
                         stylesForHost.bypassControl,
-                        { minHeight: bypassMinimumTargetSize },
                         isNativeSurface || isBypassFocused ? stylesForHost.bypassControlVisible : null,
                     ]}
                 >

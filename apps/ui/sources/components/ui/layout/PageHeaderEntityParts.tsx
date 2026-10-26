@@ -55,6 +55,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
      * view. The page wraps the menu in that setting's `SettingAnchor`, which marks the trigger.
      */
     openRequested?: boolean;
+    /** The gap to the neighbouring header action, when one sits beside it: their finger frames split it. */
+    interactiveTargetGapPx?: number;
 }>) {
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(props.openRequested === true);
@@ -116,6 +118,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
                     iconSize={18}
                     size={32}
                     variant="plain"
+                    interactiveTargetGapPx={props.interactiveTargetGapPx}
                     expanded={open}
                     hasPopup="menu"
                 />

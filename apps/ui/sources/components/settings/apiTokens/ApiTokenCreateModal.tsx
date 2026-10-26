@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
+import { resolveHappierFocusRingVisible, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
@@ -11,7 +11,6 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
@@ -135,7 +134,8 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
     const state = useApiTokenSettingsControllerState(props.controller);
     const reveal = state.reveal;
     const reducedMotion = useReducedMotionPreference();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    // The inline link draws as its words; a finger reaches the touch target above and below them, never over the sentence.
+    const actionSettingsHitArea = useHappierHitArea({ restingStyle: () => null, hitReach: { left: 0, right: 0 } });
     const [stage, setStage] = React.useState<CreateStage>('basics');
     const draft = state.createDraft;
     const limited = draft.access === 'limited';
@@ -348,6 +348,8 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                                     accessibilityState={{ disabled: state.createPending }}
                                     focusable
                                     disabled={state.createPending}
+                                    hitSlop={actionSettingsHitArea.hitSlop}
+                                    onLayout={actionSettingsHitArea.onLayout}
                                     onPress={() => {
                                         props.onClose();
                                         router.push('/settings/actions');
@@ -356,12 +358,12 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                                         const webState = interactionState as typeof interactionState & { focused?: boolean };
                                         return [
                                             styles.actionSettingsLink,
-                                            { minWidth: minimumInteractiveTargetSize, minHeight: minimumInteractiveTargetSize },
                                             focusRingStyle({ focused: resolveHappierFocusRingVisible(webState.focused), color: theme.colors.border.focus }),
                                             { opacity: interactionState.pressed ? motionTokens.press.opacity : 1 },
                                         ];
                                     }}
                                 >
+                                    {actionSettingsHitArea.frame}
                                     <Text style={styles.link}>{t('settingsApiTokens.create.actionSettingsLink')}</Text>
                                 </Pressable>
                             </View>

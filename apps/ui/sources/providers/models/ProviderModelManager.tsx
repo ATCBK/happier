@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { readProviderReasoningEffortOption } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type {
     DaemonProviderModelProjectionGroupV1,
@@ -21,7 +22,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     SelectionListScreen,
     type SelectionListOption,
@@ -36,7 +36,7 @@ import { providerModelConnectionTitle } from './providerModelConnectionTitle';
 
 type ProviderModelManagerRow = Readonly<{
     ref: Pick<DaemonProviderModelProjectionRowV1['ref'], 'modelId'>;
-    descriptor: Pick<DaemonProviderModelProjectionRowV1['descriptor'], 'id' | 'name' | 'description' | 'contextWindowTokens'>;
+    descriptor: Pick<DaemonProviderModelProjectionRowV1['descriptor'], 'id' | 'name' | 'description' | 'contextWindowTokens' | 'capabilities' | 'modelOptions'>;
     sources: DaemonProviderModelProjectionRowV1['sources'];
     compatibility?: DaemonProviderModelProjectionRowV1['compatibility'];
     endpointHealth?: DaemonProviderModelProjectionRowV1['endpointHealth'];
@@ -74,6 +74,8 @@ function ModelVisibilityAccessory(props: Readonly<{
     onSetDefault?: () => void;
     onVisibleChange: (visible: boolean) => void;
     onRemove?: () => void;
+    onEditEffort?: () => void;
+    onEditGeneration?: () => void;
     onShowOnly?: () => void;
     onLoad?: () => void;
     onCancelLoad?: () => void;
@@ -108,6 +110,18 @@ function ModelVisibilityAccessory(props: Readonly<{
             testID: 'provider-model-manager.show-only',
             title: t('settingsProviders.models.showOnly'),
             onSelect: props.onShowOnly,
+        }] : []),
+        ...(props.onEditEffort ? [{
+            id: 'editEffort',
+            testID: 'provider-model-manager.edit-effort',
+            title: t('settingsProviders.models.editEffort'),
+            onSelect: props.onEditEffort,
+        }] : []),
+        ...(props.onEditGeneration ? [{
+            id: 'editGeneration',
+            testID: 'provider-model-manager.edit-generation',
+            title: t('settingsProviders.models.generationSettings'),
+            onSelect: props.onEditGeneration,
         }] : []),
         ...(props.onRemove ? [{
             id: 'remove',
@@ -148,7 +162,6 @@ function ModelVisibilityAccessory(props: Readonly<{
                     iconName="x-circle"
                     accessibilityLabel={actionLabel(t('settingsProviders.models.cancelLoad'))}
                     tooltip={t('settingsProviders.models.cancelLoad')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={6}
                     variant="plain"
                     onPress={props.onCancelLoad}
@@ -160,7 +173,6 @@ function ModelVisibilityAccessory(props: Readonly<{
                     iconName="cloud-arrow-down"
                     accessibilityLabel={actionLabel(t('settingsProviders.models.load'))}
                     tooltip={t('settingsProviders.models.load')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={6}
                     variant="plain"
                     disabled={props.loading}
@@ -289,7 +301,6 @@ function ProviderModelBulkActions(props: Readonly<{
                     iconName="eye"
                     accessibilityLabel={t('settingsProviders.models.showAll')}
                     tooltip={t('settingsProviders.models.showAll')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={4}
                     variant="plain"
                     onPress={props.onShowAll}
@@ -301,7 +312,6 @@ function ProviderModelBulkActions(props: Readonly<{
                     iconName="eye-slash"
                     accessibilityLabel={t('settingsProviders.models.hideAll')}
                     tooltip={t('settingsProviders.models.hideAll')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={4}
                     variant="plain"
                     onPress={props.onHideAll}
@@ -313,7 +323,6 @@ function ProviderModelBulkActions(props: Readonly<{
                     iconName="arrow-clockwise"
                     accessibilityLabel={t('settingsProviders.models.resetVisibility')}
                     tooltip={t('settingsProviders.models.resetVisibility')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={4}
                     variant="plain"
                     onPress={props.onReset}
@@ -371,6 +380,12 @@ export function buildProviderModelVisibilityChanges(input: Readonly<{
 }
 
 
+/** The tiers a model declares, named by the shared descriptor; null when it declares none. */
+function reasoningEffortLevelsLabel(descriptor: ProviderModelManagerRow['descriptor']): string | undefined {
+    const option = readProviderReasoningEffortOption(descriptor);
+    return option?.options?.map(level => level.name).join(', ');
+}
+
 function modelVisibilityActionLabel(hidden: boolean): string {
     return hidden
         ? t('settingsProviders.models.enable')
@@ -385,6 +400,8 @@ export function buildProviderModelManagerSections(input: Readonly<{
     readOnly?: boolean;
     onSetVisibility: (ref: ModelVisibilityRefV1, hidden: boolean) => void;
     onRemoveManualModel?: (connectionId: string, modelId: string) => void;
+    onEditManualModel?: (connectionId: string, modelId: string) => void;
+    onEditGenerationSettings?: (connectionId: string, modelId: string) => void;
     onShowOnly?: (ref: ModelVisibilityRefV1) => void;
     onLoadModel?: (connectionId: string, modelId: string) => void;
     onCancelModelLoad?: () => void;
@@ -477,6 +494,7 @@ export function buildProviderModelManagerSections(input: Readonly<{
                 modelId: row.ref.modelId,
                 name: row.descriptor.name,
                 description: row.descriptor.description,
+                reasoningEffortLevels: reasoningEffortLevelsLabel(row.descriptor),
                 // A connection's own list already names it; only the agent-wide list needs it per row,
                 // and a list grouped by source says it once, in the source's header.
                 contextLabel: input.scope.kind === 'agent' && !grouping ? providerModelConnectionTitle(group) : undefined,
@@ -564,6 +582,12 @@ export function buildProviderModelManagerSections(input: Readonly<{
                         onRemove={!input.readOnly && row.sources.manual && input.onRemoveManualModel
                             ? () => input.onRemoveManualModel?.(group.connectionId, row.ref.modelId)
                             : undefined}
+                        onEditEffort={!input.readOnly && row.sources.manual && input.onEditManualModel
+                            ? () => input.onEditManualModel?.(group.connectionId, row.ref.modelId)
+                            : undefined}
+                        onEditGeneration={!input.readOnly && (row.sources.manual || row.sources.static) && input.onEditGenerationSettings
+                            ? () => input.onEditGenerationSettings?.(group.connectionId, row.ref.modelId)
+                            : undefined}
                     />
                 ),
                 onSelect: input.readOnly ? undefined : lockedByConnectionScope
@@ -642,6 +666,9 @@ export function ProviderModelManager(props: Readonly<{
     readOnly?: boolean;
     onSetVisibility: (ref: ModelVisibilityRefV1, hidden: boolean) => void;
     onRemoveManualModel?: (connectionId: string, modelId: string) => void;
+    onEditManualModel?: (connectionId: string, modelId: string) => void;
+    /** A connection page only: opens one model's generation settings (its output allowance). */
+    onEditGenerationSettings?: (connectionId: string, modelId: string) => void;
     onShowOnly?: (ref: ModelVisibilityRefV1) => void;
     onLoadModel?: (connectionId: string, modelId: string) => void;
     onCancelModelLoad?: () => void;
@@ -670,6 +697,8 @@ export function ProviderModelManager(props: Readonly<{
     const nativeModels = props.nativeModels.length === 0 ? EMPTY_NATIVE_MODELS : props.nativeModels;
     const groups = props.groups.length === 0 ? EMPTY_GROUPS : props.groups;
     const canRemoveManualModel = props.onRemoveManualModel !== undefined;
+    const canEditManualModel = props.onEditManualModel !== undefined;
+    const canEditGenerationSettings = props.onEditGenerationSettings !== undefined;
     const canShowOnly = props.onShowOnly !== undefined;
     const canLoadModel = props.onLoadModel !== undefined;
     const canCancelModelLoad = props.onCancelModelLoad !== undefined;
@@ -679,6 +708,12 @@ export function ProviderModelManager(props: Readonly<{
     });
     const onRemoveManualModel = useEventCallback((connectionId: string, modelId: string) => {
         props.onRemoveManualModel?.(connectionId, modelId);
+    });
+    const onEditManualModel = useEventCallback((connectionId: string, modelId: string) => {
+        props.onEditManualModel?.(connectionId, modelId);
+    });
+    const onEditGenerationSettings = useEventCallback((connectionId: string, modelId: string) => {
+        props.onEditGenerationSettings?.(connectionId, modelId);
     });
     const onShowOnly = useEventCallback((ref: ModelVisibilityRefV1) => {
         props.onShowOnly?.(ref);
@@ -700,6 +735,8 @@ export function ProviderModelManager(props: Readonly<{
         readOnly: props.readOnly,
         onSetVisibility,
         ...(canRemoveManualModel ? { onRemoveManualModel } : {}),
+        ...(canEditManualModel ? { onEditManualModel } : {}),
+        ...(canEditGenerationSettings ? { onEditGenerationSettings } : {}),
         ...(canShowOnly ? { onShowOnly } : {}),
         ...(canLoadModel ? { onLoadModel } : {}),
         ...(canCancelModelLoad ? { onCancelModelLoad } : {}),
@@ -712,6 +749,8 @@ export function ProviderModelManager(props: Readonly<{
         canCancelModelLoad,
         canOpenConnection,
         canRemoveManualModel,
+        canEditManualModel,
+        canEditGenerationSettings,
         canShowOnly,
         groups,
         props.loadingModelKey,
@@ -722,6 +761,8 @@ export function ProviderModelManager(props: Readonly<{
         onCancelModelLoad,
         onOpenConnection,
         onRemoveManualModel,
+        onEditManualModel,
+        onEditGenerationSettings,
         onSetVisibility,
         onShowOnly,
         scope,

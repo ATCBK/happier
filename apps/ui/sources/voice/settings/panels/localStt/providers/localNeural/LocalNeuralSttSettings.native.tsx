@@ -7,7 +7,6 @@ import * as React from 'react';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { useVoiceSttSettingRefs } from '@/voice/settings/useVoiceSttSettingRefs';
 
-import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -23,10 +22,8 @@ import { getSherpaStreamingSttPackOptions } from '@/voice/sherpa/stt/sherpaStrea
 import { DaemonVoiceInferenceExecutionDropdown } from '@/voice/settings/panels/daemonInference/DaemonVoiceInferenceExecutionDropdown';
 import { SelectedDaemonModelPackRow } from '@/voice/settings/panels/modelCatalog/DaemonModelPackRow';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { LocalNeuralSttLanguageItem } from './LocalNeuralSttLanguageItem';
 
-const ACCESSORY_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 export function LocalNeuralSttSettings(props: {
   cfg: VoiceLocalSttSettings;
@@ -135,7 +132,6 @@ export function LocalNeuralSttSettings(props: {
                 <IconButton
                   accessibilityLabel={t('common.cancel')}
                   variant="plain"
-                  size={ACCESSORY_TARGET_SIZE}
                   onPress={(event) => {
                     event?.stopPropagation?.();
                     cancelPrepare();

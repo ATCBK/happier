@@ -9,9 +9,10 @@ import {
     resolveHappierSceneArtSize,
     type HappierSceneInput,
     type HappierStateSize,
+    useHappierHitArea,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -19,7 +20,6 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
@@ -28,7 +28,6 @@ import { SceneArt } from '@/components/ui/surfaces/SceneArt';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-const LINE_LINK_MIN_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 /** The one thing to do about an empty page: create the first item, connect, sign in. */
 export type EmptyStatePrimaryAction = Readonly<{
@@ -112,7 +111,12 @@ type EmptyStateProps = Readonly<{
     paddingVertical?: number;
 }>;
 
+const LINE_LINK_HIT_REACH = { left: 4, right: 4 } as const;
+
 const EmptyStateLineLink = React.memo(function EmptyStateLineLink(props: Readonly<{ link: EmptyStatePrimaryAction }>) {
+    // The link draws as its text line; a finger reaches the touch target through the shared hit area
+    // (sideways half the gap to the next link).
+    const hitArea = useHappierHitArea({ restingStyle: () => null, hitReach: LINE_LINK_HIT_REACH, hitSlop: 6 });
     return (
         <Pressable
             testID={props.link.testID}
@@ -121,9 +125,11 @@ const EmptyStateLineLink = React.memo(function EmptyStateLineLink(props: Readonl
             accessibilityState={{ disabled: props.link.disabled === true }}
             disabled={props.link.disabled}
             onPress={() => { void props.link.onPress(); }}
-            hitSlop={6}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
             style={stylesheet.lineLink}
         >
+            {hitArea.frame}
             <Text style={stylesheet.lineLinkLabel}>{props.link.label}</Text>
         </Pressable>
     );
@@ -330,7 +336,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     lineLink: {
-        minHeight: LINE_LINK_MIN_TARGET_PX,
         justifyContent: 'center',
         paddingHorizontal: theme.space.s4,
     },

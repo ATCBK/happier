@@ -5,6 +5,7 @@ import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/selection/v1';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { buildProviderReasoningModelOptions } from '@happier-dev/protocol/providers/catalog/reasoningEffort';
 import { buildCustomProviderTemplate, createCustomProviderDraft } from '@/providers/authoring/state';
 import {
     RPC_METHODS,
@@ -23,7 +24,6 @@ const connectionId = ProviderConnectionIdSchema.parse('pc_a');
 const state = vi.hoisted(() => ({
     manualModelPolicy: 'allowed' as 'allowed' | 'catalog-only',
     connectionRevision: 7,
-    loading: false,
     error: null as null | ReturnType<typeof createProviderErrorV1>,
     models: [{ id: 'manual-a', name: 'Manual A', source: 'manual', stale: false, loadState: 'unknown', visibility: 'visible' }] as DaemonProviderModelRowV1[],
 }));
@@ -96,16 +96,21 @@ function mutationCatalog(index: number) {
     if (content?.t !== 'plain') throw new Error('Expected the Plain Account fixture catalog mutation');
     return content.v;
 }
-async function restoreAccount(accountId = 'account-a', modelVisibilityByRef = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1.modelVisibilityByRef) {
+async function restoreAccount(
+    accountId = 'account-a',
+    modelVisibilityByRef = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1.modelVisibilityByRef,
+    manualModels: ReadonlyArray<Readonly<{ id: string; name?: string; reasoningEffortLevels?: string[]; addedAt: number }>> = [{ id: 'manual-a', addedAt: 1 }],
+) {
     const saved = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
         ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://acme.test/v1', requiresApiKey: false, catalog: 'probe',
     }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision: state.connectionRevision, createdAt: 1, updatedAt: 1 });
     const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [saved], modelVisibilityByRef,
-        manualModelsByConnectionId: { pc_a: [{ id: 'manual-a', addedAt: 1 }] } });
+        manualModelsByConnectionId: { pc_a: manualModels } });
     await account.restore({ accountId, serverIdentityId: 'srv_provider_models', machines: [{ ...machine, activeAt: Date.now() }],
         catalog, waivedActions: [
         'providers.models.manual.add', 'providers.models.manual.remove', 'providers.models.visibility.set',
         'providers.models.visibility.reset', 'providers.models.visibility.bulk', 'providers.models.load', 'providers.probe',
+        'providers.connections.update',
     ] });
     stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: account.serverId, catalog,
         reply: () => {
@@ -253,7 +258,6 @@ describe('ProviderConnectionModelsSection', () => {
         modelsRequestCount = 0;
         state.manualModelPolicy = 'allowed';
         state.connectionRevision = 7;
-        state.loading = false;
         state.error = null;
         state.models = [{ id: 'manual-a', name: 'Manual A', source: 'manual', stale: false, loadState: 'unknown', visibility: 'visible' }];
         refresh.mockClear();
@@ -278,7 +282,6 @@ describe('ProviderConnectionModelsSection', () => {
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODELS, async () => {
             modelsRequestCount += 1;
             if (modelsRequestCount > 1) await refresh();
-            if (state.loading && state.models.length === 0) return await new Promise<never>(() => undefined);
             if (state.error) return { status: 'error', error: state.error };
             return createProviderModelsFixture({
                 connectionId: 'pc_a',
@@ -419,19 +422,33 @@ describe('ProviderConnectionModelsSection', () => {
     });
 
     it('does not claim an empty catalog while the initial catalog is loading or failed', async () => {
-        state.loading = true;
-        state.models = [];
-        const loading = await renderBaseScreen(<ModelsSectionHost connectionId="pc_a" />);
-        expect(renderedModelRowCount(loading)).toBe(0);
-        expect(loading.findByTestId('provider-model-manager.empty')).toBeNull();
-        expect(loading.findAllByType(Item).some((item) => item.props.loading === true)).toBe(true);
+        const response = createDeferred<void>();
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODELS, async () => {
+            modelsRequestCount += 1;
+            await response.promise;
+            return { status: 'error', error: createProviderErrorV1('provider_endpoint_unreachable') };
+        });
+        const screen = await renderBaseScreen(<ModelsSectionHost connectionId="pc_a" />);
+        await act(async () => {
+            await vi.waitFor(() => expect(modelsRequestCount).toBeGreaterThan(0));
+        });
+        expect(sectionState(screen).initialLoading).toBe(true);
+        expect(renderedModelRowCount(screen)).toBe(0);
+        expect(screen.findByTestId('provider-model-manager.empty')).toBeNull();
+        expect(screen.findAllByType(Item).some((item) => item.props.loading === true)).toBe(true);
 
-        state.loading = false;
-        state.error = createProviderErrorV1('provider_endpoint_unreachable');
-        const failed = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
-        expect(renderedModelRowCount(failed)).toBe(0);
-        expect(failed.findByTestId('provider-model-manager.empty')).toBeNull();
-        expect(presentedTitles(failed))
+        // Settle the same physical read: another mount joins this pending RPC.
+        await act(async () => {
+            response.resolve();
+        });
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(sectionState(screen).initialLoading).toBe(false);
+        });
+        expect(sectionState(screen).error?.code).toBe('provider_endpoint_unreachable');
+        expect(renderedModelRowCount(screen)).toBe(0);
+        expect(screen.findByTestId('provider-model-manager.empty')).toBeNull();
+        expect(presentedTitles(screen))
             .toContain('settingsProviders.errors.unreachableTitle');
     });
 
@@ -492,6 +509,168 @@ describe('ProviderConnectionModelsSection', () => {
         expect(sectionState(screen).manualModelText).toBe('');
         expect(sectionState(screen).editorOpen).toBe(false);
         expect(refresh).toHaveBeenCalledOnce();
+    });
+
+    it('declares the chosen reasoning-effort levels on every added model and none when none are chosen', async () => {
+        const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
+        await act(async () => {
+            await vi.waitFor(() => expect(renderedModelRowCount(screen)).toBe(1));
+        });
+        await openManualEditor(screen);
+        await act(async () => {
+            screen.findByType(FieldTextInput).props.onChangeText?.('model-a\nmodel-b');
+        });
+        await screen.pressByTestIdAsync('provider-manual-model-effort.high');
+        await screen.pressByTestIdAsync('provider-manual-model-effort.low');
+        await act(async () => {
+            await screen.findByType(InlineAddExpander).props.onSave?.();
+            await vi.waitFor(() => expect(stored.writes).toBe(1));
+            await vi.waitFor(() => expect(sectionState(screen).savingManualModels).toBe(false));
+        });
+
+        expect(stored.catalog.manualModelsByConnectionId[connectionId]?.map(({ id, reasoningEffortLevels }) => ({ id, reasoningEffortLevels })))
+            .toEqual([
+                { id: 'manual-a', reasoningEffortLevels: undefined },
+                { id: 'model-a', reasoningEffortLevels: ['low', 'high'] },
+                { id: 'model-b', reasoningEffortLevels: ['low', 'high'] },
+            ]);
+        expect(sectionState(screen).manualEffortLevels).toEqual([]);
+    });
+
+    it('edits a manual model\'s levels without dropping its name or the levels it already declares', async () => {
+        await restoreAccount('account-a', undefined, [{ id: 'manual-a', name: 'Acme A', reasoningEffortLevels: ['low', 'high'], addedAt: 1 }]);
+        await account.selectMachine(account.serverId, 'machine-a');
+        const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
+        await act(async () => {
+            await vi.waitFor(() => expect(renderedModelRowCount(screen)).toBe(1));
+        });
+
+        await act(async () => { screen.findByType(ProviderModelManager).props.onEditManualModel?.('pc_a', 'manual-a'); });
+        expect(sectionState(screen).manualEffortLevels).toEqual(['low', 'high']);
+        expect(sectionState(screen).editingModelDirty).toBe(false);
+        await screen.pressByTestIdAsync('provider-manual-model-effort.medium');
+        await act(async () => {
+            await screen.findByType(InlineAddExpander).props.onSave?.();
+            await vi.waitFor(() => expect(stored.writes).toBe(1));
+            await vi.waitFor(() => expect(sectionState(screen).savingManualModels).toBe(false));
+        });
+
+        expect(stored.catalog.manualModelsByConnectionId[connectionId]).toEqual([
+            { id: 'manual-a', name: 'Acme A', reasoningEffortLevels: ['low', 'medium', 'high'], addedAt: 1 },
+        ]);
+        expect(sectionState(screen).editingModel).toBeNull();
+        expect(sectionState(screen).editorOpen).toBe(false);
+
+        await act(async () => { screen.findByType(ProviderModelManager).props.onEditManualModel?.('pc_a', 'manual-a'); });
+        for (const level of ['low', 'medium', 'high']) await screen.pressByTestIdAsync(`provider-manual-model-effort.${level}`);
+        await act(async () => {
+            await screen.findByType(InlineAddExpander).props.onSave?.();
+            await vi.waitFor(() => expect(stored.writes).toBe(2));
+            await vi.waitFor(() => expect(sectionState(screen).savingManualModels).toBe(false));
+        });
+        expect(stored.catalog.manualModelsByConnectionId[connectionId]).toEqual([
+            { id: 'manual-a', name: 'Acme A', addedAt: 1 },
+        ]);
+    });
+
+    describe('output allowance', () => {
+        const editorModel = {
+            id: 'qwen-base', name: 'Qwen base', source: 'static', stale: false, loadState: 'unknown', visibility: 'visible',
+            descriptor: {
+                id: 'qwen-base', name: 'Qwen base', contextWindowTokens: 8192,
+                inlineCompletion: { operationId: 'fim', tokenAccounting: 'utf8-bytes', promptOverheadTokens: 0, maxOutputTokens: 4096 },
+            },
+        } as const satisfies DaemonProviderModelRowV1;
+        async function renderWithEditorModel() {
+            state.models = [editorModel];
+            // The Machine reports the connection revision the Account owner last acknowledged.
+            providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODELS, async () => {
+                modelsRequestCount += 1;
+                return createProviderModelsFixture({ connectionId: 'pc_a', connectionRevision: stored.catalog.connections[0].revision,
+                    models: state.models, manualModelPolicy: state.manualModelPolicy, modelLoadAction: 'available' });
+            });
+            const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
+            await act(async () => { await vi.waitFor(() => expect(renderedModelRowCount(screen)).toBe(1)); });
+            return screen;
+        }
+        function openAllowanceEditor(screen: RenderedScreen) {
+            return act(async () => { screen.findByType(ProviderModelManager).props.onEditGenerationSettings?.('pc_a', 'qwen-base'); });
+        }
+        async function typeAllowance(screen: RenderedScreen, text: string) {
+            await act(async () => { screen.findByType(FieldTextInput).props.onChangeText?.(text); });
+        }
+
+        it('saves the typed allowance through the revision-checked connection update and shows it again, until Clear removes it', async () => {
+            const screen = await renderWithEditorModel();
+            await openAllowanceEditor(screen);
+            expect(sectionState(screen).generationModel?.id).toBe('qwen-base');
+            expect(screen.findByTestId('provider-model-generation-clear')).toBeNull();
+            expect(screen.getTextContent()).toContain('Qwen base');
+
+            await typeAllowance(screen, '2048');
+            await act(async () => {
+                await screen.findByType(InlineAddExpander).props.onSave?.();
+                await vi.waitFor(() => expect(stored.writes).toBe(1));
+                await vi.waitFor(() => expect(sectionState(screen).savingManualModels).toBe(false));
+            });
+            const [connection] = stored.catalog.connections;
+            expect(connection.modelSettings).toEqual({ 'qwen-base': { maxTokens: 2048 } });
+            expect(connection.revision).toBe(8);
+            expect(sectionState(screen).editorOpen).toBe(false);
+
+            await openAllowanceEditor(screen);
+            expect(screen.findByType(FieldTextInput).props.value).toBe('2048');
+            expect(screen.getTextContent()).toContain('2,048');
+            await screen.pressByTestIdAsync('provider-model-generation-clear');
+            await act(async () => { await vi.waitFor(() => expect(stored.writes).toBe(2)); });
+            expect(stored.catalog.connections[0].modelSettings?.['qwen-base']?.maxTokens ?? null).toBeNull();
+
+            await openAllowanceEditor(screen);
+            expect(screen.findByType(FieldTextInput).props.value).toBe('');
+            expect(screen.findByTestId('provider-model-generation-clear')).toBeNull();
+        });
+
+        it('refuses a value the model cannot honour without writing', async () => {
+            const screen = await renderWithEditorModel();
+            await openAllowanceEditor(screen);
+            for (const refused of ['', 'abc', '0', '-5', '4097']) {
+                await typeAllowance(screen, refused);
+                await act(async () => { await screen.findByType(InlineAddExpander).props.onSave?.(); });
+                expect(sectionState(screen).editorError, refused).toEqual(expect.any(String));
+            }
+            expect(stored.writes).toBe(0);
+        });
+    });
+
+    it('counts the rows the page lists, including models only the Machine discovered', async () => {
+        // The Account catalog knows one manual model; the Machine also lists a discovered one.
+        state.models = [
+            { id: 'manual-a', name: 'Manual A', source: 'manual', stale: false, loadState: 'unknown', visibility: 'visible' },
+            { id: 'discovered-b', name: 'Discovered B', source: 'probe', stale: false, loadState: 'unknown', visibility: 'visible' },
+            { id: 'discovered-c', name: 'Discovered C', source: 'probe', stale: false, loadState: 'unknown', visibility: 'hidden_all_agents' },
+        ];
+        const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
+        await act(async () => { await vi.waitFor(() => expect(sectionState(screen).modelCount).toBe(3)); });
+        expect(sectionState(screen).catalogCount).toEqual({ shown: 2, total: 3 });
+        expect(screen.getTextContent()).toContain('settingsProvidersCollection.modelsShown(shown=2,total=3)');
+    });
+
+    it('names a model\'s declared levels on its row', async () => {
+        state.models = [{
+            id: 'manual-a', name: 'Manual A', source: 'manual', stale: false, loadState: 'unknown', visibility: 'visible',
+            descriptor: {
+                id: 'manual-a',
+                name: 'Manual A',
+                capabilities: { reasoningControls: 'supported' },
+                modelOptions: buildProviderReasoningModelOptions({ supportedLevels: ['low', 'high'] }) as never,
+            },
+        }];
+        const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
+        await act(async () => {
+            await vi.waitFor(() => expect(renderedModelRowCount(screen)).toBe(1));
+        });
+
+        expect(screen.getTextContent()).toContain('settingsProviders.models.reasoningEffortSummary(levels=Low, High)');
     });
 
     it('settles manual model authoring while the acknowledged catalog presentation refresh is pending', async () => {

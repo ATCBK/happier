@@ -1,14 +1,15 @@
 import * as React from 'react';
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { DetailsPaneOpenAsPageButton } from '@happier-dev/plugin-ui/components';
+import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
 
 import { DetailsPaneHost } from '@/components/appShell/panes/details/DetailsPaneHost';
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
-import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -17,7 +18,6 @@ import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -308,14 +308,11 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
                         ? t('settingsPlugins.surfaces.detailInstalledLabel')
                         : t('settingsPlugins.surfaces.detailListingLabel'),
                     actions: (
-                        <IconButton
+                        <CorePluginUiPresentationScope><DetailsPaneOpenAsPageButton
                             testID="settings.plugins.detailPane.openAsPage"
-                            iconName="arrow-square-out"
                             accessibilityLabel={t('settingsPlugins.surfaces.openAsPage')}
-                            tooltip={t('settingsPlugins.surfaces.openAsPage')}
-                            variant="plain"
                             onPress={openSelectionAsPage}
-                        />
+                        /></CorePluginUiPresentationScope>
                     ),
                 },
                 content: openItem.kind === 'installed' ? (
@@ -510,7 +507,6 @@ function PluginsToolbar(props: Readonly<{
                     segmentSizing="content"
                     // The page owns the toolbar's width, so the platform floor costs a
                     // wider track rather than an undersized target.
-                    targetSize="platform"
                 />
             ) : null}
             <View style={styles.controls}>
@@ -571,7 +567,6 @@ function PluginsToolbar(props: Readonly<{
                     testIDPrefix="settings.plugins.collectionView"
                     accessibilityLabel={t('settingsPlugins.surfaces.viewLabel')}
                     segmentSizing="content"
-                    targetSize="platform"
                 />
                 </View>
             </View>
@@ -676,7 +671,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s2,
-        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
     },
     developerLinkText: {
         ...Typography.variant('meta'),

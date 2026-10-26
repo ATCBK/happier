@@ -2,7 +2,6 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { useHappierNativeMinimumInteractiveTargetSize } from '@happier-dev/plugin-ui/environment';
 import { HappierFieldTextBox, resolveHappierFieldTextInputMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { Typography } from '@/constants/Typography';
@@ -70,7 +69,6 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
 
     // The capture field is the shared field box; only its key handling is this dialog's own.
     const fieldColors = resolveFieldBoxColors(theme);
-    const nativeMinimumTargetSize = useHappierNativeMinimumInteractiveTargetSize();
 
     const webCaptureProps = React.useMemo<Pick<ShortcutCaptureTextInputProps, 'onKeyDown'>>(() => (
         Platform.OS === 'web' ? { onKeyDown: captureShortcut } : {}
@@ -115,7 +113,7 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
                     autoCorrect={false}
                     style={[
                         Typography.mono(),
-                        resolveHappierFieldTextInputMetrics({ nativeMinimumTargetSize }),
+                        resolveHappierFieldTextInputMetrics({}),
                         { color: fieldColors.valueColor },
                     ]}
                     {...webCaptureProps}

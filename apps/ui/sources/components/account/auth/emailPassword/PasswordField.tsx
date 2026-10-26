@@ -1,6 +1,6 @@
 import { HappierPressable, happierRaisedEdgeStyle } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, View, type NativeSyntheticEvent, type TextInputKeyPressEventData } from 'react-native';
+import { View, type NativeSyntheticEvent, type TextInputKeyPressEventData } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { FieldItem, type FieldItemProps } from '@/components/ui/forms/FieldItem';
@@ -11,10 +11,12 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
 /**
- * Minimum comfortable target for the reveal control: 44 pt on iOS, 48 dp on
- * Android, and Happier's accessible pointer minimum elsewhere.
+ * The sign-in frame's height (the same 44 as the email and sign-in fields beside it) and the reveal
+ * control drawn inside it. Both are design sizes under every pointer: a finger reaches the touch
+ * target through the shared pressable's hit area, never by drawing the field or the control larger.
  */
-const REVEAL_TARGET = Platform.select({ ios: 44, android: 48, default: 40 })!;
+const FRAME_MIN_HEIGHT = 44;
+const REVEAL_SIZE = 36;
 
 export type PasswordFieldProps = Readonly<{
     testID: string;
@@ -152,7 +154,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
         paddingLeft: theme.space.s12,
         paddingRight: theme.space.s4,
-        minHeight: REVEAL_TARGET + 4,
+        minHeight: FRAME_MIN_HEIGHT,
     },
     input: {
         flex: 1,
@@ -160,8 +162,8 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: theme.space.s10,
     },
     reveal: {
-        width: REVEAL_TARGET,
-        height: REVEAL_TARGET,
+        width: REVEAL_SIZE,
+        height: REVEAL_SIZE,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -176,8 +178,8 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: 0,
         minHeight: FIELD_BOX_METRICS.lineHeightPx,
     },
-    // The reveal glyph fits the page field; on touch platforms the shared pressable still gives it
-    // the native target size.
+    // The reveal glyph fits the page field; under a finger the shared pressable's hit area reaches
+    // the touch target past it.
     pageReveal: {
         width: FIELD_BOX_METRICS.minHeightPx - 2,
         height: FIELD_BOX_METRICS.minHeightPx - 2,

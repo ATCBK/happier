@@ -7,7 +7,7 @@ import * as React from 'react';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -38,10 +38,8 @@ import { resolveDaemonTtsVoiceSelection } from './resolveDaemonTtsVoiceSelection
 import { LocalNeuralTtsSpeedItem } from './LocalNeuralTtsSpeedItem';
 import { resolveLocalNeuralTtsOptions } from '@/voice/local/localVoiceSettings';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useDaemonVoiceModelCatalogController } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
 
-const ACCESSORY_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 export function LocalNeuralTtsSettings(props: {
   cfgKokoro: VoiceLocalTtsSettings['localNeural'];
@@ -200,7 +198,6 @@ export function LocalNeuralTtsSettings(props: {
                 <IconButton
                   accessibilityLabel={t('common.cancel')}
                   variant="plain"
-                  size={ACCESSORY_TARGET_SIZE}
                   onPress={(event) => {
                     event?.stopPropagation?.();
                     cancelPrepare();
@@ -273,7 +270,6 @@ export function LocalNeuralTtsSettings(props: {
               <IconButton
                 accessibilityLabel={t('settingsVoice.realtimeProviders.catalog.preview', { voice: v.title })}
                 variant="plain"
-                size={ACCESSORY_TARGET_SIZE}
                 onPress={(e) => {
                   e?.stopPropagation?.();
                   fireAndForget(playPreview({ id: v.id, name: v.title }), { tag: 'LocalNeuralTtsSettings.preview' });

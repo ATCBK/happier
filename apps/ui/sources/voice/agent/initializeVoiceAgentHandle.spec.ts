@@ -19,6 +19,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { SessionActiveModelSelectionSchema } from '@happier-dev/protocol/providers/selection/v2';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { createDeferred } from '@/dev/testkit';
@@ -312,7 +313,7 @@ describe('initializeVoiceAgentHandle', () => {
         expect(admittedStart().chatModelId).toBeUndefined();
     });
 
-    it.each(['current', 'missing', 'stale', 'cancelled'])('starts on a hidden carrier with the bound root Agent, model and Launch Profile only when applied model is known (%s)', async applied => {
+    it.each(['current', 'missing', 'stale', 'cancelled', 'team', 'team_stale'])('starts on a hidden carrier with the bound root Agent, model and Launch Profile only when applied model is known (%s)', async applied => {
         const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
         const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
         const carrierId = 'hidden-selection-carrier';
@@ -321,7 +322,7 @@ describe('initializeVoiceAgentHandle', () => {
         const previousRoot = current.sessions.s1;
         if (!previousRoot.metadata) throw new Error('The coding root requires owner metadata');
         const localSettings = readLocalConversationSettingsFromAccountSettings(previousSettings);
-        if (applied === 'stale') rootRunnerPid = 124;
+        if (applied === 'stale' || applied === 'team_stale') rootRunnerPid = 124;
         const targetAddress = { serverId: connection.home.id, sessionId: 's1' };
         const rootMetadata = { ...previousRoot.metadata, flavor: 'claude', profileId: 'root-launch-profile',
             modelOverrideV1: { v: 1 as const, modelId: 'pending-unapplied-model', updatedAt: 20 },
@@ -338,10 +339,16 @@ describe('initializeVoiceAgentHandle', () => {
             },
             sessionModelsV1: { v: 1 as const, agentId: 'claude', updatedAt: 30, currentModelId: 'claude-haiku-4-5',
                 availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku' }],
-                ...(applied !== 'missing' ? { activeSelectionV1: { v: 1 as const, source: 'runtime_apply' as const,
+                ...(applied !== 'missing' ? { activeSelectionV1: SessionActiveModelSelectionSchema.parse({
+                    v: applied.startsWith('team') ? 2 : 1, source: 'runtime_apply',
                     selection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'), providerConnectionId: null, modelId: 'claude-haiku-4-5' },
                     runner: { pid: 123, processStartTimeMs: 1000 },
-                } } : {}),
+                    ...(applied.startsWith('team') ? { teamCredentialModel: {
+                        kind: 'team_credential_provider_model', resourceId: 'team-resource', teamId: 'team-1',
+                        expectedResourceRevision: 0, deliveryMode: 'brokered',
+                        agentTargetKey: buildAgentUniverseBackendTargetKey('claude'), modelId: 'claude-haiku-4-5',
+                    } } : {}),
+                }) } : {}),
             },
             sessionAppliedModelV1: SessionAppliedModelV1Schema.parse({ v: 1, provider: 'claude', modelId: 'last-accepted-model', updatedAt: 10,
                 selection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'),
@@ -386,7 +393,8 @@ describe('initializeVoiceAgentHandle', () => {
                 return;
             }
             if (applied !== 'current') {
-                await expect(initializing).rejects.toMatchObject({ code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
+                await expect(initializing).rejects.toMatchObject({ code: applied === 'team'
+                    ? 'VOICE_AGENT_TEAM_MODEL_UNSUPPORTED' : 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
                 expect(start).not.toHaveBeenCalled();
                 return;
             }

@@ -9,12 +9,11 @@ import {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useItemRowAccessibleName } from '@/components/ui/lists/ItemRowAccessibleName';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { shadowLevelStyle } from '@/shadowElevation';
-import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, isHappierFocusVisible } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, isHappierFocusVisible, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 
 export type SliderProps = Readonly<{
     value: number;
@@ -23,6 +22,8 @@ export type SliderProps = Readonly<{
     /** Values snap to `min + n * step`. Discrete settings use their option index with a step of 1. */
     step: number;
     onValueChange: (next: number) => void;
+    /** Transient drag value; undefined withdraws the preview on release, cancellation or unmount. */
+    onValuePreview?: (next: number | undefined) => void;
     /** Defaults to the enclosing `Item` row's title. */
     accessibilityLabel?: string;
     /** What assistive technology announces for a value ("Large", "120%"). */
@@ -39,8 +40,11 @@ export type SliderProps = Readonly<{
 
 const TRACK_HEIGHT_PX = 4;
 const THUMB_SIZE_PX = 18;
-/** Retain the web track frame; touch platforms expand it through the shared target policy. */
+/** The track frame in layout under every pointer; a finger reaches the touch target through the shared hit area. */
 const TRACK_HIT_HEIGHT_PX = 40;
+const TRACK_FRAME_STYLE = { height: TRACK_HIT_HEIGHT_PX } as const;
+/** The track scrubs along its own width; the hit area extends above and below only. */
+const TRACK_HIT_REACH = { left: 0, right: 0 } as const;
 /** Page Up/Down move a tenth of the range, at least one step. */
 const PAGE_FRACTION = 0.1;
 
@@ -73,8 +77,9 @@ export function Slider(props: SliderProps) {
     const reducedMotion = useReducedMotionPreference();
     const rowAccessibleName = useItemRowAccessibleName();
     const { min, max, step, disabled } = props;
-    const trackHitHeight = Math.max(TRACK_HIT_HEIGHT_PX, resolveMinimumInteractiveTargetSize());
-    const value = snapToStep(props.value, min, max, step);
+    const trackHitArea = useHappierHitArea({ restingStyle: () => TRACK_FRAME_STYLE, hitReach: TRACK_HIT_REACH });
+    const [draft, setDraft] = React.useState<number | null>(null);
+    const value = snapToStep(draft ?? props.value, min, max, step);
     const progress = max > min ? (value - min) / (max - min) : 0;
     const [focused, setFocused] = React.useState(false);
     const [dragging, setDragging] = React.useState(false);
@@ -84,6 +89,9 @@ export function Slider(props: SliderProps) {
     valueRef.current = value;
     const onValueChangeRef = React.useRef(props.onValueChange);
     onValueChangeRef.current = props.onValueChange;
+    const onValuePreviewRef = React.useRef(props.onValuePreview);
+    onValuePreviewRef.current = props.onValuePreview;
+    const gesture = React.useRef<{ start: number; value: number } | null>(null);
 
     const commit = React.useCallback((raw: number) => {
         const next = snapToStep(raw, min, max, step);
@@ -91,11 +99,16 @@ export function Slider(props: SliderProps) {
         onValueChangeRef.current(next);
     }, [max, min, step]);
 
-    const commitAtX = React.useCallback((x: number) => {
+    const previewAtX = React.useCallback((x: number) => {
         const width = trackWidthRef.current;
-        if (width <= 0) return;
-        commit(min + Math.min(1, Math.max(0, x / width)) * (max - min));
-    }, [commit, max, min]);
+        if (width <= 0 || !gesture.current) return;
+        const next = snapToStep(min + Math.min(1, Math.max(0, x / width)) * (max - min), min, max, step);
+        if (gesture.current.value === next) return;
+        gesture.current.value = next;
+        valueRef.current = next;
+        setDraft(next);
+        onValuePreviewRef.current?.(next);
+    }, [max, min, step]);
 
     const handleGrant = React.useCallback((event: GestureResponderEvent) => {
         if (disabled) return;
@@ -104,9 +117,10 @@ export function Slider(props: SliderProps) {
         // Remember where the track starts on the page: later moves are measured from it, because a
         // pointer that leaves the track reports its position relative to whatever it is over.
         trackPageXRef.current = locationX !== null && pageX !== null ? pageX - locationX : null;
+        gesture.current = { start: valueRef.current, value: valueRef.current };
         setDragging(true);
-        if (locationX !== null) commitAtX(locationX);
-    }, [commitAtX, disabled]);
+        if (locationX !== null) previewAtX(locationX);
+    }, [previewAtX, disabled]);
 
     const handleMove = React.useCallback((event: GestureResponderEvent) => {
         if (disabled) return;
@@ -114,17 +128,37 @@ export function Slider(props: SliderProps) {
         const x = pageX !== null && trackPageXRef.current !== null
             ? pageX - trackPageXRef.current
             : readFinite(event.nativeEvent.locationX);
-        if (x !== null) commitAtX(x);
-    }, [commitAtX, disabled]);
+        if (x !== null) previewAtX(x);
+    }, [previewAtX, disabled]);
 
     const handleRelease = React.useCallback(() => {
+        const current = gesture.current;
+        gesture.current = null;
         trackPageXRef.current = null;
         setDragging(false);
+        setDraft(null);
+        if (current && current.value !== current.start) onValueChangeRef.current(current.value);
+        onValuePreviewRef.current?.(undefined);
     }, []);
 
+    const cancelGesture = React.useCallback(() => {
+        if (!gesture.current) return;
+        gesture.current = null;
+        trackPageXRef.current = null;
+        setDragging(false);
+        setDraft(null);
+        onValuePreviewRef.current?.(undefined);
+    }, []);
+    React.useEffect(() => { if (disabled) cancelGesture(); }, [disabled, cancelGesture]);
+    React.useEffect(() => () => {
+        if (gesture.current) onValuePreviewRef.current?.(undefined);
+    }, []);
+
+    const hitAreaOnLayout = trackHitArea.onLayout;
     const handleTrackLayout = React.useCallback((event: LayoutChangeEvent) => {
         trackWidthRef.current = event.nativeEvent.layout.width;
-    }, []);
+        hitAreaOnLayout?.(event);
+    }, [hitAreaOnLayout]);
 
     const pageStep = Math.max(step, Math.round(((max - min) * PAGE_FRACTION) / step) * step);
     const handleKeyDown = React.useCallback((event: { key?: string; nativeEvent?: { key?: string }; preventDefault?: () => void }) => {
@@ -189,19 +223,21 @@ export function Slider(props: SliderProps) {
             <View
                 testID={props.testID ? `${props.testID}-track` : undefined}
                 onLayout={handleTrackLayout}
+                hitSlop={trackHitArea.hitSlop}
                 onStartShouldSetResponder={() => !disabled}
                 onMoveShouldSetResponder={() => !disabled}
                 onResponderTerminationRequest={() => false}
                 onResponderGrant={handleGrant}
                 onResponderMove={handleMove}
                 onResponderRelease={handleRelease}
-                onResponderTerminate={handleRelease}
+                onResponderTerminate={cancelGesture}
                 style={[
                     styles.trackHitArea,
-                    { height: trackHitHeight },
+                    TRACK_FRAME_STYLE,
                     props.trackWidth === undefined ? styles.trackHitAreaFill : { width: props.trackWidth },
                 ]}
             >
+                {trackHitArea.frame}
                 <View pointerEvents="none" style={[styles.track, { backgroundColor: theme.colors.switch.track.inactive }]}>
                     <View style={[styles.fill, { width: percent, backgroundColor: theme.colors.text.primary }, motion]} />
                 </View>
@@ -210,7 +246,7 @@ export function Slider(props: SliderProps) {
                     style={[
                         styles.thumb,
                         {
-                            top: (trackHitHeight - THUMB_SIZE_PX) / 2,
+                            top: (TRACK_HIT_HEIGHT_PX - THUMB_SIZE_PX) / 2,
                             left: percent,
                             backgroundColor: theme.colors.text.primary,
                             borderColor: theme.colors.surface.base,

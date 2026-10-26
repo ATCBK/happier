@@ -576,7 +576,6 @@ describe('ActionSettingsDetailView', () => {
                 bar.testIDPrefix === `settings-actions:action:happier.inspector/actions/self-check:target:${targetId}:mode`
             ));
             expect(modeControl?.accessibilityLabel).toBe(target?.title);
-            expect(modeControl?.targetSize).toBe('platform');
             expect(modeControl?.valueSource).toBe('inherited');
             expect((modeControl?.tabs as Array<{ id: string }>).map((tab) => tab.id)).toEqual([
                 'off',

@@ -244,7 +244,9 @@ describe("artifactsRoutes (AccountChange integration)", () => {
             artifactId: deleted ? null : artifactId, cursor: account.seq });
         expect(account.seq).toBeGreaterThan(0);
         expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({ userId: accountId,
-            payload: expect.objectContaining({ seq: account.seq, body: { t: "account-change" } }),
+            payload: expect.objectContaining({ seq: account.seq, body: {
+                t: "account-change", changeKinds: ["artifact"], entityIds: [artifactId],
+            } }),
             recipientFilter: { type: "account-stored-content-v3" },
         }));
         return account.seq;

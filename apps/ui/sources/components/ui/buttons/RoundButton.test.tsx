@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { flattenTestStyle } from '@/dev/testkit';
-import { HappierMaterialRoleProvider, resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierMaterialRoleProvider, resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation';
 import { Platform } from 'react-native';
 import { lightTheme } from '@/theme';
 import Color from 'color';
@@ -100,7 +100,25 @@ describe('RoundButton', () => {
         expect(raisedSide(pill())).toBeDefined();
     });
 
-    it('takes its touch target from the shared pressable: the platform floor on native, none on web', async () => {
+    it('draws normal and small at the page control heights the plugin-ui button draws, on every platform', async () => {
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const expected = { normal: HAPPIER_PAGE_METRICS.controlHeightPx, small: HAPPIER_PAGE_METRICS.smallControlHeightPx, large: undefined } as const;
+        for (const platform of ['ios', 'android', 'web'] as const) {
+            for (const size of ['large', 'normal', 'small'] as const) {
+                const testID = `drawn-${platform}-${size}`;
+                const screen = await renderScreen(
+                    <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                        <RoundButton title="Go" size={size} testID={testID} onPress={() => {}} />
+                    </HappierUiPlatformProvider>,
+                );
+                const pill = screen.findByTestId(testID)!.findAll(node => String(node.type) === 'Animated.View')[0]!;
+                expect(flattenTestStyle(pill.props.style).minHeight, `${testID} drawn height`).toBe(expected[size]);
+                await screen.unmount();
+            }
+        }
+    });
+
+    it('takes its touch target from the shared pressable as hit area: drawn at its own size on every platform', async () => {
         const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
         const flatten = (style: unknown): Record<string, unknown> => (Array.isArray(style)
@@ -115,19 +133,19 @@ describe('RoundButton', () => {
                             <RoundButton title="Go" size={size} display={display} testID={testID} onPress={() => {}} />
                         </HappierUiPlatformProvider>,
                     );
-                    const pressable = screen.findByTestId(testID)!;
-                    const slop = typeof pressable.props.hitSlop === 'number' ? pressable.props.hitSlop : 0;
-                    const style = flatten(pressable.props.style);
-                    if (platform === 'web') {
-                        // Pointer platforms keep their density: no minimum box is imposed.
-                        expect(style.minHeight, `${testID} height`).toBeUndefined();
-                        expect(style.minWidth, `${testID} width`).toBeUndefined();
-                    } else {
-                        const target = resolveMinimumInteractiveTargetSize(platform);
-                        expect(Number(style.minHeight ?? 0) + slop * 2, `${testID} height`).toBeGreaterThanOrEqual(target);
-                        expect(Number(style.minWidth ?? 0) + slop * 2, `${testID} width`).toBeGreaterThanOrEqual(target);
-                        // One floor: the pressable's, not a second, smaller box of the button's own.
-                        expect(style.minHeight, `${testID} single floor`).toBe(target);
+                    const style = flatten(screen.findByTestId(testID)!.props.style);
+                    // No touch floor is drawn: the button keeps its design geometry.
+                    expect(style.minHeight, `${testID} height`).toBeUndefined();
+                    expect(style.minWidth, `${testID} width`).toBeUndefined();
+                    if (platform !== 'web') {
+                        const drawnHeight = size === 'small' ? HAPPIER_PAGE_METRICS.smallControlHeightPx : HAPPIER_PAGE_METRICS.controlHeightPx;
+                        // Under a finger the hit area reaches the platform target past the drawn pill.
+                        const host = screen.findHostByTestId(testID)!;
+                        await act(async () => {
+                            host.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 120, height: drawnHeight } } });
+                        });
+                        const slop = screen.findHostByTestId(testID)!.props.hitSlop as Record<string, number>;
+                        expect(drawnHeight + slop.top + slop.bottom, `${testID} hit height`).toBe(resolveMinimumInteractiveTargetSize(platform));
                     }
                     await screen.unmount();
                 }
@@ -151,6 +169,22 @@ describe('RoundButton', () => {
         const screen = await renderScreen(<RoundButton title="Saving" loading={true} testID="loading-round-button" />);
 
         expect(screen.findByTestId('loading-round-button')?.props.accessibilityState?.busy).toBe(true);
+    });
+
+    it('keeps its label readable while busy, trading only the leading mark for the spinner', async () => {
+        const mark = React.createElement('Mark', { testID: 'refresh-mark' });
+        const idle = await renderScreen(<RoundButton title="Refresh now" leading={mark} testID="idle-button" />);
+        const busy = await renderScreen(<RoundButton title="Refresh now" leading={mark} loading={true} testID="busy-button" />);
+        const labelOpacity = (screen: Awaited<ReturnType<typeof renderScreen>>) => {
+            const label = screen.tree.root.find((node) => node.props.children === 'Refresh now');
+            return flattenTestStyle(label.props.style).opacity;
+        };
+
+        expect(labelOpacity(idle)).toBe(1);
+        expect(labelOpacity(busy)).toBe(1);
+        expect(idle.findByTestId('refresh-mark')).toBeTruthy();
+        expect(busy.findByTestId('refresh-mark')).toBeNull();
+        expect(busy.findByTestId('busy-button')?.props.accessibilityState?.busy).toBe(true);
     });
 
     it('stays busy while an async action runs, swallows repeat presses, then becomes pressable again', async () => {

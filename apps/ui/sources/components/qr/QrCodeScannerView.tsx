@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { AppState, Linking, Platform, Pressable, useWindowDimensions, View } from 'react-native';
+import { AppState, Linking, Platform, useWindowDimensions, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -10,7 +11,6 @@ import { Typography } from '@/constants/Typography';
 import { canUseCurrentDeviceQrScanner } from '@/utils/platform/qrScannerSupport';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
@@ -113,7 +113,6 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
     const styles = stylesheet;
     const { height } = useWindowDimensions();
     const closeIconColor = theme.dark ? theme.colors.background.canvas : theme.colors.text.primary;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const scannerActive = props.active ?? true;
 
     const [permission, requestPermission] = useCameraPermissions();
@@ -270,18 +269,12 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
             />
             <View style={styles.overlay} pointerEvents="box-none">
                 <View style={styles.topRow} pointerEvents="box-none">
-                    <Pressable
+                    <HappierPressable
                         accessibilityRole="button"
                         accessibilityLabel={t('common.cancel')}
                         testID={`${props.testIDPrefix}-close`}
                         onPress={props.onCancel}
-                        style={[
-                            styles.closeButton,
-                            {
-                                minWidth: minimumInteractiveTargetSize,
-                                minHeight: minimumInteractiveTargetSize,
-                            },
-                        ]}
+                        style={styles.closeButton}
                     >
                         <Icon
                             testID={`${props.testIDPrefix}-close-icon`}
@@ -289,7 +282,7 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
                             size={20}
                             color={closeIconColor}
                         />
-                    </Pressable>
+                    </HappierPressable>
                     {props.embedded ? (
                         <View style={styles.spacer} pointerEvents="none" />
                     ) : (

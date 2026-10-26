@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Platform, Pressable, type PressableProps } from 'react-native';
+import { Pressable, type PressableProps } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveHappierFocusRingVisible } from '@happier-dev/plugin-ui/presentation';
+import { resolveHappierFocusRingVisible, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { t } from '@/text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -15,6 +14,9 @@ type ModalCloseButtonProps = Readonly<{
     accessibilityLabel?: string;
     size?: number;
 }> & Pick<PressableProps, 'hitSlop'>;
+
+/** The glyph's breathing room inside the drawn close square (the same square an `IconButton` draws). */
+const CLOSE_SQUARE_PADDING_PX = 4;
 
 const stylesheet = StyleSheet.create({
     button: {
@@ -28,7 +30,11 @@ export function ModalCloseButton(props: ModalCloseButtonProps) {
     const styles = stylesheet;
     const accessibilityLabel = props.accessibilityLabel ?? t('common.close');
     const size = props.size ?? 20;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    // The close square is the glyph plus its breathing room under every pointer; a finger reaches the
+    // touch target through the shared hit area, never by drawing a larger button.
+    const square = size + CLOSE_SQUARE_PADDING_PX * 2;
+    const squareStyle = React.useMemo(() => ({ width: square, height: square }), [square]);
+    const hitArea = useHappierHitArea({ restingStyle: () => squareStyle, hitSlop: props.hitSlop ?? undefined });
 
     return (
         <Pressable
@@ -36,21 +42,20 @@ export function ModalCloseButton(props: ModalCloseButtonProps) {
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
             focusable
-            hitSlop={props.hitSlop}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
             onPress={props.onPress}
             style={(interactionState) => {
                 const webState = interactionState as typeof interactionState & { focused?: boolean };
                 return [
                     styles.button,
-                    {
-                        minWidth: minimumInteractiveTargetSize,
-                        minHeight: minimumInteractiveTargetSize,
-                    },
+                    squareStyle,
                     focusRingStyle({ focused: resolveHappierFocusRingVisible(webState.focused), color: theme.colors.border.focus }),
                     { opacity: interactionState.pressed ? motionTokens.press.opacity : 1 },
                 ];
             }}
         >
+            {hitArea.frame}
             <Icon name="x" size={size} color={theme.colors.text.secondary} />
         </Pressable>
     );

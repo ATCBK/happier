@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -10,6 +10,7 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { Modal } from '@/modal';
 import { t, tLoose } from '@/text';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 export type FirstKeyRecoveryActionResult =
     | Readonly<{ kind: 'completed' }>
@@ -30,7 +31,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     danger: {
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: 44,
+        paddingVertical: theme.space.s10,
         marginTop: theme.space.s4,
     },
     dangerText: {
@@ -122,7 +123,7 @@ export function FirstKeyRecoveryModal(
                 disabled={busy}
                 testID="first-key-recovery-keep"
             />
-            <Pressable
+            <HappierPressable
                 accessibilityRole="button"
                 accessibilityLabel={tLoose(
                     'settingsAccount.firstKeyRecovery.abandon',
@@ -139,7 +140,7 @@ export function FirstKeyRecoveryModal(
                         'settingsAccount.firstKeyRecovery.abandon',
                     )}
                 </Text>
-            </Pressable>
+            </HappierPressable>
         </View>
     ), [abandon, busy, props, run, styles]);
     useModalCardChrome(props.setChrome, {

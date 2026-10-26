@@ -1,12 +1,9 @@
 import { Platform } from 'react-native';
 import {
     HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
+    isHappierCoarsePrimaryPointer,
     resolveHappierMinimumInteractiveTargetSize,
 } from '@happier-dev/plugin-ui/environment';
-
-import { isCoarsePrimaryPointerEnvironment } from '@/utils/platform/webMobileHeuristics';
-
-let coarseWebPrimaryPointer: boolean | null = null;
 
 /**
  * Whether the primary pointer is a finger: always on native, and on the web when the primary pointer
@@ -16,8 +13,8 @@ let coarseWebPrimaryPointer: boolean | null = null;
  */
 export function isTouchPrimaryPointer(platform: string = Platform.OS): boolean {
     if (platform !== 'web') return true;
-    if (coarseWebPrimaryPointer === null) coarseWebPrimaryPointer = isCoarsePrimaryPointerEnvironment();
-    return coarseWebPrimaryPointer;
+    // The shared hit-area owner reads the primary pointer once; core asks the same owner.
+    return isHappierCoarsePrimaryPointer();
 }
 
 /**

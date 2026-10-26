@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { HappierBreadcrumb } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -9,7 +9,6 @@ import { MachineAdministrationTargetSelector } from '@/components/settings/machi
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -222,7 +221,6 @@ function ListingActionCard(props: Readonly<{
     return (
         <SurfaceCard padding="md" style={styles.actionCard}>
             <RoundButton size="normal" titleNumberOfLines="complete"
-                style={{ minHeight: resolveMinimumInteractiveTargetSize(Platform.OS) }}
                 testID={props.installed ? 'settings.plugins.listing.manage' : 'settings.plugins.listing.install'}
                 title={props.installed ? t('settingsPlugins.managePlugin') : t('settingsPlugins.installAndTrust')}
                 disabled={!props.installed && props.disabled}

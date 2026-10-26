@@ -12,7 +12,6 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import { happierRaisedEdgeStyle } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 
 /**
  * The canonical small labelled action for pane toolbars and surface headers.
@@ -136,11 +135,6 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
     const callerBackground = readSurfaceStyleProperty(props.style, 'backgroundColor');
-    // One target policy with `RoundButton`: a precise pointer keeps the dense toolbar box, a finger
-    // gets the platform floor as real box (the native floor is `HappierPressable`'s; slop is inert on
-    // the web). Callers never stretch the visible box to a touch target themselves.
-    const webTouchFloor = Platform.OS === 'web' ? resolveTouchTargetFloorPx() : null;
-
     return (
         <HappierPressable
             testID={props.testID}
@@ -161,7 +155,6 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
                 props.disabled ? styles.disabled : null,
                 // Native caller styles cross the portable adapter unchanged.
                 props.style as HappierSurfaceProps['style'],
-                webTouchFloor === null ? null : { minHeight: webTouchFloor },
                 callerBackground !== undefined && typeof callerBackground !== 'string' ? null : {
                     backgroundColor: paintColor(callerBackground ?? (isPrimary ? theme.colors.button.primary.background : pressed && !props.disabled ? theme.colors.surface.selected : props.active || hovered && !props.disabled ? theme.colors.surface.pressed : theme.colors.surface.base), undefined, isPrimary || callerBackground !== undefined ? 'solidControl' : 'surface'),
                 },

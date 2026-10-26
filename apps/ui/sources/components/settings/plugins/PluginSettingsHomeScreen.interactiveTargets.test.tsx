@@ -140,10 +140,11 @@ async function renderInAppPanes(
 
 
 /**
- * Both plugin-management segmented bars sit inside their own horizontal
- * scroller, so the consumer genuinely owns the room the platform floor asks
- * for. A control the reader taps to change what the whole screen shows must
- * meet 44pt/48dp rather than the dense flush-row 24px WCAG floor.
+ * The plugin-management controls are drawn at their dense design size under every
+ * pointer (DESIGN.md: a touch target is a hit area, not a drawn size). The
+ * segmented bars reach 44pt/48dp with their transparent press frame; the
+ * selects reach it through the shared pressable's hit area. Neither draws
+ * the target, so no measured width or height may reach it.
  */
 async function readSegmentMinimumWidths(testID: string, dimension: 'minWidth' | 'minHeight' = 'minWidth'): Promise<readonly string[]> {
     const { Platform } = await import('react-native');
@@ -153,7 +154,8 @@ async function readSegmentMinimumWidths(testID: string, dimension: 'minWidth' | 
         for (const platform of ['ios', 'android'] as const) {
             (Platform as { OS: string }).OS = platform;
             const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-            observed.push(`${platform}: ${flattenTestStyle(screen.findByTestId(testID)?.props.style)[dimension]}`);
+            const drawn = flattenTestStyle(screen.findByTestId(testID)?.props.style)[dimension];
+            observed.push(`${platform}: ${typeof drawn === 'number' && drawn >= (platform === 'android' ? 48 : 44) ? 'target' : 'dense'}`);
         }
     } finally {
         (Platform as { OS: string }).OS = previousPlatform;
@@ -178,22 +180,22 @@ describe('PluginSettingsHomeScreen segmented controls', () => {
         standardCleanup();
     });
 
-    it('meets the platform interactive target on the management view selector', async () => {
+    it('draws the management view selector at its dense width', async () => {
         expect(await readSegmentMinimumWidths('settings.plugins.management.view:installed'))
-            .toEqual(['ios: 44', 'android: 48']);
+            .toEqual(['ios: dense', 'android: dense']);
     });
 
-    it('meets the platform interactive target on the Discover source filter', async () => {
+    it('draws the Discover source filter at its dense height', async () => {
         mocks.activeView = 'discover';
         expect(await readSegmentMinimumWidths('settings.plugins.marketplace.sourceFilter.trigger', 'minHeight'))
-            .toEqual(['ios: 44', 'android: 48']);
+            .toEqual(['ios: dense', 'android: dense']);
     });
 
-    it('meets the platform interactive target on Grid | List and the Installed status filter', async () => {
+    it('draws Grid | List and the Installed status filter at their dense size', async () => {
         expect(await readSegmentMinimumWidths('settings.plugins.collectionView:grid'))
-            .toEqual(['ios: 44', 'android: 48']);
+            .toEqual(['ios: dense', 'android: dense']);
         expect(await readSegmentMinimumWidths('settings.plugins.marketplace.installed.statusFilter.trigger', 'minHeight'))
-            .toEqual(['ios: 44', 'android: 48']);
+            .toEqual(['ios: dense', 'android: dense']);
     });
 
     it('offers the Installed status filter only when it can narrow the list', async () => {

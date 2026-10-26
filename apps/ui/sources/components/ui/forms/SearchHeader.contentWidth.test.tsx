@@ -74,23 +74,31 @@ function findSearchInputWrapperStyle(
 }
 
 describe('SearchHeader touch target', () => {
-    it('keeps the search field at least the platform minimum interactive size', async () => {
+    it('draws the field at its padding and line height and reaches the finger target through the hit area', async () => {
         shared.contentWidthMode = 'compact';
         const { SearchHeader } = await import('./SearchHeader');
-        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
-        const { Platform } = await import('react-native');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
 
         const screen = await renderScreen(
-            <SearchHeader value="" onChangeText={() => {}} placeholder="Search actions" />,
+            <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <SearchHeader value="" onChangeText={() => {}} placeholder="Search actions" />
+            </HappierUiPlatformProvider>,
         );
 
-        // The minimum comes from the platform-policy owner, so this follows a
-        // change there instead of pinning a number of its own. Padding and line
-        // height alone previously left the field under it.
-        const minimum = resolveMinimumInteractiveTargetSize(Platform.OS);
+        // A touch target is a hit area, not a drawn size (DESIGN.md): no minimum height inflates the field.
         const wrapper = findSearchInputWrapperStyle(screen);
-        expect(typeof wrapper.minHeight).toBe('number');
-        expect(wrapper.minHeight as number).toBeGreaterThanOrEqual(minimum);
+        expect(wrapper.minHeight).toBeUndefined();
+        // The field is 22 (iOS line height) + 2 x 8 = 38 high once laid out, so the hit area reaches 3 up and down.
+        const findWrapper = () => screen.tree.root.findAll((node) => typeof node.type === 'string'
+            && flattenStyle(node.props.style).flexDirection === 'row'
+            && flattenStyle(node.props.style).borderRadius !== undefined)[0]!;
+        await act(async () => {
+            findWrapper().props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 38 } } });
+        });
+        // The web's Pressable ignores hitSlop, so the hit area is an invisible frame that overhangs the field.
+        const frame = findWrapper().findAll((node) => typeof node.type === 'string' && node.props['aria-hidden'] === true
+            && flattenStyle(node.props.style).position === 'absolute')[0];
+        expect(flattenStyle(frame?.props.style)).toMatchObject({ top: -3, bottom: -3 });
     });
 });
 

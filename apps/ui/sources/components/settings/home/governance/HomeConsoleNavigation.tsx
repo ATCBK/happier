@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, useWindowDimensions, View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 import { usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -13,12 +13,11 @@ import type { HomeGovernanceProjectionV1 } from '@happier-dev/protocol/home/gove
 import { SettingsFloatingControlsHost } from '@/components/settings/shell/SettingsModalFloatingControls';
 import { CollectionNavigationRow } from '@/components/ui/lists/collection/CollectionList';
 import { appShellColumnPlaneColor, appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
-import { AppShellMaterialPlane } from '@/components/navigation/shell/AppShellMaterialFrame';
+import { AppShellMaterialPlane } from '@/components/navigation/shell/appShellMaterialPlane';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { HomeMark } from '@/components/homes/HomeMark';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -351,7 +350,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
     },
     menuTrigger: {
-        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
         justifyContent: 'center',
         maxWidth: '100%',
     },

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { useHappierNativeMinimumInteractiveTargetSize } from '@happier-dev/plugin-ui/environment';
 import {
     HAPPIER_FIELD_TEXT_METRICS,
     HappierFieldTextBox,
@@ -88,9 +87,6 @@ export const FieldTextInput = React.memo(React.forwardRef<React.ElementRef<typeo
             const height = event.nativeEvent.contentSize?.height;
             if (typeof height === 'number' && Number.isFinite(height) && height > 0) setContentHeight(Math.ceil(height));
         }, []);
-        // On phones the input itself takes the shared native touch floor, so a tap anywhere in the
-        // box lands in the field; pointer platforms keep the page's field density.
-        const nativeMinimumTargetSize = useHappierNativeMinimumInteractiveTargetSize();
         return (
             <HappierFieldTextBox
                 presentation={presentation}
@@ -147,7 +143,6 @@ export const FieldTextInput = React.memo(React.forwardRef<React.ElementRef<typeo
                         resolveHappierFieldTextInputMetrics({
                             multiline: props.multiline,
                             minLines: props.minLines,
-                            nativeMinimumTargetSize,
                             presentation,
                         }),
                         // The mono face is for what is typed (a path, a command); an empty field's placeholder is

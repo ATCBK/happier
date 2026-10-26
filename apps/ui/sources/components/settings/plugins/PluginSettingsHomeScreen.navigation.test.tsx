@@ -268,6 +268,10 @@ describe('Settings > Plugins information architecture', () => {
         // The collection beside it marks the same plugin as the open one.
         const installedSection = screen.findAll((node) => typeof node.props?.onNavigateToPlugin === 'function')[0];
         expect(installedSection?.props.selectedPluginId).toBe('acme.plugin');
+        await screen.pressByTestIdAsync('settings.plugins.detailPane.openAsPage');
+        expect(routerMock.value?.spies.push).toHaveBeenCalledWith(expect.objectContaining({
+            pathname: '/(app)/settings/plugins/[pluginId]', params: { pluginId: 'acme.plugin' },
+        }));
         await act(async () => { screen.pressByTestId('settings.plugins.detailPane.header.close'); });
         expect(routerMock.value?.spies.setParams).toHaveBeenCalledWith({ plugin: undefined, source: undefined });
     });

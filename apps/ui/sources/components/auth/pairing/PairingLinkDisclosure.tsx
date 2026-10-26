@@ -17,7 +17,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginTop: theme.space.s8,
     },
     header: {
-        minHeight: 44,
         paddingHorizontal: theme.space.s16,
         paddingVertical: theme.space.s10,
         justifyContent: 'center',

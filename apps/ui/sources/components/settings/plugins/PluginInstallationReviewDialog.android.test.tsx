@@ -16,7 +16,7 @@ installSettingsViewCommonModuleMocks({
 });
 
 describe('PluginInstallationReviewDialog on Android', () => {
-    it('keeps optional access and decision controls at least 48dp', async () => {
+    it('draws optional access and decision controls at their design size, never at the 48dp target', async () => {
         const { PluginInstallationReviewDialog } = await import('./PluginInstallationReviewDialog');
         const screen = await renderScreen(
             <PluginInstallationReviewDialog
@@ -36,13 +36,16 @@ describe('PluginInstallationReviewDialog on Android', () => {
         );
 
         const optional = screen.findByTestId('settings.plugins.installReview.optional.workspace');
-        expect(flattenTestStyle(optional?.props.style)).toMatchObject({ minWidth: 48, minHeight: 48 });
+        // A touch target is a hit area, not a drawn size (DESIGN.md): no control grows to 48.
+        expect(flattenTestStyle(optional?.props.style).minHeight).toBeUndefined();
         for (const testID of [
             'settings.plugins.installReview.cancel',
             'settings.plugins.installReview.confirm',
         ]) {
             const control = screen.findByTestId(testID);
-            expect(flattenTestStyle(control?.props.style({ pressed: false }))).toMatchObject({ minHeight: 48 });
+            expect(control).toBeDefined();
+            const style = typeof control?.props.style === 'function' ? control.props.style({ pressed: false }) : control?.props.style;
+            expect(flattenTestStyle(style).minHeight).toBeUndefined();
         }
     });
 });

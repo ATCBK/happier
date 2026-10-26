@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type {
@@ -334,6 +334,6 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
         paddingHorizontal: theme.space.s12,
         paddingVertical: theme.space.s10,
-        minHeight: Platform.OS === 'android' ? 48 : 44,
+        minHeight: 44,
     },
 }));

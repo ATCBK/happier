@@ -32,7 +32,16 @@ describe('IconButton', () => {
         return Object.assign({}, ...entries.filter(Boolean) as object[]);
     }
 
-    it('keeps the visible control at the requested size while the press frame carries the required target', async () => {
+    function hitSlopAfterLayout(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string, size: number) {
+        const host = screen.findHostByTestId(testID);
+        expect(host?.props.onLayout, 'a control with a hit area measures its drawn square').toBeTypeOf('function');
+        act(() => {
+            host!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: size, height: size } } });
+        });
+        return screen.findHostByTestId(testID)?.props.hitSlop as Record<string, number> | undefined;
+    }
+
+    it('keeps the layout box at the drawn square while the hit area reaches the declared target', async () => {
         const screen = await renderScreen(
             <IconButton
                 testID="icon-btn"
@@ -45,23 +54,29 @@ describe('IconButton', () => {
             />,
         );
 
-        const pressable = screen.findByTestId('icon-btn');
-        const frame = flattenStyle(pressable?.props.style);
-        // The press box is real box model because `hitSlop` is inert on react-native-web.
-        // Only the declared horizontal row gap can be spent; another row can sit flush vertically.
-        expect(frame.width).toBe(44);
-        expect(frame.height).toBe(44);
-        expect(frame.marginHorizontal).toBe(-8);
-        expect(frame.marginVertical).toBe(0);
-        // A declared target is never delegated to hit slop.
-        expect(pressable?.props.hitSlop).toBe(0);
+        const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
+        // The touch target is a hit area: the box in layout is the drawn square, never the target.
+        expect(frame.width).toBe(28);
+        expect(frame.height).toBe(28);
+        expect(frame.marginHorizontal ?? 0).toBe(0);
+        expect(frame.marginVertical ?? 0).toBe(0);
+        expect(hitSlopAfterLayout(screen, 'icon-btn', 28)).toEqual({ top: 8, bottom: 8, left: 8, right: 8 });
 
         const surface = flattenStyle(screen.findByTestId('icon-btn-surface')?.props.style);
         expect(surface.width).toBe(28);
         expect(surface.height).toBe(28);
     });
 
-    it('honours the declared floor and allocates remaining width when the neighbour gap cannot cover it', async () => {
+    it('keeps the WCAG pointer floor by hit area for a drawn square below it', async () => {
+        const small = await renderScreen(
+            <IconButton testID="icon-btn" iconName="copy" accessibilityLabel="Copy address" size={20} interactiveTargetGapPx={4} onPress={() => {}} />,
+        );
+        expect(flattenStyle(small.findByTestId('icon-btn')?.props.style).width).toBe(20);
+        expect(hitSlopAfterLayout(small, 'icon-btn', 20)).toEqual({ top: 2, bottom: 2, left: 2, right: 2 });
+
+    });
+
+    it('splits a tight row gap with its neighbour instead of overlapping it', async () => {
         const screen = await renderScreen(
             <IconButton
                 testID="icon-btn"
@@ -74,40 +89,9 @@ describe('IconButton', () => {
             />,
         );
 
-        const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
-        expect(frame.width).toBe(44);
-        expect(frame.marginHorizontal).toBe(-2);
-        expect(frame.marginVertical).toBe(0);
-        // Only the margin expansion is capped: layout allocates the rest, so targets never overlap.
-        expect(frame.height).toBe(44);
-        expect((frame.width as number) + 2 * (frame.marginHorizontal as number)).toBe(40);
-        // The row gap says nothing about a stacked neighbor: the full vertical target stays in flow.
-        expect((frame.height as number) + 2 * (frame.marginVertical as number)).toBe(44);
-    });
-
-    it('overhangs instead of taking layout when the caller declares its container cannot grow', async () => {
-        const screen = await renderScreen(
-            <IconButton
-                testID="icon-btn"
-                iconName="copy"
-                accessibilityLabel="Close view"
-                size={26}
-                minimumInteractiveTargetSize={44}
-                interactiveTargetGapPx={2}
-                interactiveTargetLayout="overhang"
-                onPress={() => {}}
-            />,
-        );
-
-        const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
-        // The full target height, none of it in flow; sideways only the row gap is spent.
-        expect(frame.height).toBe(44);
-        expect((frame.height as number) + 2 * (frame.marginVertical as number)).toBe(26);
-        expect((frame.width as number) + 2 * (frame.marginHorizontal as number)).toBe(26);
-        expect(frame.width).toBe(28);
-        const surface = flattenStyle(screen.findByTestId('icon-btn-surface')?.props.style);
-        expect(surface.width).toBe(26);
-        expect(surface.height).toBe(26);
+        expect(flattenStyle(screen.findByTestId('icon-btn')?.props.style).width).toBe(28);
+        // Sideways only half the gap; above and below the whole target.
+        expect(hitSlopAfterLayout(screen, 'icon-btn', 28)).toEqual({ top: 8, bottom: 8, left: 2, right: 2 });
     });
 
     it('takes the free space it is given on each side, so a row of controls tiles its container with targets', async () => {
@@ -118,33 +102,15 @@ describe('IconButton', () => {
                 accessibilityLabel="Close view"
                 size={26}
                 minimumInteractiveTargetSize={44}
-                interactiveTargetLayout="overhang"
                 interactiveTargetEdgesPx={{ leading: 1, trailing: 3 }}
                 onPress={() => {}}
             />,
         );
-        const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
-        // Half the neighbour gap before it, the container's padding after it; no layout taken.
-        expect(frame.width).toBe(30);
-        expect((frame.width as number) + (frame.marginLeft as number) + (frame.marginRight as number)).toBe(26);
-        // Padded so the drawn square stays where layout put it.
-        expect(frame.paddingLeft).toBe(1);
-        expect(frame.paddingRight).toBe(3);
+        expect(flattenStyle(screen.findByTestId('icon-btn')?.props.style).width).toBe(26);
+        expect(hitSlopAfterLayout(screen, 'icon-btn', 26)).toEqual({ top: 9, bottom: 9, left: 1, right: 3 });
     });
 
-    it('does not grow the press frame when no minimum target is declared', async () => {
-        const screen = await renderScreen(
-            <IconButton testID="icon-btn" iconName="copy" accessibilityLabel="Copy address" size={28} onPress={() => {}} />,
-        );
-
-        const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
-        expect(frame.width).toBe(28);
-        expect(frame.height).toBe(28);
-        expect(frame.marginHorizontal).toBe(0);
-        expect(frame.marginVertical).toBe(0);
-    });
-
-    it('paints hover, press and selection on the drawn square, never on the larger touch frame', async () => {
+    it('paints hover, press and selection on the drawn square, never on the hit area', async () => {
         const screen = await renderScreen(
             <IconButton
                 testID="icon-btn"
@@ -160,8 +126,8 @@ describe('IconButton', () => {
 
         for (const state of [{ hovered: true }, { pressed: true }, { selected: true }]) {
             const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style, state);
-            // The frame is only the hit region: it may be larger, but it never paints.
-            expect(frame.width).toBe(44);
+            // The pressable box is the drawn square; its tint belongs to the surface inside it.
+            expect(frame.width).toBe(24);
             expect(frame.backgroundColor).toBeUndefined();
         }
         await act(async () => {

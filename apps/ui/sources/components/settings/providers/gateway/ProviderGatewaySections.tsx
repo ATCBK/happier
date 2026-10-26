@@ -108,12 +108,14 @@ export type ProviderGatewaySectionsProps = Readonly<{
   pickerRows: React.ReactNode;
   /** The Name field, owned by the page. */
   nameRow: React.ReactNode;
+  /** A saved gateway's Used by section, owned by the page; a draft has none. */
+  usedBy?: React.ReactNode;
 }>;
 
 /**
  * A gateway's configuration (lab `rgateway` GW1/GW2): which subscription each vendor draws on, where
  * the gateway runs, how it shows in the model picker, and Claude Code's helper models. Every control
- * saves on change through the connection's one update writer; this component holds no saved state.
+ * delegates to the caller's authoring buffer or the connection's one update writer; this component holds no saved state.
  */
 export const ProviderGatewaySections = React.memo(
   function ProviderGatewaySections(props: ProviderGatewaySectionsProps) {
@@ -242,7 +244,6 @@ export const ProviderGatewaySections = React.memo(
                 activeTabId={mode}
                 onSelectTab={selectMode}
                 segmentSizing="equal"
-                targetSize="platform"
                 disabled={props.disabled}
                 accessibilityLabel={t(
                   'settingsProvidersCollection.gateway.runsOnTitle',
@@ -316,6 +317,8 @@ export const ProviderGatewaySections = React.memo(
             />
           ) : null}
         </ItemGroup>
+
+        {props.usedBy ?? null}
 
         <ItemGroup
           title={t('settingsProvidersCollection.gateway.modelPickerTitle')}
