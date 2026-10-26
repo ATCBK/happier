@@ -173,8 +173,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Move a session from Claude to Codex, or back, in place. The session keeps its id, history and settings, and the arriving agent gets a summary of the recent conversation. <a href="https://docs.happier.dev/sessions/continue-with-another-agent">Continue with another agent</a></p>
 
-<!-- TODO screenshot: .github/screenshots/agent-switch.png -->
-<p align="center"><img src=".github/screenshots/agent-switch.png" alt="TODO: switching the agent of a running session" width="100%" /></p>
+<p align="center"><img src=".github/screenshots/agent-switch.png" width="380" alt="Agent and model picker with OpenCode, Claude, Codex and other agents" /></p>
 
 <br/>
 
@@ -198,8 +197,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Stage, commit, push, branch and open pull requests without leaving the app. Start a session in its own Git worktree from any local or remote branch, or in the folder you are already in. <a href="https://docs.happier.dev/code/git">Git</a> · <a href="https://docs.happier.dev/sessions/new-session-shortcuts">New session options</a></p>
 
-<!-- TODO screenshot: .github/screenshots/git-worktrees.png -->
-<p align="center"><img src=".github/screenshots/git-worktrees.png" alt="TODO: git panel and worktree picker" width="100%" /></p>
+<p align="center"><img src=".github/screenshots/git.png" width="640" alt="Git panel with changed files and a diff for review" /></p>
 
 <br/>
 
@@ -224,8 +222,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">A session can hand work to another agent. Claude can start a review, plan or delegate run on Codex, for example, and you follow every run from the Agents tab in the session. <a href="https://docs.happier.dev/extending/subagents">Delegated work</a></p>
 
-<!-- TODO screenshot: .github/screenshots/subagents.png -->
-<p align="center"><img src=".github/screenshots/subagents.png" alt="TODO: Agents tab with a Codex run started from a Claude session" width="100%" /></p>
+<p align="center"><img src=".github/screenshots/subagents.png" width="640" alt="Agents panel with a finished review subagent next to its result in the session" /></p>
 
 <br/>
 
@@ -233,8 +230,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Browse, search and edit the files in a session's folder from any device. Open a terminal on the connected machine when you need a quick command. <a href="https://docs.happier.dev/code/files-and-editor">Files and editor</a> · <a href="https://docs.happier.dev/extras/embedded-terminal">Embedded terminal</a></p>
 
-<!-- TODO screenshot: .github/screenshots/files-terminal.png -->
-<p align="center"><img src=".github/screenshots/files-terminal.png" alt="TODO: file editor and embedded terminal in a session" width="100%" /></p>
+<p align="center"><img src=".github/screenshots/files-terminal.png" width="640" alt="File editor open on a project file with the project file list" /></p>
 
 <br/>
 
