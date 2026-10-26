@@ -7,7 +7,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { storage } from '@/sync/domains/state/storageStore';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -18,7 +18,6 @@ import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/l
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import type { RoleArtifactV1 } from '@happier-dev/protocol';
-import type { Artifact, ArtifactUpdateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { invalidateRoleCatalog, useRoleCatalog } from './useRoleCatalog';
 
@@ -49,12 +48,12 @@ describe('role catalog Account lifetime', () => {
         const roleId = '11111111-1111-4111-8111-111111111111';
         const role: RoleArtifactV1 = { name: 'Builder', instructions: 'Before save', runsAs: { kind: 'session' },
             workspaceWrites: 'allow', secondOpinion: 'off', enabled: true };
-        let artifact: Artifact = { id: roleId, ownerAccountId: 'alice', access: 'owner', encryptionMode: 'plain',
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
+        await artifacts.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: roleId,
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
             header: encodePlainArtifactStoredContent({ kind: 'role.v1', title: role.name }),
-            body: encodePlainArtifactStoredContent({ body: JSON.stringify(role) }),
-            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-        const staleRead = createDeferred<Response>();
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(role) }) }) });
+        const staleRead = createDeferred<void>();
         let holdRead = false;
         let held = false;
         let lists = 0;
@@ -63,7 +62,8 @@ describe('role catalog Account lifetime', () => {
         const connection = await restoreServerAccountForTest({
             serverUrl: 'https://role-mutation-flight.example.test', accountId: 'alice',
             request: async (url, init) => {
-                const path = new URL(String(url)).pathname;
+                const target = new URL(String(url));
+                const path = target.pathname;
                 if (path === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
                     v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
@@ -82,22 +82,14 @@ describe('role catalog Account lifetime', () => {
                 }
                 if (path === '/v1/artifacts') {
                     lists += 1;
-                    if (holdRead && !held) { held = true; return staleRead.promise; }
-                    return Response.json([artifact]);
-                }
-                if (path === `/v1/artifacts/${roleId}`) {
-                    if (init?.method === 'POST') {
-                        const write = JSON.parse(String(init.body)) as ArtifactUpdateRequest;
-                        if (write.expectedHeaderVersion !== artifact.headerVersion || write.expectedBodyVersion !== artifact.bodyVersion)
-                            return Response.json({ success: false, error: 'version-mismatch', currentHeaderVersion: artifact.headerVersion,
-                                currentBodyVersion: artifact.bodyVersion }, { status: 409 });
-                        const { kind: storedKind, ...content } = write;
-                        artifact = { ...artifact, ...content, ...(storedKind === undefined ? {} : projectArtifactStoredKind(storedKind)), headerVersion: artifact.headerVersion + 1, bodyVersion: (artifact.bodyVersion ?? 0) + 1 };
-                        return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
+                    const response = await artifacts.handle(`${path}${target.search}`, init);
+                    if (holdRead && !held) {
+                        held = true;
+                        await staleRead.promise;
                     }
-                    return Response.json(artifact);
+                    return response!;
                 }
-                return new Response(null, { status: 404 });
+                return await artifacts.handle(`${path}${target.search}`, init) ?? new Response(null, { status: 404 });
             },
         });
         onTestFinished(connection.dispose);
@@ -105,7 +97,6 @@ describe('role catalog Account lifetime', () => {
         const catalog = await renderHook(() => useRoleCatalog());
         const entry = () => catalog.getCurrent().entries.find((item) => item.roleId === roleId)!;
         await vi.waitFor(() => expect(entry()?.role.instructions).toBe('Before save'));
-        const staleArtifact = { ...artifact };
         const initialLists = lists;
         holdRead = true;
         await act(async () => { catalog.getCurrent().refresh(); });
@@ -120,7 +111,7 @@ describe('role catalog Account lifetime', () => {
             invalidateRoleCatalog();
         });
         if (retire) await act(async () => { publishAppliedActiveServerRuntimeAvailability(false); });
-        await act(async () => { staleRead.resolve(Response.json([staleArtifact])); });
+        await act(async () => { staleRead.resolve(); });
         if (retire) {
             expect(catalog.getCurrent().entries).toEqual([]);
             expect(lists).toBe(initialLists + 1);
@@ -131,7 +122,7 @@ describe('role catalog Account lifetime', () => {
             await act(async () => {
                 expect(await roleActions.update(roleId, { ...role, instructions: 'Next edit' }, entry().revision!)).toMatchObject({ ok: true });
             });
-            expect(artifact.bodyVersion).toBe(3);
+            expect(artifacts.read(roleId)?.bodyVersion).toBe(3);
         }
     });
 
@@ -145,19 +136,22 @@ describe('role catalog Account lifetime', () => {
         const initial = storage.getState();
         onTestFinished(() => storage.setState(initial, true));
         let lists = 0;
-        const reopenedList = createDeferred<Response>();
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
+        const reopenedList = createDeferred<void>();
         let holdList = false;
         const connection = await restoreServerAccountForTest({
             serverUrl: 'https://role-lifetime.example.test', accountId: 'alice',
-            request: async (url) => {
-                const path = new URL(String(url)).pathname;
+            request: async (url, init) => {
+                const target = new URL(String(url));
+                const path = target.pathname;
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v1/account/entity-rows/prompt-library') return promptLibraryRowsResponse();
                 if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
                 if (path === '/v1/artifacts') {
                     lists += 1;
-                    return holdList ? reopenedList.promise : Response.json([]);
+                    if (holdList) await reopenedList.promise;
+                    return (await artifacts.handle(`${path}${target.search}`, init))!;
                 }
                 return new Response(null, { status: 404 });
             },
@@ -182,7 +176,7 @@ describe('role catalog Account lifetime', () => {
             holdList = true;
             await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
             expect(catalog.getCurrent().entries).toEqual([]);
-            await act(async () => { reopenedList.resolve(Response.json([])); });
+            await act(async () => { reopenedList.resolve(); });
             await vi.waitFor(() => expect(catalog.getCurrent().entries.length).toBeGreaterThan(0));
             expect(lists).toBeGreaterThan(previousLists);
             return;
@@ -192,7 +186,7 @@ describe('role catalog Account lifetime', () => {
         storage.getState().activateProfileScope({ serverId: connection.home.id, accountId: 'alice' });
         const reopened = await renderHook(() => useRoleCatalog());
         expect(reopened.getCurrent().entries).toEqual([]);
-        await act(async () => { reopenedList.resolve(Response.json([])); });
+        await act(async () => { reopenedList.resolve(); });
         await vi.waitFor(() => expect(reopened.getCurrent().entries.length).toBeGreaterThan(0));
         expect(lists).toBeGreaterThan(previousLists);
     });

@@ -199,7 +199,8 @@ describe('SettingsSidebar', () => {
         // plane — any other colour would read as a band rather than a fade.
         const fade: any = screen.findAllByType('LinearGradient')[0];
         expect(fade).toBeTruthy();
-        expect(fade.props.colors).toContain(lightTheme.colors.surface.inset);
+        // P1 §4.2: Settings navigation and its fades share the shell's canvas plane.
+        expect(fade.props.colors).toContain(lightTheme.colors.background.canvas);
         // A caret centred over a navigation list's last row reads as that row's disclosure.
         expect(collectIconNames(screen)).not.toContain('caret-down');
     });

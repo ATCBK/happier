@@ -32,7 +32,9 @@ it('keeps a plan-none Agent out of the rendered reach legend and names it once i
         const base = home.storage.getState().machines.nl2!;
         const machine = { ...base, metadata: { ...base.metadata!,
             agentInventory: { checkedAt: 2, installedAgentIds: ['codex', 'gemini'] } } };
-        home.storage.setState({ machines: { nl2: machine }, machineListByServerId: { [home.scope.serverId]: [machine] } });
+        home.storage.getState().applyMachines([machine], true, {
+            sourceServerId: home.scope.serverId, sourceAccountId: home.scope.accountId,
+        });
         const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {
             codex: { id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
                 capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true },

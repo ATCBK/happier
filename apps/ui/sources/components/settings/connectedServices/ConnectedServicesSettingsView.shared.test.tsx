@@ -1,14 +1,15 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 
 import { renderScreen, standardCleanup, teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { answerTeamCredentialDiscoveryForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
+import { connectedServicesModuleState, installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
 
-installConnectedServicesCommonModuleMocks();
+// P8 / O-COLUMNS-R3: Team-shared rows belong to the All services overview.
+installConnectedServicesCommonModuleMocks({ searchParams: { view: 'all' } });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
@@ -28,6 +29,7 @@ const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orch
 const { storage } = await import('@/sync/domains/state/storage');
 
 beforeEach(async () => {
+    connectedServicesModuleState.searchParams = { view: 'all' };
     await home.reset();
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
@@ -59,17 +61,24 @@ it.each([
             : { kind: 'connected_service', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' } },
     });
     const resources = sourceKind === 'empty' ? [] : [shared];
-    home.answer(serverId, '/v1/teams/credential-resources/entitled/list', { body: { resources, nextCursor: null } });
+    answerTeamCredentialDiscoveryForTests(home, serverId, input => ({
+        resources: resources.filter(resource => input.teamIds.includes(resource.teamId)), nextCursor: null, failures: [],
+    }));
     const credentials = await TokenStorage.getCredentialsForServerUrl('https://qa.example');
     expect(credentials).not.toBeNull();
-    const screen = await renderScreen(<InjectedAuthProvider credentials={{ token: credentials!.token }}>
+    const { DestinationInstanceContext } = await import('@/components/appShell/workspace/destinationInstanceContext');
+    const { router } = await import('expo-router');
+    const screen = await renderScreen(<DestinationInstanceContext.Provider value={{ tabId: 'services-overview',
+        ref: { kind: 'settings', params: { view: 'all' } }, pathname: '/settings/connected-services',
+        focused: true, visible: true, navigation: router,
+    }}><InjectedAuthProvider credentials={{ token: credentials!.token }}>
         <ConnectedServicesSettingsView />
-    </InjectedAuthProvider>);
+    </InjectedAuthProvider></DestinationInstanceContext.Provider>);
     await waitForHomeGovernance(() => expect(getTeamCredentialResourceCatalogSnapshot(
         { serverId, accountId: 'recipient' }, { serverId, teamId: 'team-1' },
     )?.data).toEqual(resources));
     await act(async () => {});
-    expect(home.requestsFor('/v1/teams/credential-resources/entitled/list')).not.toHaveLength(0);
+    expect(home.requestsFor(TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1)).not.toHaveLength(0);
     if (sourceKind === 'connected_service') {
         expect(screen.findByTestId('team-credential-catalog-resource:team-1:shared-claude')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Team Claude');

@@ -113,8 +113,8 @@ describe('Set up from a preset (D53)', () => {
     const serverId = resolveServerProfileScopeIdForIdentifier(home);
     phase = 'activate approval Account policy';
     await harness.requireUiApproval(home, 'machines.environment.apply');
-    harness.answer(home, '/v1/machines', {
-      body: [createPlainMachineRowFixture({ id: 'devbox', accountId: 'owner' })],
+    harness.answer(home, '/v1/machines/devbox', {
+      body: { machine: createPlainMachineRowFixture({ id: 'devbox', accountId: 'owner' }) },
     });
     harness.answer(home, '/v1/machines/presets/list', {
       body: {
@@ -198,6 +198,7 @@ describe('Set up from a preset (D53)', () => {
         } });
         const execution = await nativeExecutor.execute('machines.environment.apply', envelope.input, {
           surface: 'ui', authority: 'present_user', serverId: home, serverIdentityId: 'srv_build', runtimeAccountId: 'owner',
+          actionsSettings: (await account.readSettings()).actionsSettingsV1,
           actionRequestId: envelope.requestId, externalActionTarget: envelope.target,
           externalActionExecutionAuthorization: authorization,
           signExternalActionApprovalInput: ({ actionId, input, target, authorization }) => signExternalActionApprovalInputV1({
@@ -213,9 +214,10 @@ describe('Set up from a preset (D53)', () => {
     const { Modal } = await import('@/modal');
     const { ActionOperationDetailModal } = await import('@/components/inbox/actionOperations/ActionOperationDetailModal');
     const onClose = vi.fn();
-    // The Action front door first resolves the target machine through the Home; choosing never gets that far.
+    // The Action front door resolves exact target rows through the real batch
+    // transport. A list response cannot stand in for that authority.
     const frontDoorReads = () =>
-      harness.requests.filter((request) => request.path === '/v1/machines');
+      harness.requests.filter((request) => request.path === '/v1/machines/read-batch');
     phase = 'mount apply sheet';
     screen = await renderScreen(
       <MachineEnvironmentApplySheet
@@ -317,7 +319,7 @@ describe('Set up from a preset (D53)', () => {
       name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true,
     });
     const serverId = resolveServerProfileScopeIdForIdentifier(home);
-    harness.answer(home, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'devbox', accountId: 'owner' })] });
+    harness.answer(home, '/v1/machines/devbox', { body: { machine: createPlainMachineRowFixture({ id: 'devbox', accountId: 'owner' }) } });
     harness.answer(home, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] } });
     const { MachineEnvironmentApplySheet } = await import('./MachineEnvironmentApplySheet');
     const onClose = vi.fn();
