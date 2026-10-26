@@ -197,7 +197,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Stage, commit, push, branch and open pull requests without leaving the app. Start a session in its own Git worktree from any local or remote branch, or in the folder you are already in. <a href="https://docs.happier.dev/code/git">Git</a> · <a href="https://docs.happier.dev/sessions/new-session-shortcuts">New session options</a></p>
 
-<p align="center"><img src=".github/screenshots/git.png" width="640" alt="Git panel with changed files and a diff for review" /></p>
+<p align="center"><img src=".github/screenshots/git.png" width="600" alt="Review diff with stage buttons next to the Git panel with changed files and a commit message field"></p>
 
 <br/>
 
