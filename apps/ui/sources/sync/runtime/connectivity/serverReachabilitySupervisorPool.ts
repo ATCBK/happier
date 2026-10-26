@@ -709,6 +709,10 @@ export async function startServerReachabilitySupervisor(params: Readonly<{
             await entry.supervisor.stop();
             throwIfAborted(params.signal);
             await entry.supervisor.start();
+        } else if (entry.state.phase === 'connecting') {
+            // A start publishes connecting before its readiness probe, so a concurrent owner
+            // joins that in-flight start; during a retry probe start() returns at once.
+            await entry.supervisor.start();
         }
     })();
     try {
