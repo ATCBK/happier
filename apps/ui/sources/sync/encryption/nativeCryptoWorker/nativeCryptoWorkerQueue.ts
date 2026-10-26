@@ -11,6 +11,7 @@ import type { CryptoWorkerScope, CryptoWorkerWorkClass, NativeCryptoWorkerOperat
 type QueueEntry<T, R> = {
     item: T;
     signal?: AbortSignal;
+    shouldContinue?: () => boolean;
     enqueuedAtMs: number;
     resolve: (value: R) => void;
     reject: (reason: unknown) => void;
@@ -24,6 +25,8 @@ export type NativeCryptoWorkerBatchDispatchContext = Readonly<{
 
 export type NativeCryptoWorkerBatchQueueEnqueueOptions = Readonly<{
     signal?: AbortSignal;
+    /** The borrower's own currentness; a shared queue checks it per entry, never per batch. */
+    shouldContinue?: () => boolean;
 }>;
 
 export type NativeCryptoWorkerBatchQueueOptions<T, R> = Readonly<{
@@ -52,6 +55,7 @@ export type RunNativeCryptoWorkerQueuedBatchOptions<T, R> = Readonly<{
     telemetry?: SyncPerformanceTelemetry;
     telemetryEnabled?: boolean;
     signal?: AbortSignal;
+    shouldContinue?: () => boolean;
     dispatchKind?: NativeCryptoWorkerBatchDispatchKind;
     dispatch: (items: readonly T[], context: NativeCryptoWorkerBatchDispatchContext) => Promise<readonly R[]>;
 }>;
@@ -310,6 +314,10 @@ function isSignalAborted(signal: AbortSignal | undefined): boolean {
     return signal?.aborted === true;
 }
 
+function isEntryCancelled(entry: Readonly<{ signal?: AbortSignal; shouldContinue?: () => boolean }>): boolean {
+    return isSignalAborted(entry.signal) || entry.shouldContinue?.() === false;
+}
+
 function getSharedSignal<T, R>(batch: readonly QueueEntry<T, R>[]): AbortSignal | undefined {
     const signal = batch[0]?.signal;
     return signal && batch.every((entry) => entry.signal === signal) ? signal : undefined;
@@ -359,7 +367,7 @@ export function createNativeCryptoWorkerBatchQueue<T, R>(
                 updateLifecycleStats();
                 const activeBatch: Array<QueueEntry<T, R>> = [];
                 for (const entry of batch) {
-                    if (isSignalAborted(entry.signal)) {
+                    if (isEntryCancelled(entry)) {
                         rejectForCancellation(entry);
                     } else {
                         activeBatch.push(entry);
@@ -398,7 +406,7 @@ export function createNativeCryptoWorkerBatchQueue<T, R>(
                     }
                     for (let index = 0; index < activeBatch.length; index += 1) {
                         const entry = activeBatch[index]!;
-                        if (isSignalAborted(entry.signal)) {
+                        if (isEntryCancelled(entry)) {
                             rejectForCancellation(entry);
                         } else {
                             entry.resolve(results[index]!);
@@ -441,7 +449,7 @@ export function createNativeCryptoWorkerBatchQueue<T, R>(
     return {
         enqueue(item: T, enqueueOptions: NativeCryptoWorkerBatchQueueEnqueueOptions = {}): Promise<R> {
             return new Promise<R>((resolve, reject) => {
-                if (isSignalAborted(enqueueOptions.signal)) {
+                if (isEntryCancelled(enqueueOptions)) {
                     reject(new NativeCryptoWorkerQueueCancelledError({
                         operation: options.operation,
                     }));
@@ -468,6 +476,7 @@ export function createNativeCryptoWorkerBatchQueue<T, R>(
                 const entry: QueueEntry<T, R> = {
                     item,
                     signal,
+                    shouldContinue: enqueueOptions.shouldContinue,
                     enqueuedAtMs: now(),
                     resolve: (value) => { detachAbort?.(); resolve(value); },
                     reject: (reason) => { detachAbort?.(); reject(reason); },
@@ -547,7 +556,7 @@ export async function runNativeCryptoWorkerQueuedBatch<T, R>(
     const enqueueWindowSize = Math.max(1, Math.trunc(options.maxBatchSize)) * 2;
     for (let index = 0; index < options.items.length; index += enqueueWindowSize) {
         const window = options.items.slice(index, index + enqueueWindowSize);
-        results.push(...await Promise.all(window.map((item) => queue.enqueue(item, { signal: options.signal }))));
+        results.push(...await Promise.all(window.map((item) => queue.enqueue(item, { signal: options.signal, shouldContinue: options.shouldContinue }))));
     }
     return results;
 }

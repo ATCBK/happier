@@ -43,6 +43,7 @@ import {
 import {
     markNativeCryptoWorkerQueueActive,
     markNativeCryptoWorkerQueueQuiescent,
+    NativeCryptoWorkerQueueCancelledError,
     runNativeCryptoWorkerQueuedBatch,
 } from './nativeCryptoWorker/nativeCryptoWorkerQueue';
 import { getDefaultNativeCryptoWorkerRouting } from './nativeCryptoWorker/nativeCryptoWorkerRoutingConfig';
@@ -986,6 +987,8 @@ export class Encryption {
                                 telemetry: syncPerformanceTelemetry,
                                 telemetryEnabled: routing.telemetryEnabled,
                                 signal: dispatchSignal,
+                                // This borrower's currentness cancels only its own queued entries.
+                                shouldContinue: scopeInput.shouldContinue,
                                 workClass: scopeInput.workClass,
                                 dispatch: async (queuedItems, context) => {
                                     // A shared queue outlives its first borrower. The queue
@@ -1008,6 +1011,13 @@ export class Encryption {
                             });
                             bytesOut = estimateCryptoWorkerBatchBridgeBytes(items.filter((item): item is string => typeof item === 'string')).totalBridgeBytes;
                             return items;
+                        } catch (error) {
+                            // A borrower that stopped while queued is a stopped read, not a
+                            // native failure that may degrade routing or fall back to JS.
+                            if (error instanceof NativeCryptoWorkerQueueCancelledError && refreshCancellation()) {
+                                return nativeItems.map(() => null);
+                            }
+                            throw error;
                         } finally {
                             if (routing.telemetryEnabled && syncPerformanceTelemetry.isEnabled()) {
                                 recordNativeCryptoWorkerBridgeSerialization(syncPerformanceTelemetry, {
