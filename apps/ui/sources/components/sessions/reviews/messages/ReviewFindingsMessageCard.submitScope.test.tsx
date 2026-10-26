@@ -58,6 +58,8 @@ const RUN_ID = 'review-submit-run';
 const initialState = storage.getState();
 let ReviewFindingsMessageCard!: typeof import('./ReviewFindingsMessageCard').ReviewFindingsMessageCard;
 let disposeHomes: (() => Promise<void>) | undefined;
+/** The comment the Home serves; a test can advance its revision before the final read. */
+let servedComment: ReviewCommentV1;
 
 const comment: ReviewCommentV1 = {
     ...buildReviewCommentFixture({ id: 'review-submit-comment', sessionId: SESSION_ID, runId: RUN_ID, state: 'open', serverRevision: 7 }),
@@ -81,6 +83,7 @@ beforeAll(async () => {
 }, 600_000);
 
 beforeEach(async () => {
+    servedComment = comment;
     storage.setState(initialState, true);
     await clearBrowserRecords();
     await prepareSessionDraftPersistenceStorage();
@@ -111,7 +114,7 @@ async function setupHomes(focusReview: boolean, beforeReviewResponse?: (read: nu
             if (request.path === '/v1/reviews/comments' && request.method === 'GET') {
                 return (async () => {
                     await beforeReviewResponse?.(++reviewReads);
-                    return Response.json({ items: [storePlainReviewCommentFixture(comment)], cursor: null });
+                    return Response.json({ items: [storePlainReviewCommentFixture(servedComment)], cursor: null });
                 })();
             }
             if (request.path.endsWith('/pending') && request.method === 'POST') {
@@ -180,6 +183,9 @@ describe('ReviewFindingsMessageCard final submit Account custody', () => {
             for (const observer of [...credentialObservers]) observer(event);
         });
         const submit = vi.spyOn(sync, 'submitMessage'); // Observation only: executes real submit if called.
+        // The comment owner publishes only a real change; the final read returns a newer revision
+        // with the same accepted decision, so its publication marks the admission gap.
+        servedComment = { ...comment, serverRevision: comment.serverRevision + 1 };
         try {
             await act(async () => { await screen.pressByTestIdAsync('review-findings-publish-accepted'); });
             await flushHookEffects({ cycles: 12, turns: 4 });

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
-import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
+import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
@@ -19,6 +19,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Socket } from 'socket.io-client';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -185,11 +186,18 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                     const sessionResponse = readSession(path);
                     if (sessionResponse) return sessionResponse;
                 }
+                const readMachine = (machineId: string) => {
+                    const machine = storage.getState().machines[machineId];
+                    return machine ? createPlainMachineRowFixture({ id: machineId, accountId: realm.accountId, machine }) : null;
+                };
+                if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+                    return createMachineReadBatchResponseFixture(init.body, readMachine);
+                }
                 if ((init?.method ?? 'GET') === 'GET' && path.startsWith('/v1/machines/')) {
                     const machineId = decodeURIComponent(path.slice('/v1/machines/'.length));
-                    const machine = storage.getState().machines[machineId];
+                    const machine = readMachine(machineId);
                     if (!machine) return new Response('{}', { status: 404 });
-                    return json({ machine: { id: machineId, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+                    return json({ machine });
                 }
                 if ((init?.method ?? 'GET') === 'GET' && path === `/v2/sessions/${sessionId}/pending`) return json({ pending: [] });
                 if ((init?.method ?? 'GET') === 'GET' && path === `/v1/sessions/${sessionId}/messages`) return json({ messages: [], hasMore: false, nextBeforeSeq: null });

@@ -13,6 +13,7 @@ import {
 
 import { installLocalStorageMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // Device storage and network are the only substituted owners; workflow, crypto
 // projection, Session hydration, scope lifetime and repository logic remain real.
@@ -39,6 +40,8 @@ vi.mock('@/sync/runtime/getSyncSingleton', () => ({ getSyncSingleton: () => {
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: {
     onMessage: vi.fn(), onError: vi.fn(), onReconnected: vi.fn(),
     onStatusChange: vi.fn(() => () => {}), onConnectionStateChange: vi.fn(() => () => {}),
+    // A disconnected Account socket carries no Account encryption observation.
+    getAccountEncryptionObservationBinding: () => null,
     connect: vi.fn(), disconnect: vi.fn(), initialize: vi.fn(), invalidateRequests: vi.fn(), request: (path: string, init?: RequestInit) => network(`https://workflow.example${path}`, init),
 } }));
 let localStorage: LocalStorageMockHandle;
@@ -73,9 +76,11 @@ beforeEach(async () => {
     fetchWorkflowRunSnapshot.mockReset();
     fetchWorkflowRunSnapshot.mockImplementation(async ({ runId }) => snapshot(runId));
     network.mockReset();
-    network.mockImplementation(async (url) => {
+    network.mockImplementation(async (url, init) => {
         const parsed = new URL(url);
         if (parsed.pathname === '/v1/auth/ping') return json({ ok: true });
+        // Session reads arrive on the batch wire; answer each component from the per-Session facts below.
+        if (parsed.pathname === '/v2/sessions/read-batch') return createSessionReadBatchFetchBoundary(async (input, init) => network(String(input), init))(url, init);
         if (parsed.pathname === '/v1/features') return json(FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, board: { enabled: true } } }, capabilities: { session: { systemRecords: { protocolVersions: [1] } } } }));
         if (parsed.pathname === '/v2/sessions/sess_1') return json({ session: {
             id: 'sess_1', createdAt: 1, updatedAt: 2, seq: 1, active: true, activeAt: 2,

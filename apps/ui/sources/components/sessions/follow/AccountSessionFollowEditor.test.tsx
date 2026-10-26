@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { GetSessionFollowResponse, SetSessionFollowRequest } from '@happier-dev/protocol';
+import { normalizeAccountFollowNotificationChoiceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
@@ -72,7 +73,8 @@ describe('Account Follow editor', () => {
                 }
                 const legacy = legacyEditorPreferences(preferences);
                 writes.push(`set:${preferences.notificationLevel}`);
-                stored = { sessionId: target.sessionId, following: true, ...preferences, ...legacy };
+                // The Home persists a scalar edit as its canonical policy and projects both.
+                stored = { sessionId: target.sessionId, following: true, ...preferences, ...legacy, policy: normalizeAccountFollowNotificationChoiceV1(legacy) };
                 return { kind: 'ok', value: {
                     changed: true,
                     follow: stored,
@@ -119,7 +121,7 @@ describe('Account Follow editor', () => {
         const address = { serverId: 'home-a', sessionId: 'session-a' };
         const transport: AccountSessionFollowTransport = {
             get: async () => ({ kind: 'ok', value: {
-                follow: { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false },
+                follow: { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
@@ -127,7 +129,7 @@ describe('Account Follow editor', () => {
             set: async (target, preferences) => ({ kind: 'ok', value: {
                 changed: true,
                 // The server's modern writer retires the legacy bit; policy is authoritative.
-                follow: { sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, ...(preferences.policy ? { policy: preferences.policy } : {}) },
+                follow: { sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, policy: preferences.policy ?? { preset: 'important' } },
                 voiceInitialSnapshotPending: true,
             } }),
             remove: async () => ({ kind: 'ok', value: { changed: true } }),
@@ -164,7 +166,7 @@ describe('Account Follow editor', () => {
                 writes.push(preferences);
                 once = preferences.once ?? undefined;
                 return { kind: 'ok', value: { changed: true, voiceInitialSnapshotPending: false, follow: {
-                    sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false,
+                    sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' },
                     ...(once ? { once } : {}),
                 } as never } };
             },
@@ -224,7 +226,7 @@ describe('Account Follow editor', () => {
                 capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false } }),
             set: async (_target, preferences) => {
                 writes.push(preferences);
-                follow = { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false };
+                follow = { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } };
                 return { kind: 'ok', value: { changed: true, follow, voiceInitialSnapshotPending: false } };
             },
             remove: async () => ({ kind: 'ok', value: { changed: false } }),
@@ -267,7 +269,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true, policy: { preset: 'important', voice: true } },
                     isSessionOwner: false,
                     capabilities: { manageFollow: true },
                     voiceInitialSnapshotPending: false,
@@ -313,7 +315,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } },
                     isSessionOwner: false,
                     capabilities: { manageFollow: false },
                     voiceInitialSnapshotPending: false,
@@ -330,7 +332,7 @@ describe('Account Follow editor', () => {
     it('renders the readiness selected by the canonical Voice runtime projection', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: true },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: true, policy: { preset: 'important', voice: true } },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
@@ -350,7 +352,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true, policy: { preset: 'important', voice: true } },
                     isSessionOwner: false,
                     capabilities: { manageFollow: true },
                     voiceInitialSnapshotPending: false,
@@ -368,7 +370,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true, policy: { preset: 'important', voice: true } },
                     isSessionOwner: false,
                     capabilities: { manageFollow: true },
                     voiceInitialSnapshotPending: false,
@@ -392,7 +394,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true, policy: { preset: 'important', voice: true } },
                     isSessionOwner: false,
                     capabilities: { manageFollow: true },
                     voiceInitialSnapshotPending: false,
@@ -410,7 +412,7 @@ describe('Account Follow editor', () => {
     it('explains that a followed external Session with Background sync off may only update while attached', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' } },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
@@ -445,7 +447,7 @@ describe('Account Follow editor', () => {
     it('chooses how much you hear with the one shared Follow policy editor, not the old level form (C1 §4.3, lab P2)', async () => {
         const onEditPolicy = vi.fn();
         const state = {
-            projection: { follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false }, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
+            projection: { follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } }, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
             draft: null, policyDraft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
         } as unknown as AccountSessionFollowEditorSnapshot;
         const screen = await renderSettingsView(
@@ -471,7 +473,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 projection: {
-                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false },
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } },
                     isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
                 },
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
@@ -495,7 +497,7 @@ describe('Account Follow editor', () => {
     it('claims no one else follows it while the census is unknown or empty', async () => {
         const state = {
             projection: {
-                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false },
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false, policy: { preset: 'important' } },
                 isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
             },
             draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,

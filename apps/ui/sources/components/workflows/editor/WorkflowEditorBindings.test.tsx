@@ -229,11 +229,15 @@ describe('workflow editor declared bindings', () => {
         const laterCursor = encodeArtifactListCursor({ artifactId: lastRow.id, updatedAt: lastRow.updatedAt });
         home.answer(serverId, '/v1/artifacts', { select: () => {
             const request = home.requests.at(-1)!;
-            const cursor = new URL(request.path, request.serverUrl).searchParams.get('cursor');
+            const params = new URL(request.path, request.serverUrl).searchParams;
+            const cursor = params.get('cursor');
             cursors.push(cursor);
-            if (getStorage().getState().profileScope?.accountId === 'account-b') return { body: [], respondAfter: successor.promise };
-            if (!cursor) return { body: firstPage };
-            return failing ? { status: 403, body: { error: 'run_access_denied' } } : { body: [] };
+            // A kind-selected list answers the filtered wire shape; an unfiltered list answers rows.
+            const filtered = params.has('kinds') || params.has('kind') || params.has('unclassified');
+            const page = (items: readonly Artifact[]) => filtered ? { items, hasUnclassified: false } : items;
+            if (getStorage().getState().profileScope?.accountId === 'account-b') return { body: page([]), respondAfter: successor.promise };
+            if (!cursor) return { body: page(firstPage) };
+            return failing ? { status: 403, body: { error: 'run_access_denied' } } : { body: page([]) };
         } });
         const block = { kind: 'workflow' as const, id: 'later', workflowRef: 'plugin:example.tools/later-child',
             input: { oldField: { kind: 'literal' as const, value: 'Keep me' } } };
