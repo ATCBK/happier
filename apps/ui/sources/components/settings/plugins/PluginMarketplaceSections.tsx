@@ -447,7 +447,9 @@ function useInstalledPluginAnatomy(projectionByPluginId: PluginProjectionFactsBy
         reason: (row) => (row.statusLabel
             ? <PluginCardStatus label={row.statusLabel} tone={row.statusTone} />
             : null),
-        action: (row) => row.control,
+        // A card's control sits in its footer; a list row's is its row action (`useInstalledPluginRowActions`),
+        // which the Collection draws in every list geometry, so the list does not draw it a second time.
+        ...(presentation === 'grid' ? { action: (row: InstalledPluginRow) => row.control } : {}),
         accessibilityLabel: (row) => buildActionRowAccessibilityLabel([row.entry.title, t('common.details')]) ?? row.entry.title,
         testID: (row) => `settings.plugins.marketplace.installed.${row.entry.pluginId}`,
         columnTitles: { title: t('settingsPlugins.surfaces.navigationTitle') },
@@ -949,7 +951,9 @@ export function DiscoverStatusSummary(props: Readonly<{
     // With no retained rows, the source notices own the cause and recovery.
     const sourceFailureWithoutResults = issues.length > 0 && props.entryCount === 0
         && props.nonInstallable.length === 0 && !props.loading;
-    const noMatch = searched && !props.loading && props.error === null && !props.noTarget
+    // Browse reads the Account's sources without a Machine, so an answered query that matched nothing is a
+    // no-match whether or not a Machine is chosen yet (`searched` is the query the results answer).
+    const noMatch = searched && !props.loading && props.error === null
         && props.entryCount === 0 && props.nonInstallable.length === 0 && !sourceFailureWithoutResults;
     const message = props.noTarget && props.entryCount === 0 && !props.loading
         ? t('settingsPlugins.surfaces.chooseMachineBrowse')
@@ -1150,7 +1154,7 @@ export function DiscoverListingsSection(props: Readonly<{
         openKey: props.selectedListing ? `${props.selectedListing.sourceId}:${props.selectedListing.pluginId}` : null,
         onOpenChange,
     });
-    const anatomy = useDiscoverListingAnatomy(props);
+    const anatomy = useDiscoverListingAnatomy(props, presentation);
     const controls = React.useMemo(() => new Map(items.map((item) => [
         readDiscoverListingKey(item),
         discoverListingControl(item.entry, props),
@@ -1273,7 +1277,7 @@ function discoverListingControl(entry: PluginMarketplaceCatalogEntry, props: Dis
 /** One anatomy for the grid's cards and the list's rows. A withdrawal outranks "Installed". */
 function useDiscoverListingAnatomy(props: DiscoverListingActionInputs & Readonly<{
     projectionByPluginId?: PluginProjectionFactsById;
-}>): CollectionAnatomy<DiscoverListingItem> {
+}>, presentation: PluginsCollectionPresentation): CollectionAnatomy<DiscoverListingItem> {
     const host = resolvePluginsSurfaceHost(usePathname());
     const { installedPluginById, projectionByPluginId } = props;
     return React.useMemo(() => ({
@@ -1305,12 +1309,14 @@ function useDiscoverListingAnatomy(props: DiscoverListingActionInputs & Readonly
                 tone={entry.warning === 'withdrawn' ? 'warning' : 'quiet'}
             />
         )),
-        action: (item) => discoverListingControl(item.entry, props),
+        // A card's control sits in its footer; a list row's is its row action (`useDiscoverListingRowActions`),
+        // which the Collection draws in every list geometry, so the list does not draw it a second time.
+        ...(presentation === 'grid' ? { action: (item: DiscoverListingItem) => discoverListingControl(item.entry, props) } : {}),
         accessibilityLabel: ({ entry }) => buildActionRowAccessibilityLabel([entry.title, t('common.details'), entry.sourceTitle]) ?? entry.title,
         testID: ({ entry }) => `settings.plugins.marketplace.entry.${entry.sourceId}.${entry.id}`,
         columnTitles: { title: t('settingsPlugins.surfaces.navigationTitle') },
     // `props` carries the action inputs `discoverListingControl` reads; its identity is the render's.
-    }), [host, installedPluginById, projectionByPluginId, props]);
+    }), [host, installedPluginById, presentation, projectionByPluginId, props]);
 }
 
 const sectionStylesheet = StyleSheet.create((theme) => ({
