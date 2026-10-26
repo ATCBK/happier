@@ -566,6 +566,9 @@ const it: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Chiedi qualsiasi cosa senza interrompere questa sessione. Gira su ${machine} accanto; non torna nulla finché non lo invii.`,
     },
+    placeholders: {
+        review: 'Su cosa devono concentrarsi i revisori?',
+    },
     chips: {
         engineTitle: 'Chi risponde',
         addReviewer: 'Aggiungi revisore',

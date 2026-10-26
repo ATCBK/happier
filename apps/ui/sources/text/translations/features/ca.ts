@@ -566,6 +566,9 @@ const ca: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Pregunta el que vulguis sense interrompre aquesta sessió. S’executa a ${machine} al seu costat; no hi torna res si no ho envies.`,
     },
+    placeholders: {
+        review: 'En què s’han de centrar els revisors?',
+    },
     chips: {
         engineTitle: 'Qui respon',
         addReviewer: 'Afegeix un revisor',

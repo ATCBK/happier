@@ -560,6 +560,9 @@ const de: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Frag alles, ohne diese Sitzung zu unterbrechen. Es läuft auf ${machine} daneben; nichts geht zurück, solange du es nicht sendest.`,
     },
+    placeholders: {
+        review: 'Worauf sollen sich die Reviewer konzentrieren?',
+    },
     chips: {
         engineTitle: 'Wer antwortet',
         addReviewer: 'Reviewer hinzufügen',

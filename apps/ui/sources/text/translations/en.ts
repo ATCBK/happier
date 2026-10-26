@@ -9995,6 +9995,7 @@ const enSession = {
       blocked: 'Blocked',
       delivering: 'Delivering',
       queuedInClaude: 'Queued in Claude',
+      nextTurn: 'Waiting for the next turn',
     },
     queuedReasons: {
       waitingForForegroundTurn: 'Waiting for the current turn',

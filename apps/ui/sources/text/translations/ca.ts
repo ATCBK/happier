@@ -7713,6 +7713,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                     blocked: 'Bloquejat',
                     delivering: 'S’està entregant',
                     queuedInClaude: 'A la cua de Claude',
+                    nextTurn: 'Esperant el pròxim torn',
                 },
                 queuedReasons: {
                     waitingForForegroundTurn: 'Esperant que acabi el torn actual',

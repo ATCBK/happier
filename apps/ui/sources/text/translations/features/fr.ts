@@ -566,6 +566,9 @@ const fr: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Demande ce que tu veux sans interrompre cette session. Elle tourne sur ${machine} à côté ; rien n’y revient sans que tu l’envoies.`,
     },
+    placeholders: {
+        review: 'Sur quoi les relecteurs doivent-ils se concentrer ?',
+    },
     chips: {
         engineTitle: 'Qui répond',
         addReviewer: 'Ajouter un relecteur',

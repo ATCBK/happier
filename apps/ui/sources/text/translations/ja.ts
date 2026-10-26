@@ -8705,6 +8705,7 @@ localTailscale: {
           blocked: 'ブロック済み',
           delivering: '配信中',
           queuedInClaude: 'Claude でキュー待ち',
+          nextTurn: '次のターンを待機中',
         },
         queuedReasons: {
           waitingForForegroundTurn: '現在のターンの完了を待っています',

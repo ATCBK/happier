@@ -8239,6 +8239,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
             blocked: 'Bloqué',
             delivering: 'Livraison en cours',
             queuedInClaude: 'En file d’attente dans Claude',
+            nextTurn: 'En attente du prochain tour',
           },
           queuedReasons: {
             waitingForForegroundTurn: 'En attente du tour en cours',

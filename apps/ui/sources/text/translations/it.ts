@@ -8623,6 +8623,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
             blocked: 'Bloccato',
             delivering: 'Consegna in corso',
             queuedInClaude: 'In coda in Claude',
+            nextTurn: 'In attesa del prossimo turno',
           },
           queuedReasons: {
             waitingForForegroundTurn: 'In attesa del turno corrente',

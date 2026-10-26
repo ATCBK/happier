@@ -68,6 +68,8 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   /** An iPhone's band (app-surfaces `.phone .am-phn`), the native navigation bar's height. */
   paneHeaderUnderNativeChromeHeightPx: 44,
   controlHeightPx: 32,
+  /** The dense control inside a row, card or detail header (settings lab `.btn.sm`): a small button draws this tall. */
+  smallControlHeightPx: 28,
   /**
    * A Collection toolbar's row: the inline find capsule (the search field that leads it) is its tallest control,
    * and the host's loading identity for a toolbar page holds the same height so the title does not move.

@@ -566,6 +566,9 @@ const zhHans: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `随便问，不会打断这个会话。它在 ${machine} 上并行运行；除非你发送，否则不会传回任何内容。`,
     },
+    placeholders: {
+        review: '审查者应重点关注什么？',
+    },
     chips: {
         engineTitle: '由谁回答',
         addReviewer: '添加审查者',

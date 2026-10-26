@@ -8780,6 +8780,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
             blocked: 'Заблокировано',
             delivering: 'Доставляется',
             queuedInClaude: 'В очереди в Claude',
+            nextTurn: 'Ждёт следующего хода',
           },
           queuedReasons: {
             waitingForForegroundTurn: 'Ожидание завершения текущего хода',

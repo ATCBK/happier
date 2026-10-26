@@ -566,6 +566,9 @@ const ru: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Спросите что угодно, не прерывая эту сессию. Разговор идёт на ${machine} рядом; ничего не вернётся, пока вы это не отправите.`,
     },
+    placeholders: {
+        review: 'На чём рецензентам стоит сосредоточиться?',
+    },
     chips: {
         engineTitle: 'Кто отвечает',
         addReviewer: 'Добавить рецензента',

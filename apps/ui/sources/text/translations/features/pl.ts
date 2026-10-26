@@ -566,6 +566,9 @@ const pl: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Zapytaj o cokolwiek bez przerywania tej sesji. Działa na ${machine} obok; nic nie wraca, dopóki tego nie wyślesz.`,
     },
+    placeholders: {
+        review: 'Na czym mają się skupić recenzenci?',
+    },
     chips: {
         engineTitle: 'Kto odpowiada',
         addReviewer: 'Dodaj recenzenta',

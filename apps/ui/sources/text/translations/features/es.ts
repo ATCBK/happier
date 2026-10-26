@@ -566,6 +566,9 @@ const es: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `Pregunta lo que quieras sin interrumpir esta sesión. Se ejecuta en ${machine} a su lado; no vuelve nada a menos que lo envíes.`,
     },
+    placeholders: {
+        review: '¿En qué deben centrarse los revisores?',
+    },
     chips: {
         engineTitle: 'Quién responde',
         addReviewer: 'Añadir revisor',

@@ -566,6 +566,9 @@ const zhHant: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `隨便問，不會打斷這個工作階段。它在 ${machine} 上並行執行；除非你傳送，否則不會傳回任何內容。`,
     },
+    placeholders: {
+        review: '審查者應重點關注什麼？',
+    },
     chips: {
         engineTitle: '由誰回答',
         addReviewer: '新增審查者',

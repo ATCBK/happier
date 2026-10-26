@@ -8399,6 +8399,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
             blocked: 'Bloqueado',
             delivering: 'Entregando',
             queuedInClaude: 'En cola en Claude',
+            nextTurn: 'Esperando el próximo turno',
           },
           queuedReasons: {
             waitingForForegroundTurn: 'Esperando a que termine el turno actual',

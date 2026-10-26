@@ -8236,6 +8236,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
           blocked: 'Zablokowano',
           delivering: 'Dostarczanie',
           queuedInClaude: 'W kolejce w Claude',
+          nextTurn: 'Czeka na następną turę',
         },
         queuedReasons: {
           waitingForForegroundTurn: 'Oczekiwanie na zakończenie bieżącej tury',

@@ -566,6 +566,9 @@ const ja: typeof en = {
     descriptions: {
         conversation: ({ machine }) => `このセッションを止めずに何でも聞けます。${machine} で横に並んで動き、あなたが送らない限り何も戻りません。`,
     },
+    placeholders: {
+        review: 'レビュアーに重点的に見てほしい点は？',
+    },
     chips: {
         engineTitle: '応答するエージェント',
         addReviewer: 'レビュアーを追加',

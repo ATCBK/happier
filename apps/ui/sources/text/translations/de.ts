@@ -8391,6 +8391,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
 	                blocked: 'Blockiert',
 	                delivering: 'Wird zugestellt',
 	                queuedInClaude: 'In Claude eingereiht',
+	                nextTurn: 'Wartet auf den nächsten Zug',
 	            },
 	            queuedReasons: {
 	                waitingForForegroundTurn: 'Wartet auf den aktuellen Turn',

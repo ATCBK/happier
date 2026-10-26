@@ -8507,6 +8507,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
           blocked: 'Bloqueado',
           delivering: 'Entregando',
           queuedInClaude: 'Na fila no Claude',
+          nextTurn: 'Aguardando o próximo turno',
         },
         queuedReasons: {
           waitingForForegroundTurn: 'Aguardando o turno atual terminar',

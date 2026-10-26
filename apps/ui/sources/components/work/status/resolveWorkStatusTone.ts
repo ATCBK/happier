@@ -46,7 +46,7 @@ export const WORK_STATUS_PILL_VARIANT = HAPPIER_WORK_STATUS_SEMANTIC_TONE satisf
  * outcome distinguishes failure from a current request. A workflow state with no card word of its
  * own keeps the run owner's word.
  */
-export function describeWorkerUpdateState(update: WorkerUpdateV1): string {
+export function describeWorkerUpdateState(update: Pick<WorkerUpdateV1, 'workerKind' | 'ownerState' | 'wake'>): string {
     const event = classifyWorkerUpdateEventV1(update);
     if (event === 'needs_you') return t('sessionWork.workerUpdate.state.needsYou');
     if (event === 'stalled') return t('sessionWork.workerUpdate.state.stalled');

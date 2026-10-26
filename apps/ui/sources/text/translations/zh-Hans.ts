@@ -8081,6 +8081,7 @@ export const zhHans: TranslationStructure = {
           blocked: '已阻止',
           delivering: '正在递送',
           queuedInClaude: '已在 Claude 中排队',
+          nextTurn: '等待下一轮',
         },
         queuedReasons: {
           waitingForForegroundTurn: '正在等待当前轮次结束',

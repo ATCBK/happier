@@ -6889,6 +6889,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                     blocked: '已封鎖',
                     delivering: '正在傳送',
                     queuedInClaude: '已在 Claude 中排隊',
+                    nextTurn: '等待下一輪',
                 },
                 queuedReasons: {
                     waitingForForegroundTurn: '正在等待目前回合結束',
