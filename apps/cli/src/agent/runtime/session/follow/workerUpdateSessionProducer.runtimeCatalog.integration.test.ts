@@ -338,7 +338,7 @@ describe('session WorkerUpdate producer through Follow', () => {
     // typed lifecycle alone carries this needs-you fact to the manager.
     const waiting = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
     expect(waiting?.workerUpdates).toEqual([expect.objectContaining({
-      workerId, ownerState: 'needs_input', wake: 'needs_you',
+      workerId, ownerState: 'needs_input', wake: 'needs_you', headline: 'Needs you',
     })]);
     expect(waiting?.wakeEventLocalId).toBeTruthy();
     expect(await waiting!.recheckAdmission(new AbortController().signal)).toBe(true);
