@@ -213,8 +213,15 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Connect several accounts you own for the same service and group them in a pool. With automatic switching turned on, a pool moves sessions to another account when one hits a usage limit or its sign-in expires, so the work keeps going. When there is nowhere to switch, Claude sessions resume on their own once the limit resets. <a href="https://docs.happier.dev/accounts/connected-services">Connected services and pools</a> · <a href="https://happier.dev/features/usage-limits">Usage limits</a></p>
 
-<!-- TODO screenshot: .github/screenshots/account-pools.png -->
-<p align="center"><img src=".github/screenshots/account-pools.png" alt="TODO: account pool with usage gauges" width="100%" /></p>
+<p align="center"><img src=".github/screenshots/account-pools.png" width="390" alt="Account pools list with an automatic and a manual pool and a Create pool button" /></p>
+
+<br/>
+
+<h3 align="center">📊 Track your accounts usage</h3>
+
+<p align="center">See how much is left on each of your connected accounts and subscriptions. For a Claude subscription that means the 5-hour and weekly limits, with the time until each one resets. <a href="https://docs.happier.dev/accounts/connected-services">Connected services</a></p>
+
+<p align="center"><img src=".github/screenshots/account-usage.png" width="420" alt="Claude subscription usage card with 5-hour and weekly limits and reset times" /></p>
 
 <br/>
 
