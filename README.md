@@ -216,6 +216,33 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <br/>
 
+<h3 align="center">🪪 Subscriptions, account pools and usage limits</h3>
+
+<p align="center">Connect several accounts you own for the same service and group them in a pool. With automatic switching turned on, a pool moves sessions to another account when one hits a usage limit or its sign-in expires, so the work keeps going. When there is nowhere to switch, Claude sessions resume on their own once the limit resets. <a href="https://docs.happier.dev/accounts/connected-services">Connected services and pools</a> · <a href="https://happier.dev/features/usage-limits">Usage limits</a></p>
+
+<!-- TODO screenshot: .github/screenshots/account-pools.png -->
+<p align="center"><img src=".github/screenshots/account-pools.png" alt="TODO: account pool with usage gauges" width="100%" /></p>
+
+<br/>
+
+<h3 align="center">🤝 Subagents across agents</h3>
+
+<p align="center">A session can hand work to another agent. Claude can start a review, plan or delegate run on Codex, for example, and you follow every run from the Agents tab in the session. <a href="https://docs.happier.dev/extending/subagents">Delegated work</a></p>
+
+<!-- TODO screenshot: .github/screenshots/subagents.png -->
+<p align="center"><img src=".github/screenshots/subagents.png" alt="TODO: Agents tab with a Codex run started from a Claude session" width="100%" /></p>
+
+<br/>
+
+<h3 align="center">🗂️ Files, editor and terminal</h3>
+
+<p align="center">Browse, search and edit the files in a session's folder from any device. Open a terminal on the connected machine when you need a quick command. <a href="https://docs.happier.dev/code/files-and-editor">Files and editor</a> · <a href="https://docs.happier.dev/extras/embedded-terminal">Embedded terminal</a></p>
+
+<!-- TODO screenshot: .github/screenshots/files-terminal.png -->
+<p align="center"><img src=".github/screenshots/files-terminal.png" alt="TODO: file editor and embedded terminal in a session" width="100%" /></p>
+
+<br/>
+
 <h3 align="center">⌨️ Keep your terminal</h3>
 
 <p align="center">Run Claude Code, Codex or OpenCode in their own terminal UIs. Happier mirrors those sessions to every device, so you can follow along, send messages and approve from anywhere. <a href="https://docs.happier.dev/sessions/claude-unified-terminal">Claude unified terminal</a></p>
@@ -237,13 +264,10 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 ### Also in the box
 
 - **Session handoff.** Move a live Claude Code or OpenCode session to another machine and bring the working tree along if you want it. [Session handoff](https://docs.happier.dev/sessions/session-handoff)
-- **Files, editor, terminal.** Open any file in an editor and drop into a live terminal on the connected machine. [Files and editor](https://docs.happier.dev/code/files-and-editor) · [Embedded terminal](https://docs.happier.dev/extras/embedded-terminal)
 - **Session sharing.** Invite someone with view or edit access, or publish a read-only public link. [Session sharing](https://docs.happier.dev/accounts/session-sharing)
 - **Happier as an MCP server.** `happier mcp serve` lets any MCP host create sessions, send messages and run session actions. [Happier as an MCP server](https://docs.happier.dev/extending/happier-as-mcp-server) · [CLI](https://docs.happier.dev/apps/cli)
 - **MCP servers, configured once.** Use them with every agent on every machine. [MCP servers](https://docs.happier.dev/extending/mcp-servers)
 - **Add a machine over SSH** from the app or the CLI. [Machines and the daemon](https://docs.happier.dev/apps/daemon)
-- **Usage limits.** When a provider limit bites, Happier shows the reset time, waits and resumes the session. [Usage limits](https://happier.dev/features/usage-limits)
-- **Subagents across agents (experimental, off by default).** A session can launch review, plan or delegate runs on another agent. Turn it on in Settings > Features. [Delegated work](https://docs.happier.dev/extending/subagents)
 - **Self-hosting.** The self-hosted relay runs the same apps, encryption and features. [Self-hosting](https://docs.happier.dev/self-hosting)
 - **End-to-end encryption.** Content is encrypted on your devices by default. [Security](#security)
 
