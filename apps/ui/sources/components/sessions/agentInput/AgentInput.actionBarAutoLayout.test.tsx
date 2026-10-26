@@ -142,7 +142,10 @@ describe('AgentInput (action bar auto layout)', () => {
         const reservedBottom = Number(geometry.paddingBottom ?? 0) + Number(geometry.marginBottom ?? 0);
         expect(reservedTop).toBeGreaterThanOrEqual(hitSlop.top);
         expect(reservedBottom).toBeGreaterThanOrEqual(hitSlop.bottom);
-        const stack = findNearestHostParent(shape);
+        let stack = findNearestHostParent(shape);
+        // The submit focus-return wrapper has no layout; inspect the actual
+        // shared Voice/Send cluster rather than assuming a fixed host depth.
+        while (stack && flattenStyle(stack.props.style).flexDirection === undefined) stack = findNearestHostParent(stack);
         const stackGeometry = flattenStyle(stack?.props.style);
         expect(stackGeometry.flexDirection).toBe('column-reverse');
         const voice = findAllHostTestInstances(screen.tree.root, node => node.props.testID === 'session-composer-voice')[0];

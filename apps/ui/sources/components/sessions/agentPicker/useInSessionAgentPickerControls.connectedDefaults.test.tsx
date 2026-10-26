@@ -137,7 +137,7 @@ describe('continuation target account discovery', () => {
         }
     });
 
-    it('keeps exact Team probe errors separate from a prior personal-account catalog', async () => {
+    it('does not reuse a prior personal-account catalog or start a native probe for an exact Team binding', async () => {
         resetDynamicModelProbeCacheForTests();
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
@@ -172,14 +172,14 @@ describe('continuation target account discovery', () => {
         } });
         await act(async () => { screen.tree.update(detail(team)); await Promise.resolve(); });
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Personal account model');
-        expect(screen.findByTestId('provider-error:agent_error')).not.toBeNull();
-        expect(invoke.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+        // The Team catalog owns a team_resource binding's models; no native operation probe runs for it.
+        expect(invoke.mock.calls.map(([request]) => request)).not.toContainEqual(expect.objectContaining({
             method: 'probeModels', params: expect.objectContaining({ connectedServices: team }),
         }));
         await screen.unmount();
     });
 
-    it('removes Native catalog rows when New Session requests an exact Team model observation', async () => {
+    it('removes Native catalog rows without a native probe when New Session selects an exact Team binding', async () => {
         resetDynamicModelProbeCacheForTests();
         invoke.mockClear();
         const { useNewSessionScreenPreflightState } = await import('../new/hooks/screenModel/useNewSessionScreenPreflightState');
@@ -216,9 +216,9 @@ describe('continuation target account discovery', () => {
 
         await vi.waitFor(() => {
             expect(current?.modelOptions.map((model) => model.value)).not.toContain('native-only-model');
-            expect(current?.modelOptionsProbeState.failed).toBe(true);
+            expect(current?.modelOptionsProbeState).toMatchObject({ phase: 'idle', failed: false });
         });
-        expect(invoke.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
+        expect(invoke.mock.calls.map(([request]) => request)).not.toContainEqual(expect.objectContaining({
             method: 'probeModels', params: expect.objectContaining({ connectedServices: team }),
         }));
         await screen.unmount();

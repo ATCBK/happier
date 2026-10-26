@@ -144,7 +144,7 @@ describe('SessionItem workflow body', () => {
             expect(screen.findByTestId('workflow-run-row:run-row')?.props.accessibilityLabel).toContain('Prepare the release');
             expect(screen.findByTestId('workflow-run-row:run-row')?.props.accessibilityLabel).toContain('workflows.runState.failed');
             await screen.pressByTestIdAsync('workflow-run-row:run-row');
-            expect(push).toHaveBeenCalledWith('/workflows/runs/run-row');
+            expect(push).toHaveBeenCalledWith('/workflows/runs/run-row?serverId=server-a');
             const before = screen.findByTestId('workflow-run-row:run-row')!.props.accessibilityLabel;
             await act(async () => screen.tree.update(row(false)));
             act(() => seed(3));

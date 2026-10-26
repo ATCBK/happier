@@ -114,7 +114,10 @@ const ROW_STATE_CASES: readonly RowStateCase[] = [
         session: { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1, pendingRequestObservedAt: NOW_MS },
         spoken: 'action required',
     },
-    { label: 'failed', session: { latestTurnStatus: 'failed' }, spoken: 'error' },
+    // A failed turn speaks only while its committed failure anchor is beyond this viewer's read cursor.
+    { label: 'failed', session: { latestTurnStatus: 'failed', viewer: createSessionViewerFixture({ latestFailureSeq: 4,
+        readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+        attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' } }) }, spoken: 'error' },
     { label: 'ready', session: { latestReadyEventSeq: 4 }, spoken: 'ready for review' },
     { label: 'queued input', session: { pendingCount: 2 }, spoken: 'Queued input' },
     { label: 'unread', session: {}, hasUnreadMessages: true, spoken: 'Unread' },

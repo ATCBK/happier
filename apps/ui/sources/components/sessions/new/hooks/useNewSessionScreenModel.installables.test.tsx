@@ -853,7 +853,8 @@ describe('useNewSessionScreenModel (installables)', () => {
             await flushHookEffects();
             const current = hook.getCurrent();
             expect(await current?.simpleProps?.emptyAutocompleteSuggestions('$project')).toEqual(expect.arrayContaining([
-                expect.objectContaining({ text: '$project-check', structuredInput: expect.objectContaining({ origin: 'vendor', backendId: 'codex' }) }),
+                // A chosen skill is inserted as its inline reference token; its identity rides in structuredInput.
+                expect.objectContaining({ kind: 'skill', label: 'project-check', structuredInput: expect.objectContaining({ origin: 'vendor', backendId: 'codex' }) }),
             ]));
             expect(await current?.simpleProps?.emptyAutocompleteSuggestions('/project')).toEqual(expect.arrayContaining([
                 expect.objectContaining({ text: '/project-check' }),
@@ -1956,7 +1957,9 @@ describe('useNewSessionScreenModel (installables)', () => {
             const model = hook.getCurrent();
 
             const suggestions = await model?.simpleProps?.emptyAutocompleteSuggestions?.('@REA');
-            expect(suggestions?.some((suggestion: { text: string }) => suggestion.text === '@README.md')).toBe(true);
+            expect(suggestions?.some((suggestion: { kind?: string; structuredInput?: { label?: string } }) => (
+                suggestion.kind === 'file' && suggestion.structuredInput?.label === 'README.md'
+            ))).toBe(true);
 
             // The addressing, not just the presence of rows: without an explicit machine and
             // cwd the daemon searches its OWN working directory and would offer files from a

@@ -213,7 +213,8 @@ vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => {
 vi.mock('@/utils/platform/platform', () => ({
   isRunningOnMac: () => false,
 }));
-vi.mock('@/sync/domains/session/control/submitMode', () => ({
+vi.mock('@/sync/domains/session/control/submitMode', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/sync/domains/session/control/submitMode')>(),
   chooseSubmitMode: () => 'direct',
 }));
 vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOriginal) => ({

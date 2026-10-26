@@ -37,14 +37,18 @@ installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSock
 const modalAlertSpy = vi.hoisted(() => vi.fn());
 const scopedSocketEmitWithAckSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
-  createEphemeralServerSocketClient: vi.fn(async () => ({
-    timeout: () => ({ emitWithAck: scopedSocketEmitWithAckSpy }),
-    emitWithAck: scopedSocketEmitWithAckSpy,
-    emit: vi.fn(),
-    disconnect: vi.fn(),
-  })),
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', async () => {
+  // The canonical socket boundary stub keeps the client's lifecycle surface (on/off/disconnect);
+  // only its acknowledged RPC emission is answered by this suite.
+  const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
+  return {
+    createEphemeralServerSocketClient: vi.fn(async () => Object.assign(createSocketIoBoundaryStub().socket, {
+      connected: true,
+      timeout: () => ({ emitWithAck: scopedSocketEmitWithAckSpy }),
+      emitWithAck: scopedSocketEmitWithAckSpy,
+    })),
+  };
+});
 
 installNewSessionScreenModelCommonModuleMocks({
   modal: async () => ({

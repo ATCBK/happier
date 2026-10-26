@@ -91,14 +91,15 @@ describe('useNewSessionPreflightModelsState persistence through scoped daemon tr
         expect(capabilityRpc).toHaveBeenCalledTimes(2);
     });
 
-    it('hydrates cached results across module reloads without another daemon probe', async () => {
+    it('hydrates cached results across module reloads, then revalidates once for the new demand', async () => {
         const first = await mountOwner();
         expectModelFields(first.getCurrent().preflightModels, 'm1', thinkingOption);
         await first.unmount();
         await loadOwnerGraph();
         const restarted = await mountOwner();
         expectModelFields(restarted.getCurrent().preflightModels, 'm1', thinkingOption);
-        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        // A retained success shows at once; the first observer after the restart revalidates it once.
+        expect(capabilityRpc).toHaveBeenCalledTimes(2);
     });
 
     it('does not persist static fallback probe results across module reloads', async () => {

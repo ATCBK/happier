@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import {
     TREE_DROP_OVERLAY_KIND_NONE,
@@ -72,6 +72,8 @@ vi.doUnmock('@/agents/registry/registryUiBehavior');
 const nativeBoundary = await import('react-native');
 Object.defineProperty(nativeBoundary.Platform, 'OS', { configurable: true, get: () => platformOs });
 vi.spyOn(nativeBoundary, 'useWindowDimensions').mockImplementation(() => windowDimensions);
+// Device presentation reads the window geometry from Dimensions, so the same boundary drives both.
+vi.spyOn(nativeBoundary.Dimensions, 'get').mockImplementation(() => windowDimensions);
 const { lightTheme } = await import('@/theme');
 const { renderScreen: renderCanonicalScreen } = await import('@/dev/testkit/render/renderScreen');
 const storageModule = await import('@/sync/domains/state/storage');
@@ -460,6 +462,12 @@ describe('SessionItem activity time', () => {
                     latestTurnStatus: 'failed',
                     latestTurnStatusObservedAt: 1_100,
                     seq: 11,
+                    // A failed turn speaks while its committed failure anchor is beyond this viewer's cursor.
+                    viewer: createSessionViewerFixture({
+                        latestFailureSeq: 11,
+                        readState: { state: 'tracking', lastViewedSessionSeq: 10, unreadSince: null },
+                        attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' },
+                    }),
                 } as SessionListRenderableSession}
                 serverId="server_a"
                 pinned={false}
@@ -600,6 +608,11 @@ describe('SessionItem activity time', () => {
             ...createSession('sess_external_failed'),
             latestTurnStatus: 'failed' as const,
             latestTurnStatusObservedAt: now,
+            viewer: createSessionViewerFixture({
+                latestFailureSeq: 1,
+                readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
+                attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' },
+            }),
         };
         const SessionItem = await importSessionItem();
         const screen = await renderScreen(
@@ -1081,7 +1094,11 @@ describe('SessionItem activity time', () => {
         ['thinking', { thinking: true }, true],
         ['permission_required', { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0 }, false],
         ['action_required', { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1 }, false],
-        ['error', { latestTurnStatus: 'failed' as const }, false],
+        ['error', { latestTurnStatus: 'failed' as const, viewer: createSessionViewerFixture({
+            latestFailureSeq: 1,
+            readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
+            attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' },
+        }) }, false],
     ] as const)('exposes the %s state on the single actionable row in minimal path mode', async (state, sourceFacts, busy) => {
         const now = Date.now();
         const sessionId = `sess_accessible_${state}`;
