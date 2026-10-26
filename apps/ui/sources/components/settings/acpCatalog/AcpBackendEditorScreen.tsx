@@ -161,7 +161,16 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
         && snapshot?.catalog.status === 'ready' && !snapshot.stale && isEditorCurrent();
     const currentAuthority = React.useMemo(() => snapshot && !snapshot.stale
         ? captureDraftAuthority(snapshot.catalog) : null, [snapshot]);
-    const executeAction = action.execute;
+    // Leaving the captured Account's settings releases an in-flight save or delete: its approval
+    // result could no longer apply to this editor, which then holds only the retained draft.
+    const departure = React.useRef(new AbortController());
+    React.useEffect(() => {
+        if (!capturedScope || areAccountSettingsScopesEqual(activeScope, capturedScope)) return;
+        departure.current.abort();
+        departure.current = new AbortController();
+    }, [activeScope, capturedScope]);
+    const executeAction = React.useCallback<typeof action.execute>((actionId, input, operation) =>
+        action.execute(actionId, input, { ...operation, signal: departure.current.signal }), [action.execute]);
     const secretCatalog = useSavedSecretCatalog({ scope: capturedScope, personalSecrets: NO_PERSONAL_SECRETS });
     const secrets = React.useMemo(() => [...secretCatalog.materializedSecrets], [secretCatalog.materializedSecrets]);
     const settings = React.useMemo(() => ({ v: 2 as const, backends: snapshot?.data?.definitions ?? [] }), [snapshot?.data]);
