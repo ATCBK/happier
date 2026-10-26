@@ -926,7 +926,9 @@ describe('daemon Session Account authority', () => {
         }) }),
         rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'bob-session', encryptionMode: 'plain' }),
         getStoredContentEncryptionContext: () => ({ mode: 'plain' }),
-        getActiveTurnAdmissionWitness: () => witness, getActiveTurnPermissionWitness: () => witness,
+        getActiveTurnAdmissionWitness: () => witness,
+        getActiveTurnPermissionWitness: () => ({ turnId: witness.turnId,
+          causalPermissionAuthority: witness.causalPermissionAuthority }),
         getWorkDepth: () => 2, getHostTurnWorkDepth: () => 2,
       }, { authorityScope: kind === 'link' ? 'account' : 'session', accountSettings: settings, ...(kind === 'link' ? { credentials } : {}) });
       runnerClient = new Client({ name: 'approval-origin', version: '1' });
@@ -1006,18 +1008,20 @@ describe('daemon Session Account authority', () => {
     if (!open || open.v !== 2) throw new Error('Missing Session approval origin');
     expect(open.executionOriginV1).toMatchObject({ serverId: configuration.activeServerId, serverIdentityId: homeId,
       machineId: source.machineId, authority: 'account_automation', surface: 'agent' });
+    if (runnerCarrier) {
+      expect(open.executionOriginV1.accountId).toBe('source-account');
+      expect(open.executionOriginV1.actionRequestAttributionV1?.requester).toEqual({
+        serverId: configuration.activeServerId, accountId: 'source-account',
+      });
+      expect(open).not.toHaveProperty('requesterConfirmation');
+    }
     if (mcp || kind === 'link') {
       expect(open.executionOriginV1.externalActionExecutionAuthorization).toBeUndefined();
       expect(open.executionOriginV1.externalActionInputSignature).toBeUndefined();
       expect(requiresExactDaemonApprovalReplay(open)).toBe(true);
       expect(mintedRequests).toEqual([]);
     } else {
-      if (runnerCarrier) {
-        expect(open.executionOriginV1.actionRequestAttributionV1?.requester).toEqual({
-          serverId: configuration.activeServerId, accountId: 'source-account',
-        });
-        expect(open).not.toHaveProperty('requesterConfirmation');
-      } else expect(requiresExactDaemonApprovalReplay(open)).toBe(!(kind === 'client' || relation));
+      if (!runnerCarrier) expect(requiresExactDaemonApprovalReplay(open)).toBe(!(kind === 'client' || relation));
       if (!open.executionOriginV1.externalActionInputSignature) throw new Error('Missing signed client approval origin');
       expect(open.executionOriginV1).toMatchObject({ accountId: 'source-account', requestId: invocationRequestId, target });
       expect(verifyExternalActionApprovalInputV1({ authorizationToken: 'source-home-proof', actionId, input: open.actionArgs, target,

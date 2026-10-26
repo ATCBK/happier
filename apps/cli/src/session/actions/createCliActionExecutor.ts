@@ -417,10 +417,9 @@ export function createCliActionExecutor(
     surface,
     authority,
     ...(signExternalActionApprovalInput ? { signExternalActionApprovalInput } : {}),
-    // Local invocations use their authenticated runtime token. RPC context is
-    // host-built from the admitted requester, which may differ from the daemon
-    // custodian; neither its actor nor its absence may be replaced by that token.
-    ...(surface !== 'rpc' && !context?.machineAdmission && runtimeAccountId ? { runtimeAccountId } : {}),
+    // Token-only callers retain this host's existing Account binding. The
+    // shared harness stamps credentialed hosts; Session-only MCP has no such credentials.
+    ...(!params.credentials && surface !== 'rpc' && !context?.machineAdmission && runtimeAccountId ? { runtimeAccountId } : {}),
     actionsSettings: actionSettingsProvider.getActionsSettings(),
     sessionAgentSpawnPolicyV1:
       context?.sessionAgentSpawnPolicyV1

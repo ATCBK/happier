@@ -321,6 +321,7 @@ export function buildSessionSpawnInitialInputAdmissionForLocalIdV1(params: Reado
   actionCaller: ActionCaller;
   callerSurface?: keyof ActionSurfaces | null;
   localId: string;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>): Readonly<{
   localId: string;
   inputAdmission: Readonly<{
@@ -330,34 +331,19 @@ export function buildSessionSpawnInitialInputAdmissionForLocalIdV1(params: Reado
 }> {
   const localId = params.localId;
 
-  if (params.actionCaller.kind === 'automationRun') {
-    return Object.freeze({
-      localId,
-      inputAdmission: buildAutomationSessionInputAdmissionV1({
+  const inputAdmission = params.actionCaller.kind === 'automationRun'
+    ? buildAutomationSessionInputAdmissionV1({
         automationId: params.actionCaller.automationId,
         runId: params.actionCaller.runId,
-      }),
-    });
-  }
-
-  if (params.actionCaller.kind === 'plugin') {
-    const pluginId = PluginIdSchema.parse(params.actionCaller.pluginId);
-    const contributionLocalId = PluginContributionLocalIdSchema.parse(
-      params.actionCaller.contributionLocalId,
-    );
-    const inputAdmission = buildPluginSessionInputAdmissionV1({
-      caller: { kind: 'plugin', pluginId, contributionLocalId },
-      surface: params.callerSurface,
-    });
-    return Object.freeze({
-      localId,
-      inputAdmission,
-    });
-  }
-
-  const inputAdmission = buildTrustedHostSessionInputAdmissionV1(params.callerSurface);
+      })
+    : params.actionCaller.kind === 'plugin'
+      ? buildPluginSessionInputAdmissionV1({ caller: params.actionCaller, surface: params.callerSurface })
+      : buildTrustedHostSessionInputAdmissionV1(params.callerSurface);
   return Object.freeze({
     localId,
-    inputAdmission,
+    inputAdmission: params.actionRequestAttributionV1
+      ? { ...inputAdmission, request: { ...inputAdmission.request,
+          actionRequestAttributionV1: materializeActionRequestAttributionV1(params.actionRequestAttributionV1) } }
+      : inputAdmission,
   });
 }

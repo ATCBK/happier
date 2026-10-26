@@ -270,11 +270,15 @@ export function createCliActionExecutorHarness(
   }
   const deps = rawDeps as ActionExecutorDeps;
   const executor = createActionExecutor(deps);
+  const runtimeAccountId = params.credentials ? readAccountIdFromToken(params.credentials.token) ?? undefined : undefined;
   const resolveContext = (context: Parameters<typeof executor.execute>[2], actionId?: string) => {
     const accountSettings = !context?.externalActionExecutionAuthorization && context?.surface !== 'rpc'
       ? originationSettingsProvider.getAccountSettings?.() : null;
     return {
       ...(context ?? {}),
+      // This is the executing Account, never a substitute for the requester.
+      // Received RPC/Machine admission keeps its host-built requester context.
+      ...(context?.surface !== 'rpc' && !context?.machineAdmission && runtimeAccountId ? { runtimeAccountId } : {}),
       // A received Action already represents another origin. Do not recheck the
       // controller's Account preference, including on same-Account reception.
       ...(accountSettings ? { managedMachineCreationEnabled: accountSettings.managedMachineCreationEnabled } : {}),

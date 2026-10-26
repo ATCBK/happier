@@ -6073,6 +6073,7 @@ export function createCliActionDeps(params: Readonly<{
         const { inputAdmission } = buildSessionSpawnInitialInputAdmissionForLocalIdV1({
           actionCaller,
           callerSurface,
+          ...(context?.actionRequestAttributionV1 ? { actionRequestAttributionV1: context.actionRequestAttributionV1 } : {}),
           // Only admission facts are inspected here; the creator owns the
           // actual first-input local id after settling the Session identity.
           localId: sessionCreationTag,
@@ -6584,6 +6585,7 @@ export function createCliActionDeps(params: Readonly<{
                     actionCaller,
                     callerSurface,
                     localId,
+                    ...(context?.actionRequestAttributionV1 ? { actionRequestAttributionV1: context.actionRequestAttributionV1 } : {}),
                   });
                   const attachments = initialInput.attachments ?? [];
                   const authoredComposerAttachments = attachments.length > 0 && actionCaller.kind === 'plugin'
@@ -7600,9 +7602,11 @@ export function createCliActionDeps(params: Readonly<{
       if (sessionInputSource && caller?.kind !== 'session') return rejectUndispatchedSessionAgentTransition('forbidden');
       const { buildCausalSessionInputAdmissionV1, buildPluginSessionInputAdmissionV1 } = await import("@/session/services/sessionInputAdmissionIdentity");
       const inputAdmission = sessionInputSource && caller?.kind === 'session'
-        ? buildCausalSessionInputAdmissionV1({ ...sessionInputSource, callerDepth: readAgentStartCallerWorkDepthV1(caller) })
+        ? buildCausalSessionInputAdmissionV1({ ...sessionInputSource, callerDepth: readAgentStartCallerWorkDepthV1(caller),
+            ...(context.actionRequestAttributionV1 ? { actionRequestAttributionV1: context.actionRequestAttributionV1 } : {}) })
         : caller?.kind === 'plugin'
-          ? buildPluginSessionInputAdmissionV1({ caller, surface: context.surface })
+          ? buildPluginSessionInputAdmissionV1({ caller, surface: context.surface,
+              ...(context.actionRequestAttributionV1 ? { actionRequestAttributionV1: context.actionRequestAttributionV1 } : {}) })
           : caller?.kind === 'host' && (context.authority === 'present_user' || context.externalActionCredential)
             ? buildTrustedHostSessionInputAdmissionV1(context.surface)
             : undefined;

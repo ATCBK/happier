@@ -658,7 +658,12 @@ export function createHappierMcpServer(
     actionsSettings: readActionsSettings(),
     getActionsSettings: readActionsSettings,
     resolveCallerPermissionMode: resolveAgentCallerPermissionMode,
-    resolveActiveTurnPermissionWitness: () => resolveLiveClientActiveTurnPermissionWitness(client),
+    // Action attribution belongs to the complete admitted input, not the
+    // narrower permission/depth view. An installed full reader returning null
+    // means no admitted turn; it must not fall back to a different witness.
+    resolveActiveTurnPermissionWitness: () => client.getActiveTurnAdmissionWitness
+      ? client.getActiveTurnAdmissionWitness()
+      : resolveLiveClientActiveTurnPermissionWitness(client),
     resolveReviewCommentActor: () => {
       const target = resolveLiveClientBackendTarget(client);
       return target ? { kind: 'agent', agentId: resolveExecutionRunPublicBackendId(target), sessionId: client.sessionId } : null;

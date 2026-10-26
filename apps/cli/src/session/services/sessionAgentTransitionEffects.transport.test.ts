@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
-import { API_TOKEN_FULL_GRANT_V1, verifyExternalActionMachineRequestV1, verifyExternalActionMachineRpcRequestV1, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, FeaturesResponseSchema, SessionInputRequestV1Schema, settleSessionInputRequestV1, verifyExternalActionMachineRequestV1, verifyExternalActionMachineRpcRequestV1, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -17,6 +17,10 @@ import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActi
 import { waitForSessionIdle } from './waitForSessionIdle';
 import { detectLatestSessionTurnActivity } from '@/session/query/detectLatestSessionTurnActivity';
 import { buildBoundedActivationBrief } from '@/session/agentTransition/buildSessionAgentTransitionActivationBrief';
+import { buildSessionAgentTransitionDividerPayload } from '@/session/agentTransition/sessionAgentTransitionCutoverPayload';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { UserMessageSchema } from '@/api/types';
 
 const io = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', () => ({ io }));
@@ -84,7 +88,49 @@ describe('Agent transition service effect transports', () => {
       return { ok: true, result: { status: 'enforced' } };
     } }));
   });
-  afterEach(() => { vi.restoreAllMocks(); io.mockReset(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); io.mockReset(); });
+
+  it('retains a plugin requester when re-admitting an already committed Agent transition input', async () => {
+    const localId = 'continued-input';
+    const cause = { requestRef: 'original-question', requester: { serverId: 'home', accountId: 'person' },
+      persona: { serverId: 'home', sessionId: 'source-session' }, origin: null };
+    const divider = buildSessionAgentTransitionDividerPayload({ submittedLocalId: localId,
+      fromAgentId: 'claude', toAgentId: 'codex', sourceCutoffSeqInclusive: 1,
+      returningAgentLastSeenSeqInclusive: null, mode: 'plain', ctx: null });
+    const originalGet = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url, config) => {
+      const path = new URL(String(url)).pathname;
+      if (path.includes('/messages/by-local-id/')) return { status: 200, data: { message: {
+        id: 'divider', seq: 2, localId: divider.localId, sidechainId: null, createdAt: 1, updatedAt: 1,
+        content: divider.content,
+      } } };
+      if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: {
+        ...rawSession, active: true, metadata: JSON.stringify({ machineId, path: '/repo', flavor: 'codex' }),
+      } } };
+      return await originalGet(url, config);
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(FeaturesResponseSchema.parse({
+      features: { sessions: { enabled: true, agentSwitching: { enabled: true } } }, capabilities: {},
+    }))));
+    const admitted: unknown[] = [];
+    const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: 'source-session',
+      mode: 'plain', ctx: null, machineAdmissionTransport: async request => {
+        if (request.content.t !== 'plain') throw new Error('Expected plain fixture input');
+        const message = UserMessageSchema.parse(request.content.v);
+        const inputAdmissionReceipt = { v: 1, issuer: 'authenticatedMachine' } as const;
+        const inputAuthority = settleSessionInputRequestV1({ request: SessionInputRequestV1Schema.parse(message.meta?.happierInputRequestV1),
+          currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+        admitted.push(deriveSessionInputActionRequestAttributionV1({ requestRef: request.localId,
+          persona: { serverId: 'home', sessionId }, origin: null, messageRole: 'user', inputAdmissionReceipt, inputAuthority }));
+        return { status: 'accepted', localId: request.localId };
+      } });
+    expect(await deps.sessionAgentTransition!({ request: { v: 1, sessionId, expectedCurrentAgentId: 'claude',
+      selection: { v: 1, agentId: 'codex' }, input: { localId, text: 'Continue', meta: {} } },
+      context: { surface: 'plugin', authority: 'account_automation', actionRequestAttributionV1: cause,
+        actionCaller: { kind: 'plugin', pluginId: 'acme.plugin', contributionLocalId: 'continue' } },
+    })).toMatchObject({ type: 'accepted', localId });
+    expect(admitted).toEqual([cause]);
+  });
 
   const invoke = (phase: 'fence' | 'stop' | 'activate', proof: NonNullable<Parameters<typeof callSessionRpc>[0]['externalAction']> = externalAction) => {
     if (phase === 'fence') return callSessionProviderInputAdmission({ credentials, sessionId,

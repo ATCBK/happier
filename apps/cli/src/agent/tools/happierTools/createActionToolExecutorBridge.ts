@@ -20,6 +20,7 @@ import { createSensitiveDiagnosticTextRedactor } from '@happier-dev/protocol/bug
 import type { SensitiveDiagnosticValuesLease } from '@happier-dev/protocol/bugs/reports';
 import { projectTargetActionFailure } from '@/plugins/runtime/invocation/actionExecutor';
 import { registerTargetActionDiagnosticInput } from '@/plugins/runtime/invocation/diagnostics';
+import { materializeActionRequestAttributionV1, type ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 type ActionExecutorResult = Readonly<
   | { ok: true; result: unknown }
@@ -38,6 +39,7 @@ type ActionExecutorLike = Readonly<{
       approvalOrigin?: ApprovalRequestOriginV1 | null;
       callerPermissionMode?: string | null;
       causalPermissionAuthority?: unknown;
+      actionRequestAttributionV1?: ActionRequestAttributionV1;
       sessionInputSource?: unknown;
       sessionAgentSpawnPolicyV1?: unknown;
       runtimeRunId?: string;
@@ -149,6 +151,7 @@ async function buildActionExecutorContext(params: Readonly<{
   authority?: 'account_automation';
   callerPermissionMode?: string | null;
   causalPermissionAuthority?: unknown;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
   sessionInputSource?: unknown;
   sessionAgentSpawnPolicyV1?: unknown;
   actionsSettings?: ActionsSettingsV1 | null;
@@ -164,9 +167,10 @@ async function buildActionExecutorContext(params: Readonly<{
     : null;
   const reviewActor = params.surface !== 'cli' ? params.resolveReviewCommentActor?.() : null;
   const hasActiveTurnPermissionWitnessResolver =
-    params.surface === 'agent'
+    params.surface !== 'cli'
     && typeof params.resolveActiveTurnPermissionWitness === 'function';
   let causalPermissionAuthority: unknown = null;
+  let activeTurnAttribution: unknown;
   let activeTurnId: string | null = null;
   let activeInputId: string | null = null;
   if (hasActiveTurnPermissionWitnessResolver) {
@@ -174,6 +178,7 @@ async function buildActionExecutorContext(params: Readonly<{
       const rawWitness = await params.resolveActiveTurnPermissionWitness!();
       const witness = isInputRecord(rawWitness) ? rawWitness : null;
       causalPermissionAuthority = witness?.causalPermissionAuthority ?? null;
+      activeTurnAttribution = witness?.actionRequestAttributionV1;
       activeTurnId = typeof witness?.turnId === 'string' && witness.turnId.trim().length > 0
         ? witness.turnId.trim()
         : null;
@@ -221,6 +226,9 @@ async function buildActionExecutorContext(params: Readonly<{
     ...(callerPermissionMode ? { callerPermissionMode } : {}),
     ...(hasActiveTurnPermissionWitnessResolver
       ? { causalPermissionAuthority: causalPermissionAuthority ?? null }
+      : {}),
+    ...(activeTurnAttribution !== undefined
+      ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(activeTurnAttribution) }
       : {}),
     ...(hasActiveTurnPermissionWitnessResolver && activeTurnId
       ? {

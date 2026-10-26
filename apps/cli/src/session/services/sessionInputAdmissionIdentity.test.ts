@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { derivePluginSessionInputLocalIdV1, SessionInputRequestV1Schema } from '@happier-dev/protocol';
+import { derivePluginSessionInputLocalIdV1, SessionInputRequestV1Schema, settleSessionInputRequestV1, type ActionCaller } from '@happier-dev/protocol';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 import {
   buildAutomationSessionInputAdmissionV1,
@@ -25,6 +26,25 @@ describe('derivePluginSessionInputLocalIdV1', () => {
     pluginId: 'acme.channels',
     contributionLocalId: 'inbound',
   };
+
+  it.each([
+    { kind: 'session', sessionId: 'parent-session', starterDepth: 0, turnDepth: 0 },
+    { kind: 'plugin', pluginId: 'acme.channels', contributionLocalId: 'inbound' },
+    { kind: 'automationRun', automationId: 'automation', runId: 'run' },
+  ] satisfies ActionCaller[])('retains the admitted requester through a $kind spawn first input', actionCaller => {
+    const cause = { requestRef: 'original-parent-input', requester: { serverId: 'home', accountId: 'person' },
+      persona: { serverId: 'home', sessionId: 'parent-session' }, origin: null };
+    const first = buildSessionSpawnInitialInputAdmissionForLocalIdV1({ actionCaller,
+      callerSurface: 'agent', localId: 'child-first-input', actionRequestAttributionV1: cause });
+    const inputAdmissionReceipt = { v: 1, issuer: 'authenticatedMachine' } as const;
+    const authority = settleSessionInputRequestV1({ request: first.inputAdmission.request,
+      currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+    const derived = deriveSessionInputActionRequestAttributionV1({ requestRef: first.localId,
+      persona: { serverId: 'home', sessionId: 'child-session' }, origin: null,
+      messageRole: 'user', inputAuthority: authority, inputAdmissionReceipt });
+    expect(derived).toEqual(cause);
+    expect(derived).not.toBe(cause);
+  });
 
   it('derives one stable bounded Pending identity from caller, Session, and exact public key', () => {
     const first = derivePluginSessionInputLocalIdV1({

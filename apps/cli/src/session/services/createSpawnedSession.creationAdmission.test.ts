@@ -24,9 +24,13 @@ import {
   McpServersSettingsV1Schema,
   projectMcpServerMaterializationV1,
   resolveSessionCapabilitiesV1,
+  SessionInputRequestV1Schema,
+  settleSessionInputRequestV1,
 } from '@happier-dev/protocol';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { UserMessageSchema } from '@/api/types';
 import { SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewActionResultV1Schema, SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { getWorkflowStarterExamplesV1 } from '@happier-dev/protocol/workflows/builtins/examples';
@@ -257,6 +261,9 @@ describe('canonical Session creation admission', () => {
 
   it('composes plugin spawn private birth and rejoin with real attested HTTP MCP calls', async () => {
     const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+    const cause = { requestRef: 'parent-question', requester: { serverId: 'home-a', accountId: 'requester' },
+      persona: { serverId: 'home-a', sessionId: 'parent-session' }, origin: null };
+    const admittedCauses: unknown[] = [];
     fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
     resetServerFeaturesClientForTests();
@@ -299,6 +306,19 @@ describe('canonical Session creation admission', () => {
       sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {},
       serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
       actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}) }),
+      machineAdmissionTransport: async request => {
+        if (request.content.t !== 'plain') throw new Error('Expected plain fixture input');
+        const message = UserMessageSchema.parse(request.content.v);
+        const inputAdmissionReceipt = { v: 1, issuer: 'authenticatedMachine' } as const;
+        const inputAuthority = settleSessionInputRequestV1({
+          request: SessionInputRequestV1Schema.parse(message.meta?.happierInputRequestV1),
+          currentSessionPermissionCeiling: 'default', inputAdmissionReceipt,
+        });
+        admittedCauses.push(deriveSessionInputActionRequestAttributionV1({ requestRef: request.localId,
+          persona: { serverId: 'home-a', sessionId: request.sessionId }, origin: null,
+          messageRole: 'user', inputAdmissionReceipt, inputAuthority }));
+        return { status: 'accepted', localId: request.localId };
+      },
       sessionSpawnDirectTargetTransport: {
         machineId: 'machine-1',
         prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
@@ -309,6 +329,7 @@ describe('canonical Session creation admission', () => {
       creationKey: 'attested-http-mcp', executionTarget: { serverId: 'home-a', machineId: 'machine-1' },
       directory: { kind: 'path', path: '/repo' }, agentTarget: params.agentTarget,
       connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false, attestedContext,
+      initialInput: { text: 'Answer the original requester' },
     });
     for (const surface of ['ui', 'agent', 'mcp', 'cli', 'api', 'plugin'] as const) {
       expect(await executor.execute('session.spawn_new', input, {
@@ -318,11 +339,14 @@ describe('canonical Session creation admission', () => {
     expect(committed).toBe(false);
     const result = await executor.execute('session.spawn_new', input, {
       surface: 'plugin', authority: 'account_automation', serverId: 'home-a',
-      actionCaller: { kind: 'plugin', pluginId: 'happier.channels' },
+      actionCaller: { kind: 'plugin', pluginId: 'happier.channels', contributionLocalId: 'inbound' },
+      actionRequestAttributionV1: cause,
     });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     if (!result.ok) throw new Error('Plugin spawn failed');
-    const birth = SessionSpawnNewResultV1Schema.parse(result.result);
+    expect(result.result).toMatchObject({ initialInput: { status: 'accepted' } });
+    expect(admittedCauses).toEqual([cause]);
+    const birth = SessionSpawnNewActionResultV1Schema.parse(result.result);
     expect(birth).toMatchObject({ type: 'success', sessionId: 'session-created', disposition: 'created', attestedContext });
     if (birth.type !== 'success') throw new Error('Spawn did not settle');
     // A new message can recreate a deleted thread binding with the same birth
@@ -330,7 +354,8 @@ describe('canonical Session creation admission', () => {
     expect(await executor.execute('session.spawn_new', { ...input, attestedContext: {
       externalPrincipalId: 'other@batiplus.ch', sourceMessageId: '<followup@example.test>',
     } }, { surface: 'plugin', authority: 'account_automation', serverId: 'home-a',
-      actionCaller: { kind: 'plugin', pluginId: 'happier.channels' },
+      actionCaller: { kind: 'plugin', pluginId: 'happier.channels', contributionLocalId: 'inbound' },
+      actionRequestAttributionV1: cause,
     })).toMatchObject({ ok: true, result: { sessionId: birth.sessionId, disposition: 'rejoined', attestedContext } });
 
     const root = await mkdtemp(join(tmpdir(), 'happier-attested-spawn-mcp-'));

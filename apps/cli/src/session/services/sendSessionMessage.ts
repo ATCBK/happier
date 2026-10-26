@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { ActionSessionAddressV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { FILE_REVIEW_NOTE_KIND, readFileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 
 import {
@@ -209,6 +213,10 @@ type SendSessionMessageParams = Readonly<{
   callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
   credentials: StoredCredentials;
   idOrPrefix: string;
+  /** Captured sending Home; direct local callers retain the active Home default. */
+  serverId?: string;
+  /** Existing host-admitted routing tuple; never message metadata or a wire option. */
+  expectedSessionAddress?: ActionSessionAddressV1;
   message: string;
   wait: boolean;
   timeoutMs: number;
@@ -1470,6 +1478,38 @@ export async function sendSessionMessage(
   } catch {
     return { ok: false, code: 'admission_rejected', admissionResult: { status: 'rejected', code: 'session_input_invalid' } };
   }
+  const requiresMachineAdmission = requiresMachineAdmissionForSessionInput({
+    request: protectedAdmission?.request ?? null,
+    mode: sessionTarget.mode,
+    ...(params.callerInputAuthorization ? { callerInputAuthorization: params.callerInputAuthorization } : {}),
+  });
+  if (requiresMachineAdmission
+    && protectedAdmission?.request.v === 1 && protectedAdmission.request.producer === 'cli') {
+    // The preceding Home reads authenticate this credential. A routed send also
+    // retains Home's admitted Account binding; the Machine custodian is never
+    // the requester. Paired terminals retain that Account identity without
+    // upgrading their automation authority; API-token roots do not establish it.
+    const credentialAccountId = readAccountIdFromToken(params.credentials.token);
+    const binding = params.callerInputAuthorization?.binding;
+    const accountId = binding
+      ? 'authentication' in binding && (binding.authentication?.kind === 'account'
+        || binding.authentication?.kind === 'terminal') ? binding.accountId : null
+      : credentialAccountId;
+    const serverId = params.expectedSessionAddress?.serverId ?? params.serverId
+      ?? params.callerInputAuthorization?.requesterAccountProjection?.serverId
+      ?? params.callerInputAuthorization?.requesterHttpProjection?.serverId ?? configuration.activeServerId;
+    const attribution = accountId && serverId ? materializeActionRequestAttributionV1({
+      requestRef: localId, requester: { serverId, accountId }, persona: { serverId, sessionId }, origin: null,
+    }) : undefined;
+    if (binding && credentialAccountId && binding.accountId !== credentialAccountId
+      || protectedAdmission.request.actionRequestAttributionV1 && (!attribution
+        || !sameStrictJsonValue(protectedAdmission.request.actionRequestAttributionV1, attribution))) {
+      return { ok: false, code: 'admission_rejected',
+        admissionResult: { status: 'rejected', code: 'session_input_untrusted_assertion' } };
+    }
+    if (attribution) protectedAdmission = { ...protectedAdmission,
+      request: { ...protectedAdmission.request, actionRequestAttributionV1: attribution } };
+  }
   const replyIntent = protectedAdmission?.request.replyIntent;
   if (replyIntent) {
     const { readSessionMessageReplyCapability } = await import('./sessionMessageReply');
@@ -1604,11 +1644,6 @@ export async function sendSessionMessage(
     deliveryIntent: shouldResumeInactiveSession ? 'runtime_bootstrap' : 'ordinary',
     ...(receiverControlled ? { requestedAction: { v: 1, kind: 'enqueue' } as const }
       : params.requestedAction ? { requestedAction: params.requestedAction } : {}),
-  });
-  const requiresMachineAdmission = requiresMachineAdmissionForSessionInput({
-    request: protectedAdmission?.request ?? null,
-    mode: sessionTarget.mode,
-    ...(params.callerInputAuthorization ? { callerInputAuthorization: params.callerInputAuthorization } : {}),
   });
   const requestEqualityEvidenceV1 = requiresMachineAdmission && sessionTarget.mode === 'e2ee'
     ? {
