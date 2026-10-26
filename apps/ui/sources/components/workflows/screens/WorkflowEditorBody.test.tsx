@@ -1,11 +1,16 @@
+import { paneUiState } from '@/sync/domains/state/filePaneUiState';
 import * as React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import {
     applyComposerPresentationTransaction,
+    createComposerPresentationHostHandlers,
     readComposerPresentationSnapshot,
+    readMountedComposerPresentationSnapshot,
 } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { ScopedAuthoringComposer } from '@/components/sessions/authoring/ScopedAuthoringComposer';
+import type { PluginUiHostApiRequestEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
 import { renderScreen as renderTestScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { serveAccountHomes, serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -33,8 +38,12 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import type { NativeComposerInputHandle } from '@/components/ui/forms/nativeComposerInput';
 import { createRenderCommitCounter } from '@/dev/testkit/performance/counts';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
-const editorCosts = vi.hoisted(() => ({ views: new Map<string, ReturnType<typeof createRenderCommitCounter>>() }));
+const editorCosts = vi.hoisted(() => ({
+    views: new Map<string, ReturnType<typeof createRenderCommitCounter>>(),
+    composers: new Set<ReturnType<typeof createRenderCommitCounter>>(),
+}));
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -54,6 +63,8 @@ function readAnnouncements() {
         .filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 const promptFocus = vi.fn();
+/** Selections the real composer applies to its native input (an OS boundary). */
+const promptSelection = vi.fn();
 const bindingBoundaries: Array<() => Promise<void>> = [];
 const retireEditorContents: Array<() => Promise<void>> = [];
 let executeWorkflowCommand: (commandId: KeyboardCommandId) => boolean = () => false;
@@ -112,7 +123,7 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
         // Native text refs are an OS boundary. The real AgentInput and
         // MultiTextInput own focus requests, restored selection and edits.
         if (nativeElement.type !== 'TextInput' && nativeElement.type !== 'HappierComposerInput') return null;
-        const input = { focus: promptFocus, blur: () => {}, setSelection: () => {}, setTextAndSelection: () => {},
+        const input = { focus: promptFocus, blur: () => {}, setSelection: promptSelection, setTextAndSelection: () => {},
             offsetAtPoint: async () => null, setDropCaret: () => {},
             measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) =>
                 callback(0, 0, viewport.window.width, 0) } satisfies NativeComposerInputHandle;
@@ -157,6 +168,12 @@ function stepComposerRef(screen: Awaited<ReturnType<typeof renderScreen>>, block
     return ref;
 }
 
+function stepDocumentRef(screen: Awaited<ReturnType<typeof renderScreen>>, blockId: string) {
+    const composer = screen.findAllByType(ScopedAuthoringComposer).find(node => node.props.custody.ref.blockId === blockId);
+    if (!composer) throw new Error(`No addressed step document ${blockId}`);
+    return (composer.props as React.ComponentProps<typeof ScopedAuthoringComposer>).custody.ref;
+}
+
 const MACHINE_COMPOSER_SCOPE = {
     kind: 'machine' as const,
     machineId: 'machine-1',
@@ -178,6 +195,7 @@ vi.mock('react-native', async () => {
         const counter = React.useMemo(() => {
             const value = createRenderCommitCounter();
             if (props.testID) editorCosts.views.set(props.testID, value);
+            if (props.testID === 'agent-input-composer') editorCosts.composers.add(value);
             return value;
         }, [props.testID]);
         useRenderCommitCounter(counter);
@@ -214,6 +232,8 @@ vi.mock('@/utils/web/reactDomCjs', async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+    // A fresh page starts closed; earlier Flow cases persist their real pane intents.
+    paneUiState.remove('workflow-editor');
     // Observe browser DOM writes below the real live-region/announcement owner.
     announcementDocument = new BrowserDocument('<!doctype html><html><body></body></html>');
     const document = announcementDocument.window.document;
@@ -240,6 +260,7 @@ beforeAll(async () => {
 afterEach(async () => {
     for (const retire of retireEditorContents.splice(0)) await retire();
     await standardCleanup();
+    paneUiState.remove('workflow-editor');
     for (const dispose of bindingBoundaries.splice(0)) await dispose();
     restoreKeyboardWindow?.();
     announcementDocument?.window.close();
@@ -282,6 +303,17 @@ function buildDraft(harness: Harness, overrides: Partial<{ name: string; text: s
         AGENT_TARGET,
     );
     return base;
+}
+
+/** The SegmentedChoiceItem element behind a Conversation or Workspace segmented choice's test id prefix. */
+function segmentedField(screen: Awaited<ReturnType<typeof renderScreen>>, testIDPrefix: string) {
+    const match = screen.findAll((node) => node.props?.testIDPrefix === testIDPrefix && Array.isArray(node.props?.options)
+        && typeof node.props?.onChange === 'function')[0];
+    if (match === undefined) throw new Error(`No segmented choice ${testIDPrefix}`);
+    return match as unknown as { props: {
+        options: ReadonlyArray<Readonly<{ id: string; label: string; unavailableReason?: string }>>;
+        value: string; subtitle?: unknown; onChange: (id: string) => void;
+    } };
 }
 
 /** The DropdownMenu element (not its host View) behind a field-select test id. */
@@ -397,11 +429,87 @@ async function renderBody(
     return renderScreen(element, renderOptions);
 }
 
-it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait rows', async count => {
+it.each(['root', 'nested'] as const)('opens and closes Step options through every real %s block control', async location => {
     const harness = await loadHarness();
+    const { WorkflowInspector } = await import('../editor/WorkflowInspector');
+    const assigned = new Set<string>();
+    const retain = (block: ReturnType<Harness['createWorkflowBlock']>) => {
+        for (const id of harness.collectWorkflowBlockIds({ ...buildDraft(harness), blocks: [block] })) assigned.add(id);
+        return block;
+    };
+    const blocks = [
+        retain(harness.createWorkflowLeafBlock({ kind: 'wait' }, assigned)),
+        retain(harness.createWorkflowBlock('step', assigned)),
+        retain(harness.createWorkflowLeafBlock({ kind: 'action', actionId: 'notifications.notify_me' }, assigned)),
+        retain(harness.createWorkflowLeafBlock({ kind: 'workflow', workflowRef: 'builtin:review-and-converge' }, assigned)),
+        ...(['parallel', 'loop', 'if'] as const).map(kind => retain(harness.createWorkflowBlock(kind, assigned))),
+    ];
+    for (const evaluatorKind of ['step', 'action'] as const) {
+        const loop = retain(harness.createWorkflowBlock('loop', assigned));
+        const evaluator = retain(evaluatorKind === 'step' ? harness.createWorkflowBlock('step', assigned)
+            : harness.createWorkflowLeafBlock({ kind: 'action', actionId: 'notifications.notify_me' }, assigned));
+        if (loop.kind !== 'loop' || (evaluator.kind !== 'step' && evaluator.kind !== 'action')) throw new Error('Wrong evaluator factory kind');
+        blocks.push({ ...loop, repetition: { kind: 'evaluate', maxIterations: 2, history: 'latest', evaluator } });
+    }
+    let draft = { ...buildDraft(harness), blocks };
+    if (location === 'nested') {
+        const conditional = retain(harness.createWorkflowBlock('if', assigned));
+        const loop = retain(harness.createWorkflowBlock('loop', assigned));
+        const parallel = retain(harness.createWorkflowBlock('parallel', assigned));
+        if (conditional.kind !== 'if' || loop.kind !== 'loop' || parallel.kind !== 'parallel') throw new Error('Wrong block factory kind');
+        draft = { ...draft, blocks: [{ ...parallel, branches: [{ ...parallel.branches[0]!, blocks: [
+            { ...loop, body: [{ ...conditional, then: blocks,
+                otherwise: [retain(harness.createWorkflowLeafBlock({ kind: 'wait' }, assigned))] }] },
+        ] }] }] };
+    }
+    const screen = await renderBody(harness, { draft });
+    for (const block of harness.walkWorkflowBlocks(draft.blocks)) {
+        const suffix = block.kind === 'step' ? 'customize'
+            : block.kind === 'parallel' || block.kind === 'loop' || block.kind === 'if' ? 'summary' : 'options';
+        const control = `workflow-editor-${block.kind}-${block.id}-${suffix}`;
+        expect(screen.findHostByTestId(control), `visible Step options for ${location} ${block.kind} ${block.id}`).not.toBeNull();
+        await screen.pressByTestIdAsync(control);
+        expect(screen.findHostByTestId('workflow-editor-inspector-options')).not.toBeNull();
+        expect(screen.findAllByType(WorkflowInspector).some(node => node.props.subject?.kind === 'block'
+            && node.props.subject.blockId === block.id)).toBe(true);
+        await screen.pressByTestIdAsync('workflow-editor-inspector-done');
+        expect(screen.findHostByTestId('workflow-editor-inspector-options')).toBeNull();
+        expect(screen.findHostByTestId(control)).not.toBeNull();
+    }
+    await screen.unmount();
+});
+
+/** Unrelated-publication selector evaluations by root count, so the larger cases can compare slopes. */
+const unrelatedSelectorWorkByRoots = new Map<number, number>();
+
+/** Activates a prompt's static picture the way a press does; the live composer replaces it. */
+async function activatePromptPreview(screen: Awaited<ReturnType<typeof renderScreen>>, promptTestID: string) {
+    const field = screen.findHostByTestId(promptTestID)!.findAll(node =>
+        node.props.testID === 'agent-input-document-preview-field' && typeof node.props.onPress === 'function').at(0);
+    if (field === undefined) throw new Error(`No prompt picture in ${promptTestID}`);
+    await act(async () => field.props.onPress());
+    await flushHookEffects();
+}
+
+function liveComposerCount(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    return screen.findAll(node => typeof node.type === 'string' && node.props.testID === 'agent-input-composer').length;
+}
+
+it.each([8, 100, 500])('measures the real %s-root editor: one live composer for the prompt being edited', async count => {
+    const harness = await loadHarness();
+    const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+    const telemetryEnabled = syncPerformanceTelemetry.isEnabled();
+    syncPerformanceTelemetry.configure({ enabled: true });
     const { useWorkflowAuthoringHost } = await import('./useWorkflowAuthoringHost');
+    const serverId = 'fix210-editor-home';
+    let machineComparisons = 0;
     const machines = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `diag185-machine-${index}` }));
-    getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])) });
+    for (const machine of machines) {
+        const id = machine.id;
+        Object.defineProperty(machine, 'id', { get: () => { machineComparisons += 1; return id; } });
+    }
+    getStorage().setState({ machines: {}, machineListByServerId: { [serverId]: machines },
+        machineListStatusByServerId: { [serverId]: 'idle' } });
     const initial = harness.createWorkflowEditorDraft({ draftId: 'diag185', name: 'Review', blocks: Array.from({ length: count }, (_, index) => ({
         kind: 'wait', id: `diag185-${index}`, document: { text: 'Review', references: [], attachments: [] },
     })) });
@@ -411,7 +519,10 @@ it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait 
     function Controlled() {
         const [draft, setDraft] = React.useState(initial);
         const [selected, select] = React.useState<string | null>(null);
-        const host = useWorkflowAuthoringHost({ serverId: null, projectTarget: null });
+        const host = useWorkflowAuthoringHost({ serverId, projectTarget: { machineId: 'diag185-machine-0', directory: '/repo' } });
+        expect(host.composerScope).toMatchObject({ kind: 'machine', machineId: 'diag185-machine-0',
+            serverId, machineHomeDir: '/Users/tester' });
+        expect(host.authoringFacts.machineName).toBe('tester.local');
         current = draft;
         return <React.Profiler id="DIAG185" onRender={() => { commits += 1; }}>
             <harness.WorkflowEditorBody draft={draft} onChange={setDraft} machineName="Mac Studio"
@@ -420,11 +531,15 @@ it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait 
         </React.Profiler>;
     }
     editorCosts.views.clear();
+    editorCosts.composers.clear();
     const screen = await renderScreen(<Controlled />);
     await flushHookEffects();
     const measure = (phase: string) => {
         const rows = [...editorCosts.views].filter(([id]) => /^workflow-editor-wait-diag185-\d+$/.test(id));
-        const result = { phase, roots: count, commits,
+        const result = { phase, roots: count, commits, machineComparisons,
+            mountedComposers: editorCosts.composers.size,
+            unaffectedComposerExecutions: [...editorCosts.composers].slice(1)
+                .reduce((sum, counter) => sum + counter.read().renders, 0),
             viewFibers: [...editorCosts.views.values()].reduce((sum, counter) => sum + counter.read().renders, 0),
             rowFibers: rows.reduce((sum, [, counter]) => sum + counter.read().renders, 0),
             unaffectedRowFibers: rows.filter(([id]) => id !== 'workflow-editor-wait-diag185-0')
@@ -433,12 +548,24 @@ it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait 
                 .reduce((sum, [, counter]) => sum + counter.read().renders, 0),
             menuSerializations: stringifies.mock.calls.filter(([value]) => Array.isArray(value)
                 && value.some(item => item?.id === 'duplicate' && typeof item?.label === 'string')).length };
+        console.info('DIAG185 real editor cost', result);
         commits = 0;
+        machineComparisons = 0;
         for (const counter of editorCosts.views.values()) counter.reset();
+        for (const counter of editorCosts.composers) counter.reset();
         stringifies.mockClear();
         return result;
     };
-    expect(measure('mount').rowFibers).toBeGreaterThanOrEqual(count);
+    const mount = measure('mount');
+    expect(mount.rowFibers).toBeGreaterThanOrEqual(count);
+    // Nobody is editing yet: every prompt is its picture, none mounts the composer.
+    expect(mount.mountedComposers).toBe(0);
+    expect(screen.findAll(node => typeof node.type === 'string' && node.props.testID === 'agent-input-document-preview')).toHaveLength(count);
+    await activatePromptPreview(screen, 'workflow-editor-wait-diag185-0-prompt');
+    const activation = measure('activation');
+    expect(activation.mountedComposers).toBe(1);
+    expect(liveComposerCount(screen)).toBe(1);
+    expect(promptFocus).toHaveBeenCalled();
     const input = screen.findHostByTestId('workflow-editor-wait-diag185-0-prompt')!.findAll(node =>
         node.props.testID === 'new-session-composer-input' && typeof node.props.onChange === 'function').at(-1)!;
     await act(async () => input.props.onChange({ nativeEvent: {
@@ -447,19 +574,56 @@ it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait 
     await flushHookEffects();
     expect(current.blocks[0]?.kind === 'wait' && current.blocks[0].document.text).toBe('Reviewx');
     const key = measure('keystroke');
+    expect(key.unaffectedComposerExecutions).toBe(0);
     await screen.pressByTestIdAsync('workflow-editor-wait-diag185-0-options');
     await flushHookEffects();
-    measure('selection-and-inspector');
-    await act(async () => getStorage().setState(state => ({ machines: { ...state.machines,
-        [machines[99]!.id]: { ...machines[99]!, metadataVersion: 2 },
+    const inspector = measure('selection-and-inspector');
+    expect(inspector.unaffectedRowFibers).toBe(0);
+    expect(inspector.unrelatedGapFibers).toBe(0);
+    expect(inspector.menuSerializations).toBeLessThanOrEqual(1);
+    expect(inspector.unaffectedComposerExecutions).toBe(0);
+    // Settings are a real authoring-facts input, but Wait cards and their gaps
+    // do not display the composer's Enter-to-send preference.
+    await act(async () => getStorage().setState(state => ({ settings: {
+        ...state.settings, agentInputEnterToSend: !state.settings.agentInputEnterToSend,
     } })));
     await flushHookEffects();
+    const settings = measure('unrelated-settings-change');
+    expect(settings.unaffectedRowFibers).toBe(0);
+    expect(settings.unrelatedGapFibers).toBe(0);
+    // An unrelated root publication leaves every exact-Machine input unchanged.
+    syncPerformanceTelemetry.reset();
+    await act(async () => getStorage().setState(state => ({ isDataReady: !state.isDataReady })));
+    await flushHookEffects();
+    const selectorWork = syncPerformanceTelemetry.snapshot().events
+        .filter(event => event.name.startsWith('sync.store.storage.selector.'))
+        .reduce((sum, event) => sum + event.count, 0);
     const publication = measure('unrelated-store-publication');
+    console.info('UI-EDITORROWS unrelated publication selector work', { roots: count, selectorWork,
+        byName: Object.fromEntries(syncPerformanceTelemetry.snapshot().events
+            .filter(event => event.name.startsWith('sync.store.storage.selector.') && event.count >= count)
+            .map(event => [event.name.slice('sync.store.storage.selector.'.length), event.count])) });
+    unrelatedSelectorWorkByRoots.set(count, selectorWork);
+    syncPerformanceTelemetry.configure({ enabled: telemetryEnabled });
+    syncPerformanceTelemetry.reset();
+    // The eager editor cost 46 selector evaluations per root + 43 (DIAG188). A picture row keeps the
+    // row chrome's own (heading text, menus) plus its material and placement reads: about 15.
+    expect(selectorWork).toBeLessThan(46 * count + 43);
+    const fewer = [...unrelatedSelectorWorkByRoots].filter(([roots]) => roots < count);
+    for (const [roots, work] of fewer) expect((selectorWork - work) / (count - roots)).toBeLessThan(20);
     stringifies.mockRestore();
+    expect(key.commits).toBe(1);
     expect(key.unaffectedRowFibers).toBe(0);
     expect(key.unrelatedGapFibers).toBe(0);
-    expect(key.menuSerializations).toBeLessThanOrEqual(1);
+    expect(key.menuSerializations).toBe(0);
     expect(publication.commits).toBe(0);
+    expect(publication.machineComparisons).toBe(0);
+    // Editing the next prompt moves the one live composer; the first keeps its text as a picture.
+    await activatePromptPreview(screen, 'workflow-editor-wait-diag185-1-prompt');
+    expect(liveComposerCount(screen)).toBe(1);
+    const firstPicture = screen.findHostByTestId('workflow-editor-wait-diag185-0-prompt')!
+        .findAll(node => node.props.testID === 'agent-input-document-preview-text').at(0);
+    expect(firstPicture?.props.children).toContain('Reviewx');
     const sibling = screen.findHostByTestId('workflow-editor-wait-diag185-1-prompt')!.findAll(node =>
         node.props.testID === 'new-session-composer-input' && typeof node.props.onChange === 'function').at(-1)!;
     await act(async () => sibling.props.onChange({ nativeEvent: {
@@ -527,8 +691,8 @@ it.each(['chooser', 'drag'] as const)('acquires unopened Session options only on
     let retireSource: (() => void) | undefined;
     try {
         if (intent === 'chooser') {
-            const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'demanded-defaults-continuity-conversation-field')!;
-            await act(async () => { menu.props.onOpenChange(true); });
+            const choice = segmentedField(screen, 'demanded-defaults-continuity-conversation');
+            await act(async () => { choice.props.onChange('continue'); });
         } else {
             retireSource = runtime!.registerSource({ id: 'intent-source', scope, isCurrent: () => true,
                 getItem: () => ({ kind: 'session', scope, address: { serverId, sessionId: session.id } }) });
@@ -542,8 +706,6 @@ it.each(['chooser', 'drag'] as const)('acquires unopened Session options only on
         expect(editorRequests().some(request => request.home === 'other' && request.path === '/v2/sessions')).toBe(false);
         expect(getStorage().getState().sessions[session.id]).toBeUndefined();
         if (intent === 'chooser') {
-            const field = dropdownField(screen, 'demanded-defaults-continuity-conversation-field');
-            await act(async () => { field.props.onSelect('existing_session'); });
             expect(screen.findHostByTestId('demanded-defaults-continuity-conversation-session-unopened')).not.toBeNull();
         } else {
             await flushHookEffects();
@@ -610,7 +772,7 @@ async function renderChooserLifetimeEditor() {
     await waitForHomeGovernance(() => expect(host.sessionBindingScope?.serverId).toBe(serverId));
     const defaults = 'workflow-editor-defaults-continuity';
     const step = 'workflow-editor-inspector-continuity';
-    const menu = (prefix: string) => screen.findAllByType(DropdownMenu).find(node => node.props.testID === `${prefix}-conversation-field`)!;
+    const menu = (prefix: string) => segmentedField(screen, `${prefix}-conversation`);
     const picker = (prefix: string) => screen.findAllByType(SelectionList).find(node => node.props.testID === `${prefix}-conversation-session-picker`);
     const reads = () => batch.componentRequests.filter(request => request.path === `/v2/sessions/${session.id}`).length;
     let version = 1;
@@ -620,9 +782,8 @@ async function renderChooserLifetimeEditor() {
         await flushHookEffects();
     };
     const open = async (prefix = defaults) => {
-        await act(async () => { menu(prefix).props.onOpenChange(true); });
+        await act(async () => { menu(prefix).props.onChange('continue'); });
         await waitForHomeGovernance(() => expect(host.existingSessions.map(option => option.sessionId)).toEqual([session.id]));
-        await act(async () => { menu(prefix).props.onSelect('existing_session'); menu(prefix).props.onOpenChange(false); });
         expect(picker(prefix)).toBeDefined();
     };
     return { screen, homes, serverId, defaults, step, open, menu, picker, reads, refresh,
@@ -645,7 +806,7 @@ it.each(['archive', 'remove', 'failure', 'kind switch', 'dismiss', 'bind'] as co
             editor.fail();
             await editor.refresh();
         } else if (transition === 'kind switch') {
-            await act(async () => { editor.menu(editor.defaults).props.onSelect('fresh'); });
+            await act(async () => { editor.menu(editor.defaults).props.onChange('fresh'); });
         } else if (transition === 'dismiss') {
             await act(async () => { editor.picker(editor.defaults)!.props.onRequestClose(); });
         } else {
@@ -1002,9 +1163,10 @@ describe('workflow editor body', () => {
         expect(popover!.props.placement).toBe('auto-vertical');
     });
 
-    it('keeps the open inspector anchored to the remounted step card across responsive layouts', async () => {
+    it('keeps one page tree across the phone breakpoint: the same scroll, step card and open Step options', async () => {
         const harness = await loadHarness();
         const { Popover } = await import('@/components/ui/popover/Popover');
+        const { KeyboardAwareScrollView } = await import('@/components/ui/keyboardAvoidance/KeyboardAwareScrollView');
         const cardNodes: object[] = [];
         const element = <harness.WorkflowEditorBody draft={buildDraft(harness)} onChange={() => {}}
             machineName="Mac Studio" composerScope={MACHINE_COMPOSER_SCOPE} selectedBlockId="analyze" onSelectBlock={() => {}}
@@ -1012,21 +1174,36 @@ describe('workflow editor body', () => {
         const screen = await renderScreen(element, { createNodeMock: node => {
             // The placement ref is on the outer listitem, not the inner step editor's testID.
             if (node.props.role !== 'listitem') return undefined;
-            // A real remount receives a new platform node; the inspector must measure that node.
+            // A remount would receive a new platform node, losing focus, selection and scroll.
             const card = { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(100, 100, 600, 160) };
             cardNodes.push(card);
             return card;
         } });
         const currentAnchor = () => screen.findAllByType(Popover).find(node => node.props.open)?.props.anchorRef.current;
         await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
-        expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
         const firstCard = currentAnchor();
+        expect(firstCard === cardNodes.at(-1)).toBe(true);
+        const firstScroll = screen.findAllByType(KeyboardAwareScrollView as never)[0];
+        const cardCount = cardNodes.length;
+
+        paneState.detailsAvailable = false;
         viewport.window = { width: 390, height: 844 };
+        getStorage().setState({ localSettings: { ...getStorage().getState().localSettings, uiMultiPanePanelsEnabled: false } });
         await screen.update(React.cloneElement(element));
+        // Recomposed as the phone page (value rows and the bottom bar) without remounting the document.
+        expect(screen.findHostByTestId('workflow-editor-phone-bar')).not.toBeNull();
+        expect(screen.findAllByType(KeyboardAwareScrollView as never)).toHaveLength(1);
+        expect(screen.findAllByType(KeyboardAwareScrollView as never)[0] === firstScroll).toBe(true);
+        expect(cardNodes.length).toBe(cardCount);
+
+        paneState.detailsAvailable = true;
         viewport.window = { width: 1440, height: 1000 };
+        getStorage().setState({ localSettings: { ...getStorage().getState().localSettings, uiMultiPanePanelsEnabled: true } });
         await screen.update(React.cloneElement(element));
-        expect(cardNodes.at(-1)).not.toBe(firstCard);
-        expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
+        expect(screen.findHostByTestId('workflow-editor-phone-bar')).toBeNull();
+        expect(screen.findAllByType(KeyboardAwareScrollView as never)[0] === firstScroll).toBe(true);
+        expect(cardNodes.length).toBe(cardCount);
+        expect(currentAnchor() === firstCard).toBe(true);
         expect(screen.findHostByTestId('workflow-editor-inspector-done')).not.toBeNull();
     });
 
@@ -1362,7 +1539,7 @@ describe('workflow editor body', () => {
         await screen.pressByTestIdAsync('workflow-editor-flow-toggle');
         expect(screen.findHostByTestId('workflow-editor-flow-node-analyze')).not.toBeNull();
         expect(screen.findHostByTestId('workflow-editor-step-analyze-prompt')).not.toBeNull();
-        expect(getStorage().getState().localSettings.appPaneScopesV1?.['workflow-editor']?.right.isOpen).toBe(true);
+        expect(paneUiState.readAll()?.['workflow-editor']?.right.isOpen).toBe(true);
 
         await screen.pressByTestIdAsync('workflow-editor-settings-toggle');
         expect(screen.findHostByTestId('workflow-editor-settings-pane')).not.toBeNull();
@@ -1378,7 +1555,7 @@ describe('workflow editor body', () => {
         await screen.pressByTestIdAsync('workflow-editor-flow-toggle');
         expect(screen.findHostByTestId('workflow-editor-flow-node-analyze')).toBeNull();
         expect(screen.findHostByTestId('workflow-editor-settings-pane')).not.toBeNull();
-        expect(getStorage().getState().localSettings.appPaneScopesV1?.['workflow-editor']?.right.isOpen).toBe(false);
+        expect(paneUiState.readAll()?.['workflow-editor']?.right.isOpen).toBe(false);
     });
 
     it('keeps an untouched draft silent and reveals one validity readout after a refused Run', async () => {
@@ -1647,8 +1824,10 @@ describe('workflow editor body', () => {
         const screen = await renderBody(harness, { onRunNow: () => {}, onSave: () => {}, saveStatus: { kind: 'unsaved' } });
 
         expect(screen.findAllByType(KeyboardAwareScrollView as never)).toHaveLength(1);
-        // No side slots on a phone.
-        expect(screen.findAllByType(AppPaneScopeHost)).toHaveLength(0);
+        // The same pane host as a wide page (one tree across widths), without side slots on a phone.
+        expect(screen.findAllByType(AppPaneScopeHost)).toHaveLength(1);
+        expect(screen.findHostByTestId('workflow-editor-settings-pane')).toBeNull();
+        expect(screen.findHostByTestId('workflow-editor-flow-pane')).toBeNull();
         expect(screen.findByTestId('workflow-editor-name')).not.toBeNull();
         const order = [
             'workflow-editor-header',
@@ -2110,11 +2289,11 @@ describe('workflow editor body', () => {
         const screen = await renderBody(harness, { draft: pinned, onChange: changed });
         await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
 
-        const field = dropdownField(screen, 'workflow-editor-inspector-continuity-conversation-field');
-        expect(field.props.items[0]).toMatchObject({ id: 'default' });
+        const field = segmentedField(screen, 'workflow-editor-inspector-continuity-conversation');
+        expect(field.props.options[0]).toMatchObject({ id: 'default' });
         // The option equal to the default is still offered, and it is what is pinned now (F24).
-        expect(field.props.selectedId).toBe('shared_run');
-        await act(async () => { field.props.onSelect('default'); });
+        expect(field.props.value).toBe('shared_run');
+        await act(async () => { field.props.onChange('default'); });
         expect(changed.mock.calls.at(-1)?.[0].blocks[0]).not.toHaveProperty('execution');
     });
 
@@ -2226,14 +2405,14 @@ describe('workflow editor body', () => {
                 { sessionId: 'session-2', machineId: 'machine-1', label: 'Refactor sync' },
             ],
         });
-        const field = dropdownField(screen, 'workflow-editor-defaults-continuity-conversation-field');
-        const existing = field.props.items.find((item) => item.id === 'existing_session');
-        expect(existing).toMatchObject({ title: 'workflows.page.inspector.aSession' });
-        expect(existing?.disabled).not.toBe(true);
+        const field = segmentedField(screen, 'workflow-editor-defaults-continuity-conversation');
+        const existing = field.props.options.find((option) => option.id === 'continue');
+        expect(existing).toMatchObject({ label: 'workflows.page.inspector.conversationContinue' });
+        expect(existing?.unavailableReason).toBeUndefined();
         expect(screen.findByTestId('workflow-editor-defaults-continuity-conversation-session-picker')).toBeNull();
 
         // "A session…" opens the canonical picker; nothing is authored until a Session is chosen.
-        await act(async () => { field.props.onSelect('existing_session'); });
+        await act(async () => { field.props.onChange('continue'); });
         expect(changed).not.toHaveBeenCalled();
         expect(screen.findHostByTestId('workflow-editor-defaults-continuity-conversation-session-picker')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Fix login');
@@ -2272,7 +2451,7 @@ describe('workflow editor body', () => {
         expect(changed).not.toHaveBeenCalled();
     });
 
-    it('shows a recorded existing Session and states when none can be offered', async () => {
+    it('shows a recorded existing Session and offers none where it cannot be bound', async () => {
         const harness = await loadHarness();
         const scope = await bindingHome();
         const { createSessionFixture } = await import('@/dev/testkit');
@@ -2291,11 +2470,11 @@ describe('workflow editor body', () => {
             sessionBindingScope: scope,
             existingSessions: [{ sessionId: 'session-9', machineId: 'machine-1', label: 'Ship release' }],
         });
-        const field = dropdownField(listed, 'workflow-editor-defaults-continuity-conversation-field');
-        expect(field.props.selectedId).toBe('existing_session');
-        await waitForHomeGovernance(() => expect(dropdownField(listed,
-            'workflow-editor-defaults-continuity-conversation-field').props.items.find((item) => item.id === 'existing_session')?.title)
-            .toContain('Ship release'));
+        const field = segmentedField(listed, 'workflow-editor-defaults-continuity-conversation');
+        expect(field.props.value).toBe('continue');
+        // The consequence line names the recorded Session.
+        await waitForHomeGovernance(() => expect(String(segmentedField(listed,
+            'workflow-editor-defaults-continuity-conversation').props.subtitle)).toContain('Ship release'));
         await listed.unmount();
 
         await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
@@ -2307,10 +2486,9 @@ describe('workflow editor body', () => {
         await unlisted.unmount();
 
         const none = await renderBody(harness);
-        const noneField = dropdownField(none, 'workflow-editor-defaults-continuity-conversation-field');
-        const existing = noneField.props.items.find((item) => item.id === 'existing_session');
-        expect(existing?.disabled).toBe(true);
-        expect(existing?.subtitle).toBe('workflows.conversation.noExistingSessions');
+        // A host that cannot bind a Session offers no Session choice at all.
+        const noneField = segmentedField(none, 'workflow-editor-defaults-continuity-conversation');
+        expect(noneField.props.options.map((option) => option.id)).not.toContain('continue');
         await none.unmount();
     });
 
@@ -2409,6 +2587,7 @@ describe('workflow editor body', () => {
         }
         paneState.detailsAvailable = false;
         const screen = await renderScreen(React.createElement(ControlledBody));
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
         const originalComposer = stepComposer(screen, 'analyze');
         const originalRef = stepComposerRef(screen, 'analyze');
 
@@ -2517,6 +2696,8 @@ describe('workflow editor body', () => {
         }
         const screen = await renderScreen(React.createElement(ControlledBody));
 
+        expect(liveComposerCount(screen)).toBe(0);
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
         const composerRef = stepComposerRef(screen, 'analyze');
         expect(composerRef).toBeDefined();
         const initial = readComposerPresentationSnapshot(composerRef);
@@ -2674,7 +2855,8 @@ describe('workflow editor body', () => {
             projectTarget: { machineId: 'machine-1', directory: '/Users/me/project' },
         }));
 
-        const composerRef = stepComposerRef(screen, 'analyze');
+        expect(liveComposerCount(screen)).toBe(0);
+        const composerRef = stepDocumentRef(screen, 'analyze');
         expect(readComposerPresentationSnapshot(composerRef)).toMatchObject({
             text,
             references: text.length === 0 ? [] : [{
@@ -2684,6 +2866,7 @@ describe('workflow editor body', () => {
             }],
             attachments: [{ instanceId: 'attachment-staged', content: stagedContent }],
         });
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
         expect(composerProps(screen, 'analyze').inputPersistence).toMatchObject({
             initialSelection: selection,
         });
@@ -2761,6 +2944,7 @@ describe('workflow editor body', () => {
             });
         }
         const screen = await renderScreen(React.createElement(ControlledBody));
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
         const originalRef = stepComposerRef(screen, 'analyze');
         expect(originalRef?.instanceId).toBeDefined();
 
@@ -2773,6 +2957,8 @@ describe('workflow editor body', () => {
         await screen.pressByTestIdAsync('workflow-editor-undo');
         await act(async () => {});
         expect(draft.blocks.map((block) => block.id)).toEqual(['analyze', 'implement']);
+        // Removal moved editing to the surviving step; the restored one is edited again by activating it.
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
         const restoredRef = stepComposerRef(screen, 'analyze');
         expect(restoredRef.instanceId).not.toBe(originalRef.instanceId);
     });
@@ -2998,5 +3184,284 @@ describe('workflow editor body', () => {
             onChangeView: () => {},
         } as never));
         await vi.waitFor(() => expect(readAnnouncements()).toHaveLength(1));
+    });
+});
+
+/**
+ * A workflow mounts the live composer only for the prompt being edited (UI-EDITORROWS); every other
+ * prompt is its static picture. Custody keeps each document's exact references and caret, so moving
+ * the one live composer between rows, re-placing a row and undoing never re-derives a document.
+ */
+describe('workflow editor prompt pictures', () => {
+    const promptText = 'Compare @issue with @issue';
+    const secondTokenStart = 'Compare @issue with '.length;
+
+    it('keeps eight portable external-plugin attachment documents addressable without live composers at rest', async () => {
+        const harness = await loadHarness();
+        const draft = harness.createWorkflowEditorDraft({ draftId: 'attachment-pictures', name: 'Review',
+            blocks: Array.from({ length: 8 }, (_, index) => ({
+                kind: 'step' as const, id: `attached-${index}`,
+                document: { text: 'Review this issue', references: [], attachments: [{
+                    v: 1 as const, instanceId: `issue-${index}`, attachment: { pluginId: 'partner.issues', localId: 'issue' },
+                    key: `issue-${index}`, value: { issueId: index }, presentation: { label: `Issue ${index}`, typeLabel: 'Issue' },
+                }] }, input: [], result: { kind: 'text' as const },
+            })),
+        });
+        const screen = await renderBody(harness, { draft });
+        expect(liveComposerCount(screen)).toBe(0);
+        for (let index = 0; index < 8; index += 1) {
+            const picture = await pictureOf(screen, `attached-${index}`);
+            expect(picture?.props.attachmentRowItems).toMatchObject([{ label: `Issue ${index}` }]);
+            // The tray is drawn by the shared attachment row, in the row's own place above the field.
+            const prompt = screen.findHostByTestId(`workflow-editor-step-attached-${index}-prompt`)!;
+            const tray = prompt.findAll(node => node.props.testID === 'agent-input-document-preview-attachments').at(0);
+            expect(tray).toBeDefined();
+            expect(tray!.findAll(node => typeof node.type === 'string' && node.children.includes(`Issue ${index}`))).not.toHaveLength(0);
+        }
+        expect(liveComposerCount(screen)).toBe(0);
+        // The picture's tray is the live tray's size: neither the live row's tray section nor the
+        // picture's frame bounds its height here (no host panel budget), so activation cannot resize it.
+        const trayBounds = (node: ReactTestInstance | null) => {
+            for (let current = node; current !== null; current = current.parent) {
+                const style = [current.props.style].flat(4).filter(Boolean).reduce((all, entry) => ({ ...all, ...entry }), {});
+                if (typeof style.maxHeight === 'number') return style.maxHeight;
+            }
+            return null;
+        };
+        const pictureTray = screen.findHostByTestId('workflow-editor-step-attached-0-prompt')!
+            .findAll(node => node.props.testID === 'agent-input-document-preview-attachments').at(0)!;
+        expect(trayBounds(pictureTray)).toBeNull();
+        await activatePromptPreview(screen, 'workflow-editor-step-attached-0-prompt');
+        expect(liveComposerCount(screen)).toBe(1);
+        expect(trayBounds(screen.findHostByTestId('agent-input-attachment-drop-target'))).toBeNull();
+        await screen.unmount();
+    });
+
+    async function renderTwoStepEditor() {
+        const harness = await loadHarness();
+        let draft = harness.setWorkflowDefaultField(harness.createWorkflowEditorDraft({
+            draftId: 'pictures',
+            name: 'Review',
+            blocks: [
+                { kind: 'loop', id: 'triage', repetition: { kind: 'count', count: { kind: 'literal', value: 2 } }, body: [] },
+                { kind: 'step', id: 'analyze', document: { text: promptText, references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+                { kind: 'step', id: 'implement', document: { text: 'Implement the plan', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+            ] as never,
+        }), 'agentTarget', AGENT_TARGET);
+        let opened: string | null = null;
+        function ControlledBody() {
+            const [current, setCurrent] = React.useState(draft);
+            const history = useWorkflowEditorHistory<WorkflowEditorDraft>('prompt-pictures', (snapshot) => {
+                draft = snapshot;
+                setCurrent(snapshot);
+            });
+            return React.createElement(harness.WorkflowEditorBody, {
+                draft: current,
+                history: history.controls,
+                onCommitChange: history.commit,
+                onChange: (next: WorkflowEditorDraft, label?: string, committed?: boolean) => {
+                    history.record(current, next, label ?? 'Edit workflow', committed);
+                    draft = next;
+                    setCurrent(next);
+                },
+                machineName: 'Mac Studio',
+                composerScope: MACHINE_COMPOSER_SCOPE,
+                selectedBlockId: null,
+                onSelectBlock: () => {},
+                onCustomizeBlock: (blockId: string) => { opened = blockId; },
+                view: 'steps',
+                onChangeView: () => {},
+            });
+        }
+        const screen = await renderScreen(React.createElement(ControlledBody));
+        return { screen, readDraft: () => draft, readOpened: () => opened };
+    }
+
+    async function pictureOf(screen: Awaited<ReturnType<typeof renderScreen>>, blockId: string) {
+        const prompt = screen.findHostByTestId(`workflow-editor-step-${blockId}-prompt`);
+        return prompt?.findAll(node => typeof node.props.onActivate === 'function' && Array.isArray(node.props.references)).at(0) ?? null;
+    }
+
+    it('keeps external plugin and client Action read/apply/focus on the exact inactive document until deletion or Account retirement', async () => {
+        const homes = await serveActionHomes({ homes: [{ key: 'editor', serverUrl: 'https://inactive-editor.test', accountId: 'editor-account' }],
+            route: request => createEmptyAccountBootstrapHttpResponse(request.path, { method: request.method }) ?? undefined });
+        bindingBoundaries.push(() => homes.dispose());
+        const scope = { serverId: homes.homes.editor!.id, accountId: 'editor-account' };
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const { screen, readDraft } = await renderTwoStepEditor();
+        const first = stepDocumentRef(screen, 'analyze');
+        const second = stepDocumentRef(screen, 'implement');
+        const handlers = createComposerPresentationHostHandlers({ scope, owner: {
+            identity: { pluginId: 'partner.editor-tools', localId: 'composer-tools' },
+            occurrenceId: 'installed-tools-1', surfaceInstanceKey: 'tools-surface',
+        } });
+        const request = (method: PluginUiHostApiRequestEnvelopeV1['method'], payload: PluginUiHostApiRequestEnvelopeV1['payload']): PluginUiHostApiRequestEnvelopeV1 => ({
+            version: 1, requestId: `editor:${method}`, method, payload,
+            surface: { pluginId: 'partner.editor-tools', contributionId: 'composer-tools', surfaceId: 'tools-surface',
+                placement: 'composerSurface', platform: 'web', channel: 'internal', resourceScope: [], diagnostics: [] },
+        });
+        expect(liveComposerCount(screen)).toBe(0);
+        expect(handlers.readComposer!(request('readComposer', { ref: first }))).toMatchObject({ status: 'ready', snapshot: { text: promptText } });
+        await activatePromptPreview(screen, 'workflow-editor-step-implement-prompt');
+        const original = readMountedComposerPresentationSnapshot({ scope, ref: first })!;
+        await act(async () => {
+            expect(await handlers.applyComposer!(request('applyComposer', { ref: first, transaction: {
+                expectedRevision: original.revision, operations: [{ kind: 'text.insert', position: { offset: promptText.length }, text: ' via plugin' }],
+            } }))).toMatchObject({ status: 'applied' });
+        });
+        const pluginEdited = readMountedComposerPresentationSnapshot({ scope, ref: first })!;
+        await act(async () => {
+            expect(await executor.execute('composer.transaction.apply', { scope, ref: first, transaction: {
+                expectedRevision: pluginEdited.revision, operations: [{ kind: 'text.insert', position: { offset: pluginEdited.text.length }, text: ' via Action' }],
+            } }, { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId })).toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        const actionEdited = readMountedComposerPresentationSnapshot({ scope, ref: first })!;
+        await act(async () => {
+            expect(await executor.execute('composer.transaction.apply', { scope, ref: first, transaction: {
+                expectedRevision: actionEdited.revision, operations: [{ kind: 'text.insert', position: { offset: actionEdited.text.length }, text: ' via agent' }],
+            } }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, runtimeAccountId: scope.accountId })).toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        const block = readDraft().blocks.find(block => block.id === 'analyze');
+        expect(block?.kind === 'step' && block.document.text).toBe(`${promptText} via plugin via Action via agent`);
+        promptFocus.mockClear();
+        await act(async () => { expect(handlers.focusComposer!(request('focusComposer', { ref: first }))).toEqual({ status: 'focused' }); });
+        await flushHookEffects();
+        expect(stepComposerRef(screen, 'analyze')).toBe(first);
+        expect(promptFocus).toHaveBeenCalled();
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions');
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions-remove');
+        expect(handlers.readComposer!(request('readComposer', { ref: first }))).toEqual({ status: 'unavailable', reason: 'scopeClosed' });
+        expect(readMountedComposerPresentationSnapshot({ scope, ref: first })).toBeNull();
+        expect(handlers.focusComposer!(request('focusComposer', { ref: first }))).toEqual({ status: 'unavailable', reason: 'scopeClosed' });
+        expect(await handlers.applyComposer!(request('applyComposer', { ref: first, transaction: {
+            expectedRevision: 0, operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'stale' }],
+        } }))).toMatchObject({ status: 'composerUnavailable' });
+        expect(handlers.readComposer!(request('readComposer', { ref: second }))).toMatchObject({ status: 'ready' });
+        await act(async () => { await homes.switchAccount('editor', 'replacement-account'); });
+        expect(handlers.readComposer!(request('readComposer', { ref: second }))).toEqual({ status: 'unavailable', reason: 'scopeClosed' });
+        expect(readMountedComposerPresentationSnapshot({ scope, ref: second })).toBeNull();
+        expect(handlers.focusComposer!(request('focusComposer', { ref: second }))).toEqual({ status: 'unavailable', reason: 'scopeClosed' });
+        expect(await executor.execute('composer.transaction.apply', { scope, ref: second, transaction: {
+            expectedRevision: 0, operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'stale' }],
+        } }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, runtimeAccountId: scope.accountId })).toMatchObject({ ok: true, result: { status: 'composerUnavailable' } });
+        // Re-placement remounts the adapter, but cannot admit retained bytes to
+        // the replacement Account under the retired document's exact ref.
+        await screen.pressByTestIdAsync('workflow-editor-step-implement-actions');
+        await screen.pressByTestIdAsync('workflow-editor-step-implement-actions-moveIn');
+        const moved = readDraft().blocks[0];
+        expect(moved?.kind === 'loop' && moved.body.map(block => block.id)).toEqual(['implement']);
+        expect(handlers.readComposer!(request('readComposer', { ref: second }))).toEqual({ status: 'unavailable', reason: 'scopeClosed' });
+        handlers.dispose();
+        await screen.unmount();
+    });
+
+    it('moves the one live composer between prompts and keeps the exact reference, caret and Composer address of a picture through a move and undo', async () => {
+        const { screen, readDraft } = await renderTwoStepEditor();
+        expect(liveComposerCount(screen)).toBe(0);
+        expect(await pictureOf(screen, 'analyze')).not.toBeNull();
+
+        // Keyboard entry: focusing the picture opens the live composer and lands in it.
+        const field = screen.findHostByTestId('workflow-editor-step-analyze-prompt')!.findAll(node =>
+            node.props.testID === 'agent-input-document-preview-field' && typeof node.props.onFocus === 'function').at(0)!;
+        promptFocus.mockClear();
+        await act(async () => field.props.onFocus());
+        await flushHookEffects();
+        expect(liveComposerCount(screen)).toBe(1);
+        expect(promptFocus).toHaveBeenCalled();
+        const composerRef = stepComposerRef(screen, 'analyze');
+        const initial = readComposerPresentationSnapshot(composerRef)!;
+        await act(async () => {
+            expect(applyComposerPresentationTransaction({ ref: composerRef, transaction: {
+                expectedRevision: initial.revision,
+                operations: [{ kind: 'reference.insert', reference: {
+                    kind: 'partner.reference', ref: 'partner:issue-42', token: '@issue', label: 'Issue #42',
+                    start: secondTokenStart, end: secondTokenStart + '@issue'.length,
+                } }],
+            } })).toEqual({ status: 'applied', revision: initial.revision + 1 });
+        });
+        const caret = { start: 8, end: 14 };
+        await act(async () => {
+            (composerProps(screen, 'analyze').inputPersistence as { onSelectionChangePersist: (selection: typeof caret, length: number) => void })
+                .onSelectionChangePersist(caret, promptText.length);
+        });
+
+        // Editing the next prompt: the first becomes its picture, bound to the second token exactly.
+        await activatePromptPreview(screen, 'workflow-editor-step-implement-prompt');
+        expect(liveComposerCount(screen)).toBe(1);
+        expect(() => stepComposer(screen, 'analyze')).toThrow();
+        // Presentation demand does not retire the exact document's command address.
+        expect(readComposerPresentationSnapshot(composerRef)).toMatchObject({ text: promptText, ref: composerRef, selection: caret });
+        const exactReference = [{ start: secondTokenStart, end: secondTokenStart + '@issue'.length, ref: 'partner:issue-42', label: 'Issue #42' }];
+        expect((await pictureOf(screen, 'analyze'))?.props.references).toEqual(exactReference);
+
+        // Re-placed while it is a picture, then the move is undone.
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions');
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflow-editor-step-analyze-actions-moveIn')).not.toBeNull());
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions-moveIn');
+        await vi.waitFor(() => {
+            const loop = readDraft().blocks[0];
+            expect(loop?.kind === 'loop' ? loop.body.map(block => block.id) : []).toEqual(['analyze']);
+        });
+        expect((await pictureOf(screen, 'analyze'))?.props.references).toEqual(exactReference);
+        await screen.pressByTestIdAsync('workflow-editor-undo');
+        await act(async () => {});
+        expect(readDraft().blocks.map(block => block.id)).toEqual(['triage', 'analyze', 'implement']);
+        expect((await pictureOf(screen, 'analyze'))?.props.references).toEqual(exactReference);
+        expect(liveComposerCount(screen)).toBe(1);
+
+        // Back to the first prompt: the same Composer address, exact document and caret.
+        await activatePromptPreview(screen, 'workflow-editor-step-analyze-prompt');
+        expect(liveComposerCount(screen)).toBe(1);
+        expect(stepComposerRef(screen, 'analyze')).toBe(composerRef);
+        expect(readComposerPresentationSnapshot(composerRef)).toMatchObject({
+            text: promptText,
+            references: [{ ref: 'partner:issue-42', start: secondTokenStart, end: secondTokenStart + '@issue'.length }],
+        });
+        expect(composerProps(screen, 'analyze').inputPersistence).toMatchObject({ initialSelection: caret });
+        const implement = readDraft().blocks.find(block => block.id === 'implement');
+        expect(implement?.kind === 'step' && implement.document.text).toBe('Implement the plan');
+        await screen.unmount();
+    });
+
+    it('opens the live composer with the caret where the author pointed in the picture', async () => {
+        const { screen } = await renderTwoStepEditor();
+        const picture = await pictureOf(screen, 'implement');
+        promptSelection.mockClear();
+        promptFocus.mockClear();
+        await act(async () => picture!.props.onActivate({ start: 4, end: 4 }));
+        await flushHookEffects();
+        expect(liveComposerCount(screen)).toBe(1);
+        expect(promptFocus).toHaveBeenCalled();
+        // Focusing must not move the caret off the restored point.
+        expect(promptSelection.mock.calls.at(-1)?.[0]).toEqual({ start: 4, end: 4 });
+        await screen.unmount();
+    });
+
+    it('opens Step options from a picture without mounting a composer, and follows the saved composer placement', async () => {
+        const { getWorkflowStepOptionsChipPlacement } = await import('@/components/workflows/workflowComposerControlPlacements');
+        const placementId = getWorkflowStepOptionsChipPlacement().id;
+        const pinned = await renderTwoStepEditor();
+        expect(pinned.screen.findHostByTestId('workflow-editor-step-analyze-customize')).not.toBeNull();
+        await pinned.screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+        expect(pinned.readOpened()).toBe('analyze');
+        expect(pinned.screen.findHostByTestId('workflow-editor-inspector-options')).not.toBeNull();
+        expect(liveComposerCount(pinned.screen)).toBe(0);
+        // Pictured controls retain their advertised keyboard/accessibility entry.
+        const library = pinned.screen.findHostByTestId('workflow-editor-step-analyze-prompt')!
+            .findAll(node => node.props.testID === 'agent-input-document-preview-prompt-library').at(0)!;
+        expect(library.props).toMatchObject({ accessibilityRole: 'button', accessible: true, focusable: true });
+        await pinned.screen.unmount();
+
+        getStorage().getState().applyLocalSettings({ navigationSurfacePlacementsV1: { composer: {
+            orderedIds: [], placements: { [placementId]: 'overflow' },
+        } } });
+        const overflow = await renderTwoStepEditor();
+        // The author moved Step options to the overflow: neither the picture nor the live row draws it.
+        expect(overflow.screen.findHostByTestId('workflow-editor-step-analyze-customize')).toBeNull();
+        await activatePromptPreview(overflow.screen, 'workflow-editor-step-analyze-prompt');
+        expect(liveComposerCount(overflow.screen)).toBe(1);
+        expect(overflow.screen.findHostByTestId('workflow-editor-step-analyze-customize')).toBeNull();
+        await overflow.screen.unmount();
     });
 });

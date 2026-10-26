@@ -4,12 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { NavigationContext, useNavigation } from '@react-navigation/native';
 
-import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, installTimerCensus, renderScreen, standardCleanup } from '@/dev/testkit';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { HomeHub } from './HomeHub';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { storage } from '@/sync/domains/state/storage';
+import { flattenTestStyle } from '@/dev/testkit/harness/popoverHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -27,6 +28,8 @@ import { Text } from '@/components/ui/text/Text';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { decryptArtifactWithBody } from '@/sync/engine/artifacts/syncArtifacts';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
+import { WelcomePlanet } from '@/components/atmosphere/moments/WelcomePlanet';
+import { atmosphereStageStore } from '@/components/atmosphere/atmosphereStage';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,6 +51,14 @@ const settings = vi.hoisted(() => ({
     positions: {} as Record<string, number>,
     scrollOffset: 0,
     presented: undefined as boolean | undefined,
+    measureAtmosphere: false,
+}));
+const atmospherePaints = vi.hoisted(() => ({ count: 0, font: {} }));
+vi.mock('@shopify/react-native-skia', async () => ({
+    ...(await import('@/dev/testkit/mocks/reactNativeSkia')).createReactNativeSkiaMock(),
+    // Font readiness and physical picture allocation are native boundaries.
+    useFont: () => atmospherePaints.font,
+    createPicture: () => { atmospherePaints.count++; return { dispose() {} }; },
 }));
 installDisconnectedServerSocketBoundary();
 let artifact = createHomeHubArtifactHttpBoundary('account-home');
@@ -214,6 +225,7 @@ afterEach(async () => {
     settings.positions = {};
     settings.scrollOffset = 0;
     settings.presented = undefined;
+    settings.measureAtmosphere = false;
     usage.summary = { entries: [], asOf: null, source: 'none' };
     usage.listeners.clear();
     widgets.projection = null;
@@ -241,6 +253,12 @@ async function renderHome(request = artifact.request, initial: 'stored' | 'missi
         const scope = { serverId: connection.home.id, accountId: 'account-home' };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
     }
+    if (settings.measureAtmosphere) storage.setState(state => ({ ...state,
+        localSettings: { ...state.localSettings, homeWelcomeSeenAt: null },
+        settings: { ...state.settings, homeAtmosphere: { ...state.settings.homeAtmosphere,
+            source: 'planet', moments: { ...state.settings.homeAtmosphere.moments, welcome: true, loading: false },
+        } },
+    }));
     const element = () => (
         // The route adapter reads navigator presence before consulting useIsFocused.
         // Model a routed Home, rather than a preview that is always focused.
@@ -271,6 +289,13 @@ async function renderHome(request = artifact.request, initial: 'stored' | 'missi
     const rendered = await renderScreen(element(), {
         createNodeMock: node => {
             const testID = node.props && typeof node.props === 'object' && 'testID' in node.props ? node.props.testID : undefined;
+            if (settings.measureAtmosphere) return {
+                getInnerViewNode: () => contentNode,
+                scrollTo: () => {},
+                getBoundingClientRect: () => ({ left: 0, top: 0, width: settings.viewport.width, height: settings.viewport.height }),
+                measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) =>
+                    done(0, 0, settings.viewport.width, settings.viewport.height),
+            };
             if (testID === 'home-hub') return { getInnerViewNode: () => contentNode, scrollTo: () => {},
                 getBoundingClientRect: () => ({ left: 0, top: 56, width: settings.viewport.width, height: settings.viewport.height }) };
             const id = typeof testID === 'string' ? testID.slice('home-hub.section.'.length) : '';
@@ -316,6 +341,69 @@ function shownSections(text: string): string[] {
 }
 
 describe('HomeHub', () => {
+    it('parks planet paints, moments and timers with retained Home and returns without replaying Welcome', async () => {
+        const before = storage.getState();
+        settings.presented = true;
+        settings.measureAtmosphere = true;
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'Date', 'performance'] });
+        const timers = installTimerCensus(stack => stack.replaceAll('\\', '/').includes('/components/atmosphere/') ? 'atmosphere' : null);
+        let fires = 0;
+        const interval = globalThis.setInterval;
+        vi.spyOn(globalThis, 'setInterval').mockImplementation((callback, delay, ...args) => {
+            const atmosphereTimer = new Error().stack?.replaceAll('\\', '/').includes('/components/atmosphere/');
+            return interval(() => { if (atmosphereTimer) fires++; callback(...args); }, delay);
+        });
+        let screen: Awaited<ReturnType<typeof renderHome>> | undefined;
+        try {
+            screen = await renderHome();
+            await vi.waitFor(() => expect(screen!.findByTestId('home-hero')).not.toBeNull());
+            await act(async () => {
+                for (let node = screen!.findByTestId('home-hero'); node; node = node.parent) {
+                    if (typeof node.type === 'string') node.props.onLayout?.({ nativeEvent: {
+                        layout: { x: 0, y: 0, width: settings.viewport.width, height: settings.viewport.height },
+                    } });
+                }
+            });
+            // A first arrival exercises the real Welcome state owner; landing it enters digit rest.
+            const welcome = screen.findByType(WelcomePlanet);
+            await act(async () => welcome.props.onLanded());
+            expect(screen.findAllByType(WelcomePlanet)).toHaveLength(0);
+            const seen = storage.getState().localSettings.homeWelcomeSeenAt;
+            expect(seen).not.toBeNull();
+            const restingPaints = atmospherePaints.count;
+            await act(async () => { vi.advanceTimersByTime(2000); });
+            expect(atmospherePaints.count).toBeGreaterThan(restingPaints);
+            settings.presented = false;
+            await screen.rerender();
+            const hiddenPaints = atmospherePaints.count;
+            const hiddenFires = fires;
+            await act(async () => storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+                ...state.settings.homeAtmosphere, planet: { ...state.settings.homeAtmosphere.planet, style: 'rich' },
+            } } })));
+            await act(async () => { vi.advanceTimersByTime(300_000); });
+            expect(atmospherePaints.count - hiddenPaints).toBe(0);
+            expect(fires - hiddenFires).toBe(0);
+            expect(timers.read().filter(timer => timer.consumer === 'atmosphere')).toHaveLength(0);
+            expect(atmosphereStageStore.get().panes).toHaveLength(0);
+            settings.presented = true;
+            await screen.rerender();
+            expect(screen.findAllByType(WelcomePlanet)).toHaveLength(0);
+            expect(storage.getState().localSettings.homeWelcomeSeenAt).toBe(seen);
+            const resumedPaints = atmospherePaints.count;
+            await act(async () => { vi.advanceTimersByTime(2000); });
+            expect(atmospherePaints.count).toBeGreaterThan(resumedPaints);
+        } finally {
+            await screen?.unmount();
+            storage.setState(state => ({ ...state,
+                settings: { ...state.settings, homeAtmosphere: before.settings.homeAtmosphere },
+                localSettings: { ...state.localSettings, homeWelcomeSeenAt: before.localSettings.homeWelcomeSeenAt },
+            }));
+            timers.stop();
+            vi.restoreAllMocks();
+            vi.useRealTimers();
+        }
+    });
+
     it('parks Home subscriptions while hidden and restores current layout without losing customization', async () => {
         settings.presented = true;
         let reads = 0;
@@ -854,6 +942,8 @@ describe('HomeHub plugin widgets', () => {
 
         // The page ends with the one new-row target: a grouped widget dropped there leaves its group for the end of Home.
         expect(screen.findByTestId('home-hub.new-row')).not.toBeNull();
+        // Drawn as the dashed slot the lab draws (it takes its words' height); the room to aim at is the drag owner's, never drawn.
+        expect(flattenTestStyle(screen.findByTestId('home-hub.new-row')!.props.style).minHeight).toBeUndefined();
         const drag = screen.root.findAllByType(SessionSurfaceEntityDragHandle).find(handle => handle.props.testID === `home-hub.section.${first.id}.move`)!.props.drag;
         const newRow = screen.root.findAllByType(SessionSurfaceEntityTargetFeedback).find(node => node.props.testID === 'home-hub.new-row.drop')!.props.drag;
         let carry: ReturnType<typeof drag.runtime.begin> = null;

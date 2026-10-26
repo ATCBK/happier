@@ -162,6 +162,18 @@ describe('PluginEventAutomationComposerContent currentness', () => {
         standardCleanup();
     });
 
+    it('offers only the existing watcher chooser for pending Event intent before catalog admission', async () => {
+        const { PluginEventAutomationComposerContent } = await import('./PluginEventAutomationComposerContent');
+        const current = createModel();
+        const model = { ...current, eligibleEvents: [], selectedEvent: null, selectedWatcherOrigin: null,
+            eventCatalogStatus: 'unavailable' as const, pendingEventRef: current.selectedEvent!.event.identity };
+        const screen = await renderScreen(<PluginEventAutomationComposerContent model={model} />);
+        expect(screen.findByTestId('automation-event-watcher-picker')).not.toBeNull();
+        expect(screen.findByTestId('automation-event-configure-source')).toBeNull();
+        expect(screen.findByTestId('automation-event-filter-add-clause')).toBeNull();
+        expect(model.configureSource).not.toHaveBeenCalled();
+    });
+
     it('stops disclosing the one-time webhook secret once the configured source is no longer current', async () => {
         const { PluginEventAutomationComposerContent } = await import('./PluginEventAutomationComposerContent');
         const webhookEndpoint = {
@@ -256,7 +268,8 @@ describe('PluginEventAutomationComposerContent currentness', () => {
 
         const recheck = screen.findByProps({ testID: 'automation-event-webhook-endpoint-recheck' });
         expect(recheck.props.disabled).toBe(true);
-        expect(recheck.props.accessibilityState).toEqual({ busy: true, disabled: true });
+        expect(screen.findHostByTestId('automation-event-webhook-endpoint-recheck')?.props.accessibilityState)
+            .toMatchObject({ busy: true, disabled: true });
     });
 
     it('does not present a stale configured source as ready to reconfigure', async () => {
@@ -294,7 +307,8 @@ describe('PluginEventAutomationComposerContent currentness', () => {
 
         const configure = screen.findByProps({ testID: 'automation-event-configure-source' });
         expect(configure.props.disabled).toBe(true);
-        expect(configure.props.accessibilityState).toMatchObject({ disabled: true });
+        expect(screen.findHostByTestId('automation-event-configure-source')?.props.accessibilityState)
+            .toMatchObject({ disabled: true });
         expect(configure.props.accessibilityHint).toBe('automations.form.trigger.eventFilterInvalid');
         expect(screen.findAllByProps({ testID: 'automation-event-source-unavailable' })).toHaveLength(0);
     });

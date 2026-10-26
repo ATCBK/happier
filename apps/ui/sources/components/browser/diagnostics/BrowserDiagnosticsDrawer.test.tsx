@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
@@ -12,7 +12,12 @@ import type {
 import { applyBrowserDiagnosticEvents, createBrowserDiagnosticsUiStore, selectBrowserDiagnosticsForView } from '@/sync/domains/browser/diagnostics/store';
 import { browserViewKey } from '@happier-dev/protocol';
 
+import type { BrowserDiagnosticsDrawerHandle } from './BrowserDiagnosticsDrawer';
 import type { BrowserDiagnosticsInteractionControls } from './BrowserDiagnosticsInteractionPanel';
+import { useBrowserDiagnosticsRuntime } from './useBrowserDiagnosticsRuntime';
+import { createBrowserControlState, dispatchBrowserControlCommand } from '@/sync/domains/browser/control';
+
+afterEach(() => vi.unstubAllGlobals());
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -45,6 +50,7 @@ vi.mock('@/text', async () => {
 type BrowserDiagnosticsDrawerModule = Readonly<{
     BrowserDiagnosticsDrawer?: React.ComponentType<{
         diagnostics: unknown;
+        handleRef?: React.Ref<BrowserDiagnosticsDrawerHandle>;
         interaction?: BrowserDiagnosticsInteractionControls;
         eventSource?: Pick<StoreApi<BrowserDiagnosticsUiStore>, 'getState' | 'subscribe'>;
         testID?: string;
@@ -106,10 +112,36 @@ function hostDiagnosticsFor(viewId: string): BrowserViewDiagnosticsProjection {
 }
 
 describe('BrowserDiagnosticsDrawer', () => {
+    it('lets the user enable and deliberately disable collector-backed embedded diagnostics', async () => {
+        let nonce = 0;
+        vi.stubGlobal('crypto', { randomUUID: () => `collector_nonce_${++nonce}` });
+        const { BrowserDiagnosticsDrawer: Drawer } = await import('./BrowserDiagnosticsDrawer');
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
+        const state = dispatchBrowserControlCommand(createBrowserControlState(), {
+            kind: 'openView', commandId: 'open_embedded_diagnostics', browserSessionId: 'browser_session_1', viewId: 'embedded_diagnostics',
+            target: { kind: 'localServicePreview', targetId: 'preview_1', sessionId: 'session_1', machineId: 'machine_1' },
+            platform: 'web', currentUrl: 'https://preview.happier.test', focus: true,
+        }).state;
+        const view = state.viewsById.embedded_diagnostics;
+        if (!view) throw new Error('Browser control did not create the embedded view');
+        function MountedDiagnostics() {
+            const runtime = useBrowserDiagnosticsRuntime({ view, enabled: true, automationEnabled: true,
+                parentOrigin: 'https://app.happier.test' });
+            return <Drawer handleRef={handleRef} diagnostics={hostDiagnosticsFor(view.viewId)} interaction={runtime?.interaction} testID="embedded-diagnostics" />;
+        }
+        const screen = await renderScreen(<MountedDiagnostics />);
+        await act(async () => { handleRef.current?.open(); });
+        await screen.pressByTestIdAsync('embedded-diagnostics-body-interaction-enable');
+        expect(screen.findByTestId('embedded-diagnostics-body-eval-console')).toBeTruthy();
+        await screen.pressByTestIdAsync('embedded-diagnostics-body-interaction-disable');
+        expect(screen.findByTestId('embedded-diagnostics-body-eval-console')).toBeNull();
+        expect(screen.findByTestId('embedded-diagnostics-body-interaction-enable')).toBeTruthy();
+    });
     it('reads current collected events when open and performs no detail projection while closed', async () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
         const view = { browserSessionId: 'browser_session_1', viewId: 'view_subscription_scope' };
         const key = browserViewKey(view);
         let detailReads = 0;
@@ -129,39 +161,41 @@ describe('BrowserDiagnosticsDrawer', () => {
         };
         const source = createStore<BrowserDiagnosticsUiStore>(() => stateFor('first'));
         const screen = await renderScreen(<mod.BrowserDiagnosticsDrawer
+            handleRef={handleRef}
             diagnostics={selectBrowserDiagnosticsForView(createBrowserDiagnosticsUiStore(), view)}
             eventSource={source} testID="scoped-diagnostics"
         />);
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('scoped-diagnostics-open');
+        await act(async () => { handleRef.current?.open(); });
         expect(screen.findByTestId('scoped-diagnostics-body-console-row-first')).toBeTruthy();
         await screen.pressByTestIdAsync('scoped-diagnostics-close');
         const closedReads = detailReads;
         await act(async () => { source.setState(stateFor('second'), true); });
         expect(detailReads).toBe(closedReads);
-        await screen.pressByTestIdAsync('scoped-diagnostics-open');
+        await act(async () => { handleRef.current?.open(); });
         expect(screen.findByTestId('scoped-diagnostics-body-console-row-second')).toBeTruthy();
         expect(detailReads).toBeGreaterThan(closedReads);
     });
-    it('toggles between expanded and collapsed drawer states and can close to a peek', async () => {
+    it('opens from its external handle, resizes, and disappears when closed', async () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={hostDiagnosticsFor('view_toggle')}
                 testID="browser-diagnostics-drawer"
             />,
         );
 
-        // The drawer OPENS CLOSED (lab Q): the page is the hero, and only the handle with its
-        // reopen affordance shows until the person asks for diagnostics.
-        expect(screen.findByTestId('browser-diagnostics-drawer-container-closed')).toBeTruthy();
+        // Closed diagnostics leave the page visible until the external overflow control opens them.
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-closed')).toBeNull();
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeNull();
 
         // Opening goes to full height.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
         expect(screen.findByTestId('browser-diagnostics-drawer-container-expanded')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
 
@@ -170,26 +204,29 @@ describe('BrowserDiagnosticsDrawer', () => {
         expect(screen.findByTestId('browser-diagnostics-drawer-container-collapsed')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
 
-        // Close hides the body, keeping only the handle/peek + reopen affordance.
+        // Close removes the drawer; reopening goes through the same external handle.
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-close');
-        expect(screen.findByTestId('browser-diagnostics-drawer-container-closed')).toBeTruthy();
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-closed')).toBeNull();
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeNull();
-        expect(screen.findByTestId('browser-diagnostics-drawer-open')).toBeTruthy();
+        await act(async () => { handleRef.current?.open(); });
+        expect(screen.findByTestId('browser-diagnostics-drawer-container-expanded')).toBeTruthy();
     });
 
     it('renders one section tab per present family and shows a single family at a time', async () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={hostDiagnosticsFor('view_tabs')}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         // A tab per present family.
         expect(screen.findByTestId('browser-diagnostics-drawer-tab:console')).toBeTruthy();
@@ -200,20 +237,22 @@ describe('BrowserDiagnosticsDrawer', () => {
         // Default section is the first family (console). Only console panel renders.
         expect(screen.findByTestId('browser-diagnostics-drawer-body-console-panel')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-elements-panel')).toBeNull();
-        // Active-family fidelity badge is present (no fidelity regression).
-        expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-injectedPage')).toBeTruthy();
+        // One state line, no mechanism chip.
+        expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-injectedPage')).toBeNull();
+        expect(screen.findByTestId('browser-diagnostics-drawer-body-console-available')).toBeTruthy();
 
         // Switching to elements shows the elements panel and hides console.
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:elements');
         expect(screen.findByTestId('browser-diagnostics-drawer-body-elements-panel')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-console-panel')).toBeNull();
-        expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-injectedPage')).toBeTruthy();
+        expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-injectedPage')).toBeNull();
     });
 
     it('routes page errors through a console-grade section and persists the active section per view', async () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const diagnostics: BrowserViewDiagnosticsProjection = {
             ...hostDiagnostics,
@@ -250,12 +289,13 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={diagnostics}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:pageError');
         expect(screen.findByTestId('browser-diagnostics-drawer-body-pageError-panel')).toBeTruthy();
@@ -266,6 +306,7 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const remounted = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={{
                     ...diagnostics,
                     navigationGeneration: 3,
@@ -291,6 +332,7 @@ describe('BrowserDiagnosticsDrawer', () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         let startCount = 0;
         const enabledIdle: BrowserDiagnosticsInteractionControls = {
@@ -304,13 +346,14 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={hostDiagnosticsFor('view_picker')}
                 interaction={enabledIdle}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         // Console section: the picker affordance is not shown.
         expect(screen.findByTestId('browser-diagnostics-drawer-body-picker-start')).toBeNull();
@@ -326,6 +369,7 @@ describe('BrowserDiagnosticsDrawer', () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         let startCount = 0;
         const onSubmitExpression = vi.fn(() => true);
@@ -346,13 +390,14 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={hostDiagnosticsFor('view_eval')}
                 interaction={enabledWithEval}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         // Console section: eval is reachable, but the element picker is not.
         expect(screen.findByTestId('browser-diagnostics-drawer-body-eval-console')).toBeTruthy();
@@ -370,6 +415,7 @@ describe('BrowserDiagnosticsDrawer', () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const disabled: BrowserDiagnosticsInteractionControls = {
             state: 'disabled',
@@ -381,13 +427,14 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={hostDiagnosticsFor('view_disabled_picker')}
                 interaction={disabled}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:elements');
         // No start-picker affordance while interaction is disabled.
@@ -400,6 +447,7 @@ describe('BrowserDiagnosticsDrawer', () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const previewProxy: BrowserPreviewProxyDiagnosticsProjection = {
             status: 'available',
@@ -431,12 +479,13 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={previewProxy}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         expect(screen.findByTestId('browser-diagnostics-drawer-body')).toBeTruthy();
         expect(screen.findByTestId('browser-diagnostics-drawer-body-fidelity-previewProxy')).toBeTruthy();
@@ -447,6 +496,7 @@ describe('BrowserDiagnosticsDrawer', () => {
         const mod = await loadDrawer();
         expect(mod?.BrowserDiagnosticsDrawer).toBeTypeOf('function');
         if (!mod?.BrowserDiagnosticsDrawer) return;
+        const handleRef = React.createRef<BrowserDiagnosticsDrawerHandle>();
 
         const diagnostics: BrowserViewDiagnosticsProjection = {
             status: 'available',
@@ -487,12 +537,13 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         const screen = await renderScreen(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={diagnostics}
                 testID="browser-diagnostics-drawer"
             />,
         );
         // The drawer opens closed (lab Q: the page leads); open it to read a section.
-        await screen.pressByTestIdAsync('browser-diagnostics-drawer-open');
+        await act(async () => { handleRef.current?.open(); });
 
         expect(screen.findByTestId('browser-diagnostics-drawer-tab:performance')).toBeTruthy();
         await screen.pressByTestIdAsync('browser-diagnostics-drawer-tab:performance');
@@ -505,6 +556,7 @@ describe('BrowserDiagnosticsDrawer', () => {
 
         await screen.update(
             <mod.BrowserDiagnosticsDrawer
+                handleRef={handleRef}
                 diagnostics={{
                     ...diagnostics,
                     navigationGeneration: 3,

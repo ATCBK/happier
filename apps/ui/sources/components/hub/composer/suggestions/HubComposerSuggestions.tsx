@@ -166,7 +166,8 @@ function SuggestionLinks(props: Readonly<{ tiles: readonly SelectionTile<string>
         <View testID="hub-composer.suggestions" accessibilityLabel={t('homeComposer.suggestionsLabel')} style={[linkStyles.row, props.pills && linkStyles.pillRow]}>
             {props.tiles.map(tile => (
                 <HappierPressable key={tile.id} testID={tile.testID} accessibilityRole="button" accessibilityLabel={tile.title}
-                    accessibilityHint={tile.subtitle} disabled={tile.disabled} onPress={() => props.onPress(tile.id)}>
+                    accessibilityHint={tile.subtitle} disabled={tile.disabled} onPress={() => props.onPress(tile.id)}
+                    hitReach={props.pills ? PILL_HIT_REACH : LINK_HIT_REACH}>
                     {({ hovered }) => {
                         const label = (
                             <View style={[linkStyles.link, props.pills && linkStyles.pill]}>
@@ -187,6 +188,10 @@ function SuggestionLinks(props: Readonly<{ tiles: readonly SelectionTile<string>
         </View>
     );
 }
+
+/** Half of each row's gaps (`linkStyles`): neighbouring suggestions' hit areas meet, never overlap. */
+const PILL_HIT_REACH = 4;
+const LINK_HIT_REACH = { left: 10, right: 10, top: 2, bottom: 2 } as const;
 
 const linkStyles = StyleSheet.create((theme) => ({
     row: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: theme.space.s20, rowGap: theme.space.s4 },

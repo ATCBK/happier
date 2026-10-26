@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -22,13 +22,14 @@ import type { AutomationRunNowController } from './useAutomationRunNowController
 import type { ItemGroupVirtualizedSegment } from '@/components/ui/lists/ItemGroup.dividers';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
-import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_PAGE_METRICS, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { formatAutomationErrorMessage } from '@/components/automations/automationErrorFormatting';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
-// The drawn control height, grown to the touch floor where the primary pointer is a finger.
-const minimumInteractiveTargetSize = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
+// The Run now control draws at the page control height; a finger reaches past it through the hit area.
+const RUN_NOW_BUTTON_SIZE = HAPPIER_PAGE_METRICS.controlHeightPx;
+// The gap to the Switch beside it (`rowRight`), which the two hit areas split.
+const ROW_RIGHT_GAP = 10;
 const MAX_VISIBLE_TRIGGER_SUMMARY_LINES = 3;
 
 type Props = Readonly<{
@@ -52,17 +53,64 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.space.s10,
+        gap: ROW_RIGHT_GAP,
     },
     runNowButton: {
-        width: minimumInteractiveTargetSize,
-        height: minimumInteractiveTargetSize,
-        borderRadius: minimumInteractiveTargetSize / 2,
+        width: RUN_NOW_BUTTON_SIZE,
+        height: RUN_NOW_BUTTON_SIZE,
+        borderRadius: RUN_NOW_BUTTON_SIZE / 2,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: theme.colors.surface.elevated,
     },
 }));
+
+/**
+ * The row's Run now control. A bare `Pressable` keeps the live-region announcement the shared pressable
+ * cannot carry, so its hit area comes from the shared hook rather than a larger drawn circle.
+ */
+function RunNowButton(props: Readonly<{
+    onPress: (() => void) | undefined;
+    disabled: boolean;
+    pending: boolean;
+    runState: string | undefined;
+    label: string;
+}>) {
+    const { theme } = useUnistyles();
+    const styles = stylesheet;
+    const hitArea = useHappierHitArea({
+        restingStyle: () => styles.runNowButton,
+        hitReach: { left: ROW_RIGHT_GAP / 2, right: ROW_RIGHT_GAP / 2 },
+    });
+    return (
+        <Pressable
+            onPress={props.onPress}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
+            style={({ pressed }) => ([
+                styles.runNowButton,
+                { opacity: props.disabled ? 0.5 : pressed ? motionTokens.press.opacity : 1 },
+            ])}
+            disabled={props.disabled}
+            accessibilityRole="button"
+            accessibilityLabel={props.label}
+            accessibilityState={{ disabled: props.disabled, busy: props.pending }}
+            accessibilityLiveRegion={props.runState === 'acknowledged' ? 'polite' : undefined}
+            {...(props.runState === 'acknowledged'
+                ? ({ 'aria-live': 'polite' } as Record<string, unknown>)
+                : {})}
+        >
+            {hitArea.frame}
+            {props.runState === 'submitting' ? (
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+            ) : props.runState === 'acknowledged' ? (
+                <Icon name="check" size={16} color={theme.colors.text.secondary} />
+            ) : (
+                <Icon name="play" size={16} color={theme.colors.text.secondary} />
+            )}
+        </Pressable>
+    );
+}
 
 export const AutomationListGroup = React.memo((props: Props) => {
     const { theme } = useUnistyles();
@@ -169,33 +217,17 @@ export const AutomationListGroup = React.memo((props: Props) => {
                         rightElementOutsidePressable
                         rightElement={(
                             <View style={styles.rowRight}>
-                                <Pressable
+                                <RunNowButton
                                     onPress={mutationsEnabled
                                         ? () => void handleRunNow(automation.id, automation.targetType)
                                         : undefined}
-                                    style={({ pressed }) => ([
-                                        styles.runNowButton,
-                                        { opacity: runNowDisabled ? 0.5 : pressed ? motionTokens.press.opacity : 1 },
-                                    ])}
                                     disabled={runNowDisabled}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={runState === 'acknowledged'
+                                    pending={runNowPending}
+                                    runState={runState}
+                                    label={runState === 'acknowledged'
                                         ? `${t('automations.detail.runNowTitle')}: ${automation.name}. ${t('common.success')}`
                                         : `${t('automations.detail.runNowTitle')}: ${automation.name}`}
-                                    accessibilityState={{ disabled: runNowDisabled, busy: runNowPending }}
-                                    accessibilityLiveRegion={runState === 'acknowledged' ? 'polite' : undefined}
-                                    {...(runState === 'acknowledged'
-                                        ? ({ 'aria-live': 'polite' } as Record<string, unknown>)
-                                        : {})}
-                                >
-                                    {runState === 'submitting' ? (
-                                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-                                    ) : runState === 'acknowledged' ? (
-                                        <Icon name="check" size={16} color={theme.colors.text.secondary} />
-                                    ) : (
-                                        <Icon name="play" size={16} color={theme.colors.text.secondary} />
-                                    )}
-                                </Pressable>
+                                />
                                 <Switch
                                     value={automation.enabled}
                                     onValueChange={mutationsEnabled

@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, Popover } from '@/components/ui/popover';
 import { t } from '@/text';
@@ -47,7 +46,6 @@ export function BrowserPrivacyPopover(props: Readonly<{
                     tooltipHidden={open}
                     expanded={open}
                     hasPopup="dialog"
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={4}
                     onPress={() => setOpen((value) => !value)}
                 />

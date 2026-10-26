@@ -1,5 +1,7 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
@@ -10,7 +12,6 @@ import { isPluginMachineExecutionOriginCandidateSelectable } from '@/sync/domain
 import { Text } from '@/components/ui/text/Text';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     SelectionList,
     type SelectionListOption,
@@ -31,7 +32,8 @@ type Props = Readonly<{
     model: PluginEventAutomationComposerModel;
 }>;
 
-const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+/** The controls draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches past it through `HappierPressable`'s hit area. */
+const minimumInteractiveTargetSize = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 
 /**
  * The composer already renders inside the Automation popover, which can itself
@@ -342,11 +344,11 @@ export function PluginEventAutomationComposerContent(props: Props) {
                     ) : (
                         <>
                             <Text style={styles.fieldLabel}>{t('automations.form.trigger.eventSource')}</Text>
-                            <Pressable
+                            <HappierPressable
                                 testID="automation-event-picker"
                                 accessibilityRole="button"
-                                accessibilityState={{ expanded: eventPickerOpen }}
-                                ref={pickerTriggerRef('event')}
+                                expanded={eventPickerOpen}
+                                controlRef={pickerTriggerRef('event')}
                                 onPress={() => {
                                     notePickerTriggerPressed('event', eventPickerOpen);
                                     setEventPickerOpen((current) => !current);
@@ -361,7 +363,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                     size={14}
                                     color={theme.colors.text.secondary}
                                 />
-                            </Pressable>
+                            </HappierPressable>
                             {eventPickerOpen ? (
                                 <View testID="automation-event-picker-options" style={styles.optionList}>
                                     <SelectionList
@@ -392,15 +394,18 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                 </View>
                             ) : null}
 
-                            {selectedEvent ? (
+                        </>
+                    )}
+                            {(props.model.eventCatalogStatus === 'ready' && selectedEvent)
+                                || (props.model.pendingEventRef && props.model.watcherCandidates.length > 0) ? (
                                 <>
                                     <Text style={styles.fieldLabel}>{observationPlacementTitle}</Text>
-                                    <Pressable
+                                    <HappierPressable
                                         testID="automation-event-watcher-picker"
                                         accessibilityRole="button"
                                         accessibilityLabel={observationPlacementTitle}
-                                        accessibilityState={{ expanded: watcherPickerOpen }}
-                                        ref={pickerTriggerRef('watcher')}
+                                        expanded={watcherPickerOpen}
+                                        controlRef={pickerTriggerRef('watcher')}
                                         onPress={() => {
                                             notePickerTriggerPressed('watcher', watcherPickerOpen);
                                             setWatcherPickerOpen((current) => !current);
@@ -417,7 +422,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                             size={14}
                                             color={theme.colors.text.secondary}
                                         />
-                                    </Pressable>
+                                    </HappierPressable>
                                     {watcherPickerOpen ? (
                                         <View testID="automation-event-watcher-picker-options" style={styles.optionList}>
                                             <SelectionList
@@ -447,6 +452,10 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                         </View>
                                     ) : null}
 
+                                </>
+                            ) : null}
+                            {props.model.eventCatalogStatus === 'ready' && selectedEvent ? (
+                                <>
                                     {props.model.availableObservationTransports.length > 1 ? (
                                         <>
                                             <Text style={styles.fieldLabel}>
@@ -456,11 +465,11 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                 {props.model.availableObservationTransports.map((kind) => {
                                                     const selected = props.model.observationTransport === kind;
                                                     return (
-                                                        <Pressable
+                                                        <HappierPressable
                                                             key={kind}
                                                             testID={`automation-event-observation-${kind}`}
                                                             accessibilityRole="button"
-                                                            accessibilityState={{ selected }}
+                                                            selected={selected}
                                                             onPress={() => props.model.setObservationTransport(kind)}
                                                             style={({ pressed }) => [
                                                                 styles.targetButton,
@@ -475,7 +484,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                                         ? t('automations.form.trigger.observationSocket')
                                                                         : t('automations.form.trigger.observationCheckpointedPull')}
                                                             </Text>
-                                                        </Pressable>
+                                                        </HappierPressable>
                                                     );
                                                 })}
                                             </View>
@@ -483,14 +492,11 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                     ) : null}
 
                                     <Text style={styles.fieldLabel}>{t('automations.form.trigger.source')}</Text>
-                                    <Pressable
+                                    <HappierPressable
                                         testID="automation-event-configure-source"
                                         accessibilityRole="button"
                                         accessibilityHint={sourceSetupHint}
-                                        accessibilityState={{
-                                            busy: props.model.sourceStatus === 'settingUp',
-                                            disabled: sourceSetupDisabled,
-                                        }}
+                                        busy={props.model.sourceStatus === 'settingUp'}
                                         disabled={sourceSetupDisabled}
                                         onPress={props.model.configureSource}
                                         style={({ pressed }) => [
@@ -503,7 +509,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                             {sourceDisplayText}
                                         </Text>
                                         <Icon name="gear" size={14} color={theme.colors.text.secondary} />
-                                    </Pressable>
+                                    </HappierPressable>
                                     {sourceUnavailable ? (
                                         <Text
                                             testID="automation-event-source-unavailable"
@@ -515,7 +521,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                         </Text>
                                     ) : null}
                                     {sourceSettingsPath ? (
-                                        <Pressable
+                                        <HappierPressable
                                             testID="automation-event-source-open-settings"
                                             accessibilityRole="button"
                                             onPress={() => router.push(sourceSettingsPath as never)}
@@ -528,7 +534,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                             <Text style={styles.sourceRemediationText}>
                                                 {t('modals.openSettings')}
                                             </Text>
-                                        </Pressable>
+                                        </HappierPressable>
                                     ) : null}
                                     {showSourceInstanceId ? (
                                         <Text numberOfLines={1} style={styles.optionDescription}>
@@ -602,13 +608,10 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                         {t('automations.form.trigger.webhookEndpointAwaitingConfirmation')}
                                                     </Text>
                                                     {props.model.refreshWebhookEndpoint ? (
-                                                        <Pressable
+                                                        <HappierPressable
                                                             testID="automation-event-webhook-endpoint-recheck"
                                                             accessibilityRole="button"
-                                                            accessibilityState={{
-                                                                busy: props.model.webhookEndpointRefreshing,
-                                                                disabled: props.model.webhookEndpointRefreshing,
-                                                            }}
+                                                            busy={props.model.webhookEndpointRefreshing}
                                                             disabled={props.model.webhookEndpointRefreshing}
                                                             onPress={props.model.refreshWebhookEndpoint}
                                                             style={({ pressed }) => [
@@ -627,7 +630,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                                 size={14}
                                                                 color={theme.colors.text.secondary}
                                                             />
-                                                        </Pressable>
+                                                        </HappierPressable>
                                                     ) : null}
                                                 </>
                                             )}
@@ -667,10 +670,9 @@ export function PluginEventAutomationComposerContent(props: Props) {
 
                                     <Text style={styles.fieldLabel}>{t('automations.form.trigger.eventFilter')}</Text>
                                     <View style={styles.filterBuilder}>
-                                        <Pressable
+                                        <HappierPressable
                                             testID="automation-event-filter-add-clause"
                                             accessibilityRole="button"
-                                            accessibilityState={{ disabled: props.model.payloadBrowser.fields.length === 0 }}
                                             disabled={props.model.payloadBrowser.fields.length === 0}
                                             onPress={props.model.addFilterClause}
                                             style={({ pressed }) => [
@@ -683,7 +685,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                             <Text style={styles.filterActionText}>
                                                 {t('settingsPlugins.eventAutomationComposer.addFilterClause')}
                                             </Text>
-                                        </Pressable>
+                                        </HappierPressable>
                                         {props.model.filterClauses.map((clause) => (
                                             <View
                                                 key={clause.id}
@@ -691,12 +693,12 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                 style={styles.filterClause}
                                             >
                                                 <View style={styles.filterClauseControls}>
-                                                    <Pressable
+                                                    <HappierPressable
                                                         testID={`automation-event-filter-clause-${clause.id}-field-picker`}
                                                         accessibilityRole="button"
                                                         accessibilityLabel={t('settingsPlugins.eventAutomationComposer.filterField')}
-                                                        accessibilityState={{ expanded: filterFieldPickerOpenFor === clause.id }}
-                                                        ref={pickerTriggerRef(`filterField:${clause.id}`)}
+                                                        expanded={filterFieldPickerOpenFor === clause.id}
+                                                        controlRef={pickerTriggerRef(`filterField:${clause.id}`)}
                                                         onPress={() => {
                                                             notePickerTriggerPressed(
                                                                 `filterField:${clause.id}`,
@@ -711,13 +713,13 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                     >
                                                         <Text numberOfLines={1} style={styles.filterPickerText}>{clause.field}</Text>
                                                         <Icon name="caret-down" size={12} color={theme.colors.text.secondary} />
-                                                    </Pressable>
-                                                    <Pressable
+                                                    </HappierPressable>
+                                                    <HappierPressable
                                                         testID={`automation-event-filter-clause-${clause.id}-operator-picker`}
                                                         accessibilityRole="button"
                                                         accessibilityLabel={t('settingsPlugins.eventAutomationComposer.filterOperator')}
-                                                        accessibilityState={{ expanded: filterOperatorPickerOpenFor === clause.id }}
-                                                        ref={pickerTriggerRef(`filterOperator:${clause.id}`)}
+                                                        expanded={filterOperatorPickerOpenFor === clause.id}
+                                                        controlRef={pickerTriggerRef(`filterOperator:${clause.id}`)}
                                                         onPress={() => {
                                                             notePickerTriggerPressed(
                                                                 `filterOperator:${clause.id}`,
@@ -736,8 +738,8 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                                 : t('settingsPlugins.eventAutomationComposer.filterOneOf')}
                                                         </Text>
                                                         <Icon name="caret-down" size={12} color={theme.colors.text.secondary} />
-                                                    </Pressable>
-                                                    <Pressable
+                                                    </HappierPressable>
+                                                    <HappierPressable
                                                         testID={`automation-event-filter-clause-${clause.id}-remove`}
                                                         accessibilityRole="button"
                                                         accessibilityLabel={t('common.remove')}
@@ -745,7 +747,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                         style={({ pressed }) => [styles.filterRemoveButton, pressed ? styles.pressed : null]}
                                                     >
                                                         <Icon name="trash" size={14} color={theme.colors.text.secondary} />
-                                                    </Pressable>
+                                                    </HappierPressable>
                                                 </View>
                                                 {filterFieldPickerOpenFor === clause.id ? (
                                                     <View
@@ -753,11 +755,11 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                         style={styles.filterOptionList}
                                                     >
                                                         {props.model.payloadBrowser.fields.map((field) => (
-                                                            <Pressable
+                                                            <HappierPressable
                                                                 key={field.pointer}
                                                                 testID={`automation-event-filter-clause-${clause.id}-field-option-${field.pointer}`}
                                                                 accessibilityRole="button"
-                                                                accessibilityState={{ selected: clause.field === field.pointer }}
+                                                                selected={clause.field === field.pointer}
                                                                 onPress={() => {
                                                                     props.model.setFilterClauseField(clause.id, field.pointer);
                                                                     notePickerCollapsed(`filterField:${clause.id}`);
@@ -770,7 +772,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                                 ]}
                                                             >
                                                                 <Text style={styles.filterOptionText}>{field.pointer}</Text>
-                                                            </Pressable>
+                                                            </HappierPressable>
                                                         ))}
                                                     </View>
                                                 ) : null}
@@ -780,11 +782,11 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                         style={styles.filterOptionList}
                                                     >
                                                         {(['eq', 'in'] as const).map((op) => (
-                                                            <Pressable
+                                                            <HappierPressable
                                                                 key={op}
                                                                 testID={`automation-event-filter-clause-${clause.id}-operator-option-${op}`}
                                                                 accessibilityRole="button"
-                                                                accessibilityState={{ selected: clause.op === op }}
+                                                                selected={clause.op === op}
                                                                 onPress={() => {
                                                                     props.model.setFilterClauseOperator(clause.id, op);
                                                                     notePickerCollapsed(`filterOperator:${clause.id}`);
@@ -801,7 +803,7 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                                                         ? t('settingsPlugins.eventAutomationComposer.filterEquals')
                                                                         : t('settingsPlugins.eventAutomationComposer.filterOneOf')}
                                                                 </Text>
-                                                            </Pressable>
+                                                            </HappierPressable>
                                                         ))}
                                                     </View>
                                                 ) : null}
@@ -857,8 +859,6 @@ export function PluginEventAutomationComposerContent(props: Props) {
                                     ) : null}
                                 </>
                             ) : null}
-                        </>
-                    )}
                 </View>
         </View>
     );

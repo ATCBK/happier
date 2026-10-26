@@ -1,30 +1,24 @@
+import { isHappierTouchPrimaryPointer } from '@happier-dev/plugin-ui/environment';
 import { Platform } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { resolveAgentInputPanelLayoutStyle } from '@/components/sessions/agentInput/components/agentInputChromeStyles';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
 import type { ThemeStyleScales } from '@/theme/themeStyleScales';
 
 /**
- * Text-labelled authoring controls cannot declare a square the way
- * `IconButton` does, so under a finger they take the canonical platform target
- * as a real minimum height. `hitSlop` is not an option: react-native-web's
- * `Pressable` never reads it and the desktop app IS the web bundle, so a
- * slop-declared target there is a target that does not exist. Growth is on the
- * free vertical axis, so wrapping chip rows still meet at their gap rather than
- * overlapping. A precise pointer keeps the document's dense rhythm (the shared
- * touch-floor policy, `resolveTouchTargetFloorPx`), so headings, footers and
- * the between-block gap sit at the lab's spacing on desktop.
+ * The document draws at its lab rhythm under every pointer; text-labelled authoring controls are
+ * `HappierPressable`s, whose hit area reaches the finger's target past the drawn box; the between-block
+ * inserter is drawn as the document's gap and reached the same way. Only the reveal rule asks the
+ * shared pointer owner.
  */
-const TOUCH_TARGET_FLOOR = resolveTouchTargetFloorPx(Platform.OS) ?? undefined;
 
 /**
  * Whether the document is under a finger. There is no hover there, so the between-block inserter
  * shows while a block in its list is selected; under a precise pointer it shows on hover or focus only.
  */
-export const WORKFLOW_EDITOR_TOUCH_POINTER = TOUCH_TARGET_FLOOR !== undefined;
+export const WORKFLOW_EDITOR_TOUCH_POINTER = isHappierTouchPrimaryPointer(Platform.OS);
 
 /**
  * The document's ordinal column (lab `.uwe-ord`, 22 px): every heading starts with a ring this wide,
@@ -34,9 +28,6 @@ const ORDINAL_SIZE = ICON_SIZE.lg;
 
 /** A lane caption's line: the caption's own type (`rowMeta`), which its tick and caret hang on. */
 const LANE_LINE = Number(Typography.variant('meta').lineHeight);
-
-/** A heading's first line: the touch floor under a finger, else the ordinal ring's own height. */
-const HEADING_LINE = TOUCH_TARGET_FLOOR ?? ORDINAL_SIZE;
 
 /**
  * The document's grid (lab `editor-E1`, `editor-P1`): every block's ordinal (or a container's kind
@@ -68,7 +59,6 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      * paint it without moving layout.
      */
     actionTarget: {
-        minHeight: TOUCH_TARGET_FLOOR,
         justifyContent: 'center',
         borderWidth: 1,
         borderColor: 'transparent',
@@ -179,7 +169,6 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s4,
         paddingHorizontal: theme.space.s8,
         marginLeft: -theme.space.s8,
-        minWidth: TOUCH_TARGET_FLOOR,
         borderRadius: theme.borderRadius.md,
         flexShrink: 1,
     },
@@ -238,7 +227,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** The ordinal and `⋯` columns, centred on the heading's first line. */
     headingLine: {
-        minHeight: HEADING_LINE,
+        minHeight: ORDINAL_SIZE,
         justifyContent: 'center',
     },
     /** The name with its meta, then the trailing consequence (wrapping beneath when the row is narrow). */
@@ -316,7 +305,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 0,
         maxWidth: '100%',
-        minHeight: HEADING_LINE,
+        minHeight: ORDINAL_SIZE,
         alignItems: 'center',
         // A wrapping row packs its lines at the top unless told otherwise; the name line centres on
         // the heading's first line so it reads level with the ordinal and `⋯` (DESIGN-7 N28).
@@ -330,7 +319,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     headingButtonFill: {
         flexGrow: 1,
     },
-    /** The editable name's box is its text; its line (`headingButton`) carries the touch floor. */
+    /** The editable name's box is its text; its line is `headingButton`. */
     headingNameInput: {
         ...Typography.variant('heading'),
         color: theme.colors.text.primary,
@@ -382,14 +371,13 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /**
      * An editable step's inputs at rest (its tokens on the footer line): one press target that
-     * selects the step, with the touch floor under a finger and a reserved border for the ring.
+     * selects the step, with a reserved border for the ring.
      */
     inputTokensTarget: {
         // A row item of the footer line that still wraps its own tokens at the line's width (phone).
         flexShrink: 1,
         minWidth: 0,
         maxWidth: '100%',
-        minHeight: TOUCH_TARGET_FLOOR,
         borderWidth: 1,
         borderColor: 'transparent',
         borderRadius: theme.borderRadius.sm,
@@ -416,25 +404,22 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /**
      * The between-block inserter: a hairline with a centred (+), revealed on hover, focus or
-     * selection (04 §4.3). It IS the gap between two blocks, never an extra row inside one: a
-     * precise pointer gets the reading document's `blockGap`, a finger the platform target, so a
-     * hidden inserter adds no empty space on a phone (lab `editor-P1`).
+     * selection (04 §4.3). It IS the gap between two blocks, never an extra row inside one, drawn
+     * at the same gap under every pointer; a finger reaches it by hit area (lab `editor-P1`).
      */
     inserter: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s4,
-        minHeight: TOUCH_TARGET_FLOOR ?? theme.space.s20,
+        minHeight: theme.space.s20,
         borderWidth: 1,
         borderColor: 'transparent',
     },
     /**
-     * The inserter's place in the list: one `margins.xl` gap. Under a finger its 44–48 px target
-     * overlaps half of the difference into each neighbour, so the visible rhythm matches the desktop
-     * and lab P1 (DESIGN-6 M2) instead of stacking the target as empty space.
+     * The inserter's place in the list: one `margins.xl` gap. A finger's hit area reaches past it into
+     * its neighbours, so it sits above them.
      */
     inserterSlot: {
-        marginVertical: TOUCH_TARGET_FLOOR === undefined ? 0 : -(TOUCH_TARGET_FLOOR - theme.space.s20) / 2,
         zIndex: 1,
     },
     inserterHidden: {
@@ -466,7 +451,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s8,
-        minHeight: TOUCH_TARGET_FLOOR ?? theme.space.s24 + theme.space.s16,
+        minHeight: theme.space.s24 + theme.space.s16,
         paddingHorizontal: theme.space.s12,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
@@ -519,10 +504,6 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: 'transparent',
         borderRadius: theme.borderRadius.md,
-    },
-    /** A pair that is one press target ("+ Set", a default, a value to edit) keeps the touch floor. */
-    actionFieldRowTarget: {
-        minHeight: TOUCH_TARGET_FLOOR,
     },
     /** The label track: the lab's 120 px column, growing to the label's words before it wraps. */
     actionFieldLabelColumn: {

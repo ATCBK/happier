@@ -101,11 +101,12 @@ describe('workflow step inspector field controls', () => {
         await screen.unmount();
     });
 
-    it('uses visible default copy rather than accessibility-only state copy', async () => {
+    it('leaves an inherited field without a state of its own; its group names the workflow defaults once', async () => {
         const harness = await loadHarness();
         const screen = await renderScreen(<InspectorHarness harness={harness} fields={['permissionMode']}
             draft={buildDraft(harness)} onChangeField={() => {}} />);
-        expect(screen.findByTestId('workflow-inspector-permissionMode-state')?.props.children).toBe('workflows.page.blocks.workflowDefaults');
+        expect(screen.findByTestId('workflow-inspector-permissionMode-state')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('workflows.page.blocks.workflowDefaults');
         expect(screen.getTextContent()).not.toContain('workflows.a11y.inherited');
         await screen.unmount();
     });
@@ -152,8 +153,8 @@ describe('workflow step inspector field controls', () => {
             />,
         );
 
-        // The inherited/override state and the value control live together.
-        expect(screen.findByTestId('workflow-inspector-permissionMode-state')).toBeTruthy();
+        // An inherited field shows its value control alone; only an override carries a state.
+        expect(screen.findByTestId('workflow-inspector-permissionMode-state')).toBeNull();
         const chip = screen.findByTestId('workflow-inspector-control-permissionMode');
         expect(chip).toBeTruthy();
 
@@ -205,7 +206,7 @@ describe('workflow step inspector field controls', () => {
             />,
         );
 
-        expect(screen.findByTestId('workflow-inspector-connectedServices-state')).toBeTruthy();
+        expect(screen.findByTestId('workflow-inspector-connectedServices-state')).toBeNull();
         expect(
             screen.findByTestId('workflow-inspector-control-connectedServices-unavailable'),
         ).toBeTruthy();

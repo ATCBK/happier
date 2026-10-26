@@ -179,10 +179,6 @@ vi.mock('@/components/workspaces/scm/review/useScmDiffExpandedKeys', () => ({
 }));
 
 
-vi.mock('@/components/workspaces/scm/review/useInitialScrollRestore', () => ({
-    useInitialScrollRestore: () => undefined,
-}));
-
 vi.mock('@/components/workspaces/scm/review/useChangedFilesReviewDiffBlockRenderer', () => ({
     useChangedFilesReviewDiffBlockRenderer: () => (path: string) =>
         React.createElement('View', { testID: `scm-review-diff-${toTestIdSafeValue(path)}` }),

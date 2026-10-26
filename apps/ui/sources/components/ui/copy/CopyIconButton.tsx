@@ -1,18 +1,17 @@
 import * as React from 'react';
-import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton, type IconButtonVariant } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { t } from '@/text';
 
 const ICON_SIZE = 14;
 const HORIZONTAL_PADDING = 8;
-const COPY_ICON_BUTTON_SIZE = ICON_SIZE + HORIZONTAL_PADDING * 2;
-export const COPY_ICON_BUTTON_WIDTH = Math.max(COPY_ICON_BUTTON_SIZE, resolveMinimumInteractiveTargetSize(Platform.OS));
+/** The drawn square. A finger reaches past it through the button's hit area, never by drawing it larger. */
+export const COPY_ICON_BUTTON_SIZE = ICON_SIZE + HORIZONTAL_PADDING * 2;
 
 export type CopyIconButtonProps = Readonly<{
     /** The text to copy; pass a function when building it is not free, so it only runs on press. */
@@ -20,10 +19,15 @@ export type CopyIconButtonProps = Readonly<{
     /** Placement only; interaction chrome belongs to IconButton. */
     style?: StyleProp<ViewStyle>;
     variant?: IconButtonVariant;
+    /**
+     * The free space on each side the hit area may take: the block's padding at its ends, and nothing
+     * toward the content the button sits beside.
+     */
+    interactiveTargetEdgesPx?: Readonly<{ leading: number; trailing: number; top?: number; bottom?: number }>;
     testID?: string;
 }>;
 
-export const CopyIconButton = React.memo<CopyIconButtonProps>(({ text, style, testID, variant = 'plain' }) => {
+export const CopyIconButton = React.memo<CopyIconButtonProps>(({ text, style, testID, variant = 'plain', interactiveTargetEdgesPx }) => {
     const { theme } = useUnistyles();
     const { copy, isCopied } = useHappierCopyFeedback();
     const copied = isCopied();
@@ -39,7 +43,7 @@ export const CopyIconButton = React.memo<CopyIconButtonProps>(({ text, style, te
                 size={COPY_ICON_BUTTON_SIZE}
                 iconSize={ICON_SIZE}
                 variant={variant}
-                minimumInteractiveTargetSize={COPY_ICON_BUTTON_WIDTH}
+                interactiveTargetEdgesPx={interactiveTargetEdgesPx}
                 onPress={onCopy}
                 accessibilityLabel={t('common.copy')}
                 icon={(

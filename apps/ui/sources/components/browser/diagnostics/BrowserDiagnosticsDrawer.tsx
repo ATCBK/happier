@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, PanResponder, ScrollView, View, type LayoutChangeEvent } from 'react-native';
+import { PanResponder, ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
     cancelAnimation,
     useAnimatedStyle,
@@ -10,7 +10,6 @@ import Animated, {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { SegmentedTabBar, type SegmentedTab } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -36,6 +35,9 @@ import type {
 } from './BrowserDiagnosticsInteractionPanel';
 
 type DrawerState = 'expanded' | 'collapsed' | 'closed';
+
+/** Opens the drawer from the Browser chrome's ⋯ item at every width. */
+export type BrowserDiagnosticsDrawerHandle = Readonly<{ open: () => void }>;
 
 const SECTION_FAMILY_ORDER = [
     'console',
@@ -272,8 +274,9 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
      * fixed 320px. Omitted (or zero) falls back to the historical fixed height.
      */
     surfaceHeightPx?: number;
+    handleRef?: React.Ref<BrowserDiagnosticsDrawerHandle>;
     testID?: string;
-}>): React.ReactElement {
+}>): React.ReactElement | null {
     const testID = props.testID ?? 'browser-diagnostics-drawer';
     const bodyTestID = `${testID}-body`;
     const { theme } = useUnistyles();
@@ -317,9 +320,8 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
 
     const persistenceKey = React.useMemo(() => diagnosticsViewKey(props.diagnostics), [props.diagnostics]);
     const persistedState = drawerStateByDiagnosticsViewKey.get(persistenceKey);
-    // Opens CLOSED: the page is the hero (browser lab Q). The closed bar still says the diagnostics
-    // are here; a peek of the drawer on every page load took a quarter of the page before the person
-    // asked for it. Opening it is remembered per view.
+    // Opens closed: the page leads until Diagnostics is requested from ⋯.
+    // Opening it is remembered per view.
     const [drawerState, setDrawerState] = React.useState<DrawerState>(
         persistedState?.drawerState ?? 'closed',
     );
@@ -431,11 +433,15 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
         ? props.interaction
         : undefined;
 
+    React.useImperativeHandle(props.handleRef, () => ({ open: () => setDrawerState('expanded') }), []);
+
     const bodyVisible = drawerState !== 'closed';
     const tabs = React.useMemo<readonly SegmentedTab<SectionKey>[]>(
         () => sections.map((section) => ({ id: section, label: sectionLabel(section) })),
         [sections],
     );
+
+    if (!bodyVisible) return null;
 
     return (
         <View testID={`${testID}-container-${drawerState}`} style={[stylesheet.root, { minHeight: headerHeightPx }]}>
@@ -456,58 +462,41 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
                         <View style={stylesheet.titleColumn}>
                             <Text style={stylesheet.title}>{t('browserShell.devtools.title')}</Text>
                         </View>
-                        {drawerState === 'closed' ? (
-                            <IconButton
-                                testID={`${testID}-open`}
-                                iconName="caret-up"
-                                accessibilityLabel={t('browserShell.devtools.open')}
-                                tooltip={t('browserShell.devtools.open')}
-                                size={30}
-                                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                interactiveTargetGapPx={8}
-                                iconSize={16}
-                                onPress={() => setDrawerState('expanded')}
-                            />
-                        ) : (
-                            <>
-                                {drawerState === 'expanded' ? (
-                                    <IconButton
-                                        testID={`${testID}-collapse`}
-                                        iconName="caret-down"
-                                        accessibilityLabel={t('browserShell.devtools.collapse')}
-                                        tooltip={t('browserShell.devtools.collapse')}
-                                        size={30}
-                                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                        interactiveTargetGapPx={8}
-                                        iconSize={16}
-                                        onPress={() => setDrawerState('collapsed')}
-                                    />
-                                ) : (
-                                    <IconButton
-                                        testID={`${testID}-expand`}
-                                        iconName="caret-up"
-                                        accessibilityLabel={t('browserShell.devtools.expand')}
-                                        tooltip={t('browserShell.devtools.expand')}
-                                        size={30}
-                                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                        interactiveTargetGapPx={8}
-                                        iconSize={16}
-                                        onPress={() => setDrawerState('expanded')}
-                                    />
-                                )}
+                        <>
+                            {drawerState === 'expanded' ? (
                                 <IconButton
-                                    testID={`${testID}-close`}
-                                    iconName="x"
-                                    accessibilityLabel={t('browserShell.devtools.close')}
-                                    tooltip={t('browserShell.devtools.close')}
+                                    testID={`${testID}-collapse`}
+                                    iconName="caret-down"
+                                    accessibilityLabel={t('browserShell.devtools.collapse')}
+                                    tooltip={t('browserShell.devtools.collapse')}
                                     size={30}
-                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                                     interactiveTargetGapPx={8}
                                     iconSize={16}
-                                    onPress={() => setDrawerState('closed')}
+                                    onPress={() => setDrawerState('collapsed')}
                                 />
-                            </>
-                        )}
+                            ) : (
+                                <IconButton
+                                    testID={`${testID}-expand`}
+                                    iconName="caret-up"
+                                    accessibilityLabel={t('browserShell.devtools.expand')}
+                                    tooltip={t('browserShell.devtools.expand')}
+                                    size={30}
+                                    interactiveTargetGapPx={8}
+                                    iconSize={16}
+                                    onPress={() => setDrawerState('expanded')}
+                                />
+                            )}
+                            <IconButton
+                                testID={`${testID}-close`}
+                                iconName="x"
+                                accessibilityLabel={t('browserShell.devtools.close')}
+                                tooltip={t('browserShell.devtools.close')}
+                                size={30}
+                                interactiveTargetGapPx={8}
+                                iconSize={16}
+                                onPress={() => setDrawerState('closed')}
+                            />
+                        </>
                     </View>
                 </View>
 

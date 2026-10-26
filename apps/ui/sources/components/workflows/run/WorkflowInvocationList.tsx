@@ -2,7 +2,6 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import {
-    Platform,
     View,
     type NativeScrollEvent,
     type NativeSyntheticEvent,
@@ -13,10 +12,11 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { VirtualizedList, type VirtualizedListRef } from '@/components/ui/lists/virtualized';
 
 import { WorkflowLifecycleStatus } from '@/components/workflows/presentation/WorkflowLifecycleStatus';
@@ -40,11 +40,10 @@ import {
  */
 
 /**
- * Rows and the paging action take the platform target as a real minimum
- * height. `hitSlop` is inert on react-native-web's `Pressable`, and the desktop
- * app IS the web bundle.
+ * Rows and the paging action draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches
+ * its touch target through the `HappierPressable` hit area past this drawn box.
  */
-const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+const MINIMUM_TARGET_SIZE = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 
 const styles = StyleSheet.create((theme) => ({
     scroll: {
@@ -82,6 +81,14 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
         flexShrink: 1,
+    },
+    identity: {
+        flex: 1,
+        minWidth: 0,
+    },
+    occurrence: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.secondary,
     },
     labelSelected: {
         ...Typography.default('semiBold'),
@@ -143,6 +150,8 @@ export type WorkflowInvocationListProps = Readonly<{
     loadMoreFailed?: boolean;
     loaded: boolean;
     resolveInvocationLabel?: (invocation: WorkflowRunInvocationIndexV1) => string | null;
+    /** The shared occurrence projection distinguishes repeated steps without opening their content. */
+    resolveInvocationOccurrenceLabel?: (invocation: WorkflowRunInvocationIndexV1) => string | null;
     /** The authored block kind for a row, so a held Wait-for-you step reads its own word. */
     resolveInvocationBlockKind?: (invocation: WorkflowRunInvocationIndexV1) => string | null;
     ListHeaderComponent?: React.ReactElement | null;
@@ -158,20 +167,28 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
     const testIDPrefix = props.testIDPrefix ?? 'workflow-invocations';
     const keyExtractor = React.useCallback((invocation: WorkflowRunInvocationIndexV1) => invocation.id, []);
     const extraData = React.useMemo(() => ({ selectedInvocationId: props.selectedInvocationId,
-        invocationStatusContext: props.invocationStatusContext }), [props.selectedInvocationId, props.invocationStatusContext]);
+        invocationStatusContext: props.invocationStatusContext,
+        resolveInvocationLabel: props.resolveInvocationLabel,
+        resolveInvocationBlockKind: props.resolveInvocationBlockKind,
+        resolveInvocationOccurrenceLabel: props.resolveInvocationOccurrenceLabel,
+    }), [props.selectedInvocationId, props.invocationStatusContext, props.resolveInvocationLabel,
+        props.resolveInvocationBlockKind, props.resolveInvocationOccurrenceLabel]);
     const renderInvocation = React.useCallback(({ item: invocation }: { item: WorkflowRunInvocationIndexV1 }) => {
         const selected = props.selectedInvocationId === invocation.id;
         const blockKind = props.resolveInvocationBlockKind?.(invocation) ?? null;
         const stateLabel = describeWorkflowInvocationLifecycle(invocation.lifecycle, { ...props.invocationStatusContext, blockKind }).label;
         const attempt = describeWorkflowInvocationAttempt(invocation.attempt);
         const displayLabel = props.resolveInvocationLabel?.(invocation) ?? t('workflows.contentUnavailable');
+        const occurrenceLabel = props.resolveInvocationOccurrenceLabel?.(invocation) ?? null;
+        const recordedTime = formatAsOfTime(Date.parse(invocation.createdAt));
         return (
             <HappierPressable
                 testID={`${testIDPrefix}-row-${invocation.id}`}
                 accessibilityRole="button"
                 current={selected ? 'page' : undefined}
                 accessibilityLabel={t('workflows.a11y.flowNode', {
-                    node: attempt.retried ? `${displayLabel} · ${attempt.label}` : displayLabel,
+                    node: [displayLabel, occurrenceLabel, attempt.retried ? attempt.label : null, recordedTime]
+                        .filter((part) => part !== null).join(' · '),
                     state: stateLabel,
                 })}
                 onPress={(event) => props.onSelectInvocation(invocation.id, event)}
@@ -182,10 +199,20 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
                     importantForAccessibility="no-hide-descendants"
                     style={styles.rail}
                 />
-                <Text style={[styles.label, selected ? styles.labelSelected : null]} numberOfLines={1}>
-                    {displayLabel}
-                </Text>
+                <View style={styles.identity}>
+                    <Text style={[styles.label, selected ? styles.labelSelected : null]} numberOfLines={1}>
+                        {displayLabel}
+                    </Text>
+                    {occurrenceLabel === null ? null : (
+                        <Text testID={`${testIDPrefix}-occurrence-${invocation.id}`} style={styles.occurrence}>
+                            {occurrenceLabel}
+                        </Text>
+                    )}
+                </View>
                 <View style={styles.trailing}>
+                    <Text testID={`${testIDPrefix}-time-${invocation.id}`} style={styles.ordinal}>
+                        {recordedTime}
+                    </Text>
                     {attempt.retried ? (
                         <Text testID={`${testIDPrefix}-attempt-${invocation.id}`} style={styles.ordinal}>
                             {attempt.label}
@@ -200,7 +227,8 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
                 </View>
             </HappierPressable>
         );
-    }, [props.invocationStatusContext, props.onSelectInvocation, props.resolveInvocationBlockKind, props.resolveInvocationLabel, props.selectedInvocationId, testIDPrefix, theme.colors.border.focus]);
+    }, [props.invocationStatusContext, props.onSelectInvocation, props.resolveInvocationBlockKind, props.resolveInvocationLabel,
+        props.resolveInvocationOccurrenceLabel, props.selectedInvocationId, testIDPrefix, theme.colors.border.focus]);
 
     const pagingFooter = props.onLoadMore === undefined ? null : (
         <View style={styles.footer}>

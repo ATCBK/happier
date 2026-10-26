@@ -10,7 +10,6 @@ import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import type { WorkspaceDownloadState, WorkspaceUploadState } from '@/hooks/workspaces/transfers/useWorkspaceFileTransfers';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
 
 const BAR_HEIGHT = 4;
@@ -47,7 +46,6 @@ function resolveProgress(uploadedBytes: number, totalBytes: number): number {
 function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { status: 'preflighting' | 'uploading' }>; onCancel: () => void }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const totalFiles = props.state.totalFiles;
     const completedFiles = props.state.completedFiles;
     const label =
@@ -73,7 +71,6 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
                     iconName="x"
                     iconSize={16}
                     size={28}
-                    minimumInteractiveTargetSize={minimumInteractiveTargetSize}
                     interactiveTargetGapPx={20}
                     onPress={props.onCancel}
                 />
@@ -86,7 +83,6 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
 function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { status: 'downloading' }>; onCancel: () => void }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const label = t('files.transfers.downloading', {
         name: props.state.name,
         downloaded: formatHappierDataBytes(props.state.downloadedBytes, { kind: 'storage' }),
@@ -105,12 +101,11 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
                     iconName="x"
                     iconSize={16}
                     size={DOWNLOAD_CANCEL_BUTTON_SIZE}
-                    minimumInteractiveTargetSize={minimumInteractiveTargetSize}
                     interactiveTargetGapPx={20}
                     onPress={props.onCancel}
                 /> : <View style={{
-                    width: Math.max(DOWNLOAD_CANCEL_BUTTON_SIZE, minimumInteractiveTargetSize),
-                    height: Math.max(DOWNLOAD_CANCEL_BUTTON_SIZE, minimumInteractiveTargetSize),
+                    width: DOWNLOAD_CANCEL_BUTTON_SIZE,
+                    height: DOWNLOAD_CANCEL_BUTTON_SIZE,
                 }} />}
             </View>
             <MeterBar tone="neutral" height={BAR_HEIGHT} animated fillFraction={progress} fillColor={theme.colors.text.link} progressAccessibilityLabel={label} />
@@ -127,7 +122,6 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
 function UploadFailureRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { status: 'error' }>; machineName: string; onDismiss: () => void }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const label = describeUploadFailure(props.state.reason, props.machineName);
     return (
         <View testID="repository-tree-upload-failure" style={styles.row}>
@@ -139,7 +133,6 @@ function UploadFailureRow(props: Readonly<{ state: Extract<WorkspaceUploadState,
                 iconName="x"
                 iconSize={16}
                 size={28}
-                minimumInteractiveTargetSize={minimumInteractiveTargetSize}
                 interactiveTargetGapPx={20}
                 onPress={props.onDismiss}
             />

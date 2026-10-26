@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { BrowserSurfaceUnavailableReason } from '@/components/browser/surfaces/BrowserSurfaceFallback';
@@ -8,7 +7,6 @@ import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 
 function decisionEnabled(decision: ReturnType<typeof useFeatureDecision>): boolean {
     return decision?.state === 'enabled';
@@ -41,6 +39,8 @@ export function BrowserSurfaceOpenButton(props: Readonly<{
     size: number;
     /** The chrome's own glyph colour (the session header); omitted, the button's default tint. */
     iconColor?: string;
+    /** Horizontal gap the caller's row leaves to the neighbouring actions; the hit area reaches half of it. */
+    interactiveTargetGapPx?: number;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const browserDecision = useFeatureDecision('browser', { scopeKind: 'runtime' });
@@ -60,7 +60,7 @@ export function BrowserSurfaceOpenButton(props: Readonly<{
             testID={props.testID}
             variant="plain"
             size={props.size}
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+            interactiveTargetGapPx={props.interactiveTargetGapPx}
             accessibilityLabel={label}
             tooltip={t('browserSurface.openHint')}
             disabled={disabled}

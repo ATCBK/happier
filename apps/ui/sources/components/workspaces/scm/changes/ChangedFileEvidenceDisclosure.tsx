@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
+import { HappierPressable, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native-unistyles';
 import { normalizeCheckpointAttributionScope } from '@happier-dev/protocol/sessions/changes/checkpointAttributionScope';
 import type { CheckpointOverlapObservation, RepositoryCheckpointTurnMetadata, SessionChangeAttribution } from '@happier-dev/protocol/sessions/changes/types';
@@ -66,6 +67,9 @@ export function ChangedFileEvidenceDisclosure({ entry, children }: Readonly<{
     const anchorRef = React.useRef<View>(null);
     const content = t(`changedFileEvidence.content.${entry.content.confidence}`);
     const attribution = t(`changedFileEvidence.attribution.${entry.attribution.confidence}`);
+    // A text link draws at its line; a finger reaches past it through the shared hit area, splitting
+    // the row's column gap with the words beside it.
+    const triggerHit = useHappierHitArea({ restingStyle: () => styles.trigger, hitReach: { left: 4, right: 4 } });
     return (
         <View style={styles.row}>
             <Text style={styles.secondary}>{content} · {attribution}</Text>
@@ -76,8 +80,11 @@ export function ChangedFileEvidenceDisclosure({ entry, children }: Readonly<{
                 accessibilityLabel={t('changedFileEvidence.howDeterminedForFile', { path: entry.file.fullPath })}
                 accessibilityState={{ expanded: open }}
                 onPress={(event) => { event?.stopPropagation(); setOpen((value) => !value); }}
+                hitSlop={triggerHit.hitSlop}
+                onLayout={triggerHit.onLayout}
                 style={styles.trigger}
             >
+                {triggerHit.frame}
                 <Text style={styles.link}>{t('changedFileEvidence.howDetermined')}</Text>
             </Pressable>
             {open ? <Popover
@@ -112,9 +119,9 @@ export function ChangedFileEvidenceDisclosure({ entry, children }: Readonly<{
                             </View>
                         ))}
                         {children}
-                        <Pressable testID="changed-file-evidence-close" accessibilityRole="button" onPress={() => requestClose('selection')} style={styles.trigger}>
+                        <HappierPressable testID="changed-file-evidence-close" accessibilityRole="button" onPress={() => requestClose('selection')} style={styles.trigger}>
                             <Text style={styles.link}>{t('common.close')}</Text>
-                        </Pressable>
+                        </HappierPressable>
                     </ScrollView>
                 )}
             </Popover> : null}
@@ -126,7 +133,7 @@ const styles = StyleSheet.create((theme) => ({
     row: { paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s8, columnGap: theme.space.s8, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
     secondary: { color: theme.colors.text.secondary, flexShrink: 1 },
     link: { color: theme.colors.text.link },
-    trigger: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
+    trigger: { justifyContent: 'center', alignSelf: 'flex-start' },
     details: { backgroundColor: theme.colors.surface.base, borderRadius: 12 },
     evidence: { gap: theme.space.s6 },
     code: { ...Typography.mono(), color: theme.colors.text.primary },

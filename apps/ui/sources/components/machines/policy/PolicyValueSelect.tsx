@@ -1,12 +1,10 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
@@ -90,10 +88,7 @@ export const PolicyValueSelect = React.memo(function PolicyValueSelect(
           accessibilityLabel={`${props.label}: ${props.value}`}
           expanded={open}
           hasPopup="menu"
-          style={{
-            minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
-            justifyContent: 'center',
-          }}
+          style={{ justifyContent: 'center' }}
         >
           {renderDropdownItemTriggerRightElement({
             detail: props.value,

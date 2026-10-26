@@ -6,7 +6,6 @@ import type { ScmLogEntry } from '@happier-dev/protocol';
 import { Text } from '@/components/ui/text/Text';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
@@ -72,7 +71,7 @@ export const SourceControlOperationsHistoryTimelineRow = React.memo((props: Sour
             } : undefined}
             style={(state) => ({
                 flexDirection: 'row',
-                minHeight: props.layout === 'summary' ? Math.max(36, resolveTouchTargetFloorPx() ?? 0) : 46,
+                minHeight: props.layout === 'summary' ? 36 : 46,
                 paddingRight: 4,
                 borderRadius: 14,
                 backgroundColor: state.pressed ? pressedBackground : 'transparent',

@@ -26,7 +26,7 @@ import { renderThemeMaterialSurface } from '@/components/ui/glass/GlassSurface';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
@@ -181,7 +181,8 @@ export function WidgetFrameLoadingBody(props: Readonly<{ testID: string; accessi
 /** A tall card keeps its room with space, not with a wall of placeholder rows. */
 const WIDGET_FRAME_LOADING_MAX_ROWS = 3;
 
-const FOOTER_MIN_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+// The footer links draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches past it through the hit area.
+const FOOTER_MIN_TARGET_PX = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 const FIXED_BODY_FADE_EDGES = { top: true, bottom: true } as const;
 /** How long the arrival ring stays before it fades: long enough to find it, short enough to never read as a badge. */
 const FRESH_RING_HOLD_MS = 2000;

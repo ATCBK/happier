@@ -1,12 +1,11 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import {
   DropdownMenu,
   type DropdownMenuItem,
 } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
 
 /**
@@ -54,6 +53,8 @@ export const ScmComparisonMoreMenu = React.memo(function ScmComparisonMoreMenu(
   props: Readonly<{
     sections: readonly ScmComparisonMenuSection[];
     testID?: string;
+    /** The gap to the neighbouring bar action: their finger frames split it. */
+    interactiveTargetGapPx?: number;
   }>,
 ) {
   const [open, setOpen] = React.useState(false);
@@ -98,9 +99,7 @@ export const ScmComparisonMoreMenu = React.memo(function ScmComparisonMoreMenu(
             accessibilityLabel={t('common.more')}
             tooltip={t('common.more')}
             onPress={toggle}
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(
-              Platform.OS,
-            )}
+            interactiveTargetGapPx={props.interactiveTargetGapPx}
           />
         </View>
       )}

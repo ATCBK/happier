@@ -1,11 +1,11 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
@@ -14,12 +14,10 @@ import { clampPreviewLines, normalizeResultPreview, RESULT_PREVIEW_MAX_LINES } f
 import { ToolFindText, useToolFindState } from '@/components/tools/renderers/core/ToolFindText';
 
 /**
- * Text-labelled controls take the canonical platform target as a real minimum
- * height. `hitSlop` is inert on react-native-web's `Pressable`, and the desktop
- * app IS the web bundle, so a slop-declared target there is a target that does
- * not exist.
+ * Text-labelled controls draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches its
+ * touch target through the `HappierPressable` hit area past this drawn box.
  */
-const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+const MINIMUM_TARGET_SIZE = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 // Six nominal body lines is a viewport, never a cutoff in the normalized value.
 const PREVIEW_HEIGHT = Typography.variant('meta').lineHeight! * RESULT_PREVIEW_MAX_LINES;
 

@@ -1,10 +1,10 @@
 import type { WorkflowInvocationLifecycleV1 } from '@happier-dev/protocol';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Text } from '@/components/ui/text/Text';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
@@ -48,12 +48,10 @@ import {
  */
 
 /**
- * Text-labelled controls take the canonical platform target as a real minimum
- * height. `hitSlop` is inert on react-native-web's `Pressable`, and the desktop
- * app IS the web bundle, so a slop-declared target there is a target that does
- * not exist.
+ * Text-labelled controls draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches its
+ * touch target through the `HappierPressable` hit area past this drawn box.
  */
-const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+const MINIMUM_TARGET_SIZE = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 
 const styles = StyleSheet.create((theme) => ({
     actionTarget: {

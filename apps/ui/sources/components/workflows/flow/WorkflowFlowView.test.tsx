@@ -139,6 +139,25 @@ describe('WorkflowFlowView accessibility structure', () => {
 });
 
 describe('WorkflowFlowView run map anatomy (lab run-A)', () => {
+    it('renders a projected If condition with its branches and includes it in the accessible name', async () => {
+        const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{
+            kind: 'if', id: 'approved', when: { kind: 'compare', operator: 'eq',
+                left: { kind: 'input', name: 'approved' }, right: { kind: 'literal', value: true } },
+            then: [step('publish')], otherwise: [step('revise')],
+        }] };
+        const projection = projectWorkflowFlow(definition);
+        const screen = await renderScreen(<WorkflowFlowView projection={projection} selectedNodeId={null} testIDPrefix="flow" />);
+        const sentence = projection.nodesById.get('approved')?.labelDetail ?? '';
+        expect(sentence).toBeTruthy();
+        expect(screen.findByTestId('flow-node-approved')?.findAll((node) => node.props.children === ` · ${sentence}`).length).toBeGreaterThan(0);
+        // This suite's translation boundary records parameters as JSON, which
+        // escapes the nested input label. Inspect the spoken block parameter.
+        const announcement = String(screen.findByTestId('flow-node-approved')?.props.accessibilityLabel);
+        const parameters: unknown = JSON.parse(announcement.slice(announcement.indexOf(':') + 1));
+        expect(parameters).toMatchObject({ block: expect.stringContaining(sentence) });
+        expect(screen.findByTestId('flow-node-approved#then')).not.toBeNull();
+        expect(screen.findByTestId('flow-node-approved#otherwise')).not.toBeNull();
+    });
     it('keeps each repeated occurrence duration with its own attempt without choosing a latest occurrence', async () => {
         const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [step('gather')] };
         const screen = await renderScreen(React.createElement(WorkflowFlowView, {

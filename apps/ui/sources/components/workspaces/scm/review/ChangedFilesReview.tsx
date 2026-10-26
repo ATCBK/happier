@@ -34,7 +34,7 @@ import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScroll
 import { ChangedFilesReviewDiffAreaSelector } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffAreaSelector';
 import { useChangedFilesReviewDiffBlockRenderer } from '@/components/workspaces/scm/review/useChangedFilesReviewDiffBlockRenderer';
 import type { ReviewBlockHunkReview } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffBlock';
-import { ScmComparisonBar } from '@/components/sessions/files/comparison/ScmComparisonBar';
+import { ScmComparisonBar, SCM_COMPARISON_ACTIONS_GAP_PX } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { useInitialScrollRestore } from '@/components/workspaces/scm/review/useInitialScrollRestore';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
@@ -588,6 +588,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         phoneControlHeight.value = event.nativeEvent.layout.height;
     }, [phoneControlHeight]);
     const lastScrollTopRef = React.useRef<number>(typeof props.initialScrollTop === 'number' ? props.initialScrollTop : 0);
+    const [reviewListLoaded, setReviewListLoaded] = React.useState(Platform.OS !== 'web');
     const [viewableExpansionEnabled, setViewableExpansionEnabled] = React.useState(() => {
         return typeof props.initialScrollTop === 'number' && props.initialScrollTop > 2;
     });
@@ -791,26 +792,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         toggleCollapsedPreservingWebScroll(path);
     }, [collapsedKeys, toggleCollapsedPreservingWebScroll]);
 
-    React.useEffect(() => {
-        if (Platform.OS !== 'web') return;
-        let cancelled = false;
-
-        let attempts = 0;
-        const maxAttempts = 12;
-        const step = () => {
-            if (cancelled) return;
-            if (webScrollRootRef.current) return;
-            resolveWebScrollRoot();
-            attempts += 1;
-            if (attempts >= maxAttempts) return;
-            scheduleWebFrame(() => step());
-        };
-        scheduleWebFrame(() => step());
-        return () => {
-            cancelled = true;
-            webScrollRootRef.current = null;
-        };
-    }, [resolveWebScrollRoot, scheduleWebFrame]);
+    React.useEffect(() => () => { webScrollRootRef.current = null; }, []);
 
     // Once the file list has scrolled away, the header offers the jump menu in its place (SG).
     const indexHeightRef = React.useRef<number | null>(null);
@@ -839,6 +821,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             });
             const current = scrollRoot && typeof (scrollRoot as any).scrollTop === 'number' ? (scrollRoot as any).scrollTop : null;
             if (typeof current === 'number') {
+                // Initial recycler scroll events are not reader movement before its layout is ready.
+                if (!reviewListLoaded && current === 0 && lastScrollTopRef.current > 0) return;
                 phoneScrollTop.value = current;
                 reportScrollTop(current);
                 trackIndexScroll(current);
@@ -852,16 +836,20 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             reportScrollTop(y);
             trackIndexScroll(y);
         }
-    }, [props.onScroll, reportScrollTop, resolveWebScrollRoot, trackIndexScroll, phoneScrollTop]);
+    }, [props.onScroll, reportScrollTop, resolveWebScrollRoot, trackIndexScroll, phoneScrollTop, reviewListLoaded]);
 
-    useInitialScrollRestore({
+    const { cancelRestore: cancelInitialScrollRestore, requestRestore: requestInitialScrollRestore } = useInitialScrollRestore({
         initialScrollTop: typeof props.initialScrollTop === 'number' ? props.initialScrollTop : null,
         latestScrollTopRef: lastScrollTopRef,
+        ready: reviewListLoaded,
         applyInitialScrollTop: React.useCallback((initial) => {
+            const scrollRoot = (Platform.OS === 'web' ? resolveWebScrollRoot() : null) as {
+                scrollTop: number; scrollHeight: number; clientHeight: number;
+            } | null;
+            if (Platform.OS === 'web' && !scrollRoot) return false;
             if (Platform.OS === 'web') {
-                const scrollRoot = webScrollRootRef.current;
                 const currentTop =
-                    scrollRoot && typeof (scrollRoot as any).scrollTop === 'number' ? Number((scrollRoot as any).scrollTop) : null;
+                    scrollRoot && typeof scrollRoot.scrollTop === 'number' ? Number(scrollRoot.scrollTop) : null;
                 const trackedTop = Number.isFinite(lastScrollTopRef.current) ? lastScrollTopRef.current : 0;
                 // If the user has already scrolled but we haven't yet observed a stable scrollTop via
                 // virtualized-list events during early mount on web, do not override their position.
@@ -879,19 +867,36 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             }
 
             if (Platform.OS === 'web') {
-                const scrollRoot = webScrollRootRef.current;
-                if (scrollRoot && typeof (scrollRoot as any).scrollTop === 'number') {
+                if (scrollRoot && typeof scrollRoot.scrollTop === 'number') {
                     try {
-                        (scrollRoot as any).scrollTop = initial;
+                        scrollRoot.scrollTop = initial;
+                        const reachableTop = Math.min(initial, Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight));
+                        return Math.abs(Number(scrollRoot.scrollTop) - reachableTop) <= 1;
                     } catch {
-                        // ignore
+                        return false;
                     }
                 }
+                return false;
             }
 
             return true;
-        }, []),
+        }, [resolveWebScrollRoot]),
     });
+    const onReviewListLoad = React.useCallback(() => {
+        resolveWebScrollRoot();
+        setReviewListLoaded(true);
+        requestInitialScrollRestore();
+    }, [resolveWebScrollRoot, requestInitialScrollRestore]);
+    const onReviewListLayout = React.useCallback<NonNullable<ScrollViewProps['onLayout']>>((event) => {
+        resolveWebScrollRoot();
+        requestInitialScrollRestore();
+        props.onLayout?.(event);
+    }, [resolveWebScrollRoot, requestInitialScrollRestore, props.onLayout]);
+    const onReviewListContentSizeChange = React.useCallback<NonNullable<ScrollViewProps['onContentSizeChange']>>((width, height) => {
+        resolveWebScrollRoot();
+        requestInitialScrollRestore();
+        props.onContentSizeChange?.(width, height);
+    }, [resolveWebScrollRoot, requestInitialScrollRestore, props.onContentSizeChange]);
 
     React.useEffect(() => {
         return () => {
@@ -950,12 +955,13 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const scrollToPath = React.useCallback((path: string) => {
         const index = pathToRowIndex.get(path);
         if (typeof index !== 'number') return;
+        cancelInitialScrollRestore();
         // On web, animated programmatic scrolls can trigger subtle event/restore-state glitches in
         // some browsers / RN-web stacks. Focus navigation should be deterministic, so keep it
         // non-animated on web.
         listRef.current?.scrollToIndex({ index, animated: Platform.OS !== 'web', viewPosition: 0,
             ...(props.comparisonChrome?.indexPlacement === 'phone' ? { viewOffset: phoneControlHeight.value } : null) });
-    }, [pathToRowIndex, phoneControlHeight, props.comparisonChrome?.indexPlacement]);
+    }, [pathToRowIndex, phoneControlHeight, props.comparisonChrome?.indexPlacement, cancelInitialScrollRestore]);
 
     const navigationPaths = React.useMemo(() => reviewListFiles.map((file) => file.fullPath), [reviewListFiles]);
     const revealFindTarget = React.useCallback((target: ReviewFindTarget | null) => {
@@ -1473,7 +1479,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             {Platform.OS === 'web' ? <DiffPresentationStyleToggleButton size={16} presentation="segmented" /> : null}
             <WrapLinesToggleButton />
             {tooLarge && reviewFiles.length > 0 ? (
-                <Tooltip label={t('files.reviewLargeDiffOneAtATime')} testID="scm-review-large-diff-info" style={{ width: Platform.OS === 'web' ? 28 : 48, height: Platform.OS === 'web' ? 28 : 48, alignItems: 'center', justifyContent: 'center' }}>
+                <Tooltip label={t('files.reviewLargeDiffOneAtATime')} testID="scm-review-large-diff-info" style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}>
                     <Icon name="info" size={16} color={theme.colors.text.secondary} />
                 </Tooltip>
             ) : null}
@@ -1508,7 +1514,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
 
     // The comparison bar holds only the lab's controls (WT8): the scope, its actions and a ⋯ with Review's
     // display choices; J / K moves changes and Shift moves files (hinted in the rail).
-    const comparisonDisplayActions = <><ChangedFilesReviewFindButton surfaceId={findSurfaceId} /><ChangedFilesReviewMoreMenu diffArea={diffArea} availableDiffAreas={diffConfig.availableModes}
+    const comparisonDisplayActions = <><ChangedFilesReviewFindButton surfaceId={findSurfaceId} interactiveTargetGapPx={SCM_COMPARISON_ACTIONS_GAP_PX} /><ChangedFilesReviewMoreMenu interactiveTargetGapPx={SCM_COMPARISON_ACTIONS_GAP_PX} diffArea={diffArea} availableDiffAreas={diffConfig.availableModes}
         diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} leadingSections={comparisonChrome?.menuSections} /></>;
     const comparisonKeyboardShortcuts = <ReviewKeyboardBindings enabled={props.activeReviewFile?.presented !== false}
         controller={props.hunkReview ? controller : {
@@ -1576,7 +1582,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             />
                 <WrapLinesToggleButton />
                 {tooLarge && reviewFiles.length > 0 ? (
-                    <Tooltip label={t('files.reviewLargeDiffOneAtATime')} testID="scm-review-large-diff-info" style={{ width: Platform.OS === 'web' ? 28 : 48, height: Platform.OS === 'web' ? 28 : 48, alignItems: 'center', justifyContent: 'center' }}>
+                    <Tooltip label={t('files.reviewLargeDiffOneAtATime')} testID="scm-review-large-diff-info" style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}>
                         <Icon name="info" size={16} color={theme.colors.text.secondary} />
                     </Tooltip>
                 ) : null}
@@ -1620,8 +1626,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     ListHeaderComponent={ListHeaderComponent as any}
                     ListFooterComponent={props.bottomInsetPx ? (() => <View style={{ height: props.bottomInsetPx }} />) as any : undefined}
                     onScroll={handleScroll}
-                    onLayout={props.onLayout as any}
-                    onContentSizeChange={props.onContentSizeChange as any}
+                    onLayout={onReviewListLayout}
+                    onLoad={onReviewListLoad}
+                    onContentSizeChange={onReviewListContentSizeChange}
                     onViewableItemsChanged={prefetch.onViewableItemsChanged as any}
                     scrollEventThrottle={16}
                 />

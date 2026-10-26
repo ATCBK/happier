@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type {
@@ -563,16 +564,16 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                             >
                                 {new Date(grant.grantedAt).toISOString()}
                             </Text>
-                            <Pressable
+                            <HappierPressable
                                 accessibilityRole="button"
                                 onPress={() => void revokeDirectWrite(grant.id)}
                                 testID={`${props.testID ?? 'review-comments'}-direct-write-grant-${grant.id}-revoke`}
-                                style={{ minHeight: 44, justifyContent: 'center' }}
+                                style={{ justifyContent: 'center' }}
                             >
                                 <Text style={{ color: theme.colors.state.danger.foreground }}>
                                     {t('files.reviewComments.durable.directWriteGrant.revoke')}
                                 </Text>
-                            </Pressable>
+                            </HappierPressable>
                         </View>
                     ))}
                 </View>
@@ -586,14 +587,14 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                 >
                     <Text selectable>{props.permissionGrantError}</Text>
                     {props.onRefreshPermissionGrants ? (
-                        <Pressable
+                        <HappierPressable
                             testID={`${props.testID ?? 'review-comments'}-permission-grants-refresh`}
                             accessibilityRole="button"
                             onPress={props.onRefreshPermissionGrants}
-                            style={{ minHeight: 44, justifyContent: 'center' }}
+                            style={{ justifyContent: 'center' }}
                         >
                             <Text>{t('common.retry')}</Text>
-                        </Pressable>
+                        </HappierPressable>
                     ) : null}
                 </View>
             ) : null}

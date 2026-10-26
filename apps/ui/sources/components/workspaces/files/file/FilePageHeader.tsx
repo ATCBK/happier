@@ -30,8 +30,6 @@ import { resolveFilePageEditControl, type FileDiffMode, type FileDisplayMode, ty
 
 export { resolveFilePageEditControl, type FilePageEditControl } from './filePageModel';
 
-const selectionActionStyle = { minHeight: Platform.select({ ios: 44, android: 48, default: 34 }) };
-
 /** The segment label of each page mode; the internal display enum stays behind it. */
 export function resolveFilePageModeLabel(mode: FilePageMode): string {
     switch (mode) {
@@ -352,7 +350,7 @@ export function FilePageHeader(props: FilePageHeaderProps) {
             ) : null}
             {showEmptyLineSelectionActions ? (
                 <ToolbarButton onPress={onClearSelection} testID="file-details-clear-selection" label={t('common.cancel')}
-                    size="md" style={selectionActionStyle} />
+                    size="md" />
             ) : null}
             {selectionHintShown ? <Text style={styles.selectionHint}>{t('files.fileActions.selectionHint')}</Text> : null}
             {hasSelectedLines ? (
@@ -448,14 +446,13 @@ export function FilePageToolbar(props: Readonly<{
                             activeTabId={props.displayMode}
                             onSelectTab={props.onDisplayMode}
                             segmentSizing="content"
-                            targetSize="platform"
                         />
                     ) : null}
                     {props.accessory}
                     <View style={styles.toolbarSpacer} />
                     {props.find ? (
-                        <IconButton testID="file-page-toolbar-find" variant="plain" size={44} iconSize={20} iconName="magnifying-glass"
-                            accessibilityRole="button" accessibilityLabel={t('find.open')} onPress={props.find.onOpen} />
+                        <IconButton testID="file-page-toolbar-find" variant="plain" size={34} iconSize={20} iconName="magnifying-glass"
+                            interactiveTargetGapPx={8} accessibilityRole="button" accessibilityLabel={t('find.open')} onPress={props.find.onOpen} />
                     ) : null}
                     {props.edit ? (
                         <ToolbarButton

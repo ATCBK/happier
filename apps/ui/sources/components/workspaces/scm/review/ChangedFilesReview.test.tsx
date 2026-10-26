@@ -16,6 +16,8 @@ import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 // Spy is intentionally `any` to allow multiple response shapes (success/failure) without fighting inference.
 const sessionScmDiffFileSpy: any = vi.fn(async (_sessionId: string, _req: any) => ({ success: true, diff: 'diff', error: null }));
 const flashListScrollToIndexSpy: any = vi.fn();
+const flashListScrollToOffsetSpy = vi.fn();
+let flashListScrollableNode: { scrollTop: number; scrollHeight: number; clientHeight: number } | null = null;
 const deferOnWebSpy: any = vi.fn((cb: any) => cb());
 
 const resolveInlineDiffVirtualizationSpy = vi.hoisted(() => vi.fn());
@@ -75,7 +77,8 @@ vi.mock('@/components/ui/code/diff/DiffFilesListView', () => ({
         React.useImperativeHandle(ref, () => ({
             clearMeasurementCache: vi.fn(),
             scrollToIndex: flashListScrollToIndexSpy,
-            scrollToOffset: vi.fn(),
+            scrollToOffset: flashListScrollToOffsetSpy,
+            getScrollableNode: () => flashListScrollableNode,
         }));
 
         const data = Array.isArray(props.files) ? props.files : [];
@@ -450,58 +453,6 @@ vi.mock('@/components/workspaces/scm/review/useChangedFilesReviewDiffLoading', (
 }));
 
 
-vi.mock('@/components/workspaces/scm/review/useInitialScrollRestore', () => ({
-    useInitialScrollRestore: (input: any) => {
-        const maxAttempts = typeof input.maxAttempts === 'number' && Number.isFinite(input.maxAttempts) ? input.maxAttempts : 12;
-        const hasScheduledRef = React.useRef(false);
-        const cancelledRef = React.useRef(false);
-        const scheduledHandleRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-        React.useEffect(() => {
-            if (Platform.OS !== 'web') return;
-            if (hasScheduledRef.current) return;
-            const initial = input.initialScrollTop;
-            if (typeof initial !== 'number' || !Number.isFinite(initial) || initial <= 0) return;
-            hasScheduledRef.current = true;
-            cancelledRef.current = false;
-
-            const schedule = (cb: () => void) => globalThis.setTimeout(cb, 0);
-            const cancelScheduled = () => {
-                const handle = scheduledHandleRef.current;
-                if (handle == null) return;
-                globalThis.clearTimeout(handle);
-                scheduledHandleRef.current = null;
-            };
-
-            const attemptApply = (attempt: number) => {
-                if (cancelledRef.current) return;
-                if (attempt >= maxAttempts) return;
-                if ((input.latestScrollTopRef.current ?? 0) > 0) {
-                    cancelledRef.current = true;
-                    return;
-                }
-                const ok = input.applyInitialScrollTop(initial);
-                if (ok) return;
-                cancelScheduled();
-                scheduledHandleRef.current = schedule(() => {
-                    scheduledHandleRef.current = null;
-                    attemptApply(attempt + 1);
-                });
-            };
-
-            cancelScheduled();
-            scheduledHandleRef.current = schedule(() => {
-                scheduledHandleRef.current = null;
-                attemptApply(0);
-            });
-            return () => {
-                cancelledRef.current = true;
-                cancelScheduled();
-            };
-        }, [input.applyInitialScrollTop, input.initialScrollTop, input.latestScrollTopRef, maxAttempts]);
-    },
-}));
-
 vi.mock('@/components/workspaces/scm/review/useChangedFilesReviewDiffBlockRenderer', () => ({
     useChangedFilesReviewDiffBlockRenderer: (input: any) => {
         const DiffBlock = ({ path }: { path: string }) => {
@@ -753,6 +704,8 @@ describe('ChangedFilesReview', () => {
         sessionScmDiffFileSpy.mockReset();
         sessionScmDiffFileSpy.mockImplementation(async (_sessionId: string, _req: any) => ({ success: true, diff: 'diff', error: null }));
         flashListScrollToIndexSpy.mockReset();
+        flashListScrollToOffsetSpy.mockReset();
+        flashListScrollableNode = null;
         deferOnWebSpy.mockReset();
         deferOnWebSpy.mockImplementation((cb: any) => cb());
         resolveInlineDiffVirtualizationSpy.mockReset();
@@ -899,6 +852,100 @@ describe('ChangedFilesReview', () => {
     async function flushReviewEffects(cycles = 1) {
         await flushHookEffects({ cycles });
     }
+
+    it('physically restores a remounted viewport after late recycler readiness and yields to explicit file reveal', async () => {
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrame = 0;
+        const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+            frames.set(++nextFrame, callback);
+            return nextFrame;
+        });
+        vi.stubGlobal('requestAnimationFrame', requestFrame);
+        vi.stubGlobal('cancelAnimationFrame', (handle: number) => frames.delete(handle));
+        vi.stubGlobal('window', { document: { querySelector: () => null } });
+        const flushFrame = async () => {
+            const pending = [...frames.values()];
+            frames.clear();
+            await act(async () => { pending.forEach((callback) => callback(0)); });
+        };
+        const { ChangedFilesReview } = await import('./ChangedFilesReview');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const onScrollTopChange = vi.fn();
+        const element = (initialScrollTop: number, focusPath?: string) => <ChangedFilesReview
+            theme={theme} sessionId="session-1" snapshot={snapshot} changedFilesViewMode="repository"
+            allRepositoryChangedFiles={[fileA, fileB]} turnAttributedFiles={[]} turnRepositoryOnlyFiles={[]}
+            sessionAttributedFiles={[]} repositoryOnlyFiles={[]} maxFiles={25} maxChangedLines={2000}
+            onFilePress={() => {}} initialScrollTop={initialScrollTop} onScrollTopChange={onScrollTopChange}
+            focusPath={focusPath}
+        />;
+
+        try {
+            flashListScrollableNode = { scrollTop: 300, scrollHeight: 2000, clientHeight: 600 };
+            const first = await renderScreen(element(0));
+            act(() => { first.findByTestId('scm-review-list')!.props.onLoad(); });
+            act(() => { first.findByTestId('scm-review-list')!.props.onScroll({ nativeEvent: { contentOffset: { y: 300 } } }); });
+            await act(async () => { first.unmount(); });
+            expect(onScrollTopChange).toHaveBeenLastCalledWith(300);
+
+            flashListScrollableNode = null;
+            onScrollTopChange.mockClear();
+            const remounted = await renderScreen(element(300));
+            await flushFrame();
+            expect(frames.size).toBe(0);
+            expect(flashListScrollToOffsetSpy).not.toHaveBeenCalled();
+            const framesBeforeReadiness = requestFrame.mock.calls.length;
+
+            act(() => { remounted.findByTestId('scm-review-list')!.props.onLoad(); });
+            await flushFrame();
+            expect(frames.size).toBe(0);
+            for (let index = 0; index < 20; index += 1) {
+                act(() => { remounted.findByTestId('scm-review-list')!.props.onLayout({ nativeEvent: { layout: { width: 800, height: 600 } } }); });
+                await flushFrame();
+                expect(frames.size).toBe(0);
+            }
+            const readyRoot = { scrollTop: 0, scrollHeight: 2000, clientHeight: 600 };
+            flashListScrollableNode = readyRoot;
+            act(() => { remounted.findByTestId('scm-review-list')!.props.onContentSizeChange(800, 2000); });
+            await flushFrame();
+            expect(readyRoot.scrollTop).toBe(300);
+            expect(flashListScrollToOffsetSpy).toHaveBeenLastCalledWith({ offset: 300, animated: false });
+            expect(flashListScrollToOffsetSpy).toHaveBeenCalledTimes(1);
+            expect(requestFrame.mock.calls.length - framesBeforeReadiness).toBe(22);
+            expect(onScrollTopChange).not.toHaveBeenCalled();
+
+            await act(async () => { remounted.update(element(300, 'src/b.ts')); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+            await flushFrame();
+            expect(flashListScrollToIndexSpy).toHaveBeenLastCalledWith(expect.objectContaining({ index: 1, animated: false }));
+            const restoreCount = flashListScrollToOffsetSpy.mock.calls.length;
+            act(() => { remounted.findByTestId('scm-review-list')!.props.onContentSizeChange(800, 2500); });
+            await flushFrame();
+            expect(flashListScrollToOffsetSpy).toHaveBeenCalledTimes(restoreCount);
+            expect(frames.size).toBe(0);
+            await act(async () => { remounted.unmount(); });
+
+            readyRoot.scrollTop = 0;
+            const revealBeforeRestore = await renderScreen(element(300));
+            await flushFrame();
+            expect(frames.size).toBe(0);
+            expect(flashListScrollToOffsetSpy).toHaveBeenCalledTimes(restoreCount);
+            act(() => { revealBeforeRestore.findByTestId('scm-review-list')!.props.onLoad(); });
+            expect(frames.size).toBe(1);
+            await act(async () => { revealBeforeRestore.update(element(300, 'src/b.ts')); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+            await flushFrame();
+            act(() => { revealBeforeRestore.findByTestId('scm-review-list')!.props.onContentSizeChange(800, 2500); });
+            await flushFrame();
+            expect(flashListScrollToOffsetSpy).toHaveBeenCalledTimes(restoreCount);
+            expect(readyRoot.scrollTop).toBe(0);
+            expect(frames.size).toBe(0);
+            await act(async () => { revealBeforeRestore.unmount(); });
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
+    });
 
     it('keeps a bounded auto-expanded window when large and viewability config is enabled', async () => {
         // Enable viewability windowing.

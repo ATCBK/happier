@@ -77,6 +77,8 @@ export type StorageReviewSheetInput = Readonly<{
   onChecking: (
     checking: Readonly<{ count: number; freesBytes: number }> | null,
   ) => void;
+  /** The dock presents this same selected plan while Review is open. */
+  onPreviewFreesBytes: (freesBytes: number | null) => void;
 }>;
 
 type ReviewProps = CustomModalInjectedProps & StorageReviewSheetInput;
@@ -91,7 +93,7 @@ async function stopStorageHolders(
   sessionIds: readonly string[],
 ): Promise<'stopped' | 'failed' | 'approval'> {
   for (const sessionId of sessionIds) {
-    const result = await executeSessionLifecycleAction('session.stop', sessionId, { serverId });
+    const result = await executeSessionLifecycleAction('session.stop', sessionId, { serverId, stopIntent: 'lifecycle_control' });
     if (result.success || isAcceptedPendingSessionStop(result) || result.code === 'session_stop_not_found') continue;
     return ActionApprovalRequestCreatedResultSchema.safeParse(result.details).success ? 'approval' : 'failed';
   }
@@ -163,6 +165,10 @@ function StorageReviewBody(props: ReviewProps) {
   }, [load, onChecking]);
 
   const plan = review ? selectStorageReviewApply(review, selected, mode) : null;
+  const { onPreviewFreesBytes } = props;
+  const previewFreesBytes = plan?.freesBytes ?? null;
+  React.useEffect(() => { onPreviewFreesBytes(previewFreesBytes); }, [onPreviewFreesBytes, previewFreesBytes]);
+  React.useEffect(() => () => onPreviewFreesBytes(null), [onPreviewFreesBytes]);
   const reviewedVolumes = new Set(review?.going.filter(row => selected.has(row.itemId)).map(row => row.volumeId));
   const lowSpaceVolume = props.summary.volumes.find(volume => reviewedVolumes.has(volume.volume.volumeId)
     && resolveMachineDiskAttentionKindV1({ totalBytes: volume.totalBytes, availableBytes: volume.freeBytes }, props.nearlyFullThreshold) !== null) ?? null;
@@ -426,7 +432,6 @@ function StorageReviewBody(props: ReviewProps) {
           rightElement={
             <SegmentedTabBar<StorageReviewMode>
               role="radiogroup"
-              targetSize="platform"
               segmentSizing="content"
               accessibilityLabel={t('machineStorage.review.whereLabel')}
               testIDPrefix="machine-storage-review-mode"
@@ -513,7 +518,7 @@ const ReviewRow = React.memo(function ReviewRow(
           : (lost ??
             `${storageReasonLabel(row.reason)} · ${formatPathRelativeToHome(row.path, props.homeDir)}`)
       }
-      subtitleLines={lost ? 2 : 1}
+      subtitleLines={lost ? 3 : 1}
       subtitleStyle={
         lost
           ? { color: theme.colors.state.attention.textForeground }

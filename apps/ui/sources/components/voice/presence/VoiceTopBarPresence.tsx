@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import {
     useVoiceAttemptControl,
     VOICE_ATTEMPT_IDLE_TARGET_DEFAULT,
@@ -26,6 +26,13 @@ import { useVoicePresenceContainer } from './useVoicePresenceContainer';
 import { VoiceTopBarAnatomy, VOICE_TOP_BAR_PILL_HEIGHT as PILL_HEIGHT } from './voicePresenceAnatomy';
 const MARK_SIZE = 20;
 const executePresentationAction = createFrontDoorUiActionExecutor();
+
+/**
+ * The resting mic's hit area inside the 40 px title strip: sideways it keeps the strip's own reach, 6 px
+ * above it stops at the window edge, and 4 of the 6 px under it are its own — the right rail's first
+ * action below takes the other 2 (half of its 4 px action gap).
+ */
+const REST_TARGET_EDGES_PX = { leading: 8, trailing: 8, top: 6, bottom: 4 } as const;
 
 /**
  * Voice in the desktop top bar (§4.3, lab R/A/C).
@@ -59,7 +66,7 @@ export const VoiceTopBarPresence = React.memo(function VoiceTopBarPresence(props
                 tooltipPlacement="bottom"
                 variant="plain"
                 size={PILL_HEIGHT}
-                minimumInteractiveTargetSize={resolveTouchTargetFloorPx() ?? undefined}
+                interactiveTargetEdgesPx={REST_TARGET_EDGES_PX}
                 onPress={voice.onPrimaryAction}
                 icon={<VoiceMarkArt pose="mic" size={MARK_SIZE} />}
             />
@@ -97,17 +104,18 @@ const VoiceTopBarPill = React.memo(function VoiceTopBarPill(props: Readonly<{
                 onPress={voice.onPrimaryAction}
                 variant="plain"
                 size={PILL_HEIGHT}
-                minimumInteractiveTargetSize={resolveTouchTargetFloorPx() ?? undefined}
+                // The label sits flush beside the mark, so the mark's hit area reaches only above and below it.
+                interactiveTargetGapPx={0}
                 icon={<VoiceMark voice={voice} size={MARK_SIZE} />}
             />}
-            label={<Pressable
+            label={<HappierPressable
                 testID={`${props.testID}-label`}
                 accessibilityRole="button"
                 accessibilityLabel={t('voicePresence.containerA11y', { status: voice.statusLabel })}
                 accessibilityHint={t('voicePresence.showConversation')}
-                aria-expanded={open}
+                expanded={open}
                 onPress={toggleOpen}
-                style={({ pressed }) => [styles.label, { minHeight: resolveTouchTargetFloorPx() ?? PILL_HEIGHT }, pressed ? styles.labelPressed : null]}
+                style={({ pressed }) => [styles.label, pressed ? styles.labelPressed : null]}
             >
                 <View style={styles.labelRow}>
                     <VoiceStatusLine voice={voice} size="pill" />
@@ -116,7 +124,7 @@ const VoiceTopBarPill = React.memo(function VoiceTopBarPill(props: Readonly<{
                         <VoiceTargetIdentity address={voice.targetSessionAddress} size="pill" testID={`${props.testID}-target`} />
                     ) : null}
                 </View>
-            </Pressable>}
+            </HappierPressable>}
             showDivider={(voice.canStop && !voice.recoveryAvailable) || (!voice.live && Boolean(voice.ended))}
             transport={<VoiceTransport voice={voice} size="pill" testID={`${props.testID}-transport`} />}
             overlay={<VoiceGlancePopover open={open} anchorRef={anchorRef} placement="bottom" onRequestClose={close} />}

@@ -10,7 +10,6 @@ import type { WidgetLayoutGroupV1 } from '@happier-dev/protocol/widgets';
 
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { ItemLoadStateRowDividersContext } from '@/components/ui/lists/ItemLoadStateRows';
-import { PAGE_ROW_TOUCH_MIN_HEIGHT_PX } from '@/components/ui/lists/pageRowMetrics';
 import {
   WidgetFrame,
   type WidgetFramePlacement,
@@ -208,7 +207,6 @@ function WidgetGroupBands(
               onAdd={props.onAddToGroup}
               anchorRef={props.addAnchorRef}
               seam={null}
-              minHeight={SLOT_ROW_MIN_HEIGHT_PX}
             />
           ) : (
             <View style={styles.columns}>
@@ -260,8 +258,6 @@ function WidgetGroupEmptySlot(
     onAdd?: (() => void) | undefined;
     anchorRef?: React.RefObject<View | null> | undefined;
     seam: Readonly<{ borderTopWidth: number; borderTopColor: string }> | null;
-    /** A slot that is a row of its own has no neighbour to take its height from. */
-    minHeight?: number;
   }>,
 ) {
   return (
@@ -274,7 +270,6 @@ function WidgetGroupEmptySlot(
         testID={props.testID}
         icon="plus"
         label={t('widgetFrame.groupSlot')}
-        {...(props.minHeight === undefined ? {} : { minHeight: props.minHeight })}
         {...(props.onAdd
           ? {
               action: {
@@ -290,8 +285,6 @@ function WidgetGroupEmptySlot(
 }
 
 const EDITING_RING_PX = 3;
-/** A slot row keeps two touch rows of room: enough to aim a carried card at. */
-const SLOT_ROW_MIN_HEIGHT_PX = 2 * PAGE_ROW_TOUCH_MIN_HEIGHT_PX;
 
 const styles = StyleSheet.create((theme) => ({
   cell: { flexGrow: 1, minWidth: 0 },

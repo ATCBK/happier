@@ -21,6 +21,11 @@ type ScmDiffSummaryModelPickerProps = Readonly<{
     machineId?: string | null;
     serverId?: string | null;
     defaultBackendTarget?: BackendTargetRefV2 | null;
+    /**
+     * What an unset choice runs on when no default model can be named here, such as the hosting Session's own model.
+     * Without it an unset choice reads "Choose a model".
+     */
+    unsetLabel?: string | null;
     modelChoices?: ReturnType<typeof useScmDiffSummaryModelChoices>;
     testID?: string;
     /**
@@ -47,7 +52,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
     React.useEffect(() => { props.onAvailabilityChange?.(choices.selectionAvailable); }, [props.onAvailabilityChange, choices.selectionAvailable]);
     const detail = props.value === '' && choices.defaultProfile && choices.selections.has('')
         ? `${choices.defaultProfile.title} · ${t('walkthroughSettings.defaultModel')}`
-        : choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel'));
+        : choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.unsetLabel ? props.unsetLabel : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel'));
     const inline = props.presentation === 'inline';
     const rowTrigger = { itemTrigger: { title: t('walkthroughSettings.model'), subtitle: t('walkthroughSettings.modelDescription'),
         // A chosen model that cannot be used explains itself in the row once; otherwise the row keeps what the model is for.
@@ -59,7 +64,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
         trigger: ({ toggle, open }: Readonly<{ toggle: () => void; open: boolean }>) => (
             <HappierPressable testID={props.testID ?? 'walkthrough.summaryModel'} accessibilityRole="button"
                 accessibilityLabel={`${t('walkthroughSettings.model')}: ${detail}`} expanded={open} onPress={toggle}
-                style={({ pressed, hovered }) => [styles.inlineTrigger, viewportClass === 'compact' ? styles.inlineTriggerTouch : null, hovered || pressed || open ? styles.inlineTriggerActive : null]}>
+                style={({ pressed, hovered }) => [styles.inlineTrigger, hovered || pressed || open ? styles.inlineTriggerActive : null]}>
                 <Text style={styles.inlineLabel}>{t('walkthroughSettings.model')}</Text>
                 <Text style={styles.inlineValue} numberOfLines={1}>{detail}</Text>
                 <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.tertiary} />
@@ -95,7 +100,6 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s10,
         borderRadius: 8,
     },
-    inlineTriggerTouch: { minHeight: 44 },
     inlineTriggerActive: { backgroundColor: theme.colors.surface.selected },
     inlineLabel: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
     inlineValue: { ...Typography.variant('meta', 'medium'), color: theme.colors.text.secondary, flexShrink: 1 },

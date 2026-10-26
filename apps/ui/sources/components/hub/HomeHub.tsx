@@ -360,8 +360,8 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
 
 /** The id the new-row target answers the indicator owner with: it is no card, so the whole slot outlines. */
 const NEW_ROW_TARGET_ID = 'home-hub.new-row';
-/** Tall enough to aim at while carrying a card: two touch rows. */
-const NEW_ROW_MIN_HEIGHT_PX = 2 * PAGE_ROW_TOUCH_MIN_HEIGHT_PX;
+/** The aim at the slot while carrying a card: two touch rows, grown below the drawn slot, never drawn. */
+const NEW_ROW_AIM_MIN_HEIGHT_PX = 2 * PAGE_ROW_TOUCH_MIN_HEIGHT_PX;
 
 /**
  * The one "new row" target that ends Home while it is customized (lab wgmenu E): a widget or a whole
@@ -376,7 +376,7 @@ function HomeNewRowTarget(props: Readonly<{
 }>) {
     const { surface, layout } = props;
     const drop = useSessionSurfaceEntityDrag({
-        ...props.widgetDrag, title: t('homeIndex.newRow'), getItem: () => null,
+        ...props.widgetDrag, title: t('homeIndex.newRow'), getItem: () => null, aimMinHeightPx: NEW_ROW_AIM_MIN_HEIGHT_PX,
         getWidgetAreaTarget: () => ({ surface, groupId: null, itemId: NEW_ROW_TARGET_ID, itemIds: [] }),
         target: widgetLayoutEndDropTarget({ surface, items: layout.items, topLevelIds: props.topLevelIds, sourceItem: props.sourceItem,
             verb: t('homeIndex.newRowVerb'), label: t('homeIndex.newRowVerb'), groupLabel: t('common.home') }),
@@ -384,7 +384,7 @@ function HomeNewRowTarget(props: Readonly<{
     return (
         <ItemGroup surface="none">
             <View ref={drop.ref} collapsable={false} onLayout={drop.onLayout}>
-                <EmptySlot testID="home-hub.new-row" icon="plus" label={t('homeIndex.newRow')} minHeight={NEW_ROW_MIN_HEIGHT_PX} />
+                <EmptySlot testID="home-hub.new-row" icon="plus" label={t('homeIndex.newRow')} />
                 <SessionSurfaceEntityTargetFeedback drag={drop} testID="home-hub.new-row.drop" />
             </View>
         </ItemGroup>

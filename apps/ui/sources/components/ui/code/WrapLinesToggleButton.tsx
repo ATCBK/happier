@@ -1,8 +1,6 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
@@ -34,7 +32,6 @@ const WrapLinesToggleSwitch = React.memo(({ wrapLines, onChange, disabled = fals
             iconSize={18}
             size={28}
             variant="plain"
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
             interactiveTargetGapPx={8}
             onPress={() => { if (!disabled) onChange(!wrapLines); }}
         />

@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { BrowserRecordingSessionV1 } from '@happier-dev/protocol';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -66,7 +65,6 @@ export function BrowserRecordingCapsule(props: Readonly<{
                 accessibilityLabel={t('browserRecording.actions.stop')}
                 tooltip={t('browserRecording.actions.stop')}
                 size={26}
-                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                 interactiveTargetGapPx={8}
                 disabled={!onStop}
                 onPress={() => onStop?.(recording)}

@@ -657,7 +657,6 @@ describe('ReviewCommentsSessionSurface', () => {
         await pressTestInstanceAsync(revokeButton, 'review-comments-session-direct-write-grant-grant-1-revoke');
         expect(onRevokeDirectWrite).toHaveBeenCalledWith({ grantId: 'grant-1' });
         expect(onRevokeDirectWrite).toHaveBeenCalledTimes(1);
-        expect(revokeButton?.props.style.minHeight).toBe(44);
     });
 
     it('keeps projected grants visible offline and exposes an explicit reconnect refresh', async () => {

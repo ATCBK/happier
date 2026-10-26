@@ -47,16 +47,14 @@ function flattenStyle(value: unknown): Record<string, unknown> {
     return typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
-function expectMinimumInteractiveTarget(
-    node: Readonly<{ props: { style?: unknown } }>,
-    minimum: number,
-): void {
+/** The WCAG 2.2 pointer floor every control draws at; a finger's target is a hit area, never the drawn box. */
+const DRAWN_FLOOR = 24;
+
+function readDrawnStyle(node: Readonly<{ props: { style?: unknown } }>): Record<string, unknown> {
     const rawStyle = typeof node.props.style === 'function'
         ? node.props.style({ pressed: false })
         : node.props.style;
-    const style = flattenStyle(rawStyle);
-    expect(style.minWidth).toBeGreaterThanOrEqual(minimum);
-    expect(style.minHeight).toBeGreaterThanOrEqual(minimum);
+    return flattenStyle(rawStyle);
 }
 
 describe('PluginEventAutomationComposerContent interactive targets', () => {
@@ -74,7 +72,7 @@ describe('PluginEventAutomationComposerContent interactive targets', () => {
     it.each([
         ['iOS', 'ios', 44],
         ['Android', 'android', 48],
-    ] as const)('uses the canonical %s minimum for every Event composer control', async (_label, platform, minimum) => {
+    ] as const)('draws every Event composer control at its design size and reaches the %s target by hit area', async (_label, platform, minimum) => {
         platformState.os = platform;
         const { Platform } = await import('react-native');
         Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
@@ -187,7 +185,13 @@ describe('PluginEventAutomationComposerContent interactive targets', () => {
             revision: 0,
         };
         const { FieldTextInput } = await import('@/components/ui/forms/FieldTextInput');
-        const screen = await renderScreen(<PluginEventAutomationComposerContent model={model} />);
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const { act } = await import('react-test-renderer');
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                <PluginEventAutomationComposerContent model={model} />
+            </HappierUiPlatformProvider>,
+        );
         const controls = [
             'automation-event-picker',
             'automation-event-watcher-picker',
@@ -204,7 +208,18 @@ describe('PluginEventAutomationComposerContent interactive targets', () => {
         }
 
         for (const testID of controls) {
-            expectMinimumInteractiveTarget(screen.findByProps({ testID }), minimum);
+            const drawn = readDrawnStyle(screen.findByProps({ testID }));
+            expect(drawn.minWidth, `${testID} drawn width`).toBe(DRAWN_FLOOR);
+            expect(drawn.minHeight, `${testID} drawn height`).toBe(DRAWN_FLOOR);
+
+            // Under a finger the shared hit area (native hit slop) reaches the platform target past the drawn box.
+            const host = screen.findHostByTestId(testID)!;
+            await act(async () => {
+                host.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 40, height: 36 } } });
+            });
+            const slop = screen.findHostByTestId(testID)!.props.hitSlop as Record<'top' | 'bottom' | 'left' | 'right', number>;
+            expect(36 + slop.top + slop.bottom, `${testID} hit height`).toBe(minimum);
+            expect(40 + slop.left + slop.right, `${testID} hit width`).toBe(minimum);
         }
 
         // The opened option rows are now owned by the shared virtualized

@@ -115,34 +115,32 @@ function WorkflowFieldInheritance(props: Readonly<{
     fieldId: string;
     inheritance: 'inherited' | 'override';
     onReset: () => void;
-}>): React.ReactElement {
+}>): React.ReactElement | null {
     const { theme } = useUnistyles();
+    // An inherited field says nothing of its own: its group names "Workflow defaults" once.
+    if (props.inheritance === 'inherited') return null;
     return (
         <View style={styles.inheritance}>
             <Text
                 testID={`${props.fieldId}-state`}
-                style={props.inheritance === 'inherited' ? styles.inheritedBadge : styles.overrideBadge}
+                style={styles.overrideBadge}
             >
-                {props.inheritance === 'inherited'
-                    ? t('workflows.page.blocks.workflowDefaults')
-                    : t('workflows.page.changedForStep')}
+                {t('workflows.page.changedForStep')}
             </Text>
-            {props.inheritance === 'override' ? (
-                <HappierPressable
-                    testID={`${props.fieldId}-reset`}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('workflows.editor.useWorkflowDefault')}
-                    onPress={props.onReset}
-                    style={(state) => [
-                        workflowEditorStyles.actionTarget,
-                        state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
-                    ]}
-                >
-                    <Text style={styles.resetAction}>
-                        {t('workflows.editor.useWorkflowDefault')}
-                    </Text>
-                </HappierPressable>
-            ) : null}
+            <HappierPressable
+                testID={`${props.fieldId}-reset`}
+                accessibilityRole="button"
+                accessibilityLabel={t('workflows.editor.useWorkflowDefault')}
+                onPress={props.onReset}
+                style={(state) => [
+                    workflowEditorStyles.actionTarget,
+                    state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
+                ]}
+            >
+                <Text style={styles.resetAction}>
+                    {t('workflows.editor.useWorkflowDefault')}
+                </Text>
+            </HappierPressable>
         </View>
     );
 }

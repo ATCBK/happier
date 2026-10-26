@@ -39,6 +39,7 @@ import { useStorageCollect } from './StorageCollectToggle';
 import { StorageItemRow } from './StorageItemRow';
 import { StorageSaySection } from './StoragePageHead';
 import { StoragePileDock } from './StoragePileDock';
+import { StoragePolicyNotice } from './StoragePolicyNotice';
 import { formatStorageDay } from './storageCategoryText';
 import { StorageProtectedFoldersPage } from './StorageProtectedFoldersPage';
 import {
@@ -185,7 +186,6 @@ function StorageTabControls(
       {!recipient ? (
         <SegmentedTabBar<'happier' | 'disk'>
           role="radiogroup"
-          targetSize="platform"
           segmentSizing="content"
           accessibilityLabel={t('machineStorage.scope.label')}
           testIDPrefix="machine-storage-scope"
@@ -289,6 +289,7 @@ function StorageMainView(
       </ItemGroup>
     );
   }
+  if (view.kind === 'policy_unavailable') return <StoragePolicyNotice onRetry={retry} />;
   if (view.kind === 'error') {
     return (
       <ItemGroup header="none">
@@ -334,6 +335,16 @@ function StorageMainView(
           offline={view.offline}
           params={props.params}
           setParams={props.setParams}
+          sentence={
+            <StorageSentence
+              facts={describeStorageSentence(view.summary, {
+                recipient: false,
+                policyUnavailable: view.policyUnavailable,
+              })}
+              tidy={isStorageNothingToClear(view.summary, { recipient: false, policyUnavailable: view.policyUnavailable })}
+              machineName={props.machineName}
+            />
+          }
         />
       ) : (
         <StorageHappierView
@@ -343,6 +354,8 @@ function StorageMainView(
           summary={view.summary}
           offline={view.offline}
           recipient={view.recipient}
+          policyUnavailable={view.policyUnavailable}
+          onRetry={retry}
           compact={layout.compact}
           lowDiskVolumeId={
             props.params.prepare === 'lowDisk'
@@ -357,6 +370,14 @@ function StorageMainView(
   );
 }
 
+/** "All tidy.": the custodian's sized storage has nothing that can go and nothing to suggest. */
+function isStorageNothingToClear(
+  summary: StorageSummary,
+  scope: Readonly<{ recipient: boolean; policyUnavailable: boolean }>,
+): boolean {
+  return !scope.recipient && !scope.policyUnavailable && readStorageCanGoBytes(summary) === 0 && summary.suggestionsTop.length === 0;
+}
+
 /** The Happier view (lab `rs` H / Hp / HR / RD / LD): what Happier keeps, what can go, and the pile. */
 function StorageHappierView(
   props: Readonly<{
@@ -366,33 +387,35 @@ function StorageHappierView(
     summary: StorageSummary;
     offline: boolean;
     recipient: boolean;
+    /** Protection and cleanup await the machine's resources policy: sizes only, nothing that offers to clear. */
+    policyUnavailable: boolean;
+    onRetry: () => void;
     compact: boolean;
     lowDiskVolumeId: string | null;
     onOpenCategory: (categoryId: HappierStorageCategoryIdV1) => void;
     setParams: (next: MachinePageTabParams) => void;
   }>,
 ) {
-  const lowDisk = props.lowDiskVolumeId
+  const lowDisk = props.lowDiskVolumeId && !props.policyUnavailable
     ? (props.summary.volumes.find(
         (volume) => volume.volume.volumeId === props.lowDiskVolumeId,
       ) ?? null)
     : null;
   const custodian = !props.recipient;
-  const nothingToClear =
-    custodian &&
-    readStorageCanGoBytes(props.summary) === 0 &&
-    props.summary.suggestionsTop.length === 0;
+  const nothingToClear = isStorageNothingToClear(props.summary, props);
   return (
     <>
       {lowDisk && custodian ? null : (
         <StorageSentence
           facts={describeStorageSentence(props.summary, {
             recipient: props.recipient,
+            policyUnavailable: props.policyUnavailable,
           })}
           tidy={nothingToClear}
           machineName={props.machineName}
         />
       )}
+      {props.policyUnavailable ? <StoragePolicyNotice onRetry={props.onRetry} /> : null}
       {lowDisk && custodian ? (
         <StorageLowDisk
           serverId={props.serverId}
@@ -423,6 +446,7 @@ function StorageHappierView(
             machineId={props.machineId}
             summary={props.summary}
             compact={props.compact}
+            cleanupHidden={props.policyUnavailable}
             onOpenCategory={props.onOpenCategory}
           />
           {nothingToClear ? (
@@ -443,7 +467,7 @@ function StorageHappierView(
                 }
               />
             </ItemGroup>
-          ) : lowDisk ? null : (
+          ) : lowDisk || props.policyUnavailable ? null : (
             <StorageTopSuggestions
               serverId={props.serverId}
               machineId={props.machineId}
@@ -459,6 +483,7 @@ function StorageHappierView(
             (scan) => scan.status === 'complete',
           ) &&
           !props.offline &&
+          !props.policyUnavailable &&
           !nothingToClear ? (
             <StorageInvite
               summary={props.summary}
@@ -475,21 +500,23 @@ function StorageHappierView(
               props.setParams({ id: 'storage', page: 'protected' })
             }
           />
-          <StoragePileDock
-            serverId={props.serverId}
-            machineId={props.machineId}
-            machineName={props.machineName}
-            summary={props.summary}
-            compact={props.compact}
-            readOnly={props.offline}
-            {...(lowDisk
-              ? {
-                  readyNote: t('machineStorage.lowDisk.pileNote', {
-                    volume: storageVolumeName(lowDisk),
-                  }),
-                }
-              : {})}
-          />
+          {props.policyUnavailable ? null : (
+            <StoragePileDock
+              serverId={props.serverId}
+              machineId={props.machineId}
+              machineName={props.machineName}
+              summary={props.summary}
+              compact={props.compact}
+              readOnly={props.offline}
+              {...(lowDisk
+                ? {
+                    readyNote: t('machineStorage.lowDisk.pileNote', {
+                      volume: storageVolumeName(lowDisk),
+                    }),
+                  }
+                : {})}
+            />
+          )}
         </>
       )}
     </>

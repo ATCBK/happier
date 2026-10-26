@@ -6,6 +6,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { readHitArea, type HitArea } from '@/dev/testkit/harness/hitFrameReach';
 import { resolveVoiceAttemptControl } from '@/components/voice/attempt/resolveVoiceAttemptControl';
 import type { VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
 import type { VoiceSurfaceState } from '@/components/voice/surface/resolveVoiceSurfaceState';
@@ -110,23 +111,71 @@ describe('physical Voice targets', () => {
         expect(frameOf(screen, 'voice-orb').width).toBeGreaterThanOrEqual(slotWidth + 44 + 8);
     });
 
-    it.each([['ios', 44], ['android', 48]] as const)('gives the native %s tablet mark a physical touch floor', async (os, floor) => {
+    /** Measures the drawn control once, as the layout would, and returns the hit area it then has around it. */
+    async function hitAreaOf(testID: string): Promise<HitArea> {
+        const drawn = frameOf(screen!, testID) as { width: number; height: number };
+        await act(async () => {
+            screen!.findHostByTestId(testID)!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: drawn.width, height: drawn.height } } });
+        });
+        return readHitArea(screen!.findHostByTestId(testID)!, drawn);
+    }
+
+    it.each([['ios', 44], ['android', 48]] as const)('draws the native %s tablet mark at the pill and reaches the physical touch floor by hit area', async (os, floor) => {
         host.os = os;
-        screen = await renderScreen(<AppShellTitleStrip columnVisible columnToggleAvailable onToggleColumn={() => {}}
-            trailing={<VoiceTopBarPresence voice={projection('listening')} />} />);
-        const frame = frameOf(screen, 'voice-top-bar-mark');
-        expect(frame.width).toBeGreaterThanOrEqual(floor);
-        expect(frame.height).toBeGreaterThanOrEqual(floor);
-        expect(frameOf(screen, 'app-shell-title-strip').height).toBeGreaterThanOrEqual(floor);
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: os, colorScheme: 'light' }}>
+            <AppShellTitleStrip columnVisible columnToggleAvailable onToggleColumn={() => {}}
+                trailing={<VoiceTopBarPresence voice={projection('listening')} />} />
+        </HappierUiPlatformProvider>);
+        const mark = await hitAreaOf('voice-top-bar-mark');
+        expect(mark.drawn.width).toBe(28);
+        expect(mark.drawn.height).toBe(28);
+        // The label sits flush beside the mark, so the hit area grows above and below it only.
+        expect(mark.height).toBe(floor);
+        expect(mark.width).toBe(28);
     });
 
-    it('keeps mobile-web composer and Island transport at their declared 44 square floor', async () => {
-        screen = await renderScreen(<><VoiceComposerPlanet pose="mic" muted={false} accessibilityLabel="Voice" accessibilityHint="Talk" onPress={() => {}} />
-            <VoiceTransport voice={projection('listening')} size="touch" /></>);
+    it('keeps the resting top-bar mic out of the right rail below it: its hit area reaches the window edge above and stops 4 px under the 28 px mic', async () => {
+        host.os = 'ios';
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+            <AppShellTitleStrip columnVisible columnToggleAvailable onToggleColumn={() => {}}
+                trailing={<VoiceTopBarPresence voice={projection('idle')} />} />
+        </HappierUiPlatformProvider>);
+        const { insets: slop } = await hitAreaOf('voice-top-bar-rest');
+        // The 40 px title strip leaves 6 px under the mic; the rail's first action keeps its own 2 px of it.
+        expect({ top: slop.top, bottom: slop.bottom }).toEqual({ top: 6, bottom: 4 });
+    });
+
+    it('draws the composer Voice control and Island transport at their design size and reaches the 44 floor by hit area, the composer control stopping at its 2 px gap to Send', async () => {
+        host.os = 'ios';
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+            <VoiceComposerPlanet pose="mic" muted={false} accessibilityLabel="Voice" accessibilityHint="Talk" onPress={() => {}} />
+            <VoiceTransport voice={projection('listening')} size="island" />
+        </HappierUiPlatformProvider>);
         for (const id of ['session-composer-voice', 'voice-transport-mute', 'voice-transport-end']) {
-            const frame = frameOf(screen, id);
-            expect(frame.width).toBeGreaterThanOrEqual(44);
-            expect(frame.height).toBeGreaterThanOrEqual(44);
+            const area = await hitAreaOf(id);
+            expect(area.drawn.height, `${id} drawn height`).toBeLessThan(44);
+            // The composer Voice control sits 2 px above Send, so its hit area reaches only 1 px of that gap.
+            expect(area.height, `${id} hit height`).toBe(id === 'session-composer-voice' ? area.drawn.height + 2 : 44);
+        }
+    });
+
+    it('keeps the Island mark slot at its design size under a finger and reaches the platform target by hit area, on the desktop and the phone Island alike', async () => {
+        host.os = 'ios';
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        for (const phone of [false, true]) {
+            screen = await renderScreen(<HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <VoiceIsland voice={projection('listening')} phone={phone} width={330} anchorRef={React.createRef<View>()}
+                    sectionOpen={false} onOpenSection={() => {}} shouldSuppressPress={() => false} />
+            </HappierUiPlatformProvider>);
+            const mark = await hitAreaOf('voice-island-mark');
+            expect(mark.drawn, `phone=${phone} drawn slot`).toEqual({ width: 40, height: 40 });
+            expect(mark.height, `phone=${phone} hit height`).toBe(44);
+            const transport = await hitAreaOf('voice-island-transport-mute');
+            expect(transport.drawn.height, `phone=${phone} transport drawn`).toBe(32);
+            await screen.unmount();
         }
     });
 });

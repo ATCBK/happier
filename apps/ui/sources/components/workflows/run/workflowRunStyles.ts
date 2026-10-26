@@ -1,19 +1,15 @@
-import { Platform } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Typography } from '@/constants/Typography';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 /**
- * Text-labelled controls cannot declare a square the way `IconButton` does, so
- * they take the platform target as a real minimum height. `hitSlop` is not an
- * option: react-native-web's `Pressable` never reads it, and the desktop app IS
- * the web bundle. Growth is on the free vertical axis only, so wrapping rows
- * still meet at their gap instead of overlapping.
+ * Text-labelled controls draw at the WCAG 2.2 pointer floor under every pointer; a finger reaches its
+ * touch target through the `HappierPressable` hit area past this drawn box.
  */
-const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+const MINIMUM_TARGET_SIZE = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
 
 /**
  * Shared Run-detail rhythm.

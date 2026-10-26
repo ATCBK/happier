@@ -3,7 +3,10 @@ import { RefreshControl, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 
-import { Stack, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Redirect, Stack, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { managedMachineEnrolledDetailId } from '@/components/settings/machines/managed/managedCreationPresentation';
+import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import { useMachinesDoor } from './machinesDoor';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useManagedEnrolledMachine, useManagedMachineHeaderIdentity } from '@/components/settings/machines/managed/ManagedMachineSections';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -23,7 +26,7 @@ import { runRefreshDiagnosticAction } from '@/utils/system/userInteractionDiagno
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import { MachinePageHeader } from './MachinePageHeader';
-import { MachinePageStateContext, type MachinePageState } from './machinePageContext';
+import { MACHINE_PAGE_COLUMN, MachinePageListHostContext, MachinePageStateContext, type MachinePageState } from './machinePageContext';
 import { useMachinePageScroll } from './machinePageScroll';
 import { readRememberedMachinePageTab, rememberMachinePageTab } from './machinePageTabMemory';
 import { isMachinePageTabRoot, machinePageTabQuery, machinePageTabRouteParams } from './machinePageTabQuery';
@@ -47,6 +50,10 @@ const styles = StyleSheet.create(() => ({
         flexWrap: 'wrap',
         gap: 12,
     },
+    ownedScroll: {
+        flex: 1,
+        minHeight: 0,
+    },
     renameActions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
@@ -62,6 +69,7 @@ const styles = StyleSheet.create(() => ({
  */
 export function MachinePageScreen() {
     const target = useMachinePageTarget();
+    const door = useMachinesDoor();
     const router = useRouter();
     const routeParams = useLocalSearchParams<Record<string, string>>();
     const { machine, machineId, serverId } = target;
@@ -125,13 +133,18 @@ export function MachinePageScreen() {
     const tabBody = React.useMemo(() => ({ serverId, machineId, machineName, online, setParams: setTabParams }),
         [machineId, machineName, online, serverId, setTabParams]);
 
+    if (managedEnrolled.machine && !managedMachineEnrolledDetailId(managedEnrolled.machine)) {
+        return <Redirect href={machineCollectionHref({ kind: 'managed', managedId: managedEnrolled.machine.id,
+            serverId: managedEnrolled.serverId }, door) as never} />;
+    }
+
     if (!machine) {
         // The page keeps its identity while the machine loads or when it no longer exists: the same
         // header with a placeholder name, then the state where the sections would be.
         return (
             <>
                 <Stack.Screen options={screenOptions} />
-                <ItemList pageColumn="wide">
+                <ItemList pageColumn={MACHINE_PAGE_COLUMN}>
                     <MachinePageHeader target={target} managedIdentity={null} renaming={false} onRename={rename.start} />
                     <ItemGroup surface="none">
                         {target.isHydratingMachine ? (
@@ -147,50 +160,66 @@ export function MachinePageScreen() {
 
     // A wide page draws the tab's accessory at the end of the tab bar (lab `rv` O); a phone keeps it in the body.
     const BarAccessory = barAccessoriesInBar ? tab.entry.BarAccessory : undefined;
+    const chrome = (
+        <>
+            <MachinePageHeader target={target} managedIdentity={managedIdentity} renaming={rename.saving} onRename={rename.start} />
+            {MACHINE_PAGE_TABS.length > 1 ? (
+                // In the page column like every section, so the tabs line up with the header and the sheets.
+                <ItemGroup header="none" surface="none" style={styles.tabsGroup}>
+                <View testID="machine-page-tabs" style={styles.tabBar}>
+                    <SegmentedTabBar<MachinePageTabId>
+                        role="tablist"
+                        segmentSizing="content"
+                        tabs={MACHINE_PAGE_TABS.map(entry => ({ id: entry.id, label: t(entry.titleKey) }))}
+                        activeTabId={tab.entry.id}
+                        onSelectTab={selectTab}
+                        accessibilityLabel={target.machineName}
+                        testIDPrefix="machine-page-tab"
+                    />
+                    {BarAccessory ? <BarAccessory serverId={serverId} machineId={machineId} online={target.online} params={tab.params} setParams={setTabParams} /> : null}
+                </View>
+                </ItemGroup>
+            ) : null}
+            {rename.editor}
+        </>
+    );
+    const refreshControl = <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />;
+    // A page that is too long to mount whole (Storage's Suggestions) draws its own virtualized scroller and leads it with this chrome.
+    const ownsScroll = tab.entry.ownsScroll?.(tab.params) === true;
+    const bodies = (
+        <MachinePageTabBodies
+            tabs={MACHINE_PAGE_TABS}
+            active={tab}
+            body={tabBody}
+            barAccessoriesInBar={barAccessoriesInBar}
+            // Ask an agent closes every Resources tab's root (plan 60 AGW-11), never a page the tab pushes; Overview places it before its machine sections.
+            footer={<MachineResourcesAskBlock serverId={serverId} machineId={machineId} machineName={target.machineSentenceName} />}
+            footerShown={tab.entry.id !== 'overview' && isMachinePageTabRoot(tab.params)}
+            scrollOwned={ownsScroll}
+        />
+    );
     return (
         <MachinePageStateContext.Provider value={pageState}>
             <Stack.Screen options={screenOptions} />
-            <ItemList
-                ref={scroll.ref}
-                onScroll={scroll.onScroll}
-                scrollEventThrottle={64}
-                // The wide column, as All machines: the two doors' index and the page keep one edge, and the
-                // tabs' tables, charts and maps get the room the lab draws them at (a created machine's
-                // receipt columns share it).
-                pageColumn="wide"
-                refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
-                keyboardShouldPersistTaps="handled"
-            >
-                <MachinePageHeader target={target} managedIdentity={managedIdentity} renaming={rename.saving} onRename={rename.start} />
-                {MACHINE_PAGE_TABS.length > 1 ? (
-                    // In the page column like every section, so the tabs line up with the header and the sheets.
-                    <ItemGroup header="none" surface="none" style={styles.tabsGroup}>
-                    <View testID="machine-page-tabs" style={styles.tabBar}>
-                        <SegmentedTabBar<MachinePageTabId>
-                            role="tablist"
-                            targetSize="platform"
-                            segmentSizing="content"
-                            tabs={MACHINE_PAGE_TABS.map(entry => ({ id: entry.id, label: t(entry.titleKey) }))}
-                            activeTabId={tab.entry.id}
-                            onSelectTab={selectTab}
-                            accessibilityLabel={target.machineName}
-                            testIDPrefix="machine-page-tab"
-                        />
-                        {BarAccessory ? <BarAccessory serverId={serverId} machineId={machineId} online={target.online} params={tab.params} setParams={setTabParams} /> : null}
-                    </View>
-                    </ItemGroup>
-                ) : null}
-                {rename.editor}
-                <MachinePageTabBodies
-                    tabs={MACHINE_PAGE_TABS}
-                    active={tab}
-                    body={tabBody}
-                    barAccessoriesInBar={barAccessoriesInBar}
-                    // Ask an agent closes every Resources tab's root (plan 60 AGW-11), never a page the tab pushes; Overview places it before its machine sections.
-                    footer={<MachineResourcesAskBlock serverId={serverId} machineId={machineId} machineName={target.machineSentenceName} />}
-                    footerShown={tab.entry.id !== 'overview' && isMachinePageTabRoot(tab.params)}
-                />
-            </ItemList>
+            {ownsScroll ? (
+                // The page draws its own page list (`VirtualizedItemList`) in the height the page has.
+                <MachinePageListHostContext.Provider value={{ chrome, refreshControl }}>
+                    <View style={styles.ownedScroll}>{bodies}</View>
+                </MachinePageListHostContext.Provider>
+            ) : (
+                <ItemList
+                    ref={scroll.ref}
+                    onScroll={scroll.onScroll}
+                    scrollEventThrottle={64}
+                    // A created machine's receipt columns share the wide column too.
+                    pageColumn={MACHINE_PAGE_COLUMN}
+                    refreshControl={refreshControl}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    {chrome}
+                    {bodies}
+                </ItemList>
+            )}
         </MachinePageStateContext.Provider>
     );
 }

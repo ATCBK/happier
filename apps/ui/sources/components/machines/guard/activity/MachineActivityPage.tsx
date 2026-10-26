@@ -60,6 +60,9 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
     const groups = React.useMemo(() => list ? groupGuardActivityByDay(list.entries) : [], [language, list]);
     const counts = all.list?.counts ?? null;
     const total = counts ? counts.stopped + counts.cleanedUp + counts.needsLook : null;
+    // Nothing automatic in the whole range (lab `rg` G7s 1): one empty state says what will be listed here; no zeroed
+    // summary and no filters with nothing to filter. "Show earlier" stays, since the range may not be the whole log.
+    const nothingYet = total === 0;
     const filterCount = (id: Filter) => !counts ? null : id === 'all' ? total : id === 'stopped' ? counts.stopped : id === 'cleaned_up' ? counts.cleanedUp : counts.needsLook;
 
     return (
@@ -71,8 +74,8 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
                     <MachineFreshnessChip testID={`machine-activity-${freshness.kind}`} freshness={freshness} />
                 </View>
             </MachineTabSubHead>
-            {all.list ? <ActivitySummary list={all.list} /> : null}
-            <ItemGroup surface="none" header="none">
+            {all.list && !nothingYet ? <ActivitySummary list={all.list} /> : null}
+            {nothingYet ? null : <ItemGroup surface="none" header="none">
                 <View style={[styles.controls, layout.compact ? styles.controlsCompact : null]}>
                     {layout.compact ? (
                         <PolicyValueSelect testID="machine-activity-filter" label={t('machineGuard.activity.filters.label')}
@@ -80,7 +83,7 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
                             choices={FILTERS.map(id => ({ id, title: `${t(`machineGuard.activity.filters.${id}`)}${filterCount(id) === null ? '' : ` · ${filterCount(id)}`}` }))}
                             onSelect={id => setFilter(id as Filter)} />
                     ) : (
-                        <SegmentedTabBar<Filter> role="radiogroup" targetSize="platform" segmentSizing="content"
+                        <SegmentedTabBar<Filter> role="radiogroup" segmentSizing="content"
                             accessibilityLabel={t('machineGuard.activity.filters.label')} testIDPrefix="machine-activity-filter"
                             tabs={FILTERS.map(id => { const count = filterCount(id); return { id, label: t(`machineGuard.activity.filters.${id}`), ...(count === null ? {} : { count: count.toLocaleString(getPreferredLanguage()) }) }; })}
                             activeTabId={filter} onSelectTab={setFilter} />
@@ -90,8 +93,16 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
                         choices={RANGES.map(id => ({ id, title: t(`machineGuard.activity.ranges.${id}`) }))}
                         onSelect={id => setRange(id as Range)} />
                 </View>
-            </ItemGroup>
-            {!list ? (
+            </ItemGroup>}
+            {nothingYet ? (
+                <ItemGroup>
+                    <SurfaceStateCard testID="machine-activity-nothing-yet" kind="empty" size="details" iconName="clock" replacesContent
+                        title={t(`machineGuard.activity.emptyTitle.${range}`, { machine: props.machineName })}
+                        reason={t('machineGuard.activity.emptyBody')}
+                        // It points back to where entries come from rather than adding one: the quiet tone (lab G7s).
+                        action={{ label: t('machineGuard.activity.reviewRules'), onPress: props.onBack, invitation: false, testID: 'machine-activity-review-rules' }} />
+                </ItemGroup>
+            ) : !list ? (
                 status === 'error' || status === 'not_reported' ? (
                     <ItemGroup>
                         <SurfaceStateCard testID="machine-activity-error" kind="error" size="line" title={t('machineGuard.activity.error')}

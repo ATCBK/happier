@@ -1,11 +1,11 @@
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal';
 import { t } from '@/text';
@@ -46,7 +46,7 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s12,
     },
     action: {
-        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
+        minHeight: HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
         borderWidth: 1,
         borderColor: 'transparent',
         justifyContent: 'center',

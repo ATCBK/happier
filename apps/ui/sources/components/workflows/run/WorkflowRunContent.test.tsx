@@ -31,6 +31,7 @@ import {
 } from './WorkflowReviewCard';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
+import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { resolveWorkflowFlowScopedNodeId } from '@/components/workflows/flow/workflowFlowProjection';
@@ -48,6 +49,9 @@ import { ModalProvider, useModal } from '@/modal';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { Icon } from '@/components/ui/icons/Icon';
 import { WorkflowLifecycleStatus } from '@/components/workflows/presentation/WorkflowLifecycleStatus';
+import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
+import { renderPaneMainColumnConsumer } from '@/dev/testkit/harness/paneMainColumnHarness';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 // These Run fixtures do not stream Markdown; keep its external web adapter at the boundary.
 vi.mock(
@@ -77,6 +81,8 @@ vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
     await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({
+    // Responsive owners read Dimensions directly; keep it on the same viewport as the hook.
+    Dimensions: { get: () => ({ ...viewport.window, scale: 2, fontScale: 1 }) },
     useWindowDimensions: () => viewport.window,
   });
 });
@@ -197,6 +203,7 @@ async function renderContent(overrides: Partial<ContentProps> = {}) {
   retireContents.push(retire);
   return {
     ...screen,
+    contentProps: props,
     visibleModals: () =>
       modals.filter((entry) => 'visible' in entry && entry.visible),
     unmount: async () => {
@@ -206,6 +213,33 @@ async function renderContent(overrides: Partial<ContentProps> = {}) {
     },
   };
 }
+
+it('keeps pane consumers asleep across unrelated publications and local controls in a 500-item Run', async () => {
+  const props: Partial<ContentProps> = {
+    title: 'Large Run',
+    invocations: Array.from({ length: 500 }, (_, index) => createWorkflowInvocationIndexFixture({ id: `pane-${index}` })),
+  };
+  const screen = await renderContent(props);
+  const descriptor = () => screen.findByType(AppPaneScopeHost).props.mainColumn;
+  const consumer = await renderPaneMainColumnConsumer(descriptor());
+  expect(consumer.read().current?.identity).toMatchObject({ name: 'Large Run', state: 'working' });
+  consumer.reset();
+  await act(async () => { getStorage().setState({ socketStatus: 'disconnected' }); });
+  await consumer.publish(descriptor());
+  expect(consumer.read().executions).toBe(0);
+  await openTechnicalDetails(screen);
+  await consumer.publish(descriptor());
+  expect(consumer.read().executions).toBe(0);
+
+  // Sensitivity: a wrongly rebound fresh identity really wakes the exact consumer.
+  const settled = descriptor();
+  await consumer.publish({ ...settled, identity: { ...settled.identity } });
+  expect(consumer.read().executions).toBe(1);
+  await screen.update(<WorkflowRunContent {...screen.contentProps}
+    title="Renamed Run" run={createWorkflowRunSummaryFixture({ state: 'running', attentionRequired: true })} />);
+  await consumer.publish(descriptor());
+  expect(consumer.read().current?.identity).toMatchObject({ name: 'Renamed Run', state: 'attention' });
+});
 
 it('does no Map-only projection work for a 500-item Run while Activity is shown, then projects current facts on open', async () => {
   // Observe the real projection without replacing any internal domain logic.
@@ -495,6 +529,30 @@ describe('WorkflowRunContent', () => {
     );
     expect(screen.findByTestId('workflow-run-needs-you')).toBeNull();
   });
+  it.each([
+    ['while a Stop is being carried out', { cancelRequested: true, run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'running' }) }],
+    ['once terminal with its publication custody pending', { run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'succeeded', workflowCustodyState: 'pending' }) }],
+  ] as const)('opens each pending publication request from the Run %s', async (_name, overrides) => {
+    const open = vi.fn();
+    const screen = await renderContent({
+      ...overrides,
+      publicationRequests: [
+        { artifactId: 'first', href: '/inbox/approvals/first?serverId=home' },
+        { artifactId: 'second', href: '/inbox/approvals/second?serverId=home' },
+      ],
+      onOpenPublicationRequest: open,
+    });
+    expect(screen.getTextContent()).toContain('approvals.waitingForYou');
+    await screen.pressByTestIdAsync('workflow-run-publication-request-second.open');
+    // Navigation only: it names exactly the pressed request and offers no way to decide it from the Run.
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('/inbox/approvals/second?serverId=home');
+  });
+  it('shows no publication request control when the Run has none to open', async () => {
+    const screen = await renderContent({ publicationRequests: [], onOpenPublicationRequest: vi.fn() });
+    expect(screen.getTextContent()).not.toContain('inbox.work.detail.openApproval');
+    expect(screen.findByTestId('workflow-run-publication-request-first')).toBeNull();
+  });
   it.each([1200, 390])(
     'keeps source actions on the tab row at width %s',
     async (width) => {
@@ -615,6 +673,33 @@ describe('WorkflowRunContent', () => {
     expect(screen.getTextContent()).toContain(
       'The publishing service refused the request.',
     );
+  });
+
+  it('says Skipped on a completed Run map for a step it never ran, and only when the history is complete', async () => {
+    const root = createWorkflowInvocationIndexFixture({ id: 'root', lifecycle: 'completed' });
+    const taken = createWorkflowInvocationIndexFixture({ id: 'taken', parentRecordId: root.id, sequence: '1', lifecycle: 'completed' });
+    const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'if', id: 'choose',
+      when: { kind: 'compare', operator: 'eq', left: { kind: 'input', name: 'go' }, right: { kind: 'literal', value: true } },
+      then: [{ kind: 'wait', id: 'taken', name: 'List machines', document: { text: 'List', references: [], attachments: [] } }],
+      otherwise: [{ kind: 'wait', id: 'untaken', name: 'Alternative check', document: { text: 'Other', references: [], attachments: [] } }] }] });
+    const progress = new Map([[root.id, WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+      blockKind: 'root', invocationPath: { blockId: '$root', scope: [] }, attempt: '0', logicalInvocationRecordId: root.id })],
+      [taken.id, WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+        blockKind: 'wait', invocationPath: { blockId: 'taken', scope: [] }, attempt: '0', logicalInvocationRecordId: taken.id })]]);
+    const render = (state: 'succeeded' | 'cancelled', invocationHistoryComplete = true) => renderContent({
+      run: createWorkflowRunSummaryFixture({ state, workflowCustodyState: 'settled' }),
+      definition, view: 'flow', invocations: [root, taken], invocationProgressById: progress, invocationHistoryComplete,
+    });
+    const completed = await render('succeeded');
+    expect(completed.findByTestId('workflow-run-flow-node-untaken-not-started')?.props.children).toBe('workflows.invocationState.skipped');
+    expect(completed.findByTestId('workflow-run-flow-node-taken-not-started')).toBeNull();
+    await completed.unmount();
+    const stopped = await render('cancelled');
+    expect(stopped.findByTestId('workflow-run-flow-node-untaken-not-started')).toBeNull();
+    await stopped.unmount();
+    const partial = await render('succeeded', false);
+    expect(partial.findByTestId('workflow-run-flow-node-untaken-not-started')).toBeNull();
+    await partial.unmount();
   });
 
   it('keeps the completed Wait completed after its Run fails from lost contact (R4)', async () => {
@@ -3683,6 +3768,99 @@ describe('WorkflowRunContent', () => {
     expect(onSelectInvocation).toHaveBeenCalledWith('inv-implement');
   });
 
+  it('keeps a structured final output in its result pane instead of printing it under the outcome', async () => {
+    const onSelectInvocation = vi.fn();
+    const definition = createWorkflowDefinitionFixture({
+      blocks: [
+        {
+          kind: 'step',
+          id: 'analyze',
+          document: {
+            text: 'Analyze changes',
+            references: [],
+            attachments: [],
+          },
+          input: [],
+          result: { kind: 'text' },
+        },
+        {
+          kind: 'step',
+          id: 'implement',
+          document: {
+            text: 'Implement the plan',
+            references: [],
+            attachments: [],
+          },
+          input: [],
+          result: { kind: 'text' },
+        },
+      ],
+      finalOutput: {
+        kind: 'result',
+        producer: { blockId: 'implement', scope: { kind: 'current' } },
+        path: [],
+      },
+    });
+    const invocations = [
+      createWorkflowInvocationIndexFixture({
+        id: 'inv-root',
+        sequence: '0',
+        parentRecordId: null,
+        memberOrdinal: '0',
+        lifecycle: 'completed',
+      }),
+      createWorkflowInvocationIndexFixture({
+        id: 'inv-analyze',
+        sequence: '1',
+        parentRecordId: 'inv-root',
+        memberOrdinal: '0',
+        lifecycle: 'completed',
+      }),
+      createWorkflowInvocationIndexFixture({
+        id: 'inv-implement',
+        sequence: '2',
+        parentRecordId: 'inv-root',
+        memberOrdinal: '1',
+        lifecycle: 'completed',
+      }),
+    ];
+    const screen = await renderContent({
+      run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'succeeded' }),
+      definition,
+      invocations,
+      // The canonical Action result names the exact producer row; this
+      // consumer opens that row and never derives one.
+      finalOutputInvocationId: 'inv-implement',
+      resultLabel: JSON.stringify({ allPassed: false, nextParticipants: [{ kind: 'session' }] }, null, 2),
+      onSelectInvocation,
+    });
+
+    expect(screen.getTextContent()).not.toContain('allPassed');
+    expect(screen.findAllByTestId('workflow-run-result')).toHaveLength(0);
+    expect(screen.findAllByTestId('workflow-run-see-failures')).toHaveLength(0);
+    await screen.pressByTestIdAsync('workflow-run-open-result');
+    expect(onSelectInvocation).toHaveBeenCalledWith('inv-implement');
+  });
+
+  it('carries proven skipped step counts into the completed Run outcome', async () => {
+    const definition = createWorkflowDefinitionFixture({ blocks: Array.from({ length: 4 }, (_, index) => ({
+      kind: 'wait', id: `wait-${index}`, document: { text: `Review ${index + 1}`, references: [], attachments: [] },
+    })) });
+    const invocations = [
+      createWorkflowInvocationIndexFixture({ id: 'root', lifecycle: 'completed' }),
+      ...Array.from({ length: 4 }, (_, index) => createWorkflowInvocationIndexFixture({
+        id: `wait-${index}`, parentRecordId: 'root', memberOrdinal: String(index), sequence: String(index + 1),
+        lifecycle: index < 2 ? 'completed' : 'skipped',
+      })),
+    ];
+    const screen = await renderContent({ definition, invocations,
+      run: createWorkflowRunSummaryFixture({ state: 'succeeded', stepProgress: { completed: 2, skipped: 2, total: 4 } }) });
+    const completedWithSkipped = 'workflows.run.completedWithSkipped:{"completed":2,"skipped":2}';
+    // The sentence is a parameter of the outcome-line translation, so the boundary serializes it again.
+    expect(screen.getTextContent()).toContain(JSON.stringify(completedWithSkipped).slice(1, -1));
+    expect(screen.getTextContent()).not.toContain('workflows.list.stepsProgress');
+  });
+
   it('opens the authoritative final producer even when that row is beyond the loaded history page', async () => {
     const onSelectInvocation = vi.fn();
     const definition = createWorkflowDefinitionFixture({
@@ -3887,7 +4065,8 @@ describe('WorkflowRunContent', () => {
     const failed = createWorkflowInvocationIndexFixture({ id: 'inv-2', sequence: '1', lifecycle: 'failed' });
     const onOpenSession = vi.fn();
     const props = { run: failedRun, invocations: [failed], firstFailedInvocationId: 'inv-2',
-      onRunAgain: vi.fn(), onOpenSession } satisfies Partial<ContentProps>;
+      onRunAgain: vi.fn(), onAnotherRound: vi.fn(), sourceAction: { kind: 'open' as const, onPress: vi.fn() },
+      onOpenSession } satisfies Partial<ContentProps>;
 
     // Wide: the state's actions sit in the header; nothing repeats them in the page.
     const wide = await renderContent(props);
@@ -3897,13 +4076,16 @@ describe('WorkflowRunContent', () => {
     expect(seeFailures(wide)).toHaveLength(1);
     await wide.unmount();
 
-    // Phone: navigation keeps only ⋯, so Run again and See failures stay in the page under the outcome.
+    // Phone: the page keeps its one primary (See failures) under the outcome; Run again, Another round and
+    // Open workflow move into ⋯ rather than stacking three bordered buttons over two rows (lab P1).
     viewport.window = { width: 390, height: 844 };
     const phone = await renderContent(props);
     const pageControls = phone.findByTestId('workflow-run-page-controls');
     expect(pageControls?.findAll((node) => node.props.testID === 'workflow-run-see-failures').length).toBeGreaterThan(0);
-    expect(pageControls?.findAll((node) => node.props.testID === 'workflow-run-run-again').length).toBeGreaterThan(0);
     expect(seeFailures(phone)).toHaveLength(1);
+    expect(phone.findAllByType(ToolbarButton).map((button) => button.props.testID)).toEqual(['workflow-run-see-failures']);
+    const menuIds = phone.findAllByType(ItemRowActions).flatMap((menu) => menu.props.actions.map((action: { id: string }) => action.id));
+    expect(menuIds).toEqual(expect.arrayContaining(['workflow-run-run-again', 'workflow-run-another-round', 'workflow-run-open-workflow']));
 
     // "From a session" is the way back; there is no second "Open the session it came from" line.
     expect(phone.getTextContent()).not.toContain('workflows.run.openSourceSession');
@@ -4368,6 +4550,36 @@ describe('WorkflowRunContent', () => {
     expect(
       screen.findByTestId('workflow-run-invocations-state-inv-1-marker'),
     ).toBeTruthy();
+  });
+
+  it('distinguishes repeated Activity steps by their exact occurrence and recorded time', async () => {
+    const definition = createWorkflowDefinitionFixture({ blocks: [{
+      kind: 'loop', id: 'files', repetition: {
+        kind: 'items', items: { kind: 'literal', value: ['first', 'second'] },
+        execution: 'parallel', failurePolicy: 'collect_outcomes',
+      }, body: [{ kind: 'action', id: 'inspect', name: 'Inspect files',
+        actionId: 'notifications.notify_me', input: {} }],
+    }] });
+    // The canonical opened progress places these leaves even when their parent page is absent.
+    const invocations = ['2026-10-24T10:00:00.000Z', '2026-10-24T11:30:00.000Z'].map((createdAt, index) =>
+      createWorkflowInvocationIndexFixture({ id: `inspect-${index}`, parentRecordId: `frame-${index}`,
+        createdAt, updatedAt: '2026-10-25T12:00:00.000Z', sequence: String(index), lifecycle: 'completed' }));
+    const invocationProgressById = new Map(invocations.map((row, index) => [row.id,
+      WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'action',
+        attempt: '0', logicalInvocationRecordId: row.id,
+        invocationPath: { blockId: 'inspect', scope: [{ kind: 'iteration', blockId: 'files', index }] } }),
+    ]));
+    const screen = await renderContent({ definition, invocations, invocationProgressById });
+    for (const [index, row] of invocations.entries()) {
+      const time = formatAsOfTime(Date.parse(row.createdAt));
+      expect(screen.findByTestId(`workflow-run-invocations-time-${row.id}`)?.props.children).toBe(time);
+      const occurrence = screen.findByTestId(`workflow-run-invocations-occurrence-${row.id}`);
+      const occurrenceLabel = `workflows.run.occurrenceItem:{"number":"${index + 1}"}`;
+      expect(occurrence?.props.children).toBe(occurrenceLabel);
+      const accessibleName = screen.findByTestId(`workflow-run-invocations-row-${row.id}`)?.props.accessibilityLabel;
+      expect(accessibleName).toContain(JSON.stringify(occurrenceLabel).slice(1, -1));
+      expect(accessibleName).toContain(time);
+    }
   });
 
   /**

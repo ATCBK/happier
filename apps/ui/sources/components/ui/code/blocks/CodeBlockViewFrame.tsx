@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
 import { resolveCodeMonoFontFamily } from '../codeTypography';
-import { CopyIconButton, COPY_ICON_BUTTON_WIDTH } from '@/components/ui/copy/CopyIconButton';
+import { CopyIconButton, COPY_ICON_BUTTON_SIZE } from '@/components/ui/copy/CopyIconButton';
 import { resolveHappierCodeBlockLayout } from '@happier-dev/plugin-ui/presentation';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 
@@ -23,14 +23,15 @@ export type CodeBlockViewFrameProps = Readonly<{
     children: React.ReactNode;
 }>;
 
-/** Placement around the copy button's platform-sized press frame. */
+/** Placement around the copy button; its hit area may take this much of the block's padding. */
 const COPY_BUTTON_OVERLAY_OFFSET = 8;
+const HEADER_ROW_PADDING_HORIZONTAL = 12;
 /**
  * How far the code's viewport stops short of the block's right edge while the copy button is overlaid,
  * so a command scrolls or wraps beside the button instead of running under it.
  */
 export const CODE_BLOCK_OVERLAY_COPY_INSET = COPY_BUTTON_OVERLAY_OFFSET
-    + COPY_ICON_BUTTON_WIDTH;
+    + COPY_ICON_BUTTON_SIZE;
 
 export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
     code,
@@ -65,6 +66,10 @@ export const CodeBlockViewFrame = React.memo<CodeBlockViewFrameProps>(({
             text={code}
             variant={shouldOverlayCopyButton ? 'outlined' : 'plain'}
             style={shouldOverlayCopyButton ? styles.copyButtonOverlay : null}
+            // Overlaid, the button's hit area takes the padding beside it, never the code viewport; in the header it takes the row's padding.
+            interactiveTargetEdgesPx={shouldOverlayCopyButton
+                ? { leading: 0, trailing: COPY_BUTTON_OVERLAY_OFFSET, top: COPY_BUTTON_OVERLAY_OFFSET, bottom: COPY_BUTTON_OVERLAY_OFFSET }
+                : { leading: 4, trailing: HEADER_ROW_PADDING_HORIZONTAL }}
         />
     ) : null;
 
@@ -130,8 +135,8 @@ const styles = StyleSheet.create((theme) => ({
         position: 'relative',
     },
     containerWithOverlaidCopy: {
-        // Keep the entire physical press target inside the block's clipping boundary.
-        minHeight: COPY_BUTTON_OVERLAY_OFFSET * 2 + COPY_ICON_BUTTON_WIDTH,
+        // The button and the padding its hit area may reach into stay inside the block's clipping boundary.
+        minHeight: COPY_BUTTON_OVERLAY_OFFSET * 2 + COPY_ICON_BUTTON_SIZE,
     },
     scroll: {
         width: '100%',
@@ -145,7 +150,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 12,
+        paddingHorizontal: HEADER_ROW_PADDING_HORIZONTAL,
         paddingVertical: 4,
     },
     headerLeft: {

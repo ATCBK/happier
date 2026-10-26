@@ -2,7 +2,8 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
+import { useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import {
   restoreFocusToBestTarget,
@@ -27,7 +28,9 @@ import {
   revokeVoiceDiagnosticsSessionAuthorization,
 } from './runtimeRevocation';
 
-const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+// The action draws at the WCAG 2.2 pointer floor under every pointer; a finger reaches past it through the hit area.
+const minimumInteractiveTargetSize = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
+const actionRestingSize = { minWidth: minimumInteractiveTargetSize, minHeight: minimumInteractiveTargetSize };
 
 function isCurrentWebFocusTarget(target: FocusReturnTarget): boolean {
   if (Platform.OS !== 'web' || typeof document === 'undefined') return false;
@@ -49,6 +52,7 @@ export function VoiceDiagnosticsIndicator(props: Readonly<{
   wrapAction?: (action: React.ReactElement, operation: 'retry_shutdown' | 'session_opt_out') => React.ReactElement;
 }>) {
   const { theme } = useUnistyles();
+  const actionHitArea = useHappierHitArea({ restingStyle: () => actionRestingSize });
   const rawVoice = useSetting('voice');
   const diagnostics = voiceSettingsParse(rawVoice).diagnostics;
   const runtimeStatus = useVoiceDiagnosticsRuntimeStatus();
@@ -164,6 +168,8 @@ export function VoiceDiagnosticsIndicator(props: Readonly<{
             ? 'settingsVoice.diagnostics.retryShutdown'
             : 'settingsVoice.diagnostics.sessionOptOut')}
           disabled={obligation?.status === 'pending'}
+          hitSlop={actionHitArea.hitSlop}
+          onLayout={actionHitArea.onLayout}
           style={{
             minWidth: minimumInteractiveTargetSize,
             minHeight: minimumInteractiveTargetSize,
@@ -233,6 +239,7 @@ export function VoiceDiagnosticsIndicator(props: Readonly<{
               })();
           }}
         >
+          {actionHitArea.frame}
           <Text style={{ color: theme.colors.text.secondary, fontSize: 11, flexShrink: 1, textDecorationLine: 'underline' }}>
             {tLoose(obligation
               ? 'common.retry'

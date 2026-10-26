@@ -4,6 +4,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DiskScanStateV1, HappierStorageSummaryV1, MachineStorageCategoryListResultV1, StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
+import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { DiskScanStateV1Schema, HappierStorageSummaryV1Schema, MachineStorageScanStartInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import type { WorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
@@ -13,6 +16,8 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
+import { measureMountedCollections } from '@/dev/testkit/render/renderInCollectionLayout';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -24,6 +29,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { MachinePageListHostContext, type MachinePageListHost } from '@/components/machines/page/machinePageContext';
 
 installDisconnectedServerSocketBoundary();
 const routerPush = vi.hoisted(() => vi.fn());
@@ -45,6 +51,47 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 });
 // Only the Machine network is replaced; credential binding, Actions, the storage and policy stores and the tab run for real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: transport.rpc }));
+// The list recycler measures a viewport the test renderer does not have: this stands in for it and shows the first
+// `viewport.count` entries it is handed, the way a window of rows is shown, while keeping every entry reachable.
+const viewport = vi.hoisted(() => {
+    const listeners = new Set<() => void>();
+    return {
+        start: 0, count: 3, listeners,
+        /** The recycler's latest props and its scroll element, as the page wires them. */
+        props: null as null | { onScroll?: (event: unknown) => void },
+        scrollNode: { recyclerScrollElement: true },
+        scrollTo(start: number) { this.start = start; for (const listener of listeners) listener(); },
+    };
+});
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const ReactModule = await import('react');
+    const element = (part: unknown) => ReactModule.isValidElement(part) ? part
+        : typeof part === 'function' ? ReactModule.createElement(part as React.ComponentType) : null;
+    return {
+        ...(await importOriginal<Record<string, unknown>>()),
+        LegendList: ReactModule.forwardRef((props: {
+            data?: readonly unknown[]; keyExtractor: (item: unknown, index: number) => string;
+            renderItem: (info: { item: unknown; index: number }) => React.ReactElement | null;
+            ListHeaderComponent?: unknown; ListFooterComponent?: unknown; testID?: string;
+            onScroll?: (event: unknown) => void;
+        }, ref) => {
+            viewport.props = props;
+            ReactModule.useImperativeHandle(ref, () => ({
+                getScrollableNode: () => viewport.scrollNode,
+                getNativeScrollRef: () => ({ scrollTo: () => {}, getScrollableNode: () => viewport.scrollNode }),
+            }), []);
+            const [, rescroll] = ReactModule.useReducer((tick: number) => tick + 1, 0);
+            ReactModule.useEffect(() => { viewport.listeners.add(rescroll); return () => { viewport.listeners.delete(rescroll); }; }, []);
+            const data = props.data ?? [];
+            const shown = data.slice(viewport.start, viewport.start + viewport.count);
+            return ReactModule.createElement('RecyclerViewport', { testID: props.testID, 'data-entries': data.length },
+                element(props.ListHeaderComponent),
+                ...shown.map((item, offset) => ReactModule.createElement(ReactModule.Fragment,
+                    { key: props.keyExtractor(item, viewport.start + offset) }, props.renderItem({ item, index: viewport.start + offset }))),
+                element(props.ListFooterComponent));
+        }),
+    };
+});
 const home = createHomeGovernanceHarness();
 const httpBoundary = { ...home, request: createSessionReadBatchFetchBoundary(home.request) };
 installHomeGovernanceBoundaries(httpBoundary);
@@ -112,7 +159,8 @@ function ControlledStorageTab(props: Readonly<{ serverId: string; initial: React
         setParams={(next) => setParams(next as typeof params)} />;
 }
 async function mount(params: React.ComponentProps<typeof MachineStorageTab>['params'], overrides: Partial<Machine> = {},
-    answer?: (rpc: Rpc) => unknown, controlled = false) {
+    answer?: (rpc: Rpc) => unknown, controlled = false, listHost: MachinePageListHost | null = null,
+    frame: (page: React.ReactElement) => React.ReactElement = (page) => page) {
     const serverId = await home.addHome({ name: 'Storage Home', serverUrl: `https://storage-tab-${Math.random().toString(36).slice(2)}.test`,
         serverIdentityId: 'srv_storage_tab', accountId: 'owner' });
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
@@ -139,9 +187,9 @@ async function mount(params: React.ComponentProps<typeof MachineStorageTab>['par
     });
     const setParams = vi.fn();
     // The machine page is a page-presentation list; the tab renders inside it.
-    const screen = await renderScreen(<ListPresentationProvider value="page">{controlled
+    const screen = await renderScreen(frame(<ListPresentationProvider value="page"><MachinePageListHostContext.Provider value={listHost}>{controlled
         ? <ControlledStorageTab serverId={serverId} initial={params} />
-        : <MachineStorageTab serverId={serverId} machineId="machine" machineName="leeroy-mbp" online params={params} setParams={setParams} />}</ListPresentationProvider>);
+        : <MachineStorageTab serverId={serverId} machineId="machine" machineName="leeroy-mbp" online params={params} setParams={setParams} />}</MachinePageListHostContext.Provider></ListPresentationProvider>));
     return { screen, setParams, serverId };
 }
 /** A running session on this machine whose worktree is in use (the real session stop Action reaches it by the Machine network). */
@@ -152,8 +200,7 @@ async function holdingSession(serverId: string) {
     const session = installSessionActionFixture({ homes: home, storage, serverId, session: { id: 'sess-1',
         metadata: { ...metadata, path: '/Users/leeroy/dev/happier/.dev/worktree/live', host: 'leeroy-mbp', homeDir: '/Users/leeroy', machineId: 'machine', flavor: 'codex' } } });
     const http = createSessionMetadataHttpBoundary(() => ({ [session.id]: session }));
-    // Person Stop persists its hold through Sync before asking the daemon to stop.
-    // Serve that real writer at the existing Home HTTP boundary.
+    // Keep the real owner metadata writer available: resource Stop must leave it untouched.
     const answer = { select: async (_input: unknown, request: Readonly<{ url: string; init: RequestInit | undefined }>) => {
         const response = http.handle(request.url, request.init);
         if (!response) throw new Error('Holding Session metadata route was not handled');
@@ -165,10 +212,39 @@ async function holdingSession(serverId: string) {
 }
 
 const before = storage.getState();
-beforeEach(async () => { await home.reset(); installHomeGovernanceBoundaries(httpBoundary); machineStorageStore.reset(); transport.rpc.mockReset(); routerPush.mockReset(); });
+beforeEach(async () => { viewport.start = 0; viewport.listeners.clear(); await home.reset(); installHomeGovernanceBoundaries(httpBoundary); machineStorageStore.reset(); transport.rpc.mockReset(); routerPush.mockReset(); });
 afterEach(async () => { standardCleanup(); setPreferredLanguageFromSettings('en'); machineStorageStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('MachineStorageTab', () => {
+    it('shows unavailable policy instead of an empty protected-folder list', async () => {
+        const { screen } = await mount({ id: 'storage', page: 'protected' }, { metadata: null });
+        await act(async () => {});
+        expect(screen.findByTestId('machine-storage-policy-unavailable')).not.toBeNull();
+        expect(screen.findByTestId('machine-storage-protected-none')).toBeNull();
+        expect(screen.findByTestId('machine-storage-protected-add')).toBeNull();
+    });
+
+    it('retains sized content but removes cleanup controls while policy is unavailable', async () => {
+        const suggestion = item('pnpm', 'pnpm store', GB, 'safe', 'downloads_again');
+        let unavailablePolicy = false;
+        const { screen, serverId } = await mount({ id: 'storage' }, {}, ({ method }) => {
+            if (unavailablePolicy) throw new RpcError('Storage policy is unavailable', 'policy_unavailable');
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, suggestionsTop: [suggestion] };
+            return undefined;
+        });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage')).not.toBeNull()); });
+        unavailablePolicy = true;
+        const resolution = await resolveServerCredentialAccountScope(serverId);
+        if (resolution.kind !== 'bound') throw new Error('Storage Home must be bound');
+        await act(async () => { await machineStorageStore.read({ serverId: resolution.scope.serverId, machineId: 'machine', expectedAccountId: resolution.scope.accountId }); });
+        expect(screen.findByTestId('machine-storage-policy-unavailable')).not.toBeNull();
+        expect(screen.findByTestId('machine-storage-policy-retry')).not.toBeNull();
+        // The last good sizes stay; no "can go" claim and no pile dock.
+        expect(screen.getTextContent()).toContain(t('machineStorage.categories.caches.title'));
+        expect(screen.getTextContent()).not.toContain('pnpm store');
+        expect(screen.getTextContent()).not.toContain(t('machineStorage.breakdown.canGo'));
+        expect(screen.findByTestId('machine-storage-pile')).toBeNull();
+    });
     it('refreshes mounted worktree evidence search when the language changes', async () => {
         await preloadTranslationsForSettings('fr');
         setPreferredLanguageFromSettings('fr');
@@ -427,7 +503,7 @@ describe('MachineStorageTab', () => {
         await custom('machine-storage-disk-old-months', '45 days');
         await expectView({ tab: 'old', depth: 1, olderThanDays: 45 });
         await act(async () => { await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('machineStorage.disk.ageGroups.recent'))); });
-        await custom('machine-storage-disk-old-months', '1');
+        await custom('machine-storage-disk-old-months', '1 d');
         await expectView({ tab: 'old', depth: 1, olderThanDays: 1 });
         await custom('machine-storage-disk-old-months', '2.5');
         await custom('machine-storage-disk-old-months', null);
@@ -436,7 +512,7 @@ describe('MachineStorageTab', () => {
     it('renders scan progress and completion while revision watches advance during a pending scan read', async () => {
         const folder = '/home/happier/dz3-leeroy/qa8-owned-fixtures';
         const running: DiskScanStateV1 = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'running', startedAt: 3,
-            progress: { sizedBytes: 0, usedBytes: 0, items: 0 },
+            progress: { sizedBytes: 0, items: 0 },
             unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
         let summary = { ...SUMMARY, wholeDisk: { enabled: true, scans: [] as DiskScanStateV1[] } };
@@ -476,18 +552,29 @@ describe('MachineStorageTab', () => {
         expect(screen.findByTestId('machine-storage-disk-progress-bar')).toBeNull();
         expect(screen.getTextContent()).toContain(t('machineStorage.disk.progressMetaOpen', { sized: formatMachineBytes(131072, 'storage'), items: '1' }));
         expect(screen.getTextContent()).not.toMatch(/\d+\s?%/);
-        const complete: DiskScanStateV1 = { ...running, status: 'complete', finishedAt: 5, progress: { sizedBytes: 266240, usedBytes: 266240, items: 3 } };
+        const complete: DiskScanStateV1 = { ...running, status: 'complete', finishedAt: 5, progress: { sizedBytes: 266240, items: 3 } };
         summary = { ...summary, revision: 4, wholeDisk: { enabled: true, scans: [complete] } };
         await act(async () => { watches.at(-1)!.resolve({ changed: true, summary }); });
         await act(async () => { pages[1]!.resolve({ state: complete, nodes: [node], coverage: [], indexedAt: 5 }); await vi.waitFor(() => expect(pages).toHaveLength(3)); });
         await act(async () => { pages[2]!.resolve({ state: complete, nodes: [node], coverage: [], indexedAt: 5 }); });
         expect(screen.findByTestId(`machine-storage-disk-row-${folder}/file`)).not.toBeNull();
         expect(screen.getTextContent()).toContain('qa8-owned-fixtures holds');
+        // A row reads the size it shows; its bar is drawn for the eye and adds no raw byte counts.
+        await measureMountedCollections(screen, { width: 1200 });
+        expect(screen.findAllByProps({ testID: `machine-storage-disk-row-${folder}/file` }).length).toBeGreaterThan(0);
+        const exposed = (entry: { parent: unknown; props: Record<string, unknown> } | null): boolean => {
+            for (let at = entry; at; at = at.parent as typeof entry) {
+                if (at.props['aria-hidden'] === true || at.props.importantForAccessibility === 'no-hide-descendants') return false;
+            }
+            return true;
+        };
+        const rawBytes = screen.root.findAll((entry) => /\d \/ \d/.test(String(entry.props.accessibilityLabel ?? '')) && exposed(entry));
+        expect(rawBytes.map((entry) => entry.props.accessibilityLabel)).toEqual([]);
     });
     it('reads a running folder scan with no folders yet as scanning, never as an empty result', async () => {
         const folder = '/home/happier/.cache';
         const running: DiskScanStateV1 = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'running', startedAt: 3,
-            progress: { sizedBytes: 177 * 1024 * 1024, usedBytes: 0, items: 5215 },
+            progress: { sizedBytes: 177 * 1024 * 1024, items: 5215 },
             unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
         const summary = { ...SUMMARY, wholeDisk: { enabled: true, scans: [running] as DiskScanStateV1[] } };
@@ -629,6 +716,7 @@ describe('MachineStorageTab', () => {
             worktree('wt-b', 'dev-post-snapshot', 'safe', 'merged_clean'),
             worktree('wt-keep', 'materialized', 'keep', 'changed_files', { loses: [{ code: 'changed_files', detail: { count: 3 } }] }),
             worktree('wt-check', 'terminal-fonts', 'check', 'facts_unavailable'),
+            worktree('wt-caution', 'needs-a-look', 'caution', 'not_rebuildable'),
         ];
         let pile: Array<Record<string, unknown>> = [];
         const pileResult = () => ({ revision: 2, items: pile, summary: { count: pile.length, freesBytes: pile.length * 2 * GB, droppedSinceLastView: [] } });
@@ -665,6 +753,8 @@ describe('MachineStorageTab', () => {
         expect(text).toContain('Keep · changed files');
         expect(text).toContain('Check now');
         expect(text).toContain('happier');
+        // The group action names the Safe sweep, leaving Caution to an explicit row tick.
+        expect(text).toContain(t('machineStorage.worktrees.collectAll', { count: 2 }));
         const pileSets = () => calls.filter(call => call.method === RPC_METHODS.DAEMON_STORAGE_PILE_SET);
 
         await act(async () => { screen.pressByTestId('machine-storage-worktree-wt-a-collect'); });
@@ -752,6 +842,57 @@ describe('MachineStorageTab', () => {
         expect(sheet.getTextContent()).toContain('Worktree with a running session');
     });
 
+    it('starts a Keep row unticked in Review (a Safe-collected folder found in use) and takes it only after an explicit tick', async () => {
+        const pile = [resolved({ itemId: 'tmp-held', path: '/tmp/happier-1000/held' }), resolved({ itemId: 'cache', path: '/Users/leeroy/cache' }),
+            resolved({ itemId: 'synced', path: '/Users/leeroy/Dropbox/cache' }), resolved({ itemId: 'system', path: '/System' }),
+            resolved({ itemId: 'unknown', path: '/Users/leeroy/unknown' })];
+        const moved: unknown[] = [];
+        const { screen } = await mount({ id: 'storage' }, {}, (rpc) => {
+            switch (rpc.method) {
+                case RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET: return { ...SUMMARY, pile: { count: 2, freesBytes: 2 * GB, droppedSinceLastView: [] } };
+                case RPC_METHODS.DAEMON_STORAGE_PILE_GET: return { revision: 2, items: pile, summary: { count: 2, freesBytes: 2 * GB, droppedSinceLastView: [] } };
+                case RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK: return {
+                    items: [{ ref: pile[0], expect: 'expect-held', verdict: 'keep', reason: { code: 'in_use', detail: { path: pile[0]!.path } },
+                        loses: [{ code: 'in_use', detail: { path: pile[0]!.path } }], size: size(GB), absorbs: [] },
+                    { ref: pile[1], expect: 'expect-cache', verdict: 'safe', reason: { code: 'rebuilds' }, size: size(GB), absorbs: [] },
+                    { ref: pile[2], expect: 'expect-synced', verdict: 'caution', reason: { code: 'not_rebuildable', detail: { cloudSynced: true } }, size: size(GB), absorbs: [] },
+                    { ref: pile[3], expect: 'expect-system', verdict: 'forbidden', reason: { code: 'system' }, size: size(GB), absorbs: [] },
+                    { ref: pile[4], expect: 'expect-unknown', verdict: 'check', reason: { code: 'facts_unavailable' }, size: size(GB), absorbs: [] }],
+                    staying: [], countedOnceBytes: 0, totalFreesBytes: 2 * GB, trashVolumes: [{ volumeId: 'mac', trashAvailable: true }] };
+                case RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE:
+                    moved.push(...((rpc.payload?.items ?? []) as Array<{ ref: { itemId: string } }>).map(entry => entry.ref.itemId));
+                    return { batchId: 'batch', mode: 'trash', inTrashBytes: 2 * GB, freedBytes: 0,
+                        outcomes: ((rpc.payload?.items ?? []) as Array<{ ref: { itemId: string } }>).map(entry => ({ itemId: entry.ref.itemId, status: 'moved' })) };
+                default: return undefined;
+            }
+        });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
+        await act(async () => { screen.pressByTestId('machine-storage-pile-review'); });
+        const shown = modal.current!.spies.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
+        const close = vi.fn();
+        const Sheet = shown.component;
+        const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
+        await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-tmp-held')).not.toBeNull()); });
+        const checked = (itemId: string) => sheet.findByTestId(`machine-storage-review-row-${itemId}`)?.props.accessibilityState?.checked;
+        expect(checked('tmp-held')).toBe(false);
+        expect(checked('cache')).toBe(true);
+        expect(checked('synced')).toBe(false);
+        expect(checked('unknown')).toBe(false);
+        expect(sheet.findByTestId('machine-storage-review-row-system')).toBeNull();
+        expect(sheet.findByTestId('machine-storage-review-staying-system')).not.toBeNull();
+        expect(sheet.getTextContent()).toContain(t('machineStorage.review.moveToTrash', { count: 1 }));
+        expect(screen.getTextContent()).toContain(t('machineStorage.pile.frees', { amount: formatMachineBytes(GB, 'storage') }));
+        await act(async () => { sheet.pressByTestId('machine-storage-review-row-cache'); });
+        expect(sheet.findByTestId('machine-storage-review-confirm')?.props.disabled).toBe(true);
+        expect(screen.getTextContent()).toContain(t('machineStorage.pile.frees', { amount: formatMachineBytes(0, 'storage') }));
+        await act(async () => { sheet.pressByTestId('machine-storage-review-row-tmp-held'); });
+        expect(checked('tmp-held')).toBe(true);
+        expect(screen.getTextContent()).toContain(t('machineStorage.pile.frees', { amount: formatMachineBytes(GB, 'storage') }));
+        await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
+        await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalled()); });
+        expect(moved).toEqual(['tmp-held']);
+    });
+
     it('stops the session holding an in-use worktree, then reviews its changed facts before removal (R42.1)', async () => {
         const path = '/Users/leeroy/dev/happier/.dev/worktree/live';
         const pile = [resolved({ itemId: 'wt-live', path }), resolved({ itemId: 'wt-kept', path: `${path}-kept` })];
@@ -762,7 +903,7 @@ describe('MachineStorageTab', () => {
             const input = rpc.payload ?? {};
             switch (rpc.method) {
                 case RPC_METHODS.STOP_SESSION:
-                    expect(holderMetadata?.writes).toContain('sess-1');
+                    expect(holderMetadata?.writes).toEqual([]);
                     order.push(`stop:${String(input.sessionId)}`);
                     stopped = true;
                     return { status: 'stopped' };
@@ -793,6 +934,9 @@ describe('MachineStorageTab', () => {
         const Sheet = shown.component;
         const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-wt-live')).not.toBeNull()); });
+        // Keep starts unticked (AGW-6); the person ticks it and unticks the Safe neighbour.
+        expect(sheet.getTextContent()).not.toContain('Stop the session and remove');
+        await act(async () => { sheet.pressByTestId('machine-storage-review-row-wt-live'); });
         expect(sheet.getTextContent()).toContain('Stop the session and remove');
         await act(async () => { sheet.pressByTestId('machine-storage-review-row-wt-kept'); });
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
@@ -801,9 +945,11 @@ describe('MachineStorageTab', () => {
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
         await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalled()); });
         expect(order).toEqual(['stop:sess-1', 'check-stopped', 'move']);
+        expect(resolveSessionAutoResumeAdmissionV1({ metadata: readSessionOwnerMetadataView(storage.getState().sessions['sess-1']),
+            archivedAt: null, authorityAvailable: true, machineAvailable: true })).toBe('eligible');
     });
 
-    it.each(['daemon Stop', 'metadata write'] as const)('keeps an in-use worktree when its session does not stop, and says so (%s)', async failure => {
+    it('keeps an in-use worktree when its session does not stop, without rewriting its resume policy', async () => {
         const path = '/Users/leeroy/dev/happier/.dev/worktree/live';
         const pile = [resolved({ itemId: 'wt-live', path })];
         const calls: Rpc[] = [];
@@ -821,7 +967,6 @@ describe('MachineStorageTab', () => {
             }
         });
         const holderMetadata = await holdingSession(serverId);
-        if (failure === 'metadata write') holderMetadata.rejectNextPatch('sess-1');
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
         await act(async () => { screen.pressByTestId('machine-storage-pile-review'); });
         const shown = modal.current!.spies.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
@@ -829,10 +974,11 @@ describe('MachineStorageTab', () => {
         const Sheet = shown.component;
         const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-wt-live')).not.toBeNull()); });
+        await act(async () => { sheet.pressByTestId('machine-storage-review-row-wt-live'); });
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
         await vi.waitFor(async () => { await act(async () => {}); expect(sheet.getTextContent()).toContain('The session didn’t stop'); });
-        expect(holderMetadata.writes).toContain('sess-1');
-        expect(calls.filter(call => call.method === RPC_METHODS.STOP_SESSION)).toHaveLength(failure === 'metadata write' ? 0 : 1);
+        expect(holderMetadata.writes).toEqual([]);
+        expect(calls.filter(call => call.method === RPC_METHODS.STOP_SESSION)).toHaveLength(1);
         expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE)).toBe(false);
         expect(close).not.toHaveBeenCalled();
     });
@@ -952,7 +1098,7 @@ describe('MachineStorageTab', () => {
     it('names a folder scan’s target in the path before its first page arrives, with no whole-disk figure', async () => {
         const folder = '/Users/leeroy/.cache';
         const stopped: DiskScanStateV1 = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'interrupted', startedAt: 3,
-            progress: { sizedBytes: 2 * GB, usedBytes: 0, items: 9 },
+            progress: { sizedBytes: 2 * GB, items: 9 },
             unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
         const pages: ReturnType<typeof createDeferred<unknown>>[] = [];
@@ -1049,6 +1195,8 @@ describe('MachineStorageTab', () => {
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-invite')).not.toBeNull()); });
         expect(screen.getTextContent()).toContain('See everything on Macintosh HD');
         expect(screen.getTextContent()).toContain('Scan Macintosh HD');
+        // The disk's sentence leads the Whole disk tab as it leads Happier's (lab `rs` MS 1).
+        expect(screen.findByTestId('machine-storage-sentence')).not.toBeNull();
     });
 
     it('offers the home folder beside Choose a folder and starts the same daemon scan on it', async () => {
@@ -1066,6 +1214,45 @@ describe('MachineStorageTab', () => {
         expect(calls.find(call => call.method === RPC_METHODS.DAEMON_STORAGE_SCAN_START)?.payload).toMatchObject({ target: { folderPath: '/Users/leeroy' } });
     });
 
+    it('says why a scan did not start and clears the line when Try again starts it', async () => {
+        const starts: Rpc[] = [];
+        const running = DiskScanStateV1Schema.parse({ scanId: 'scan', target: { folderPath: '/Users/leeroy' }, status: 'running', startedAt: 100,
+            progress: { sizedBytes: 0, items: 0 }, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: '/fixture' } } });
+        const base = machine();
+        const { screen } = await mount({ id: 'storage', view: 'disk' }, { metadata: { ...base.metadata!,
+            resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, storage: { wholeDiskEnabled: true } }) } }, (rpc) => {
+            if (rpc.method !== RPC_METHODS.DAEMON_STORAGE_SCAN_START) return undefined;
+            starts.push(rpc);
+            return starts.length === 1 ? { ok: false, errorCode: 'storage_scan_unavailable', error: 'Scan unavailable' } : running;
+        });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-shortcut-0')).not.toBeNull()); });
+        expect(screen.findByTestId('machine-storage-disk-start-failed')).toBeNull();
+        await act(async () => { screen.pressByTestId('machine-storage-disk-shortcut-0'); });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-start-failed')).not.toBeNull()); });
+        // The invitation stays: the page is still the one that can start a scan.
+        expect(screen.findByTestId('machine-storage-disk-invite')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(t('machineStorage.disk.startFailed.title'));
+        expect(screen.getTextContent()).toContain(t('machineStorage.disk.startFailed.generic'));
+        expect(screen.findByTestId('machine-storage-disk-start-turn-on')).toBeNull();
+        await act(async () => { screen.pressByTestId('machine-storage-disk-start-retry'); });
+        await act(async () => { await vi.waitFor(() => expect(starts).toHaveLength(2)); });
+        expect(starts[1]!.payload).toMatchObject({ target: { folderPath: '/Users/leeroy' } });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-start-failed')).toBeNull()); });
+    });
+
+    it('offers to turn whole-disk scanning on when the machine refused a scan for being opted out', async () => {
+        const base = machine();
+        const { screen } = await mount({ id: 'storage', view: 'disk' }, { metadata: { ...base.metadata!,
+            resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, storage: { wholeDiskEnabled: true } }) } }, (rpc) =>
+            rpc.method === RPC_METHODS.DAEMON_STORAGE_SCAN_START ? { ok: false, errorCode: 'storage_whole_disk_disabled', error: 'Whole-disk scan disabled' } : undefined);
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-shortcut-0')).not.toBeNull()); });
+        await act(async () => { screen.pressByTestId('machine-storage-disk-shortcut-0'); });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-disk-start-turn-on')).not.toBeNull()); });
+        expect(screen.getTextContent()).toContain(t('machineStorage.disk.startFailed.turnOn'));
+        expect(screen.findByTestId('machine-storage-disk-start-retry')).toBeNull();
+    });
+
     it.each(['/Volumes/Personal/Downloads', '/Volumes/Cache/user', '/Users/leeroy/projects/known'])(
         'starts daemon-supplied shortcuts and known project roots through the same scan Action: %s', async path => {
         const base = machine();
@@ -1073,12 +1260,13 @@ describe('MachineStorageTab', () => {
         const { screen, serverId } = await mount({ id: 'storage', view: 'disk' }, { metadata: { ...base.metadata!,
             resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, storage: { wholeDiskEnabled: true } }) } }, ({ method, payload }) => {
             if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return HappierStorageSummaryV1Schema.parse({ ...SUMMARY,
-                scanShortcuts: [{ kind: 'downloads', path: '/Volumes/Personal/Downloads' }, { kind: 'cache', path: '/Volumes/Cache/user' }] });
+                scanShortcuts: [{ kind: 'downloads', path: '/Volumes/Personal/Downloads' }, { kind: 'cache', path: '/Volumes/Cache/user' },
+                    { kind: 'folder', path: '/Users/leeroy/projects/known' }] });
             if (method === RPC_METHODS.DAEMON_STORAGE_SCAN_START) {
                 const request = MachineStorageScanStartInputV1Schema.parse({ machineId: 'machine', ...payload });
                 starts.push(request);
                 return DiskScanStateV1Schema.parse({ scanId: 'shortcut-scan', target: request.target, status: 'running', startedAt: 1,
-                    progress: { sizedBytes: 0, usedBytes: GB, items: 0 },
+                    progress: { sizedBytes: 0, items: 0 },
                     unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
                     fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } });
             }
@@ -1086,12 +1274,14 @@ describe('MachineStorageTab', () => {
         });
         await act(async () => { applyProjectAccountRowsFixture(storage, { workspaceRefs: [
             { id: 'project', serverId, machineId: 'machine', rootPath: '/Users/leeroy/projects/known', createdAtMs: 1 },
+            { id: 'deleted', serverId, machineId: 'machine', rootPath: '/Users/leeroy/.cache/retired-resource/project', createdAtMs: 1 },
             { id: 'other-machine', serverId, machineId: 'other', rootPath: '/other-machine/private', createdAtMs: 1 },
             { id: 'other-home', serverId: 'other-home', machineId: 'machine', rootPath: '/other-home/private', createdAtMs: 1 },
         ] }); });
         await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId('machine-storage-disk-shortcut-0')).not.toBeNull(); });
         expect(screen.getTextContent()).not.toContain('/other-machine/private');
         expect(screen.getTextContent()).not.toContain('/other-home/private');
+        expect(screen.getTextContent()).not.toContain('~/.cache/retired-resource/project');
             const shortcut = screen.root.findAll(node => typeof node.type !== 'string'
                 && node.props.testID?.startsWith('machine-storage-disk-shortcut-') && typeof node.props.onPress === 'function')
                 .find(node => node.props.subtitle === (path.startsWith('/Users/leeroy') ? '~/projects/known' : path));
@@ -1204,5 +1394,71 @@ describe('MachineStorageTab', () => {
         modal.current!.spies.confirm.mockResolvedValueOnce(true);
         await act(async () => { screen.pressByTestId('machine-storage-category-trash-empty'); });
         await act(async () => { await vi.waitFor(() => expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)).toBe(true)); });
+    });
+
+    it('lists a few thousand suggestions through one recycler: a window of rows is mounted, every row stays reachable', async () => {
+        const TOTAL = 3_000;
+        const everything = Array.from({ length: TOTAL }, (_, index) => ({
+            ...item(`s${String(index).padStart(4, '0')}`, `Cache ${String(index).padStart(4, '0')}`, (TOTAL - index) * 1_000_000, 'safe', 'downloads_again'), evidence: ['managed_cache_root'],
+        }));
+        const { screen } = await mount({ id: 'storage', page: 'suggestions' }, {}, ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUGGESTIONS_LIST) return { revision: 1, items: payload?.group === 'can-be-rebuilt' ? everything : [] };
+            return undefined;
+        });
+        const mountedRows = () => collectRenderedTestIds(screen.tree.toJSON())
+            .filter(testID => /^machine-storage-suggestion-s\d{4}$/.test(testID)).length;
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.getTextContent()).toContain('Cache 0000'); });
+        // The first window: a handful of rows are on screen, not the inventory.
+        expect(mountedRows()).toBeGreaterThan(0);
+        expect(mountedRows()).toBeLessThanOrEqual(64);
+        expect(screen.getTextContent()).not.toContain('Cache 2999');
+        // Scrolled to the end, the last row is there and the window is still a window.
+        const entries = Number(screen.findHostByTestId('machine-storage-suggestions-list')?.props['data-entries']);
+        expect(entries).toBeGreaterThan(1);
+        await act(async () => { viewport.scrollTo(entries - 3); });
+        expect(screen.getTextContent()).toContain('Cache 2999');
+        expect(mountedRows()).toBeLessThanOrEqual(64);
+    });
+
+    it('lets the Suggestions list shade the pane header as it scrolls and be the scroller popovers follow, as every page list is', async () => {
+        const { View, StyleSheet } = await import('react-native');
+        const { PaneHeader } = await import('@/components/appShell/panes/PaneHeader');
+        const { PaneHeaderScrollScope } = await import('@/components/appShell/panes/paneHeaderScroll');
+        const { usePopoverScrollSourceRef } = await import('@/components/ui/popover/PopoverScrollSource');
+        let scrollSource: React.RefObject<unknown> | null = null;
+        function ScrollSourceProbe() {
+            scrollSource = usePopoverScrollSourceRef();
+            return <View testID="machine-page-chrome" />;
+        }
+        const { screen } = await mount({ id: 'storage', page: 'suggestions' }, {}, ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUGGESTIONS_LIST) return { revision: 1, items: payload?.group === 'can-be-rebuilt' ? [item('only', 'Only cache', GB, 'safe', 'downloads_again')] : [] };
+            return undefined;
+        }, false, { chrome: <ScrollSourceProbe />, refreshControl: <View /> },
+        (page) => <PaneHeaderScrollScope><PaneHeader testID="pane-header" title="leeroy-mbp" />{page}</PaneHeaderScrollScope>);
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.getTextContent()).toContain('Only cache'); });
+        const shade = () => {
+            const opacity = StyleSheet.flatten(screen.findHostByTestId('pane-header-shade')?.props.style)?.opacity as unknown;
+            return typeof opacity === 'number' ? opacity : (opacity as { __getValue(): number } | undefined)?.__getValue();
+        };
+        expect(shade()).toBe(0);
+        await act(async () => { viewport.props?.onScroll?.({ nativeEvent: { contentOffset: { x: 0, y: 40 } } }); });
+        expect(shade()).toBe(1);
+        // A popover opened from a row follows the list's own scroll element.
+        const source = (scrollSource as React.RefObject<unknown> | null)?.current as { getScrollableNode?: () => unknown } | null | undefined;
+        expect(source?.getScrollableNode?.()).toBe(viewport.scrollNode);
+    });
+
+    it('leads the Suggestions list with the machine page\u2019s own header and tabs, so the page keeps one scroller and one set of tabs', async () => {
+        const { View } = await import('react-native');
+        const { screen } = await mount({ id: 'storage', page: 'suggestions' }, {}, ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUGGESTIONS_LIST) return { revision: 1, items: payload?.group === 'can-be-rebuilt' ? [item('only', 'Only cache', GB, 'safe', 'downloads_again')] : [] };
+            return undefined;
+        }, false, { chrome: <View testID="machine-page-chrome" />, refreshControl: <View testID="machine-page-refresh" /> });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.getTextContent()).toContain('Only cache'); });
+        const ids = collectRenderedTestIds(screen.tree.toJSON());
+        expect(ids.filter(id => id === 'machine-page-chrome')).toHaveLength(1);
+        // The chrome is inside the list the page scrolls, ahead of the page's own head.
+        expect(ids.indexOf('machine-page-chrome')).toBeGreaterThan(ids.indexOf('machine-storage-suggestions-list'));
+        expect(ids.indexOf('machine-page-chrome')).toBeLessThan(ids.indexOf('machine-storage-page-back'));
     });
 });

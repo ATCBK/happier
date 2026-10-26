@@ -23,7 +23,8 @@ function ChangedFilesReviewHunkNavigation({ controller }: Readonly<{
                 disabled={controller.currentIndex <= 0}
                 onPress={() => move(-1)}
                 variant="plain"
-                size={Platform.OS === 'web' ? 28 : 48}
+                size={28}
+                interactiveTargetGapPx={2}
                 iconSize={16}
                 iconName="caret-up"
                 tooltip={t('files.reviewPreviousHunk')}
@@ -34,7 +35,8 @@ function ChangedFilesReviewHunkNavigation({ controller }: Readonly<{
                 disabled={controller.currentIndex >= count - 1}
                 onPress={() => move(1)}
                 variant="plain"
-                size={Platform.OS === 'web' ? 28 : 48}
+                size={28}
+                interactiveTargetGapPx={2}
                 iconSize={16}
                 iconName="caret-down"
                 tooltip={t('files.reviewNextHunk')}
@@ -64,7 +66,8 @@ export function ChangedFilesReviewNavigation(props: Readonly<{
                     disabled={index === 0}
                     onPress={() => move(-1)}
                     variant="plain"
-                    size={Platform.OS === 'web' ? 28 : 48}
+                    size={28}
+                interactiveTargetGapPx={2}
                     iconSize={16}
                     iconName="caret-left"
                     tooltip={t('files.reviewPreviousFile')}
@@ -77,7 +80,8 @@ export function ChangedFilesReviewNavigation(props: Readonly<{
                     disabled={index === props.paths.length - 1}
                     onPress={() => move(1)}
                     variant="plain"
-                    size={Platform.OS === 'web' ? 28 : 48}
+                    size={28}
+                interactiveTargetGapPx={2}
                     iconSize={16}
                     iconName="caret-right"
                     tooltip={t('files.reviewNextFile')}

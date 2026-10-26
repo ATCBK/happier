@@ -124,9 +124,11 @@ it('attributes real page publications, suspends plugin-free hidden bodies, and r
     const vitalsKey = { serverId, machineId: machine.id, expectedAccountId: accountId, view: 'overview' as const };
     const storageKey = { serverId, machineId: machine.id, expectedAccountId: accountId };
     const processKey = { serverId, machineId: machine.id, accountId, scope: 'happier' as const, view: 'tree' as const };
+    const processSummaryKey = { ...processKey, view: 'owners' as const };
     await machineResourceStore.read(vitalsKey);
     await machineStorageStore.read(storageKey);
     await machineProcessesStore.read(processKey);
+    await machineProcessesStore.read(processSummaryKey);
     const modelModule = await import('@/components/sessions/new/hooks/useNewSessionScreenModel');
     const actualModel = modelModule.useNewSessionScreenModel;
     let modelCounts: Record<string, number> = {};
@@ -186,7 +188,10 @@ it('attributes real page publications, suspends plugin-free hidden bodies, and r
         for (let index = 0; index < 3; index++) {
             at += 2_000;
             if (family === 'vitals') await machineResourceStore.read(vitalsKey);
-            if (family === 'processes') { processMemory += 1_000_000; await machineProcessesStore.read(processKey); }
+            if (family === 'processes') {
+                processMemory += 1_000_000;
+                await Promise.all([machineProcessesStore.read(processKey), machineProcessesStore.read(processSummaryKey)]);
+            }
             if (family === 'storage') { storageBytes += 1_000_000_000; await machineStorageStore.read(storageKey); }
             await settle();
         }
@@ -194,6 +199,7 @@ it('attributes real page publications, suspends plugin-free hidden bodies, and r
     }
     console.info('FX95b real Machine page committed subtree counts / three separate publications per family', rows);
     expect(rows.vitals?.['Vitals overview']).toBeGreaterThan(0);
+    expect(rows.processes?.['Vitals overview']).toBeGreaterThan(0);
     // Only plugin-free bodies suspend. Ask may host external plugin renderers,
     // whose layout-effect lifetime must remain connected even while hidden.
     for (const row of Object.values(rows)) for (const id of ['processes', 'storage', 'guard']) {

@@ -99,6 +99,7 @@ export const WorkflowsColumnActions = React.memo(function WorkflowsColumnActions
                         accessibilityLabel={t('workflows.destination.moreAccessibility')}
                         tooltip={t('workflows.destination.moreAccessibility')}
                         variant="plain"
+                        interactiveTargetGapPx={ROW_GAP}
                         onPress={toggle}
                     />
                 )}
@@ -128,6 +129,7 @@ export const WorkflowsColumnActions = React.memo(function WorkflowsColumnActions
                             accessibilityLabel={t('workflows.destination.addAccessibility')}
                             tooltip={t('workflows.destination.addAccessibility')}
                             variant="plain"
+                            interactiveTargetGapPx={ROW_GAP}
                             onPress={toggle}
                         />
                     )}
@@ -140,6 +142,9 @@ export const WorkflowsColumnActions = React.memo(function WorkflowsColumnActions
         </View>
     );
 });
+
+/** The two header buttons sit flush, so their hit areas reach only above and below. */
+const ROW_GAP = 0;
 
 const styles = StyleSheet.create(() => ({
     row: {

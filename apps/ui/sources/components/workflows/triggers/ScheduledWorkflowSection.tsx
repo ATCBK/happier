@@ -1,18 +1,18 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { SessionListGroup, SessionListGroupMoreRow } from '@/components/sessions/shell/SessionListGroup';
+import { resolveSessionListGroupRowGeometry, SESSION_LIST_GROUP_ROW_PROPS, SessionListGroup, SessionListGroupMoreRow } from '@/components/sessions/shell/SessionListGroup';
 import {
-    resolveSessionListItemDensity, resolveSessionListRowTitleTextMetrics, SESSION_LIST_ROW_IDENTITY_METRICS,
+    resolveSessionListRowIdentityMetrics,
     type SessionListRowDensity,
 } from '@/components/sessions/shell/resolveSessionListDensityViewState';
+import { useIsTablet } from '@/utils/platform/responsive';
 import { WORKER_KIND_GLYPHS } from '@/components/sessions/work/workerKindGlyphs';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
 import { Icon } from '@/components/ui/icons/Icon';
-import { SessionListRowSubtitle } from '@/components/sessions/shell/row/SessionListRowPresentation';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
+import { CollectionRowLine } from '@/components/ui/lists/collection/CollectionRowContent';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useActiveServerAccountScope, useSessionDisplayNameSource } from '@/sync/domains/state/storage';
@@ -176,19 +176,30 @@ const ScheduledRow = React.memo(function ScheduledRow(props: Readonly<{
     const listDensity = props.sessionId === undefined ? props.density : undefined;
     // In the session list the row takes the density, mark slot and title size of the session rows around
     // it, and its trailing time never outweighs the title it qualifies.
+    // The same row geometry as the group's other rows (Drafts), so a phone draws them at its readable size.
+    const isTablet = useIsTablet();
+    const { width: windowWidth } = useWindowDimensions();
     const listRow = listDensity ? (() => {
-        const metrics = resolveSessionListRowTitleTextMetrics({ density: listDensity, readableNativePhoneMinimal: false });
-        return { density: resolveSessionListItemDensity(listDensity), iconBoxSize: SESSION_LIST_ROW_IDENTITY_METRICS[listDensity].slotSize,
-            titleStyle: metrics, detailStyle: metrics };
+        const geometry = resolveSessionListGroupRowGeometry(listDensity, { isTablet, windowWidth });
+        const identity = resolveSessionListRowIdentityMetrics({ density: listDensity, readableNativePhoneMinimal: geometry.readableNativePhoneMinimal });
+        return { density: geometry.itemDensity, iconBoxSize: identity.slotSize,
+            titleStyle: geometry.titleTextMetrics, detailStyle: geometry.titleTextMetrics,
+            // One line in the compact list, like the Session rows around it.
+            ...(listDensity === 'minimal' ? { titleLines: 1 } : {}),
+            pressableStyle: SESSION_LIST_GROUP_ROW_PROPS.pressableStyle,
+            style: [SESSION_LIST_GROUP_ROW_PROPS.style, { minHeight: geometry.densityViewState.rowHeight }] };
     })() : {};
     const quiet = [...steps, formatTriggerSummary(row.trigger)].join(' · ');
+    // A compact list row is one line (lab `clfamily`: "Morning brief · Mon 9:00"); its schedule, steps and
+    // destinations stay in its name for assistive technology and on the page it opens.
+    const oneLine = listDensity === 'minimal';
     return <Item testID={`scheduled-workflow:${row.key}`}
         title={title}
         // The destinations are the quiet line's second line, on the text edge.
-        subtitle={destinations.length > 0 ? <>{quiet}<View style={styles.destinations}>
+        subtitle={oneLine ? undefined : destinations.length > 0 ? <>{quiet}<View style={styles.destinations}>
             {destinations.map(sessionId => <DestinationChip key={sessionId} sessionId={sessionId} rowKey={row.key} />)}
         </View></> : quiet}
-        subtitleTestID={`scheduled-workflow:${row.key}-subtitle`}
+        subtitleTestID={oneLine ? undefined : `scheduled-workflow:${row.key}-subtitle`}
         detail={formatNextScheduledRunTime(row.trigger.nextRunAt, enabled, nowMs)}
         detailTestID={`scheduled-workflow:${row.key}-next`}
         icon={<Icon name={props.sessionId !== undefined ? WORKER_KIND_GLYPHS.workflow_run : resolveTriggerEventGroup(row.trigger).glyph} />}
@@ -206,13 +217,13 @@ const DestinationChip = React.memo(function DestinationChip(props: Readonly<{ se
         onPress={() => router.push({ pathname: '/session/[id]', params: { id: props.sessionId,
             ...(scope ? { serverId: scope.serverId } : {}) } } as never)}>
         <Avatar id={session ? getSessionAvatarId(session, scope?.serverId) : props.sessionId} size={16} monochrome />
-        <View style={styles.destinationLabel}><SessionListRowSubtitle density="compact">{label}</SessionListRowSubtitle></View>
+        <View style={styles.destinationLabel}><CollectionRowLine density="comfortable">{label}</CollectionRowLine></View>
     </HappierPressable>;
 });
 
 const styles = StyleSheet.create(theme => ({
-    // A precise pointer keeps the quiet line's own height; a finger gets the platform touch floor.
-    destination: { minHeight: resolveTouchTargetFloorPx(Platform.OS) ?? undefined, flexDirection: 'row', alignItems: 'center',
+    // The quiet line keeps its own height under every pointer; a finger reaches past it through the hit area.
+    destination: { flexDirection: 'row', alignItems: 'center',
         gap: theme.space.s4, maxWidth: '100%' },
     destinationLabel: { flexShrink: 1, minWidth: 0 },
     destinations: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, marginTop: theme.space.s4 },

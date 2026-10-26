@@ -1,9 +1,9 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ToolFindText, useToolFindState } from '@/components/tools/renderers/core/ToolFindText';
@@ -163,7 +163,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     rowTarget: {
-        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
+        minHeight: HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
         justifyContent: 'center',
         borderWidth: 1,
         borderColor: 'transparent',

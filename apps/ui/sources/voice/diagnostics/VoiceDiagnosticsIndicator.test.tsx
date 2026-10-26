@@ -211,7 +211,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       params: expect.objectContaining({ authorizationId: expect.any(String) }) }));
   });
 
-  it('uses the canonical minimum interactive target on web', async () => {
+  it('draws the action at the pointer floor on web', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
@@ -604,7 +604,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     )).toHaveLength(0);
   });
 
-  it('uses the canonical 48dp Android minimum in an isolated platform module', async () => {
+  it('draws the action at the pointer floor on Android and reaches the canonical 48dp target by hit area', async () => {
     platformState.OS = 'android';
     vi.resetModules();
     const freshRuntimeStatus = await import('./runtimeStatus');
@@ -616,11 +616,14 @@ describe('VoiceDiagnosticsIndicator', () => {
     const { VoiceDiagnosticsIndicator: AndroidVoiceDiagnosticsIndicator } = await import(
       './VoiceDiagnosticsIndicator'
     );
+    const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(React.createElement(AndroidVoiceDiagnosticsIndicator, {
-        sessionId: 'session-android',
-      })); registerStandardCleanupTarget(tree);
+      tree = renderer.create(React.createElement(
+        HappierUiPlatformProvider,
+        { platform: { platform: 'android', colorScheme: 'light' } },
+        React.createElement(AndroidVoiceDiagnosticsIndicator, { sessionId: 'session-android' }),
+      )); registerStandardCleanupTarget(tree);
     });
     await respondToVisibleConfirmation();
 
@@ -629,8 +632,13 @@ describe('VoiceDiagnosticsIndicator', () => {
       ? action.props.style({ pressed: false })
       : action.props.style;
     const frame = flattenStyle(style);
-    const expectedMinimum = resolveMinimumInteractiveTargetSize('android');
-    expect(frame.minWidth).toBe(expectedMinimum);
-    expect(frame.minHeight).toBe(expectedMinimum);
+    // The action draws at the WCAG 2.2 pointer floor; the finger's 48dp is hit slop around it.
+    expect(frame.minWidth).toBe(24);
+    expect(frame.minHeight).toBe(24);
+    await act(async () => {
+      tree.root.findByType('Pressable' as any).props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 60, height: 24 } } });
+    });
+    const slop = tree.root.findByType('Pressable' as any).props.hitSlop as Record<'top' | 'bottom', number>;
+    expect(24 + slop.top + slop.bottom).toBe(resolveMinimumInteractiveTargetSize('android'));
   });
 });

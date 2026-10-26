@@ -1,5 +1,5 @@
 import React from 'react';
-import renderer from 'react-test-renderer';
+import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, findAllHostTestInstances, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
@@ -287,21 +287,29 @@ describe('CodeBlockViewFrame', () => {
         expect(screen.tree.findByType('Icon').props.name).toBe('check');
     });
 
-    it.each(['android', 'ios'] as const)('keeps the %s copy target inside a short code block', async (platform) => {
+    it.each(['android', 'ios'] as const)('draws the %s copy button small and keeps its hit area inside a short code block', async (platform) => {
         mockPlatform(platform);
         const { CodeBlockViewFrame, CODE_BLOCK_OVERLAY_COPY_INSET } = await import('./CodeBlockViewFrame');
+        const { COPY_ICON_BUTTON_SIZE } = await import('@/components/ui/copy/CopyIconButton');
         const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const screen = await renderScreen(
-            <CodeBlockViewFrame code="x" wrap showCopyButton>
-                <React.Fragment>child</React.Fragment>
-            </CodeBlockViewFrame>,
+            <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                <CodeBlockViewFrame code="x" wrap showCopyButton>
+                    <React.Fragment>child</React.Fragment>
+                </CodeBlockViewFrame>
+            </HappierUiPlatformProvider>,
         );
-        const button = findAllHostTestInstances(screen.tree.root, (node) => (
+        const copyButton = () => findAllHostTestInstances(screen.tree.root, (node) => (
             node.props.accessibilityLabel === 'common.copy' && typeof node.props.onPress === 'function'
         ))[0]!;
-        const target = flattenViewStyle(button.props.style);
-        const floor = resolveMinimumInteractiveTargetSize(platform);
-        expect(target).toMatchObject({ width: floor, height: floor });
+        // The hit area measures the drawn square once, then reaches past it.
+        await act(async () => {
+            copyButton().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: COPY_ICON_BUTTON_SIZE, height: COPY_ICON_BUTTON_SIZE } } });
+        });
+        const button = copyButton();
+        const drawn = flattenViewStyle(button.props.style);
+        expect(drawn).toMatchObject({ width: COPY_ICON_BUTTON_SIZE, height: COPY_ICON_BUTTON_SIZE });
 
         const containers = findAllHostTestInstances(screen.tree.root, (node) => (
             flattenViewStyle(node.props.style).overflow === 'hidden'
@@ -309,8 +317,15 @@ describe('CodeBlockViewFrame', () => {
         expect(containers).toHaveLength(1);
         const container = flattenViewStyle(containers[0]!.props.style);
         const placement = copyPlacementStyle(screen.tree);
-        expect(container.minHeight).toBeGreaterThanOrEqual(Number(placement.top) + Number(target.height));
-        expect(CODE_BLOCK_OVERLAY_COPY_INSET).toBeGreaterThanOrEqual(Number(placement.right) + Number(target.width));
+        // The finger's target is reached by hit slop, bounded by the padding the block gives the button.
+        const slop = button.props.hitSlop as Readonly<{ top: number; bottom: number; left: number; right: number }>;
+        const floor = resolveMinimumInteractiveTargetSize(platform);
+        expect(slop.top).toBeLessThanOrEqual(Number(placement.top));
+        expect(slop.right).toBeLessThanOrEqual(Number(placement.right));
+        expect(slop.left).toBe(0);
+        expect(slop.top + COPY_ICON_BUTTON_SIZE + slop.bottom).toBeGreaterThanOrEqual(Math.min(floor, COPY_ICON_BUTTON_SIZE + 2 * Number(placement.top)));
+        expect(container.minHeight).toBeGreaterThanOrEqual(Number(placement.top) + COPY_ICON_BUTTON_SIZE + slop.bottom);
+        expect(CODE_BLOCK_OVERLAY_COPY_INSET).toBeGreaterThanOrEqual(Number(placement.right) + COPY_ICON_BUTTON_SIZE);
     });
 
     it('keeps the copy affordance ready to retry when the platform refuses a write', async () => {

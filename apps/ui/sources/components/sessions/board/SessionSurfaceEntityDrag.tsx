@@ -34,6 +34,11 @@ export type SessionSurfaceEntityBinding = Readonly<{
     admitWidgetMovement?: (effect: import('@happier-dev/protocol/plugins/ui').EntityDropEffectV1) => import('@happier-dev/protocol/plugins/ui').EntityDropAdmissionV1;
     widgetMovement?: WidgetEntityMovementPort;
     target?: Omit<EntityDropTarget, 'id' | 'scope' | 'scopeMode' | 'getBounds' | 'isCurrent'>;
+    /**
+     * A place drawn small (a dashed slot) that must still be easy to aim a carried card at: the pointer
+     * hits it down to this height, growing below the drawn place. Invisible; feedback stays on the drawn bounds.
+     */
+    aimMinHeightPx?: number;
     /** Content-coordinate owner supplies current native bounds after scroll/resize. */
     getNativeBounds?: () => WindowBounds | null;
     getCompanionTarget?: () => Readonly<{ itemKey: string; items: readonly SessionCompanionPresentationItemRefV1[] }>;
@@ -71,6 +76,11 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
     const ref = React.useCallback((value: View | ScrollView | null) => { node.current = value; dragDom(value); dropDom(value); }, [dragDom, dropDom]);
     const bounds = React.useCallback(() => readWindowBounds(sessionSurfaceMeasurable(node.current))
         ?? latest.current?.getNativeBounds?.() ?? nativeBounds.current, []);
+    const aimBounds = React.useCallback(() => {
+        const drawn = bounds();
+        const minimum = latest.current?.aimMinHeightPx;
+        return drawn && minimum !== undefined && drawn.height < minimum ? { ...drawn, height: minimum } : drawn;
+    }, [bounds]);
     const measure = React.useCallback(() => {
         void measureWindowBounds(sessionSurfaceMeasurable(node.current)).then(value => { nativeBounds.current = value; runtime.refresh(); });
     }, [runtime]);
@@ -85,7 +95,7 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
                 return current ? { title: current.title, ...(current.subtitle ? { subtitle: current.subtitle } : {}),
                     ...(current.renderMark ? { renderMark: current.renderMark } : {}) } : null;
             } });
-        const target = binding.target ? runtime.registerTarget({ id: targetId, scope, getBounds: bounds, isCurrent: current,
+        const target = binding.target ? runtime.registerTarget({ id: targetId, scope, getBounds: aimBounds, isCurrent: current,
             get parentId() { return latest.current?.target?.parentId; },
             get acceptedKinds() { return latest.current?.target?.acceptedKinds ?? []; },
             listDestinations: item => latest.current?.target?.listDestinations?.(item) ?? [],
@@ -105,7 +115,7 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
             containsPointer: pointer => latest.current?.target?.containsPointer?.(pointer) !== false,
         }) : null;
         return () => { source(); target?.(); };
-    }, [runtime, sourceId, targetId, binding?.scope.serverId, binding?.scope.accountId, binding !== null, binding?.target !== undefined, bounds]);
+    }, [runtime, sourceId, targetId, binding?.scope.serverId, binding?.scope.accountId, binding !== null, binding?.target !== undefined, aimBounds]);
     const adapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
     const gesture = React.useMemo(() => Gesture.Pan().minDistance(6).runOnJS(true).enabled(!domCarry)
         .onStart(event => {

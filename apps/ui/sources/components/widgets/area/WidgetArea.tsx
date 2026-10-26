@@ -1,7 +1,8 @@
 import * as React from 'react';
+import { usePluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HAPPIER_PAGE_METRICS, HappierPageSectionContext, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_EMPTY_SLOT_METRICS, HAPPIER_ICON_BUTTON_SIZE, HAPPIER_PAGE_METRICS, HappierPageSectionContext, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -33,7 +34,6 @@ import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CardGrid, CardGridCell } from '@/components/ui/cardGrid/CardGrid';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { ItemGroupColumn, ItemGroupColumns } from '@/components/ui/lists/ItemGroupColumns';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -94,7 +94,10 @@ export type WidgetAreaGeometry = 'grid' | 'column';
 const GEOMETRY_PLACEMENT: Readonly<Record<WidgetAreaGeometry, WidgetFramePlacement>> = { grid: 'home', column: 'companion' };
 /** Configuration stays in the quiet ⋯ menu; movement also has the shared grip. */
 const ALWAYS_OVERFLOW = Number.POSITIVE_INFINITY;
-const ADD_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+// The header row holds the add IconButton at its drawn size; a finger reaches past it through the hit area.
+const HEADER_MIN_HEIGHT_PX = HAPPIER_ICON_BUTTON_SIZE;
+// The dashed Add line's own height (its padding and one row title line), so its placeholder holds the same room.
+const ADD_LINE_PX = 2 * HAPPIER_EMPTY_SLOT_METRICS.paddingPx + happierPageTextMetrics('rowTitle').lineHeight;
 /** The settled empty line's height (its description step), held while a page-section area loads. */
 const EMPTY_LINE_PX = happierPageTextMetrics('sectionDescription').lineHeight;
 
@@ -124,6 +127,12 @@ export type WidgetAreaProps = Readonly<{
     title: string;
     /** One quiet fact beside the title ("your widgets on this page"). */
     meta?: string;
+    /**
+     * One line about the area itself, under its header as a section's description sits under its title
+     * (an edited preset's "… is yours now" with Reset to preset): the header's controls and the line's own
+     * action then stand on separate lines rather than stacking at the trailing edge above the header.
+     */
+    notice?: React.ReactNode;
     /** The page's or project's name: "Add to PRs & Issues", "PRs & Issues uses Card". */
     surfaceName: string;
     /** Replaces the layout state with the host's own refusal (a Project without a known source). */
@@ -299,7 +308,6 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                                 iconName="plus"
                                 variant="plain"
                                 accessibilityLabel={t('widgetAdd.areaAdd', { surface: props.surfaceName })}
-                                minimumInteractiveTargetSize={ADD_TARGET_PX}
                                 disabled={!canAdd}
                                 selected={addOpen}
                                 expanded={addOpen}
@@ -310,6 +318,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     </View>
                 ) : null}
             />}
+            {props.display === 'add' ? null : props.notice}
             {props.display === 'add' ? null : state.status === 'loading' && props.dashboard?.holdsEmptyLineWhileLoading ? (
                 <View testID={`${props.testID}.loading`} style={styles.dashboardLoading}>
                     <SkeletonRows rows={1} lines={1} rowHeight={EMPTY_LINE_PX}
@@ -366,7 +375,6 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                         accessibilityLabel={t('widgetAdd.areaAdd', { surface: props.surfaceName })}
                         disabled={!canAdd}
                         expanded={addOpen}
-                        minHeight={ADD_TARGET_PX}
                         onPress={() => setAddOpen((open) => !open)}
                     />
                 </View>
@@ -455,10 +463,11 @@ function WidgetAreaPlacements(props: PlacementsProps): React.ReactElement {
     const items = React.useMemo(() => projectWidgetAreaItems(props.items, props.placements), [props.items, props.placements]);
     const widgets = React.useMemo(() => flattenWidgetLayoutWidgetsV1(items), [items]);
     const instances = React.useMemo(() => widgets.map(entry => entry.instance), [widgets]);
+    const localize = usePluginLocalizedTextResolver({ projection: runtime.pluginUiProjection });
     const installed = React.useMemo(() => instances.flatMap(instance => {
-        const candidate = readWidgetDescriptor(runtime.pluginUiProjection, instance.definition);
+        const candidate = readWidgetDescriptor(runtime.pluginUiProjection, instance.definition, instance.displayName ? undefined : localize);
         return candidate ? [candidate] : [];
-    }), [instances, runtime.pluginUiProjection]);
+    }), [instances, runtime.pluginUiProjection, localize]);
     const descriptors = useWidgetInstanceDescriptors(props.surface, instances, installed);
     const byId = React.useMemo(() => new Map(widgets.map((entry, index): [string, AreaWidget] => [entry.instance.id, {
         placement: { instance: entry.instance, ...(entry.size ? { size: entry.size } : {}), ...(entry.frameStyle ? { frameStyle: entry.frameStyle } : {}), ...(entry.area ? { area: entry.area } : {}) },
@@ -898,6 +907,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 instance={instance}
                 descriptor={candidate}
                 providedContext={providedContext}
+                projectContext={context.projectContext}
                 groupBindings={groupContext}
                 recordRevision={stableJsonStringify(instance)}
                 presentation="content"
@@ -911,7 +921,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
             </WidgetFrameBodyCaptionContext.Provider>
             </View>
         ) : <View testID={`${testID}.deferred`} style={{ minHeight: bodyHeight }} />,
-    }), [active, bodyHeight, candidate, edit.onRepairInputs, instance, onBodyLayout, providedContext, groupContext, runtime, surface, testID, size, props.admittedViewer, props.isCurrent, props.isReadPending]);
+    }), [active, bodyHeight, candidate, edit.onRepairInputs, instance, onBodyLayout, providedContext, context.projectContext, groupContext, runtime, surface, testID, size, props.admittedViewer, props.isCurrent, props.isReadPending]);
 
     if (switchedOff) return null;
     return (
@@ -1019,7 +1029,7 @@ function WidgetAreaAddPopover(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     area: { gap: theme.space.s8 },
-    header: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minHeight: ADD_TARGET_PX },
+    header: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minHeight: HEADER_MIN_HEIGHT_PX },
     title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary, flexShrink: 0 },
     // The section's title keeps its room; the quiet meta beside it is what gives way.
     meta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, flexShrink: 1, minWidth: 0 },
@@ -1028,7 +1038,7 @@ const styles = StyleSheet.create((theme) => ({
     // Below the layout tabs' rule the line keeps a section header's breath, as a description under a title does.
     dashboardEmpty: { ...Typography.default(), ...happierPageTextMetrics('sectionDescription'), color: theme.colors.text.secondary, paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx },
     dashboardLoading: { gap: theme.space.s8, paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx },
-    addLineSpace: { height: ADD_TARGET_PX },
+    addLineSpace: { height: ADD_LINE_PX },
     // The frame fills its grid cell, so cards in one row share a height.
     cell: { flexGrow: 1 },
 }));

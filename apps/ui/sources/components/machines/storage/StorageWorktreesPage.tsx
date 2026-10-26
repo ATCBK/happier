@@ -30,8 +30,10 @@ import {
 } from './StorageCollectToggle';
 import { StorageItemRow } from './StorageItemRow';
 import { StoragePileDock } from './StoragePileDock';
+import { StoragePolicyNotice } from './StoragePolicyNotice';
 import { describeStorageVerdict, storageEvidenceLabel } from './storageReasonPresentation';
 import { toStorageItemRef } from '@/sync/domains/machines/storage/pileRef';
+import { storageVerdictStartsTicked } from '@/sync/domains/machines/storage/storageVerdictSelection';
 import { StorageVolumeRow } from './StorageVolumes';
 import { selectStorageHeadlineVolume } from './storageViewModel';
 
@@ -167,7 +169,6 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
           </View>
           <SegmentedTabBar<Filter>
             role="radiogroup"
-            targetSize="platform"
             segmentSizing="content"
             accessibilityLabel={t('machineStorage.worktrees.filterLabel')}
             testIDPrefix="machine-storage-worktrees-filter"
@@ -205,6 +206,8 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
               reason={t('machineStorage.states.offlineReason')}
           />
         </ItemGroup>
+      ) : !list.page && list.status === 'policy_unavailable' ? (
+        <StoragePolicyNotice onRetry={list.retry} />
       ) : !list.page ? (
         <ItemGroup>
           <SurfaceStateCard
@@ -261,7 +264,7 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
           />
         ))
       )}
-      {summary.summary ? (
+      {summary.summary && summary.status !== 'policy_unavailable' ? (
         <StoragePileDock
           serverId={props.serverId}
           machineId={props.machineId}
@@ -293,7 +296,7 @@ const WorktreeGroup = React.memo(function WorktreeGroup(
   const name = nameOf(props.repo);
   const groupState = collect.groupOf(props.rows);
   const sweep = props.rows.filter(
-    (row) => row.verdict !== 'keep' && collect.stateOf(row) === 'available',
+    (row) => storageVerdictStartsTicked(row.verdict) && collect.stateOf(row) === 'available',
   ).length;
   const shown = props.expanded
     ? props.rows

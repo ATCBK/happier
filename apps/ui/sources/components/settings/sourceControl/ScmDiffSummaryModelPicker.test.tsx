@@ -116,7 +116,7 @@ describe('Summary model discovery', () => {
                     automaticProfiles: configured ? [] : buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(target), models: automaticModels }),
                     discoveryTargetKeys: [buildBackendTargetKeyV2(target)] } };
             } });
-        for (const path of ['/v1/machines', '/v1/actions/agents.models.list/execution-authorization', '/v1/actions/agents.models.list']) {
+        for (const path of ['/v1/machines', '/v1/machines/read-batch', '/v1/actions/agents.models.list/execution-authorization', '/v1/actions/agents.models.list']) {
             homes.answer(homeId, path, { select: async input => {
                 const response = await boundary.handle(new URL(path, serverUrl), input === undefined ? undefined
                     : { method: 'POST', body: JSON.stringify(input) });
@@ -128,8 +128,12 @@ describe('Summary model discovery', () => {
             machines: { [machine.id]: machine }, machineListByServerId: { [homeId]: [machine] } });
         const change = vi.fn();
         const selection = vi.fn();
-        const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={change}
-            onSelection={selection} machineId={machine.id} serverId={homeId} defaultBackendTarget={target} />);
+        function Picker() {
+            const [value, setValue] = React.useState('');
+            return <ScmDiffSummaryModelPicker value={value} onChange={next => { change(next); setValue(next); }}
+                onSelection={selection} machineId={machine.id} serverId={homeId} defaultBackendTarget={target} />;
+        }
+        const screen = await renderSettingsView(<Picker />);
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
         await act(async () => { menu().props.onOpenChange(true); });
         const diagnostic = () => JSON.stringify({ paths: homes.requests.map(request => request.path), rpc: rpc.requests,
@@ -187,6 +191,12 @@ describe('Summary model discovery', () => {
         expect(selection).toHaveBeenCalledWith(expect.objectContaining({
             backendTarget: expect.objectContaining(target), modelSelector: expect.objectContaining({ modelId: 'initial-model' }),
         }));
+        await act(async () => { menu().props.onOpenChange(true); });
+        await vi.waitFor(() => expect(menu().props.items.some((item: { title: string }) => item.title === 'Real model')).toBe(true));
+        const explicit = menu().props.items.find((item: { title: string }) => item.title === 'Real model');
+        await act(async () => { menu().props.onSelect(explicit.id); });
+        expect(menu().props.open).toBe(false);
+        expect(menu().props.itemTrigger.detailFormatter()).toBe('Real model');
         await screen.unmount();
     });
     /** One configured Agent on one Machine whose strict catalog observation is whatever `execute` answers. */
@@ -209,7 +219,7 @@ describe('Summary model discovery', () => {
         const machine = createMachineFixture({ id: `${name}-machine`, activeAt: Date.now() });
         const boundary = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId,
             machineId: machine.id, actionId: 'agents.models.list', tokenEpoch: 1, execute });
-        for (const path of ['/v1/machines', '/v1/actions/agents.models.list/execution-authorization', '/v1/actions/agents.models.list']) {
+        for (const path of ['/v1/machines', '/v1/machines/read-batch', '/v1/actions/agents.models.list/execution-authorization', '/v1/actions/agents.models.list']) {
             homes.answer(homeId, path, { select: async input => {
                 const response = await boundary.handle(new URL(path, serverUrl), input === undefined ? undefined
                     : { method: 'POST', body: JSON.stringify(input) });
@@ -372,6 +382,18 @@ describe('Summary model discovery', () => {
         await vi.waitFor(() => expect(menu().props.emptyLabel).toBe(label));
         await screen.unmount();
     });
+    it('names what an unset choice runs on instead of asking for a choice that is not required', async () => {
+        const trigger = async (unsetLabel?: string) => {
+            const screen = await renderSettingsView(<ScmDiffSummaryModelPicker presentation="inline" value="" onChange={vi.fn()} unsetLabel={unsetLabel} />);
+            const label = String(screen.findAll(node => node.props.testID === 'walkthrough.summaryModel' && typeof node.props.accessibilityLabel === 'string')[0]?.props.accessibilityLabel);
+            await screen.unmount();
+            return label;
+        };
+        // No catalog can name a default here: a Session-hosted start still runs on the Session's model.
+        expect(await trigger('Session model')).toMatch(/Session model$/);
+        expect(await trigger()).toMatch(/Choose a model$/);
+    });
+
     it('offers no Load models operation, and no placeholder model row, when no machine can answer it', async () => {
         const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={vi.fn()} />);
         const items: ReadonlyArray<{ id: string; title: string }> = screen.findAll(node => node.type === DropdownMenu)[0]!.props.items;

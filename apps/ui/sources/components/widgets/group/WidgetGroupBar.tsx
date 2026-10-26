@@ -103,7 +103,6 @@ export function WidgetGroupBar(
           activeTabId={group.width}
           onSelectTab={(width) => operations.setWidth(group.id, width)}
           segmentSizing="content"
-          targetSize="platform"
           role="radiogroup"
           accessibilityLabel={t('widgetFrame.groupWidth')}
           testIDPrefix={`${props.testID}.width`}

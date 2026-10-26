@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 
 import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { DetailsSplitWorkspace } from '@/components/appShell/panes/details/workspace/DetailsSplitWorkspace';
@@ -20,6 +19,7 @@ import type { BrowserSurfaceProductModels } from './BrowserSurfaceHost';
 import {
     BROWSER_LAUNCHPAD_DETAILS_TAB_KEY,
     createBrowserLaunchpadDetailsTab,
+    readBrowserViewDetailsResource,
     resolveBrowserTabPresentation,
     selectBrowserWorkspaceViewerTab,
 } from './browserSurfaceDetailsTabModel';
@@ -27,7 +27,6 @@ import type { OpenBrowserTargetScope } from './openBrowserTargetInWorkspace';
 import { useOpenBrowserTargetInWorkspace } from './useOpenBrowserTargetInWorkspace';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useRetainedPresentationSlotVisible } from '@/components/ui/presentation/retainedPresentationSlots';
 
 /**
@@ -54,6 +53,7 @@ export function BrowserScopedWorkspace(props: Readonly<{
      * mobile launchpad shows running services + recents, not just URL entry.
      */
     launchpadRows?: readonly BrowserLaunchpadRow[];
+    localServiceTargets?: readonly import('@/sync/domains/local/services/launch').LocalServiceLaunchTarget[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
     onRefreshLaunchpad?: () => void;
@@ -66,6 +66,13 @@ export function BrowserScopedWorkspace(props: Readonly<{
     pluginProjection?: PluginUiProjectionCurrentness;
     /** Session-only action context; project Browser surfaces deliberately pass `null`. */
     pluginBrowserActionSessionId?: string | null;
+    /**
+     * A phone page (lab Qp): with one tab or none there is no tab strip, the page is the pane, and
+     * New tab and Close tab live in the page's ⋯. The strip returns once a second tab exists.
+     */
+    collapseSingleTab?: boolean;
+    /** The surface's pane header, told whether a page (not the launchpad) is what the pane shows. */
+    renderPaneHeader?: (state: Readonly<{ pageOpen: boolean }>) => React.ReactNode;
     testID?: string;
 }>): React.ReactElement {
     const pane = useAppPaneScope(props.scopeId);
@@ -76,6 +83,22 @@ export function BrowserScopedWorkspace(props: Readonly<{
         : props.pluginProjection?.serverId ?? null;
 
     const viewerAccountLifetime = useSessionViewerSourceAccountLifetime();
+    const details = pane.scopeState?.details ?? null;
+    const selectedTab = selectBrowserWorkspaceViewerTab(details);
+    const pageOpen = Boolean(selectedTab && readBrowserViewDetailsResource(selectedTab.resource));
+    const stripCollapsed = props.collapseSingleTab === true && props.presentation !== 'viewer' && (details?.tabs.length ?? 0) <= 1;
+    // The launchpad IS the new-tab page: render it as the empty-group state, and the strip `+`
+    // (or, without a strip, the page's ⋯) re-opens it as a pinned tab so choosing a row routes
+    // through the canonical opener.
+    const openLaunchpad = React.useCallback(() => {
+        pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
+    }, [pane]);
+    const onOpenNewTab = stripCollapsed && pageOpen ? openLaunchpad : undefined;
+    const closeDetailsTab = pane.closeDetailsTab;
+    const selectedTabKey = selectedTab?.key ?? null;
+    const onCloseTab = React.useMemo(() => stripCollapsed && pageOpen && selectedTabKey
+        ? () => closeDetailsTab(selectedTabKey) : undefined, [closeDetailsTab, pageOpen, selectedTabKey, stripCollapsed]);
+
     const openBrowserViewTarget = useOpenBrowserTargetInWorkspace({
         scopeId: props.scopeId,
         accountLifetime: props.pluginProjection?.accountLifetime ?? viewerAccountLifetime,
@@ -103,18 +126,24 @@ export function BrowserScopedWorkspace(props: Readonly<{
             pluginBrowserProjection: props.pluginProjection?.pluginBrowserProjection,
             pluginBrowserActionSessionId: props.pluginBrowserActionSessionId,
             launchpadRows: props.launchpadRows,
+            localServiceTargets: props.localServiceTargets,
             launchpadRefreshStatus: props.launchpadRefreshStatus,
             launchpadRefreshError: props.launchpadRefreshError,
             onRefreshLaunchpad: props.onRefreshLaunchpad,
             productModels: props.productModels ?? undefined,
             onOpenTarget: openBrowserViewTarget,
+            onOpenNewTab,
+            onCloseTab,
         }),
     ], [
+        onOpenNewTab,
+        onCloseTab,
         openBrowserViewTarget,
         props.launchpadRefreshError,
         props.onRefreshLaunchpad,
         props.launchpadRefreshStatus,
         props.launchpadRows,
+        props.localServiceTargets,
         props.localServicePreviewServerId,
         props.localServicePreviewState,
         props.platform,
@@ -156,12 +185,6 @@ export function BrowserScopedWorkspace(props: Readonly<{
         />
     ), [callbacks, props.scope, renderers]);
 
-    // The launchpad IS the new-tab page: render it as the empty-group state, and the strip `+`
-    // re-opens it as a pinned tab so choosing a row routes through the canonical opener.
-    const openLaunchpad = React.useCallback(() => {
-        pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
-    }, [pane]);
-
     const renderEmptyState = React.useCallback(() => renderTabContent({
         ...createBrowserLaunchpadDetailsTab(),
         isPreview: false,
@@ -182,13 +205,13 @@ export function BrowserScopedWorkspace(props: Readonly<{
             variant="plain"
             size={28}
             iconSize={16}
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
             onPress={openLaunchpad}
         />
     ), [openLaunchpad, props.testID]);
 
     const resolveTabIconName = React.useCallback((tab: DetailsTabState) => (
-        tab.key === BROWSER_LAUNCHPAD_DETAILS_TAB_KEY ? 'home' : 'globe'
+        // A page tab takes the strip's own per-kind globe; only the launchpad differs.
+        tab.key === BROWSER_LAUNCHPAD_DETAILS_TAB_KEY ? 'home' : null
     ), []);
 
     // Favicon/spinner slot for `browser-view` tabs (launchpad keeps its home icon). The shared
@@ -205,16 +228,20 @@ export function BrowserScopedWorkspace(props: Readonly<{
         splitDetailsGroup: undefined,
     }), [pane]);
 
-    if (props.presentation === 'viewer') {
-        const selectedTab = selectBrowserWorkspaceViewerTab(pane.scopeState?.details ?? null);
-        return renderTabContent(selectedTab ?? {
-            ...createBrowserLaunchpadDetailsTab(),
-            isPreview: false,
-            isPinned: true,
-        });
+    const paneHeader = props.renderPaneHeader?.({ pageOpen }) ?? null;
+    if (props.presentation === 'viewer' || stripCollapsed) {
+        return <>
+            {paneHeader}
+            {renderTabContent(selectedTab ?? {
+                ...createBrowserLaunchpadDetailsTab(),
+                isPreview: false,
+                isPinned: true,
+            })}
+        </>;
     }
 
-    return (
+    return <>
+        {paneHeader}
         <DetailsSplitWorkspace
             pane={singleGroupPane}
             resolveTabIconName={resolveTabIconName}
@@ -224,5 +251,5 @@ export function BrowserScopedWorkspace(props: Readonly<{
             renderEmptyState={renderEmptyState}
             testIds={{ root: props.testID }}
         />
-    );
+    </>;
 }

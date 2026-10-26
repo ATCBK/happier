@@ -1,11 +1,9 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { normalizeDiffPresentationPreference, useDiffSplitFits } from './diffPresentationStyle';
 import { t } from '@/text';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 
 export type DiffPresentationStyleToggleButtonProps = Readonly<{
@@ -67,7 +65,6 @@ export const DiffPresentationStyleToggleButton = React.memo<DiffPresentationStyl
             iconSize={iconSize}
             size={28}
             variant="plain"
-            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
             interactiveTargetGapPx={8}
         />
     );

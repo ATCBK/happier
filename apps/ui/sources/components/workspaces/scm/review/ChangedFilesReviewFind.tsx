@@ -10,14 +10,13 @@ import { useUnistyles } from 'react-native-unistyles';
 import { useFindSurfaceRegistration, useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { t } from '@/text';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
 import type { ChangedFilesReviewFindModel } from './useChangedFilesReviewFind';
 
-export function ChangedFilesReviewFindButton(props: Readonly<{ surfaceId: string }>) {
+export function ChangedFilesReviewFindButton(props: Readonly<{ surfaceId: string; interactiveTargetGapPx?: number }>) {
     const runtime = useFindSurfaceRuntime();
     return <IconButton testID="scm-review-find" iconName="magnifying-glass" variant="plain"
-        minimumInteractiveTargetSize={resolveTouchTargetFloorPx() ?? undefined}
+        interactiveTargetGapPx={props.interactiveTargetGapPx}
         accessibilityLabel={t('find.surface.changes')} tooltip={t('find.surface.changes')}
         onPress={() => { runtime.open(props.surfaceId); }} />;
 }

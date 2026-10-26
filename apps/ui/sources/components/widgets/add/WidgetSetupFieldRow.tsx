@@ -9,7 +9,7 @@ import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemePro
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -316,6 +316,6 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
 }
 
 const styles = StyleSheet.create((theme) => ({
-    bindingTrigger: { minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center' },
+    bindingTrigger: { minHeight: HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE, justifyContent: 'center' },
     needed: { ...Typography.default('semiBold'), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
 }));

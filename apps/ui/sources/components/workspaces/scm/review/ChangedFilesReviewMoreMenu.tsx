@@ -18,6 +18,8 @@ export type ChangedFilesReviewMoreMenuProps = Readonly<{
     /** The host's own rows (review comments), ahead of the display choices. */
     leadingSections?: readonly ScmComparisonMenuSection[];
     testID?: string;
+    /** The gap to the neighbouring bar action: their finger frames split it. */
+    interactiveTargetGapPx?: number;
 }>;
 
 /**
@@ -29,7 +31,7 @@ export type ChangedFilesReviewMoreMenuProps = Readonly<{
  * Review's display choices as menu rows, for whichever menu shows them: the wide bar's own `⋯`, or the
  * phone comparison menu's Display section.
  */
-export function useChangedFilesReviewDisplayMenu(props: Omit<ChangedFilesReviewMoreMenuProps, 'testID' | 'leadingSections'>): Readonly<{
+export function useChangedFilesReviewDisplayMenu(props: Omit<ChangedFilesReviewMoreMenuProps, 'testID' | 'leadingSections' | 'interactiveTargetGapPx'>): Readonly<{
     items: DropdownMenuItem[];
     select: (id: string) => void;
 }> {
@@ -81,5 +83,5 @@ export const ChangedFilesReviewMoreMenu = React.memo(function ChangedFilesReview
     const { items, select } = useChangedFilesReviewDisplayMenu(props);
     const leading = props.leadingSections;
     const sections = React.useMemo(() => [...(leading ?? []), { id: 'display', items, onSelect: select }], [items, leading, select]);
-    return <ScmComparisonMoreMenu sections={sections} testID={props.testID} />;
+    return <ScmComparisonMoreMenu sections={sections} testID={props.testID} interactiveTargetGapPx={props.interactiveTargetGapPx} />;
 });

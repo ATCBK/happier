@@ -1,12 +1,11 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ContextMenu, type ContextMenuItem } from '@/components/ui/forms/dropdown/ContextMenu';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { resolvePluginUiIconName } from '@/components/plugins/surfaces/iconToken/resolvePluginUiIconToken';
 import type { PluginBrowserActionProjection } from '@/sync/domains/plugins/browser/actions';
 import {
@@ -15,10 +14,12 @@ import {
 import type { PluginUiPolicyEvaluationContext } from '@/sync/domains/plugins/ui/policy';
 import {
     resolvePluginLocalizedText,
+    usePluginLocalizedTextResolver,
     type PluginLocalizedTextResolver,
 } from '@/sync/domains/plugins/ui/i18n';
 import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 const stylesheet = StyleSheet.create((theme) => ({
     detailsPanel: {
@@ -64,16 +65,19 @@ export function BrowserPluginActionPlacements(props: Readonly<{
     contextMenuActions: readonly PluginBrowserActionProjection[];
     policyContext: PluginUiPolicyEvaluationContext;
     localizePluginText?: PluginLocalizedTextResolver;
+    pluginUiProjection?: PluginUiProjectionModel | null;
     onAction: (action: PluginBrowserActionProjection) => void;
     testID: string;
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const contextAnchorRef = React.useRef<View>(null);
     const [contextMenuOpen, setContextMenuOpen] = React.useState(false);
+    const localized = usePluginLocalizedTextResolver({ projection: props.pluginUiProjection });
+    const localize = props.localizePluginText ?? localized;
     const contextMenuItems = React.useMemo<readonly ContextMenuItem[]>(
-        () => props.contextMenuActions.map((action) => {
-            const title = actionTitle(action, props.localizePluginText);
-            const decision = decisionFor(action, props.policyContext, props.localizePluginText);
+        () => !contextMenuOpen ? [] : props.contextMenuActions.map((action) => {
+            const title = actionTitle(action, localize);
+            const decision = decisionFor(action, props.policyContext, localize);
             return {
                 id: action.id,
                 testID: `${props.testID}-contextMenu-${action.id}`,
@@ -90,7 +94,7 @@ export function BrowserPluginActionPlacements(props: Readonly<{
                 disabled: !decision.enabled,
             };
         }),
-        [props.contextMenuActions, props.localizePluginText, props.policyContext, props.testID, theme.colors.text.secondary],
+        [contextMenuOpen, props.contextMenuActions, localize, props.policyContext, props.testID, theme.colors.text.secondary],
     );
 
     if (props.detailsPanelActions.length === 0 && props.contextMenuActions.length === 0) {
@@ -102,8 +106,8 @@ export function BrowserPluginActionPlacements(props: Readonly<{
             {props.detailsPanelActions.length > 0 ? (
                 <View testID={`${props.testID}-detailsPanel`} style={stylesheet.detailsPanel}>
                     {props.detailsPanelActions.map((action) => {
-                        const title = actionTitle(action, props.localizePluginText);
-                        const decision = decisionFor(action, props.policyContext, props.localizePluginText);
+                        const title = actionTitle(action, localize);
+                        const decision = decisionFor(action, props.policyContext, localize);
                         return (
                             <RoundButton
                                 key={action.id}
@@ -141,7 +145,6 @@ export function BrowserPluginActionPlacements(props: Readonly<{
                             tooltipHidden={contextMenuOpen}
                             expanded={contextMenuOpen}
                             hasPopup="menu"
-                            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                             onPress={() => setContextMenuOpen((open) => !open)}
                         />
                     </View>
@@ -152,7 +155,7 @@ export function BrowserPluginActionPlacements(props: Readonly<{
                         items={contextMenuItems}
                         onSelect={(actionId) => {
                             const action = props.contextMenuActions.find((candidate) => candidate.id === actionId);
-                            if (action && decisionFor(action, props.policyContext, props.localizePluginText).enabled) {
+                            if (action && decisionFor(action, props.policyContext, localize).enabled) {
                                 props.onAction(action);
                             }
                         }}

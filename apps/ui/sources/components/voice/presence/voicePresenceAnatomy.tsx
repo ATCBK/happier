@@ -3,13 +3,14 @@ import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
-import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 
 export const VOICE_TOP_BAR_PILL_HEIGHT = 28;
 export const VOICE_ISLAND_DESKTOP = Object.freeze({ width: 330, height: 56, mark: 26 });
 export const VOICE_ISLAND_PHONE = Object.freeze({ height: 58, mark: 28 });
+/** The island mark's slot: never smaller than the drawn mark, the same under every pointer (a finger reaches past it through the hit area). */
+export const VOICE_ISLAND_MARK_SLOT = 40;
 export const VOICE_ORB_MARK_SIZE = 30;
-export const VOICE_ORB_BODY_SIZE = Math.max(44, resolveMinimumInteractiveTargetSize(Platform.OS));
+export const VOICE_ORB_BODY_SIZE = 44;
 export const VOICE_ORB_CAPTION_WIDTH = 168;
 export const VOICE_ORB_OPTIONS_GAP = 8;
 
@@ -29,7 +30,7 @@ export function VoiceTopBarAnatomy(props: Readonly<{
     showDivider: boolean; overlay?: React.ReactNode;
 }>) {
     return <View ref={props.anchorRef} collapsable={false} testID={props.testID}
-        style={[styles.pill, { height: Math.max(VOICE_TOP_BAR_PILL_HEIGHT, resolveTouchTargetFloorPx() ?? 0) }]}>
+        style={[styles.pill, { height: VOICE_TOP_BAR_PILL_HEIGHT }]}>
         {props.mark}<View style={styles.pillLabel}>{props.label}</View>
         {props.showDivider ? <View style={styles.divider} /> : null}
         {props.transport}{props.overlay}
@@ -40,11 +41,9 @@ export function VoiceIslandAnatomy(props: Readonly<{
     width: number; height: number; testID?: string;
     mark: React.ReactNode; body: React.ReactNode; transport: React.ReactNode;
 }>) {
-    // The mark's slot, like the live island's: never smaller than the drawn mark.
-    const markTarget = Math.max(40, resolveMinimumInteractiveTargetSize(Platform.OS));
     return <GlassPanel testID={props.testID} radius={props.height / 2} shadowLevel={3}
         frameStyle={{ width: props.width, height: props.height }} style={styles.capsule}>
-        <View style={[styles.islandMark, { width: markTarget, height: markTarget }]}>{props.mark}</View>
+        <View style={[styles.islandMark, { width: VOICE_ISLAND_MARK_SLOT, height: VOICE_ISLAND_MARK_SLOT }]}>{props.mark}</View>
         <View style={styles.islandBody}>{props.body}</View>{props.transport}
     </GlassPanel>;
 }
@@ -61,7 +60,7 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: VOICE_TOP_BAR_PILL_HEIGHT / 2, backgroundColor: theme.colors.surface.selected,
     },
     // Concentric: the trailing well sits as far from the capsule's end as from its top and bottom
-    // ((56 − 32) / 2 desktop, (58 − 34) / 2 phone).
+    // ((56 − 32) / 2 desktop, (58 − 32) / 2 phone).
     capsule: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, paddingLeft: theme.space.s4, paddingRight: theme.space.s12 },
     pillLabel: { minWidth: 0, flexShrink: 1, justifyContent: 'center', paddingLeft: theme.space.s2, paddingRight: theme.space.s8 },
     divider: { width: 1, height: 14, marginHorizontal: theme.space.s2, backgroundColor: theme.colors.border.default },

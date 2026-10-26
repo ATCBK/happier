@@ -570,6 +570,13 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     // must survive too, so the new list attaches its live cards to the same refs.
     const stepCardRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
     const promptFocusByBlockId = React.useRef(new Map<string, () => void>());
+    /**
+     * The one prompt being edited. Every other prompt is its static picture, so a long workflow
+     * mounts one live composer, not one per step; pressing, tabbing into or focusing a prompt
+     * (Add, Edit step, the first issue) makes it this one. Custody keeps each document, its
+     * exact references and caret across the switch.
+     */
+    const [editingBlockId, setEditingBlockId] = React.useState<string | null>(null);
     const pendingPromptFocusId = React.useRef<string | null>(null);
     const registerPromptRef = React.useCallback((blockId: string, focus: (() => void) | null) => {
         if (focus === null) {
@@ -797,8 +804,26 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
 
     const { theme } = useUnistyles();
     const runKeyHint = useKeyboardShortcutLabel('workflow.run');
+    const hideWorkflowLabel = t('panes.mainColumn.hideWorkflow');
+    const showWorkflowLabel = t('panes.mainColumn.showWorkflow');
+    const workflowName = draft.name.trim().length > 0 ? draft.name : t('workflows.page.untitled');
+    const workflowMarkColor = theme.colors.text.secondary;
+    // Pane identity is shared with every mounted composer. A prompt or selection
+    // change must not publish another identity for the unchanged workflow.
+    const workflowMainColumn = React.useMemo(() => ({
+        hideLabel: hideWorkflowLabel,
+        showLabel: showWorkflowLabel,
+        identity: {
+            mark: <Icon name="tree-structure" size={ICON_SIZE.sm} color={workflowMarkColor} />,
+            name: workflowName,
+        },
+    }), [hideWorkflowLabel, showWorkflowLabel, workflowMarkColor, workflowName]);
     const pane = useAppPaneScope(WORKFLOW_EDITOR_PANE_SCOPE_ID);
     const flowOpen = pane.scopeState?.right.isOpen === true;
+    // A phone has no side slots: Flow is the Steps | Flow switch there, so a Flow pane left
+    // open at a wide width closes when the page recomposes for a phone.
+    const closeFlowPane = pane.closeRight;
+    React.useEffect(() => { if (compactLayout && flowOpen) closeFlowPane(); }, [closeFlowPane, compactLayout, flowOpen]);
     const flowChildren = useWorkflowFlowChildren(validation.normalizedDefinition ?? null, flowOpen || props.view === 'flow');
     const flowProjection = React.useMemo(
         () => (validation.normalizedDefinition === undefined
@@ -1032,6 +1057,8 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             rootAddRow={!compactLayout}
             registerPromptRef={registerPromptRef}
             requestPromptFocus={requestPromptFocus}
+            editingBlockId={editingBlockId}
+            onRequestEditBlock={setEditingBlockId}
             {...(props.documentPresentation === undefined ? {} : { presentation: props.documentPresentation })}
             // The page's commands own when issues speak; a composition without
             // them (the Automation wrapper) keeps its incumbent always-on text.
@@ -1272,135 +1299,109 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             ?.metadata?.homeDir ?? null,
     });
 
-    if (compactLayout) {
-        // Phone (lab `editor-P1`, corrected): the name stays in the page, the
-        // chips recompose as stacked value rows, the save status sits under
-        // them, Steps | Flow switches the document, and one bar above the safe
-        // area holds Add, Save and the primary Run now.
-        return (
-            <View testID={testIDPrefix} style={styles.root}>
-                <KeyboardAwareScrollView
-                    testID={`${testIDPrefix}-scroll`}
-                    onScroll={refreshDropMeasurements}
-                    onLayout={refreshDropMeasurements}
-                    style={styles.pageScroll}
-                    contentContainerStyle={[styles.pageContent, maxWidthStyle]}
-                    contentInsetAdjustmentBehavior="automatic"
-                    automaticallyAdjustKeyboardInsets
-                    keyboardShouldPersistTaps="handled"
-                >
-                    {identity}
-                    {props.reviewNotice}
-                    <ItemGroup>
-                        <Item
-                            testID={`${testIDPrefix}-where-row`}
-                            title={t('workflows.page.where.label')}
-                            subtitle={whereSummary ?? t('workflows.page.where.choose')}
-                            showChevron
-                            onPress={documentEditable ? openSettings : submitRun}
-                        />
-                        {props.triggersSummary === undefined ? null : (
-                            <Item
-                                testID={`${testIDPrefix}-triggers-row`}
-                                title={t('workflows.triggers.section.title')}
-                                subtitle={props.triggersSummary}
-                                showChevron
-                                onPress={openSettings}
-                            />
-                        )}
-                        {/* A value row like Where and Triggers (04 §4.10): its value is the chip's own
-                            summary, and it opens the settings where the Agent and model field is. */}
-                        {showsWorkflowAgent ? <Item
-                            testID={`${testIDPrefix}-agent-row`}
-                            title={t('workflows.page.sections.agentTitle')}
-                            subtitle={engineSummary}
-                            showChevron={canOpenSettings}
-                            {...(canOpenSettings ? { onPress: openSettings } : { mode: 'info' as const })}
-                        /> : null}
-                    </ItemGroup>
-                    {saveStatusNode === null && validityNode !== null ? (
-                        <View style={styles.statusLine}>
-                            {validityNode}
-                        </View>
-                    ) : null}
-                    <View style={styles.phoneViewSwitch}>
-                        <SegmentedTabBar<WorkflowEditorView>
-                            testIDPrefix={`${testIDPrefix}-view`}
-                            accessibilityLabel={t('workflows.tabsAccessibility.stepsFlow')}
-                            tabs={[
-                                { id: 'steps', label: t('workflows.tabs.steps') },
-                                { id: 'flow', label: t('workflows.tabs.flow') },
-                            ]}
-                            activeTabId={props.view}
-                            onSelectTab={props.onChangeView}
-                        />
-                    </View>
-                    <View style={styles.document}>
-                        {/*
-                          * Steps stays mounted across the switch so every composer keeps its
-                          * caret, selection and any live IME or dictation binding; Flow holds
-                          * no editing state and mounts on demand.
-                          */}
-                        <View
-                            testID={`${testIDPrefix}-steps-presentation`}
-                            style={props.view === 'steps' ? undefined : { display: 'none' }}
-                            {...(props.view === 'steps' ? {} : {
-                                accessibilityElementsHidden: true,
-                                importantForAccessibility: 'no-hide-descendants' as const,
-                                pointerEvents: 'none' as const,
-                            })}
-                        >
-                            {blockList}
-                            {/* Icon controls on a phone too: the change's label is their accessible name (DESIGN-6 N20). */}
-                            {historyIcons}
-                        </View>
-                        {stepOptionsPopoverNode}
-                        {props.view === 'flow' ? flowContent : null}
-                    </View>
-                </KeyboardAwareScrollView>
-                <View testID={`${testIDPrefix}-phone-bar`} style={styles.phoneBar}>
-                    {!documentEditable ? null : <WorkflowAddBlockMenu
-                        testID={`${testIDPrefix}-phone-add`}
-                        composerScope={props.composerScope}
-                        scopeLabel={t('workflows.a11y.blockList')}
-                        {...(props.currentWorkflowRef === undefined ? {} : { currentWorkflowRef: props.currentWorkflowRef })}
-                        onAdd={(request) => {
-                            const lastBlock = draft.blocks.at(-1);
-                            const insertion = insertWorkflowEditorBlock(draft, {
-                                request, list: { kind: 'root' },
-                                ...(lastBlock === undefined ? {} : { afterBlockId: lastBlock.id }),
-                            });
-                            onChange(insertion.draft);
-                            props.onSelectBlock(insertion.block.id);
-                            if (insertion.block.kind === 'step' || insertion.block.kind === 'wait') requestPromptFocus(insertion.block.id);
-                        }}
-                    />}
-                    {!canOpenSettings ? null : <HappierPressable
-                        testID={`${testIDPrefix}-phone-settings`}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('workflows.page.settings')}
-                        onPress={openSettings}
-                        style={(state) => [styles.action, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                    >
-                        <Icon name="sidebar-right-open" size={20} color={theme.colors.text.secondary} />
-                    </HappierPressable>}
-                    <View style={styles.phoneBarSpacer} />
-                    {duplicateButton}
-                    {onSave === undefined || !documentEditable || (props.saveStatus !== undefined && !['notSaved', 'unsaved', 'failed'].includes(props.saveStatus.kind)) ? null : (
-                        <RoundButton
-                            testID={`${testIDPrefix}-phone-save`}
-                            size="small"
-                            display="secondary"
-                            title={t('workflows.page.save')}
-                            onPress={submitSave}
-                        />
-                    )}
-                    {runNowButton}
-                </View>
+    // One tree serves every width (R110C-F1): crossing the phone breakpoint recomposes the
+    // value line and the bottom bar around the same scroll owner and document, so every
+    // composer keeps its focus, caret, selection and the page its scroll. Only siblings that
+    // never shift the document's position differ between the forms.
+    const valueLine = compactLayout ? (
+        // Phone (lab `editor-P1`, corrected): the chips recompose as stacked value rows, the
+        // save status sits under them and Steps | Flow switches the document.
+        <>
+        <ItemGroup>
+            <Item
+                testID={`${testIDPrefix}-where-row`}
+                title={t('workflows.page.where.label')}
+                subtitle={whereSummary ?? t('workflows.page.where.choose')}
+                showChevron
+                onPress={documentEditable ? openSettings : submitRun}
+            />
+            {props.triggersSummary === undefined ? null : (
+                <Item
+                    testID={`${testIDPrefix}-triggers-row`}
+                    title={t('workflows.triggers.section.title')}
+                    subtitle={props.triggersSummary}
+                    showChevron
+                    onPress={openSettings}
+                />
+            )}
+            {/* A value row like Where and Triggers (04 §4.10): its value is the chip's own
+                summary, and it opens the settings where the Agent and model field is. */}
+            {showsWorkflowAgent ? <Item
+                testID={`${testIDPrefix}-agent-row`}
+                title={t('workflows.page.sections.agentTitle')}
+                subtitle={engineSummary}
+                showChevron={canOpenSettings}
+                {...(canOpenSettings ? { onPress: openSettings } : { mode: 'info' as const })}
+            /> : null}
+        </ItemGroup>
+        {saveStatusNode === null && validityNode !== null ? (
+            <View style={styles.statusLine}>
+                {validityNode}
             </View>
-        );
-    }
-
+        ) : null}
+        <View style={styles.phoneViewSwitch}>
+            <SegmentedTabBar<WorkflowEditorView>
+                testIDPrefix={`${testIDPrefix}-view`}
+                accessibilityLabel={t('workflows.tabsAccessibility.stepsFlow')}
+                tabs={[
+                    { id: 'steps', label: t('workflows.tabs.steps') },
+                    { id: 'flow', label: t('workflows.tabs.flow') },
+                ]}
+                activeTabId={props.view}
+                onSelectTab={props.onChangeView}
+            />
+        </View>
+        </>
+    ) : (
+        <View testID={`${testIDPrefix}-chips`} style={styles.chipsLine}>
+            <View style={styles.whereChip}>
+            <WorkflowProjectTargetControl
+                accountLifetime={props.accountLifetime}
+                purpose="workflow"
+                ref={whereRef}
+                presentation="chip"
+                target={props.projectTarget}
+                machineName={props.machineName}
+                {...(props.projectMachines === undefined ? {} : { machines: props.projectMachines })}
+                {...(props.onChangeProjectTarget === undefined ? {} : { onChange: props.onChangeProjectTarget })}
+                testIDPrefix={testIDPrefix}
+            />
+            </View>
+            {showsWorkflowAgent ? <View style={styles.engineChip}>
+            <SessionAuthoringControls
+                disabled={!documentEditable}
+                fields={HEADER_ENGINE_FIELDS}
+                values={defaultAuthoringValues} engine={draft.defaults.engine} workflowRoles={draft.roles}
+                onChangeEngine={(engine) => { if (documentEditable) onChange({ ...draft, defaults: withWorkflowAuthoringEngine(draft.defaults, engine) }); }}
+                onChangeFields={(fields) => { if (documentEditable) onChange({ ...draft, defaults: withWorkflowAuthoringEngineFields(draft.defaults, fields) }); }}
+                overriddenFields="all"
+                onChangeField={(field, value) => onChange(setWorkflowDefaultField(draft, field, value))}
+                {...(props.authoringFacts === undefined ? {} : { facts: props.authoringFacts })}
+                testIDPrefix={`${testIDPrefix}-header-engine`}
+            />
+            </View> : null}
+            {props.triggersSummary === undefined ? null : (
+                <SelectionListFilterChip
+                    filter={{
+                        id: 'triggers',
+                        testID: `${testIDPrefix}-triggers-chip`,
+                        label: t('workflows.triggers.section.title'),
+                        valueLabel: props.triggersSummary,
+                        icon: <Icon name="lightning" size={16} />,
+                        // The chip reveals Runs automatically in Workflow settings, never a popover of its own.
+                        open: false,
+                        onOpenChange: (next) => { if (next) openSettings(); },
+                        renderPopoverContent: () => null,
+                    }}
+                />
+            )}
+            {historyIcons}
+        </View>
+    );
+    // Steps stays mounted across the phone's Steps | Flow switch so every composer keeps its
+    // caret, selection and any live IME or dictation binding; Flow holds no editing state and
+    // mounts on demand. Wide layouts show Flow as a pane instead.
+    const stepsHidden = compactLayout && props.view !== 'steps';
     const page = (
         <KeyboardAwareScrollView
             testID={`${testIDPrefix}-scroll`}
@@ -1416,56 +1417,65 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             {/* The header measures the pane for Back's gutter; only the document is column-capped. */}
             <View style={[styles.bodyColumn, maxWidthStyle]}>
             {props.reviewNotice}
-            <View testID={`${testIDPrefix}-chips`} style={styles.chipsLine}>
-                <View style={styles.whereChip}>
-                <WorkflowProjectTargetControl
-                    accountLifetime={props.accountLifetime}
-                    purpose="workflow"
-                    ref={whereRef}
-                    presentation="chip"
-                    target={props.projectTarget}
-                    machineName={props.machineName}
-                    {...(props.projectMachines === undefined ? {} : { machines: props.projectMachines })}
-                    {...(props.onChangeProjectTarget === undefined ? {} : { onChange: props.onChangeProjectTarget })}
-                    testIDPrefix={testIDPrefix}
-                />
-                </View>
-                {showsWorkflowAgent ? <View style={styles.engineChip}>
-                <SessionAuthoringControls
-                    disabled={!documentEditable}
-                    fields={HEADER_ENGINE_FIELDS}
-                    values={defaultAuthoringValues} engine={draft.defaults.engine} workflowRoles={draft.roles}
-                    onChangeEngine={(engine) => { if (documentEditable) onChange({ ...draft, defaults: withWorkflowAuthoringEngine(draft.defaults, engine) }); }}
-                    onChangeFields={(fields) => { if (documentEditable) onChange({ ...draft, defaults: withWorkflowAuthoringEngineFields(draft.defaults, fields) }); }}
-                    overriddenFields="all"
-                    onChangeField={(field, value) => onChange(setWorkflowDefaultField(draft, field, value))}
-                    {...(props.authoringFacts === undefined ? {} : { facts: props.authoringFacts })}
-                    testIDPrefix={`${testIDPrefix}-header-engine`}
-                />
-                </View> : null}
-                {props.triggersSummary === undefined ? null : (
-                    <SelectionListFilterChip
-                        filter={{
-                            id: 'triggers',
-                            testID: `${testIDPrefix}-triggers-chip`,
-                            label: t('workflows.triggers.section.title'),
-                            valueLabel: props.triggersSummary,
-                            icon: <Icon name="lightning" size={16} />,
-                            // The chip reveals Runs automatically in Workflow settings, never a popover of its own.
-                            open: false,
-                            onOpenChange: (next) => { if (next) openSettings(); },
-                            renderPopoverContent: () => null,
-                        }}
-                    />
-                )}
-                {historyIcons}
-            </View>
-            <View testID={`${testIDPrefix}-steps-presentation`} style={[styles.document, styles.documentUnderTitle]}>
+            {valueLine}
+            <View
+                testID={`${testIDPrefix}-steps-presentation`}
+                style={[styles.document, compactLayout ? null : styles.documentUnderTitle, stepsHidden ? { display: 'none' } : null]}
+                {...(stepsHidden ? {
+                    accessibilityElementsHidden: true,
+                    importantForAccessibility: 'no-hide-descendants' as const,
+                    pointerEvents: 'none' as const,
+                } : {})}
+            >
                 {blockList}
+                {/* Icon controls on a phone too: the change's label is their accessible name (DESIGN-6 N20). */}
+                {compactLayout ? historyIcons : null}
             </View>
             {stepOptionsPopoverNode}
+            {compactLayout && props.view === 'flow' ? <View style={styles.document}>{flowContent}</View> : null}
             </View>
         </KeyboardAwareScrollView>
+    );
+    const phoneBar = !compactLayout ? null : (
+        <View testID={`${testIDPrefix}-phone-bar`} style={styles.phoneBar}>
+            {!documentEditable ? null : <WorkflowAddBlockMenu
+                testID={`${testIDPrefix}-phone-add`}
+                composerScope={props.composerScope}
+                scopeLabel={t('workflows.a11y.blockList')}
+                {...(props.currentWorkflowRef === undefined ? {} : { currentWorkflowRef: props.currentWorkflowRef })}
+                onAdd={(request) => {
+                    const lastBlock = draft.blocks.at(-1);
+                    const insertion = insertWorkflowEditorBlock(draft, {
+                        request, list: { kind: 'root' },
+                        ...(lastBlock === undefined ? {} : { afterBlockId: lastBlock.id }),
+                    });
+                    onChange(insertion.draft);
+                    props.onSelectBlock(insertion.block.id);
+                    if (insertion.block.kind === 'step' || insertion.block.kind === 'wait') requestPromptFocus(insertion.block.id);
+                }}
+            />}
+            {!canOpenSettings ? null : <HappierPressable
+                testID={`${testIDPrefix}-phone-settings`}
+                accessibilityRole="button"
+                accessibilityLabel={t('workflows.page.settings')}
+                onPress={openSettings}
+                style={(state) => [styles.action, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
+            >
+                <Icon name="sidebar-right-open" size={20} color={theme.colors.text.secondary} />
+            </HappierPressable>}
+            <View style={styles.phoneBarSpacer} />
+            {duplicateButton}
+            {onSave === undefined || !documentEditable || (props.saveStatus !== undefined && !['notSaved', 'unsaved', 'failed'].includes(props.saveStatus.kind)) ? null : (
+                <RoundButton
+                    testID={`${testIDPrefix}-phone-save`}
+                    size="small"
+                    display="secondary"
+                    title={t('workflows.page.save')}
+                    onPress={submitSave}
+                />
+            )}
+            {runNowButton}
+        </View>
     );
 
     const flowAdapter: PaneBuiltinAdapter = {
@@ -1485,7 +1495,8 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             </View>
         ),
     };
-    const settingsDetails: AppPaneDestinationDetails | null = !canOpenSettings || !settingsOpen ? null : {
+    // A phone presents Workflow settings as the `@/modal` sheet instead of the details pane.
+    const settingsDetails: AppPaneDestinationDetails | null = compactLayout || !canOpenSettings || !settingsOpen ? null : {
         pane: (
             <View testID={`${testIDPrefix}-settings-pane`} style={styles.paneBody}>
                 <PaneHeader
@@ -1527,19 +1538,13 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         <View testID={testIDPrefix} style={styles.root}>
             <AppPaneScopeHost
                 scopeId={WORKFLOW_EDITOR_PANE_SCOPE_ID}
-                mainColumn={{
-                    hideLabel: t('panes.mainColumn.hideWorkflow'),
-                    showLabel: t('panes.mainColumn.showWorkflow'),
-                    identity: {
-                        mark: <Icon name="tree-structure" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
-                        name: draft.name.trim().length > 0 ? draft.name : t('workflows.page.untitled'),
-                    },
-                }}
+                mainColumn={workflowMainColumn}
                 main={page}
                 rightPaneBuiltinAdapter={flowAdapter}
                 destinationDetails={settingsDetails}
                 mainMinWidthPx={WORKFLOW_EDITOR_MAIN_MIN_WIDTH_PX}
             />
+            {phoneBar}
         </View>
     );
 }

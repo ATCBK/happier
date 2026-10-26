@@ -71,7 +71,7 @@ describe('RepositoryTreeTransferStatusBar', () => {
             },
             onCancel: 'download' as const,
         },
-    ])('gives the active $label cancel control a real accessible target', async ({
+    ])('draws the active $label cancel control small and reaches the target by hit area', async ({
         cancelTestID,
         downloadState,
         onCancel,
@@ -80,15 +80,18 @@ describe('RepositoryTreeTransferStatusBar', () => {
         const onCancelUploads = vi.fn();
         const onCancelDownload = vi.fn();
         const { RepositoryTreeTransferStatusBar } = await import('./RepositoryTreeTransferStatusBar');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const screen = await renderScreen(
-            <RepositoryTreeTransferStatusBar
-                uploadState={uploadState}
-                downloadState={downloadState}
-                machineName="devbox"
-                onCancelUploads={onCancelUploads}
-                onDismissUploadFailure={vi.fn()}
-                onCancelDownload={onCancelDownload}
-            />,
+            <HappierUiPlatformProvider platform={{ platform: 'ios', colorScheme: 'light' }}>
+                <RepositoryTreeTransferStatusBar
+                    uploadState={uploadState}
+                    downloadState={downloadState}
+                    machineName="devbox"
+                    onCancelUploads={onCancelUploads}
+                    onDismissUploadFailure={vi.fn()}
+                    onCancelDownload={onCancelDownload}
+                />
+            </HappierUiPlatformProvider>,
         );
 
         const cancelControl = screen.findHostByTestId(cancelTestID);
@@ -96,9 +99,14 @@ describe('RepositoryTreeTransferStatusBar', () => {
         expect(cancelControl?.props.accessibilityRole).toBe('button');
         expect(cancelControl?.props.accessibilityLabel).toBe('common.cancel');
         expect(cancelControl?.props.disabled).not.toBe(true);
-        expect(cancelControl?.props.hitSlop).toBe(0);
-        expect(frame.width).toBeGreaterThanOrEqual(44);
-        expect(frame.height).toBeGreaterThanOrEqual(44);
+        // The control draws at the status bar's design size; the finger's 44 is hit slop around it.
+        expect(frame.width).toBe(28);
+        expect(frame.height).toBe(28);
+        await act(async () => {
+            cancelControl!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 28, height: 28 } } });
+        });
+        const slop = screen.findHostByTestId(cancelTestID)!.props.hitSlop as Record<'top' | 'bottom', number>;
+        expect(28 + slop.top + slop.bottom).toBe(44);
 
         await act(async () => {
             screen.pressByTestId(cancelTestID);

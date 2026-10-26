@@ -3,6 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { resolveVoiceAttemptControl } from '@/components/voice/attempt/resolveVoiceAttemptControl';
 import type { VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
@@ -124,6 +126,39 @@ describe('VoiceGlance', () => {
         screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation="companion" />);
         expect(vi.getTimerCount()).toBe(0);
         expect(screen.getTextContent()).not.toContain('2:00');
+    });
+
+    describe('Speaks from', () => {
+        const prepared = { serverId: 'home-a', sessionId: 'captain' };
+        const speaksFrom = (name: string) => t('sessionVoice.speaksFrom', { name });
+        const withCaptain = () => storage.getState().applySessions([createSessionFixture({
+            id: 'captain', serverId: 'home-a',
+            metadata: { path: '/w', host: 'h', summary: { text: 'Release captain', updatedAt: 1 } },
+        })]);
+        const bound = (preparedInstructionsFor: typeof prepared | null) => ({
+            ...attempt(), targetSessionAddress: prepared, preparedInstructionsFor,
+        });
+
+        it('says whose instructions the call speaks from once they were prepared for this attempt', async () => {
+            withCaptain();
+            screen = await renderScreen(<VoiceGlance model={surface(bound(prepared))} presentation="companion" />);
+            expect(screen.getTextContent()).toContain(speaksFrom('Release captain'));
+            expect(screen.findHostByTestId('voice-glance-speaks-from')).toBeTruthy();
+        });
+
+        it('says nothing before preparation succeeded (or once the attempt is superseded), in global mode, or when the Session cannot be named', async () => {
+            withCaptain();
+            screen = await renderScreen(<VoiceGlance model={surface(bound(null))} presentation="companion" />);
+            expect(screen.findHostByTestId('voice-glance-speaks-from')).toBeNull();
+            await screen.unmount();
+            screen = await renderScreen(<VoiceGlance model={surface(attempt())} presentation="companion" />);
+            expect(screen.findHostByTestId('voice-glance-speaks-from')).toBeNull();
+            await screen.unmount();
+            screen = await renderScreen(<VoiceGlance
+                model={surface({ ...bound(prepared), preparedInstructionsFor: { serverId: 'home-a', sessionId: 'unknown-session' } })}
+                presentation="companion" />);
+            expect(screen.findHostByTestId('voice-glance-speaks-from')).toBeNull();
+        });
     });
 
     it('routes Mute, Interrupt and End to three different handlers', async () => {
