@@ -10,6 +10,7 @@ import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/pro
 import { ProjectWorkerStatusInputV1Schema } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -271,7 +272,9 @@ export function createCliActionExecutorHarness(
   const deps = rawDeps as ActionExecutorDeps;
   const executor = createActionExecutor(deps);
   const runtimeAccountId = params.credentials ? readAccountIdFromToken(params.credentials.token) ?? undefined : undefined;
-  const resolveContext = (context: Parameters<typeof executor.execute>[2], actionId?: string) => {
+  // Received RPC dispatch passes its host-built requester context through this harness.
+  const resolveContext = (context: (ActionExecutorContext & Pick<RpcActionExecutorContext, 'machineAdmission'>) | undefined,
+    actionId?: string) => {
     const accountSettings = !context?.externalActionExecutionAuthorization && context?.surface !== 'rpc'
       ? originationSettingsProvider.getAccountSettings?.() : null;
     return {

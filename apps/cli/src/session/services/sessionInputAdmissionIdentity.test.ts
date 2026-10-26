@@ -30,7 +30,7 @@ describe('derivePluginSessionInputLocalIdV1', () => {
   it.each([
     { kind: 'session', sessionId: 'parent-session', starterDepth: 0, turnDepth: 0 },
     { kind: 'plugin', pluginId: 'acme.channels', contributionLocalId: 'inbound' },
-    { kind: 'automationRun', automationId: 'automation', runId: 'run' },
+    { kind: 'automationRun', automationId: 'automation', runId: 'run', cause: { kind: 'manual', invokedAt: 1 } },
   ] satisfies ActionCaller[])('retains the admitted requester through a $kind spawn first input', actionCaller => {
     const cause = { requestRef: 'original-parent-input', requester: { serverId: 'home', accountId: 'person' },
       persona: { serverId: 'home', sessionId: 'parent-session' }, origin: null };
