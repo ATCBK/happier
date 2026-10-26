@@ -222,7 +222,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">A session can hand work to another agent. Claude can start a review, plan or delegate run on Codex, for example, and you follow every run from the Agents tab in the session. <a href="https://docs.happier.dev/extending/subagents">Delegated work</a></p>
 
-<p align="center"><img src=".github/screenshots/subagents.png" width="640" alt="Agents panel with a finished review subagent next to its result in the session" /></p>
+<p align="center"><img src=".github/screenshots/subagents.png" width="480" alt="Agents panel listing working and finished subagents" /></p>
 
 <br/>
 
