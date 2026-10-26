@@ -10,6 +10,8 @@ import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/u
 
 export type AppPaneContextValue = Readonly<{
     state: AppPaneState;
+    /** Command-time state, including earlier commands in the same React batch. */
+    getReadState: () => AppPaneState;
     /** Pane state remains in memory if the device could not persist its latest write. */
     persistenceFailed?: boolean;
     dispatch: (action: AppPaneAction) => void;

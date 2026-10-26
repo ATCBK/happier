@@ -370,6 +370,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
 
     const value: AppPaneContextValue = useMemo(() => ({
         state: qualifiedState,
+        getReadState: readQualifiedState,
         persistenceFailed,
         dispatch,
         registerDriver,
@@ -378,7 +379,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         overlayFocusReturnOwner,
         fileFindSeedHandoff,
         fileFindSeedAccountBindings,
-    }), [driverRegistryVersion, dispatch, fileFindSeedHandoff, fileFindSeedAccountBindings, getDriver, overlayFocusReturnOwner, persistenceFailed, registerDriver, qualifiedState]);
+    }), [driverRegistryVersion, dispatch, fileFindSeedHandoff, fileFindSeedAccountBindings, getDriver, overlayFocusReturnOwner, persistenceFailed, readQualifiedState, registerDriver, qualifiedState]);
 
     // One read-only subscription over the provider's canonical state. A file edit
     // must not broadcast a new React context through every retained pane subtree.

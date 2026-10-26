@@ -148,9 +148,9 @@ export function useOptionalDetailsTabOpener(scopeId: string): AppPaneScopeApi['o
 export function useAppPaneScope<T>(scopeId: string, selector: (scope: PaneScopeState | null) => T): Omit<AppPaneScopeApi, 'scopeState'> & { scopeState: T };
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi;
 export function useAppPaneScope<T>(scopeId: string, selector?: (scope: PaneScopeState | null) => T) {
-    const subscription = React.useContext(AppPaneContext);
-    const { dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext(value => ({
+    const { dispatch, getReadState, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext(value => ({
         dispatch: value.dispatch,
+        getReadState: value.getReadState,
         overlayFocusReturnOwner: value.overlayFocusReturnOwner,
         persistenceFailed: value.persistenceFailed,
     }));
@@ -181,10 +181,10 @@ export function useAppPaneScope<T>(scopeId: string, selector?: (scope: PaneScope
 
     const openRight = React.useCallback((options?: Readonly<{ tabId?: string; present?: boolean }>) => {
         const destination = options?.tabId ? createBuiltinPaneDestination(options.tabId)
-            : subscription?.getSnapshot().state.scopes[scopeId]?.right.selectedDestination ?? null;
+            : getReadState().scopes[scopeId]?.right.selectedDestination ?? null;
         dispatch({ type: 'openRight', scopeId, tabId: options?.tabId });
         if (options?.present !== false) presentPane?.({ scopeId, pane: 'right', destination });
-    }, [dispatch, presentPane, scopeId, subscription]);
+    }, [dispatch, getReadState, presentPane, scopeId]);
 
     const closeRight = React.useCallback(() => {
         dispatch({ type: 'closeRight', scopeId });
