@@ -157,7 +157,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Start a session on your computer and pick it up on your phone, desktop or browser. Open Claude Code, Codex or OpenCode sessions already running on your machine, live, with nothing to migrate. <a href="https://docs.happier.dev/sessions/continuing-a-session">Continuing a session</a></p>
 
-<p align="center"><img src=".github/screenshots/session.png" width="881" alt="A Happier session showing the agent thinking, tool calls and the final reply" /></p>
+<p align="center"><img src=".github/screenshots/session.png" width="640" alt="A Happier session showing the agent thinking, tool calls and the final reply" /></p>
 
 <br/>
 
@@ -165,7 +165,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Run as many sessions as you like and pick the machine, folder, agent and model for each one. Follow all of them from one list, whichever machine they run on. <a href="https://docs.happier.dev/sessions/new-session-shortcuts">Starting a session</a> · <a href="https://docs.happier.dev/apps/daemon">Machines and the daemon</a></p>
 
-<p align="center"><img src=".github/screenshots/session-list.png" width="514" alt="Session list with several sessions running in parallel" /></p>
+<p align="center"><img src=".github/screenshots/session-list.png" width="360" alt="Session list with several sessions running in parallel" /></p>
 
 <br/>
 
@@ -182,7 +182,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Permission requests, agent questions and unread sessions gather in one attention center across all sessions and machines. A push notification opens the exact session that asked. <a href="https://docs.happier.dev/sessions/inbox-and-approvals">Inbox and approvals</a></p>
 
-<p align="center"><img src=".github/screenshots/inbox-popover.png" width="399" alt="Needs attention inbox with sessions waiting on you" /></p>
+<p align="center"><img src=".github/screenshots/inbox-popover.png" width="300" alt="Needs attention inbox with sessions waiting on you" /></p>
 
 <br/>
 
@@ -190,7 +190,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Browse your agent's changes and mark the exact lines you want addressed. Send the notes straight back to the same session or to a new one. <a href="https://docs.happier.dev/code/review-comments">Review comments</a></p>
 
-<p align="center"><img src=".github/screenshots/diff-short.png" width="838" alt="Diff review of an agent change" /></p>
+<p align="center"><img src=".github/screenshots/diff-short.png" width="640" alt="Diff review of an agent change" /></p>
 
 <br/>
 
@@ -207,7 +207,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Queue messages while the agent works and reorder or edit them before they run. Steer a running turn without interrupting it. <a href="https://docs.happier.dev/sessions/steering">Steering</a> · <a href="https://docs.happier.dev/sessions/pending-queue">Pending queue</a></p>
 
-<p align="center"><img src=".github/screenshots/queue.png" width="894" alt="Pending queue with messages waiting while the agent works" /></p>
+<p align="center"><img src=".github/screenshots/queue.png" width="640" alt="Pending queue with messages waiting while the agent works" /></p>
 
 <br/>
 
