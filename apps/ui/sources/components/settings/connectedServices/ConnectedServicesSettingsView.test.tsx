@@ -13,12 +13,12 @@ import {
 import { applyConnectedAccountCatalogSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
-import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { answerTeamCredentialDiscoveryForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { teamSummaryFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { TeamsPageV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceEntitledPageV1Schema,
@@ -146,15 +146,17 @@ if (!homeIdentity) throw new Error('Expected the Home issuer fixture to advertis
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
 let prepared = false;
 let daemonReadFails = false;
+let daemonReadUnsupported = false;
 let preparedScope = '';
 let purposeBoundary: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary> | undefined;
 installSessionActionRpcBoundary(request => {
     if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
         projectionReloadSpy();
+        if (daemonReadUnsupported) return { error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
         if (daemonReadFails) throw new Error(connectedServiceRegistryState.errorReason ?? 'Daemon projection unavailable');
         return createDaemonProjectionResponse();
     }
-    return { error: 'RPC method not found', errorCode: 'METHOD_NOT_FOUND' };
+    return { error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
 });
 
 /** Cold daemon declarations; the app's registry/catalog/currentness owners interpret them. */
@@ -229,13 +231,11 @@ async function prepareAccountFixture() {
                 items: Object.entries(catalog.teamNameById).map(([id, name]) => teamSummaryFixture({ id, name,
                     capabilities: teamCapabilitiesFixture({ viewTeam: true }) })), nextCursor: null,
             }) });
-            for (const teamId of Object.keys(catalog.teamNameById)) {
-                const entitled = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId });
-                homes.answer(account.serverId, `${entitled.method} ${entitled.path}`, { body: TeamCredentialResourceEntitledPageV1Schema.parse({
-                    resources: catalog.resources.filter(resource => resource.teamId === teamId).map(resource => TeamCredentialResourceCatalogEntryV1Schema.parse(resource)),
-                    nextCursor: null,
-                }) });
-            }
+            answerTeamCredentialDiscoveryForTests(homes, account.serverId, input => ({
+                resources: catalog.resources.filter(resource => input.teamIds.includes(String(resource.teamId)))
+                    .map(resource => TeamCredentialResourceCatalogEntryV1Schema.parse(resource)),
+                nextCursor: null, failures: [],
+            }));
         }
         prepared = true;
         preparedScope = scopeKey;
@@ -264,7 +264,9 @@ async function renderScreen(element: React.ReactElement) {
     await waitForHomeGovernance(() => expect(getConnectedServiceRegistrySnapshot().status).toBe(
         wantsStale ? 'ready' : connectedServiceRegistryState.status));
     if (wantsStale && hasOnlineMachine) {
-        daemonReadFails = true;
+        // Transient transport failure intentionally retains admitted current
+        // declarations. An explicit unsupported reply withdraws that authority.
+        daemonReadUnsupported = true;
         await act(async () => publishMachineContributionRegistryProjectionInvalidation({ serverId: account.serverId, machineId: 'machine-a' }));
         await waitForHomeGovernance(() => expect(getConnectedServiceRegistrySnapshot().status).toBe('stale'));
     }
@@ -282,6 +284,7 @@ async function renderScreen(element: React.ReactElement) {
 
 describe('ConnectedServicesSettingsView', () => {
     beforeEach(async () => {
+        daemonReadUnsupported = false;
         browser = await installBrowserRuntimeForTests({ url: 'https://connected-services.test/' });
         await account.reset();
         prepared = false;
@@ -615,9 +618,12 @@ describe('ConnectedServicesSettingsView', () => {
         profileState.activeAccountScope = { serverId: 'server-2', accountId: 'other-account' };
         profileState.connectedAccountsV4 = [];
         await update(<ConnectedServicesAgentSignInView key="other-home" />);
+        // The destination's freshly loaded empty catalog is writable; only the
+        // retiring Account's selection and pending modal must be withdrawn.
+        await vi.waitFor(() => expect(tree.findAllByType(Item)
+            .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex')?.props.disabled).toBe(false));
         const otherHomeRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
-        expect(otherHomeRow?.props.disabled).toBe(true);
         expect(otherHomeRow?.props.detail).not.toBe(selectedDetail);
         expect(modalHideSpy).toHaveBeenCalledWith('screen-default-modal');
     });
@@ -778,9 +784,8 @@ describe('ConnectedServicesSettingsView', () => {
 
         expect(modalAlertSpy).not.toHaveBeenCalled();
         expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith({
-            pathname: '/(app)/settings/connected-services',
+            pathname: '/(app)/settings/connected-services/connect',
             params: {
-                connect: '1',
                 service: 'happier.agent.codex/openai-codex',
             },
         });
@@ -798,9 +803,8 @@ describe('ConnectedServicesSettingsView', () => {
 
         expect(modalAlertSpy).not.toHaveBeenCalled();
         expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith({
-            pathname: '/(app)/settings/connected-services',
+            pathname: '/(app)/settings/connected-services/connect',
             params: {
-                connect: '1',
                 service: 'happier.agent.codex/openai-codex',
             },
         });

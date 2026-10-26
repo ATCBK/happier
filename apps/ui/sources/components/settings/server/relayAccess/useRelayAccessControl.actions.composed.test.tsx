@@ -10,7 +10,8 @@ vi.mock('@/modal', async () => {
 });
 import type { SystemTaskSpec } from '@happier-dev/protocol/system/tasks/spec';
 import type { SystemTaskBridgeListenerSet } from '@/components/systemTasks/types';
-import { ApprovalRequestSchema, RPC_METHODS, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
+import { ApprovalRequestSchema, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
+import { sessionUiActionClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { createClientActionReverseDispatcher } from '../../../../../../cli/src/session/actions/clientActionReverseDispatch';
 import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -488,11 +489,13 @@ it('saved-host onboarding completion keeps Relay access behind the bound Home Ac
         'remote_hosts.relay.configure': { enabled: false }, 'remote_hosts.relay.access.status': { enabled: false },
     } });
     const [{ createRootLayoutFeaturesResponse }, { primeServerFeaturesSnapshot }, { useOnboardingWizardController },
-        { DropdownMenu }] = await Promise.all([
+        { DropdownMenu }, { createPlainAccountEncryptionCurrentnessFixture }] = await Promise.all([
         import('@/dev/testkit/fixtures/featureFixtures'), import('@/sync/api/capabilities/serverFeaturesClient'),
         import('@/components/onboarding/surfaces/useOnboardingWizardController'),
-        import('@/components/ui/forms/dropdown/DropdownMenu'),
+        import('@/components/ui/forms/dropdown/DropdownMenu'), import('@/dev/testkit/fixtures/accountEncryptionCurrentness'),
     ]);
+    // Retained-source cleanup normalizes settings history against the Home's current settings version.
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }) });
     const features = createRootLayoutFeaturesResponse({ features: {
         remoteHosts: { management: { enabled: true }, secretMaterial: { enabled: false } },
     } });
@@ -836,10 +839,12 @@ it('the admitted daemon replay reaches the bound client and native OS without cr
         externalActionTarget: { kind: 'machine' as const, machineId: 'source-machine' },
     };
     const wires: unknown[] = [];
+    // A Session-originated client Action is delivered to the App viewing that Session.
+    const sessionMethod = sessionUiActionClientRpcMethod('bob-session');
     const dispatch = createClientActionReverseDispatcher(() => ({
-        hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+        hasConnectedClientRpcHandler: method => method === sessionMethod,
         callConnectedClientRpc: async (method, payload, options) => {
-            expect(method).toBe(RPC_METHODS.UI_ACTION_EXECUTE);
+            expect(method).toBe(sessionMethod);
             options.onIssued();
             wires.push(payload);
             return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };

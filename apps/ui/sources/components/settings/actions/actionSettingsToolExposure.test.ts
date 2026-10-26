@@ -83,9 +83,10 @@ describe('action settings tool exposure', () => {
         });
     });
 
-    it('resolves external MCP and CLI exposure to direct by default', () => {
+    it('resolves external MCP exposure to discoverable and CLI exposure to direct by default', () => {
         const resolveToolExposureState = expectResolveToolExposureStateExport();
 
+        // External MCP shares the agent surface's discoverable default (e1269dcdce).
         expect(resolveToolExposureState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',
@@ -93,8 +94,8 @@ describe('action settings tool exposure', () => {
         })).toMatchObject({
             kind: 'visible',
             value: 'default',
-            defaultMode: 'direct',
-            resolvedMode: 'direct',
+            defaultMode: 'discoverable_only',
+            resolvedMode: 'discoverable_only',
         });
         expect(resolveToolExposureState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,

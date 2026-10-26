@@ -32,12 +32,15 @@ const nextServerSequenceState = vi.hoisted(() => ({ value: 0 }));
 const serverProfilesState = vi.hoisted(() => ({
     profiles: [] as Array<{ id: string; serverUrl: string; name: string; serverIdentityId?: string }>,
 }));
-let activeServerListener: ((snapshot: {
-    serverId: string;
-    serverUrl: string;
-    generation: number;
-    connectionDescriptorRevision?: number;
-}) => void) | null = null;
+// Hoisted: the voice binding store subscribes while the static imports load.
+const activeServerListenerState = vi.hoisted(() => ({
+    current: null as ((snapshot: {
+        serverId: string;
+        serverUrl: string;
+        generation: number;
+        connectionDescriptorRevision?: number;
+    }) => void) | null,
+}));
 vi.mock('expo-secure-store', () => ({
     getItemAsync: async (key: string) => {
         await secureStoreRead.beforeRead?.(key);
@@ -113,10 +116,10 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     subscribeActiveServer: (listener: unknown) => {
         // AuthProvider and the concurrent secondary-Home runtime both subscribe.
         // These tests drive the first (AuthContext) subscriber explicitly.
-        activeServerListener ??= listener as typeof activeServerListener;
+        activeServerListenerState.current ??= listener as typeof activeServerListenerState.current;
         return () => {
-            if (activeServerListener === listener) {
-                activeServerListener = null;
+            if (activeServerListenerState.current === listener) {
+                activeServerListenerState.current = null;
             }
         };
     },
@@ -139,7 +142,7 @@ describe('AuthContext.login', () => {
         vi.clearAllMocks();
         secureStore.clear();
         secureStoreRead.beforeRead = null;
-        activeServerListener = null;
+        activeServerListenerState.current = null;
         activeServerSnapshotState.serverId = '';
         activeServerSnapshotState.serverUrl = '';
         activeServerSnapshotState.generation = 0;
@@ -181,7 +184,7 @@ describe('AuthContext.login', () => {
             const auth = getCurrentAuth();
             if (!auth) throw new Error('Expected current auth to be set');
             await vi.waitFor(() => {
-                expect(activeServerListener).toBeTypeOf('function');
+                expect(activeServerListenerState.current).toBeTypeOf('function');
             });
 
             const loginPromise = act(async () => {
@@ -193,7 +196,7 @@ describe('AuthContext.login', () => {
             expect(storage.getState().localSettings.hasCompletedAuthOnce).toBe(true);
 
             await act(async () => {
-                activeServerListener?.({
+                activeServerListenerState.current?.({
                     serverId: 'server-test',
                     serverUrl: 'http://localhost:53288',
                     generation: 1,
@@ -290,7 +293,7 @@ describe('AuthContext.login', () => {
                 activeServerSnapshotState.serverId = homeB.serverIdentityId;
                 activeServerSnapshotState.serverUrl = homeB.serverUrl;
                 activeServerSnapshotState.generation = 2;
-                activeServerListener?.({
+                activeServerListenerState.current?.({
                     serverId: homeB.serverIdentityId,
                     serverUrl: homeB.serverUrl,
                     generation: 2,
@@ -352,7 +355,7 @@ describe('AuthContext.login', () => {
             const auth = getCurrentAuth();
             if (!auth) throw new Error('Expected current auth to be set');
             await vi.waitFor(() => {
-                expect(activeServerListener).toBeTypeOf('function');
+                expect(activeServerListenerState.current).toBeTypeOf('function');
             });
 
             await act(async () => {

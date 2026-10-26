@@ -303,11 +303,13 @@ describe('MemorySettingsView', () => {
         expect(archivedItem?.props.rightElement?.props.disabled).toBe(true);
     });
 
-    it('shows daemon memory status in read-only mode when daemon.memory.settings.get is unavailable', async () => {
+    it('shows daemon memory status in read-only mode when the daemon lacks daemon.memory.settings.get', async () => {
         installMemoryRpc({
             settingsGet: () => {
-                throw Object.assign(new Error('RPC method not available'), {
-                    rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                // Only a missing method marks an old daemon read-only (7cde1e059b);
+                // RPC_METHOD_NOT_AVAILABLE is a retryable routing failure.
+                throw Object.assign(new Error('Method not found'), {
+                    rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
                 });
             },
             status: () => createReadyMemoryStatus(),
@@ -349,13 +351,15 @@ describe('MemorySettingsView', () => {
         }));
     });
 
-    it('falls back to read-only mode when daemon.memory.settings.set becomes unavailable', async () => {
+    it('falls back to read-only mode when the daemon lacks daemon.memory.settings.set', async () => {
         installMemoryRpc({
             settingsGet: () => ({ v: 1, enabled: false, indexMode: 'hints', backfillPolicy: 'new_only' }),
             status: () => createReadyMemoryStatus(),
             settingsSet: () => {
-                throw Object.assign(new Error('RPC method not available'), {
-                    rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                // Only a missing method marks an old daemon read-only (7cde1e059b);
+                // RPC_METHOD_NOT_AVAILABLE is a retryable routing failure.
+                throw Object.assign(new Error('Method not found'), {
+                    rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
                 });
             },
         });

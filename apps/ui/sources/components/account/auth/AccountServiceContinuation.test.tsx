@@ -410,10 +410,14 @@ describe('exact invoking-surface continuation', () => {
             } finally { releaseFocus(); nativeReadGate = null; stopFocusObservation(); }
             if (decision) {
                 const settled = await decision;
-                if (revokeCredential || cancelDecision) {
+                if (revokeCredential) {
                     expect(settled, JSON.stringify(settled)).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
                     expect(JSON.parse(artifacts.readPlainBody(approvalId!) ?? 'null')).toMatchObject({ status: 'executing' });
-                } else expect(settled, JSON.stringify(settled)).toMatchObject({ ok: true, result: { status: 'executed' } });
+                } else {
+                    // A decided outcome settles its Artifact even after the deciding intent's signal ends.
+                    expect(settled, JSON.stringify(settled)).toMatchObject({ ok: true, result: { status: 'executed' } });
+                    expect(JSON.parse(artifacts.readPlainBody(approvalId!) ?? 'null')).toMatchObject({ status: 'executed' });
+                }
             }
             await vi.waitFor(async () => {
                 await act(async () => {});

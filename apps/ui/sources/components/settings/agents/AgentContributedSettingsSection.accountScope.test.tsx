@@ -2,6 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { PluginSettingsContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/settings';
 
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -22,6 +24,34 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { resolveScopedPluginSettingsServerIdentity } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime');
 const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+
+/**
+ * The Account's installed release is the Settings authority the admitted Action reads; the
+ * rendered projection alone never authorizes a write.
+ */
+function installAccountRelease(fields: readonly Record<string, unknown>[]) {
+    const scope = getActiveServerAccountScope();
+    if (!scope) throw new Error('Expected the applied Agent settings Account');
+    const pluginId = 'test.agent';
+    const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+        availabilityCursor: 1, hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
+        intent: { pluginId, desiredVersion: '1.0.0', enabled: true, offlineUiHosting: 'enabled', writableCollections: [], revision: 'intent-1' },
+        release: {
+            ref: { pluginId, version: '1.0.0' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+            normalizedManifest: { schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Test Agent',
+                engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: {
+                    settings: [PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: 'account',
+                        target: { kind: 'plugin' }, fields })],
+                } },
+            collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] },
+        }, packageAssets: [], uiArtifacts: [],
+    });
+    replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 1,
+        intentReads: [{ pluginId, response }], materializations: [], snapshots: [], inventoryComplete: true } });
+}
 
 async function openPreferences(screen: Awaited<ReturnType<typeof renderScreen>>) {
     const disclosure = screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.disclosure');
@@ -56,7 +86,7 @@ function selection(foreign: boolean): MachineAdministrationTargetSelectionV1 {
     };
 }
 
-afterEach(async () => { standardCleanup(); await account.reset(); });
+afterEach(async () => { standardCleanup(); clearPluginAccountAvailabilityProjection(); await account.reset(); });
 
 describe('Agent contributed Account preferences', () => {
     it('recovers Account preference availability after the same Home runtime returns without a machine change', async () => {
@@ -84,6 +114,7 @@ describe('Agent contributed Account preferences', () => {
         await account.restore({ machines: [], serverIdentityId: 'srv_agent_settings_home' });
         expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);
         expect(resolveScopedPluginSettingsServerIdentity(getActiveServerSnapshot().serverId)).toBe('srv_agent_settings_home');
+        installAccountRelease([{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' } }]);
         // The Account HTTP leaf serves an absent plugin record; the real
         // scoped settings adapter/projection performs all admission and reads.
         account.home.answer(account.serverId, '/v1/account/plugin-settings/test.agent', {
@@ -125,6 +156,13 @@ describe('Agent contributed Account preferences', () => {
 
     it('edits the active Home override without a machine and preserves the Account default and other Homes', async () => {
         await account.restore({ machines: [], serverIdentityId: 'srv_agent_settings_home' });
+        installAccountRelease([{
+            id: 'serverUrl', title: 'Server URL', schema: { type: 'string' },
+            presentation: { control: 'text', binding: { kind: 'perActiveServer', fallbackSettingId: 'serverUrl', byServerIdSettingId: 'serverUrlByServerId' } },
+        }, {
+            id: 'serverUrlByServerId', title: 'Home overrides', schema: { type: 'object', additionalProperties: { type: 'string' } },
+            presentation: { control: 'json', hidden: true },
+        }]);
         const path = '/v1/account/plugin-settings/test.agent';
         const values = {
             serverUrl: 'https://account-default.example.test',

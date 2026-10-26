@@ -383,6 +383,9 @@ describe('HomeHub', () => {
         settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };
         let failRead = true;
         const screen = await renderHome(async (input, init) => {
+            // A reachable Home with no Machines: an unanswered census would read as an unreachable
+            // Home, whose page replaces the layout failure this case exercises.
+            if (new URL(String(input)).pathname === '/v1/machines') return Response.json([]);
             if (failRead && new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
                 return Response.json({ invalid: 'artifact response' });
             }

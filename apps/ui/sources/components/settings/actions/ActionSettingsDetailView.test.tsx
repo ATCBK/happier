@@ -414,8 +414,9 @@ describe('ActionSettingsDetailView', () => {
         expect(await screen.findByTestId(
             'settings-actions:action:review.start:target:agent:tool-exposure:resolved:discoverable_only',
         )).toBeTruthy();
+        // External MCP shares the agent surface's discoverable default (e1269dcdce).
         expect(await screen.findByTestId(
-            'settings-actions:action:review.start:target:mcp:tool-exposure:resolved:direct',
+            'settings-actions:action:review.start:target:mcp:tool-exposure:resolved:discoverable_only',
         )).toBeTruthy();
     });
 

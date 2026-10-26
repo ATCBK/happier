@@ -298,18 +298,24 @@ describe('SettingsView (runs entry)', () => {
         mockFeatureEnabled = (featureId) => featureId === 'execution.runs';
         const screen = await renderSettingsViewUnderTest();
 
+        // Category sections arrive in deferred stages after the first paint; Files and
+        // source control is a late stage, so the earlier groups have settled once it shows.
+        // Files preferences stay reachable when SCM write operations are disabled.
+        await vi.waitFor(() => expect(screen.findRowByTitle('settings.filesSourceControl')).not.toBeNull());
         // The Voice root also owns ungated local dictation/privacy settings;
         // only Conversations is gated by the server's Voice capability.
         expect(screen.findRowByTitle('settings.voiceAssistant')).not.toBeNull();
-        expect(screen.findRowByTitle('settings.filesSourceControl')).toBeNull();
         expect(screen.findRowByTitle('settings.memorySearch')).toBeNull();
     });
 
-    it('hides the files and source control group when all child entries are disabled', async () => {
+    it('keeps the files and source control group for Files preferences when its gated entries are disabled', async () => {
         mockFeatureEnabled = (featureId) => featureId === 'execution.runs';
         const screen = await renderSettingsViewUnderTest();
 
-        expect(screen.findAllByProps({ title: 'settings.filesAndSourceControl' })).toEqual([]);
+        // Source control rows gate individually; the page itself stays reachable.
+        await vi.waitFor(() => expect(screen.findGroup('settings.filesAndSourceControl')).not.toBeNull());
+        expect(screen.findRowByTitle('settings.filesSourceControl')).not.toBeNull();
+        expect(screen.findRowByTitle('settings.attachments')).toBeNull();
     });
 
     it('shows feature-gated entries when voice, source control, and memory search are enabled', async () => {

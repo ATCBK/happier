@@ -21,6 +21,9 @@ vi.mock('socket.io-client', async (importOriginal) =>
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routeParams = vi.hoisted(() => ({ item: undefined as string | string[] | undefined }));
+const routerMock = vi.hoisted(() => ({
+    current: null as ReturnType<typeof import('@/dev/testkit/mocks/router').createExpoRouterMock> | null,
+}));
 const viewport = vi.hoisted(() => ({ width: 390 }));
 let harness: Awaited<ReturnType<typeof serveActionHomes>>;
 const readAnswers = new Map<string, { status?: number; body: unknown; respondAfter?: Promise<void> }>();
@@ -85,9 +88,11 @@ function unreadSession(serverId: string) {
     });
 }
 
-vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
-    params: () => routeParams,
-}).module);
+vi.mock('expo-router', async () => {
+    const mock = (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ params: () => routeParams });
+    routerMock.current = mock;
+    return mock.module;
+});
 // Expo's native Route context is an SDK boundary absent from this host renderer.
 // The canonical root router mock does not cover this deep SDK entry; the route body stays real.
 vi.mock('expo-router/build/Route', () => ({ useRouteNode: () => null }));
@@ -121,6 +126,14 @@ function nodesByTestId(tree: renderer.ReactTestRenderer, testID: string) {
     ));
 }
 
+/** A deep link is a fresh destination: it carries the item alone, never the view a tab press wrote. */
+function openDeepLink(item: string | string[]) {
+    act(() => {
+        routeParams.item = item;
+        routerMock.current?.resetParams();
+    });
+}
+
 async function press(node: { props: { onPress?: () => void } }): Promise<void> {
     await act(async () => {
         node.props.onPress?.();
@@ -145,6 +158,7 @@ describe('InboxView mark as read', () => {
         storage.setState(initialStorageState, true);
         readAnswers.clear();
         routeParams.item = undefined;
+        routerMock.current?.resetParams();
         harness = await serveActionHomes({
             homes: [
                 { key: 'b', serverUrl: 'https://inbox-b.test', accountId: 'me' },
@@ -219,7 +233,7 @@ describe('InboxView mark as read', () => {
         await press(nodesByTestId(screen.tree, 'inbox.view:updates')[0]);
         expect(nodesByTestId(screen.tree, 'inbox.session.needs-focus')).toHaveLength(0);
 
-        routeParams.item = [createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'needs-focus' }).params.item];
+        openDeepLink([createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'needs-focus' }).params.item]);
         await screen.update(<InboxPage />);
         const focusedRow = () => screen.findAllByType(HappierWorkRowShell)
             .find(node => node.props.testID === 'inbox.session.needs-focus');
@@ -235,10 +249,10 @@ describe('InboxView mark as read', () => {
         // A render with the same item preserves the person's chosen Updates tab.
         expect(nodesByTestId(screen.tree, 'inbox.session.needs-focus')).toHaveLength(0);
 
-        routeParams.item = createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'missing' }).params.item;
+        openDeepLink(createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'missing' }).params.item);
         await screen.update(<InboxPage />);
         expect(focusedRow()?.props.selected).toBe(false);
-        routeParams.item = 'session: ';
+        openDeepLink('session: ');
         await screen.update(<InboxPage />);
         expect(focusedRow()?.props.selected).toBe(false);
     }, SLOW_RENDER_TIMEOUT_MS);

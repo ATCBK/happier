@@ -516,11 +516,16 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
             const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
             const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
-            const scope = getActiveServerAccountScope();
-            const isAppliedAccount = scope?.serverId === resolveServerProfileScopeIdForIdentifier(serverId)
-                && scope.accountId === record.accountId;
-            const { settingsParse } = await import('@/sync/domains/settings/settings');
+            const { areAccountSettingsScopesEqual } = await import('@/sync/domains/settings/scope/accountSettingsScope');
             const targetScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: record.accountId };
+            // Action admission reads the live settings whenever their scope is this Account,
+            // including before the applied runtime has published that Account as active.
+            const activeScope = getActiveServerAccountScope();
+            const liveSettingsScope = storage.getState().settingsScope;
+            const scope = areAccountSettingsScopesEqual(activeScope, targetScope) ? activeScope
+                : areAccountSettingsScopesEqual(liveSettingsScope, targetScope) ? liveSettingsScope : null;
+            const isAppliedAccount = scope !== null;
+            const { settingsParse } = await import('@/sync/domains/settings/settings');
             const persisted = loadAccountSettings(targetScope);
             const current = isAppliedAccount ? storage.getState().settings : settingsParse(persisted.settings ?? {});
             const homeSnapshot = AccountSettingsV2GetResponseSchema.safeParse(
@@ -549,6 +554,10 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             if (isAppliedAccount && scope) {
                 seededApprovalRequirement ??= { ...scope, policy: current.actionsSettingsV1 };
                 storage.getState().applySettingsLocal({ actionsSettingsV1: settings.actionsSettingsV1 });
+            } else {
+                // A later activation of this Account starts from its persisted settings.
+                const { saveAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+                saveAccountSettings(targetScope, settings, version);
             }
             // The Action front door may capture the exact Home while another
             // surface changes the device's live settings scope. Persist the same

@@ -20,6 +20,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
   (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(boundary.rpc));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
 const { Modal } = await import('@/modal');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { McpServerDetailPage } = await import('./McpServerDetailPage');
@@ -57,11 +58,12 @@ beforeEach(async () => {
   const machine = createMachineFixture({ id: 'mcp-machine', activeAt: Date.now() });
   const state = getStorage().getState();
   getStorage().setState({ settingsScope: scope, profileScope: scope, isDataReady: true,
-    machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },
-    machineListStatusByServerId: { [serverId]: 'idle' },
     settings: { ...state.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: {
       'mcp.servers.signIn.start': ['ui'],
     } }) } });
+  getStorage().getState().applyMachines([machine], true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
+  observeMachinePresenceForTest(scope, [machine.id]);
+  expect(getStorage().getState().machineDisplayById[machine.id]?.id).toBe(machine.id);
   harness.answer(serverId, '/v1/account/entity-rows/mcp', { select: () => ({ body: {
     status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, servers: [catalogServer], bindings: [] } },
   } }) });
@@ -104,7 +106,11 @@ describe('saved MCP detail recovery wiring', () => {
   it('client refusal keeps the API-key alternative and saves through the existing header editor', async () => {
     const current = await page(McpServerCatalogEntryV1Schema.parse({ ...base, remote: { ...base.remote, auth: { kind: 'oauth' } } }));
     boundary.rpc.mockRejectedValue(Object.assign(new Error('client_refused'), { code: 'client_refused' }));
-    await waitForHomeGovernance(() => expect(current.tree.findByType(McpServerWhereAndTools).props.detail.execution.ready).toBe(true));
+    await waitForHomeGovernance(() => {
+      const detail = current.tree.findByType(McpServerWhereAndTools).props.detail;
+      expect(detail.execution.ready).toBe(true);
+      expect(detail.signIn.view).toMatchObject({ state: 'not_connected' });
+    });
     await current.tree.pressByTestIdAsync('mcp.server.signin:not-connected:action');
     await waitForHomeGovernance(() => expect(current.tree.findByTestId('mcp.server.signin:client-refused:action')).not.toBeNull());
     await current.tree.pressByTestIdAsync('mcp.server.signin:client-refused:action');
