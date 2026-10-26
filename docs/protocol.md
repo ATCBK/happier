@@ -45,6 +45,12 @@ authorized Session facts and content-opening results into its pure projector. Th
 projection is not persisted and does not own unread state, following, personal
 attention, or notification decisions.
 
+The shared presentation keeps a completed, operationally ready worker settled
+after its publisher stops, goes offline or its observation becomes stale. The
+process-terminal fact remains separate. Current requests, explicit resume and
+runtime serviceability failures retain precedence; List, Map and report counts
+consume the same decision.
+
 Pending permission and user-action counts are session-wide projections of the
 acknowledged Agent state. Its legacy and metadata-tuple writers normalize and
 publish those counts, including explicit clears when requests settle. Foreground

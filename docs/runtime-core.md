@@ -260,6 +260,13 @@ validation. A pending replacement retains launch ownership; the replacement
 consumes the canonical Pending row under its existing local-id deduplication.
 This adds no input queue, retry, timer or restart state.
 
+For app Resume in this development source, an issued Machine RPC whose outcome
+cannot be confirmed retains `RPC_OUTCOME_UNKNOWN` through the existing Resume
+result and `session.open` Action. The shared alert presents **Outcome unknown**
+with check-before-retrying guidance and optional technical details. It neither
+retries automatically nor claims success from a Ready projection or a completed
+native turn; those facts do not establish that the outer RPC reply arrived.
+
 The foreground Pending consumer honours the materialization owner's retry delay
 for the same retained claim until settlement or caller cancellation. Repeated
 uncertain acknowledgements do not exhaust a separate consumer retry allowance
@@ -2395,7 +2402,14 @@ Creation origin, current turn initiator and causal work depth are separate host
 facts. The [turn stamper](../apps/cli/src/agent/runtime/session/turn/stampTurnFacts.ts)
 distinguishes user, agent-session, workflow and host input; a user turn has depth
 zero, while the start-policy witness retains the Session's starter depth as well.
-Reporting membership can change without rewriting these facts. The shared start
+
+For accepted protected originals, root ownership comes from the admission receipt:
+an Account receipt must name that Account; a Machine receipt must bind the exact
+Account and source Session in `admittedTarget`. Follow and Discussion carriers
+do not become direct originals merely because they have a user role. Inherited
+roots retain their existing lineage, and exact Execution Run inputs remain outside
+this Session-root selection. Reporting membership can change without rewriting
+these facts. The shared start
 policy enforces role engines, permission ceilings and the Account work-depth
 limit; consumers do not infer authority from a tree row or worker result.
 
@@ -2456,15 +2470,31 @@ Queue batches and private native-turn/Action custody retain a copied cause rathe
 than a Session-global latest requester. Accepted Workflows retain it inside their
 existing accepted origin. This observational value grants neither execution nor
 approval authority; missing human identity never becomes the Bot owner's identity.
+Spawn first-input handoffs preserve the invoking Action's admitted cause, including
+for plugin and automation callers. Subsequent protected CLI inputs retain the
+authenticated Account requester for Account and paired-terminal bindings. An
+API-token root does not establish a human requester; terminal attribution does
+not elevate its automation authority to present-person approval authority.
+Local Agent/MCP tool execution copies the cause
+from the same active-turn witness as its permission and input facts; the daemon
+Action channel carries that witness through its existing projection. Neither path
+derives the requester from the executing Account or the child Session's ownership.
+Credentialed CLI hosts stamp the separate execution Account in their shared Action
+context; Session-only transport credentials do not supply Account authority.
 
 The strict [WorkerUpdate](../packages/protocol/src/sessions/relations/workerUpdateV1.ts)
 envelope carries actual engine facts when available, owner outcome, source
 pointer and optional deliverables. Truncated results require a source pointer.
 It is host context, never a fabricated user message. A Session worker's pending
-turn-end review postpones settled delivery; inactive leads are not resumed just
-because a result exists. Source and permission admission remain current at the
-eligible input boundary. Work/Inbox are projections of these owners, not a second
-turn scheduler or permission ledger.
+turn-end review postpones settled delivery. Follow policy selects quiet context
+or a wake from the source outcome. The receiving machine's daemon can request
+Resume for an eligible inactive lead through the existing input/resume owner;
+an explicit Stop holds automatic delivery, archive drops new delivery, and an
+unavailable machine leaves it pending. Busy receivers take context at an input boundary
+without steering. Source and permission admission remain current at that
+boundary; enqueue or Resume alone does not prove native acceptance.
+Work/Inbox are projections of these owners, not a second turn scheduler or
+permission ledger.
 
 In 0.3 development source, Session Follow progress ACKs use the publisher owner's
 Serializable snapshot path. They validate the exact current publisher, source

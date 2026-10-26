@@ -41,6 +41,13 @@ A banner above the composer distinguishes four durable states:
 
 Depending on the state, the banner offers **Retry**, **Resume**, or **Process when online**, plus **Keep queued** and **Auto-resume options**. A terminal failure is not retried on every reconnect; choose **Retry** or **Resume** when you want another attempt.
 
+In unreleased 0.3 development source, queued Follow updates appear as source
+notices. Several queued or delivering updates from one source share one notice
+with a count; a **needs you** update takes precedence. Blocked or failed updates
+stay separate. This changes the display, not the underlying queue or delivery.
+Quiet Follow context waits for the next real input, so resuming an idle session
+does not by itself consume every queued update.
+
 ## Managing pending messages (UI)
 
 Open **Pending messages** from the session view indicator.

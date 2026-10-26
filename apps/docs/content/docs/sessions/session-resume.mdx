@@ -23,7 +23,7 @@ For a stopped session, Agent resume is a strict workflow:
 1. Happier finds the existing Happier session
 2. Happier checks whether that session is actually **vendor-resumable**
 3. Happier asks the backend/provider to resume the same vendor session
-4. If that vendor resume fails, Happier shows an error instead of silently starting a new session
+4. If that vendor resume definitively fails, Happier shows an error instead of silently starting a new session
 
 That strict behavior matters because it keeps one session identity and one transcript source of truth.
 
@@ -64,6 +64,11 @@ does not clear that hold. Stops from machine resource controls—Processes,
 widgets, Guard, Storage holder cleanup and the machine's Runs section—leave the
 session eligible to wake under your automatic-resume setting, unless it was
 already held. This distinction still awaits integrated live verification.
+
+In the same development source, a Resume request that was sent but whose result
+could not be confirmed shows **Outcome unknown**. Check the session before
+trying again: it may already have resumed. Happier does not automatically retry
+that request or treat a Ready label as confirmation that its reply arrived.
 
 ## CLI behavior
 

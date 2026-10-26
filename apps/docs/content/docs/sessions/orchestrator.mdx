@@ -56,9 +56,12 @@ the same update presentation. A session with a pending turn-end review
 reports settled only after that review finishes.
 
 The host delivers updates at an eligible input boundary; your input has
-priority. An offline lead retains pending work for later delivery. Receiving
-an update does not itself resume an inactive lead. Open the worker's peek
-or run to inspect the full result; a truncated card retains a source pointer.
+priority. In unreleased 0.3 development source, Follow policy can wake an
+eligible inactive lead on a reachable machine. Quiet updates wait for the
+next real input; an explicit Stop holds automatic delivery, archive drops new
+delivery, and an offline machine leaves updates pending. Follow does not steer a running
+turn. Open the worker's peek or run to inspect the full result; a truncated
+card retains a source pointer.
 
 ## Tree and lifecycle limits
 

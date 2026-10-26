@@ -28,6 +28,29 @@ Pending wire shape changes. Explicit steering never selects interrupt as a fallb
 
 ## Follow-original replay (0.3 development)
 
+Pending reads project `hostFollowInput` from the server-admitted Follow receipt,
+beside the opaque input content. The UI admits that public original once and
+uses its existing host-input recognition owner before request metadata settles
+to authority. Authored request/provenance fields alone do not establish pending
+host identity. The read projection exposes no private rule, permission or grant
+witness and does not authorize delivery, wake, reply or ACK. Older responses
+without the projection retain settled-authority recognition.
+
+Queued host Follow input renders as a source notice rather than a person's
+message bubble. Plainly queued or delivering updates from the same source fold
+into one counted notice at the first row's position, with needs-you taking
+precedence and the latest update chosen among equal states. Blocked, failed and
+cancelling rows stay separate. This groups presentation only: every underlying
+row keeps its identity, order and delivery custody. A needs-you Session notice
+offers the existing source-opening action.
+
+Protected `next_turn` Follow input remains informational context until a real
+input starts native work; Resume alone does not turn it into a wake. A newly
+admitted `wake` can start eligible idle work through the existing receiver and
+resume owners. Retained context joins the dispatched prompt and settles only
+when represented in its actual native acceptance, as described under
+[UI settlement convergence](#ui-settlement-convergence-development).
+
 An Account-issued Follow original is identified by its source Session, original
 sequence, event and authenticated admission receipt. Its delivered content is
 derived from that source event. After host admission freezes Pending custody,
