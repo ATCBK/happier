@@ -1,6 +1,7 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View, TouchableOpacity } from 'react-native';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ToolViewProps } from '../core/_registry';
 import { resolvePermissionRequestId } from '../core/resolvePermissionRequestId';
@@ -33,6 +34,7 @@ import {
 } from '@/sync/domains/plugins/settings/askUserQuestionSettings';
 import { resolvePermissionDisabledMessage } from '@/components/tools/shell/permissions/permissionDisabledMessage';
 import { usePendingPromptPrimaryFocus, markTranscriptPromptAnswered } from '@/components/tools/shell/permissions/usePendingPromptPrimaryFocus';
+import { PermissionDecisionButton } from '@/components/tools/shell/permissions/PermissionDecisionButton';
 import { PermissionAnswerUnconfirmedNotice } from '@/components/tools/shell/permissions/PermissionAnswerUnconfirmedNotice';
 import {
     clearPermissionAnswerUnconfirmed,
@@ -491,7 +493,8 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         gap: theme.space.s10,
-        minHeight: 44, // Minimum touch target for mobile
+        // Lab `.q-opt`: a choice row is designed 44 tall (min-height), not a target-derived floor.
+        minHeight: 44,
     },
     optionButtonSelected: {
         backgroundColor: theme.colors.surface.inset,
@@ -554,7 +557,8 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 14,
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.surface.base,
-        minHeight: 44,
+        // Lab `.q-field` (coordination-v3 c3-q.css): the field is 40 tall, a touch target is its hit area.
+        minHeight: 40,
     },
     freeformDescription: {
         fontSize: 13,
@@ -613,13 +617,14 @@ const styles = StyleSheet.create((theme) => ({
     submitButton: {
         backgroundColor: theme.colors.button.primary.background,
         paddingHorizontal: theme.space.s20,
-        paddingVertical: theme.space.s12,
+        paddingVertical: theme.space.s6,
         borderRadius: 8,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: theme.space.s6,
-        minHeight: 44, // Minimum touch target for mobile
+        // The shared control height (lab `.uw-btn`); the touch target is the hit area, not this box.
+        minHeight: HAPPIER_PAGE_METRICS.controlHeightPx,
     },
     submitButtonQuiet: {
         backgroundColor: 'transparent',
@@ -1310,8 +1315,9 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                 {(canInteract || isSubmitting || answerUnconfirmed) && (
                     <View style={styles.footer}>
                         <Text testID="ask-user-question.hint" style={styles.footerHint}>{formatFooterHint(footerHint)}</Text>
-                        <TouchableOpacity
+                        <PermissionDecisionButton
                             testID="ask-user-question.submit"
+                            hitReach={theme.space.s12 / 2}
                             accessibilityRole="button"
                             accessibilityLabel={t('tools.askUserQuestion.submit')}
                             accessibilityState={{
@@ -1332,7 +1338,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                             ) : (
                                 <Text style={[styles.submitButtonText, questionV1?.mode === 'continue' && styles.submitButtonTextQuiet]}>{t('tools.askUserQuestion.submit')}</Text>
                             )}
-                        </TouchableOpacity>
+                        </PermissionDecisionButton>
                     </View>
                 )}
             </View>

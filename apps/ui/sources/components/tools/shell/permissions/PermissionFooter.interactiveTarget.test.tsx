@@ -59,11 +59,11 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return style && typeof style === 'object' ? style as Record<string, unknown> : {};
 }
 
-function expectMinimumActionTarget(button: ReactTestInstance, minimumSize: 44 | 48) {
-    expect(flattenStyle(button.props.style)).toMatchObject({
-        minWidth: minimumSize,
-        minHeight: minimumSize,
-    });
+/** A decision keeps its drawn pill; the touch target is the shared hit area (see PermissionDecisionButton). */
+function expectDrawnAtDesignSize(button: ReactTestInstance) {
+    const style = flattenStyle(button.props.style);
+    expect(style.minWidth).toBeUndefined();
+    expect(style.minHeight).toBeUndefined();
 }
 
 describe('PermissionFooter interactive targets', () => {
@@ -92,7 +92,7 @@ describe('PermissionFooter interactive targets', () => {
         { platform: 'web', minimumSize: 44 },
         { platform: 'android', minimumSize: 48 },
     ] as const)(
-        'keeps every Codex decision action at least $minimumSize on $platform',
+        'draws every Codex decision action at its design size on $platform',
         async ({ platform, minimumSize }) => {
             platformEnvironment.platform = platform;
             const { PermissionFooter } = await import('./PermissionFooter');
@@ -109,7 +109,7 @@ describe('PermissionFooter interactive targets', () => {
             const actions = screen.findAllByType('TouchableOpacity' as any);
             expect(actions).toHaveLength(5);
             for (const action of actions) {
-                expectMinimumActionTarget(action, minimumSize);
+                expectDrawnAtDesignSize(action);
             }
         },
     );
@@ -118,7 +118,7 @@ describe('PermissionFooter interactive targets', () => {
         { platform: 'web', minimumSize: 44 },
         { platform: 'android', minimumSize: 48 },
     ] as const)(
-        'keeps every standard permission action at least $minimumSize on $platform',
+        'draws every standard permission action at its design size on $platform',
         async ({ platform, minimumSize }) => {
             platformEnvironment.platform = platform;
             const { PermissionFooter } = await import('./PermissionFooter');
@@ -135,7 +135,7 @@ describe('PermissionFooter interactive targets', () => {
             const actions = screen.findAllByType('TouchableOpacity' as any);
             expect(actions.length).toBeGreaterThanOrEqual(3);
             for (const action of actions) {
-                expectMinimumActionTarget(action, minimumSize);
+                expectDrawnAtDesignSize(action);
             }
         },
     );

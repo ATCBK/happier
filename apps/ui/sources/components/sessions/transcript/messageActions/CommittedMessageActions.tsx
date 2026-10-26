@@ -5,7 +5,7 @@ import { HappierPressable, happierFocusRingStyle } from '@happier-dev/plugin-ui/
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { resolveMessageActionNeighbourGapPx } from './messageActionNeighbourGap';
 import { ContextMenu, type ContextMenuItem } from '@/components/ui/forms/dropdown/ContextMenu';
 import { SelectMessageButton } from '../messageSelection/SelectMessageButton';
 import { useSessionTranscriptSource } from '../source/SessionTranscriptSourceContext';
@@ -71,7 +71,7 @@ export function CommittedMessageActions(props: Props) {
     const [decisionSaved, setDecisionSaved] = React.useState(false);
     const { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability, committedMessage } = useCommittedMessageActions({
         ...props, openSavePrompt: () => setSaveOpen(true), openSaveDecision: setDecisionSeedSource,
-    });
+    }, { rowVisible: props.showActions, menuVisible: menuOpen });
     React.useEffect(() => { setSaveOpen(false); setMenuOpen(false); setSavedArtifactId(null); setDecisionSeedSource(null); setDecisionSaved(false); }, [props.message.id]);
     const availableActions = actions.filter((action) => action.available);
     const saveAvailable = availableActions.some((action) => action.id === 'savePrompt');
@@ -84,6 +84,9 @@ export function CommittedMessageActions(props: Props) {
                 icon: <Icon name={action.icon} size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
                 ...(action.id === 'savePrompt' ? { subtitle: t('committedMessageActions.savePromptHint') } : {}),
             }]);
+    // The gap to the neighbouring action (its `marginRight`) is split between the two hit areas.
+    const actionGapPx = props.invertTimestampAndActions ? theme.space.s2 : theme.space.s6;
+    const neighbourGapPx = resolveMessageActionNeighbourGapPx(theme);
     const hasNativeMenu = Platform.OS !== 'web' && items.length > 0;
     const nativeMenuHold = React.useMemo(() => Gesture.LongPress()
         .enabled(hasNativeMenu)
@@ -119,6 +122,7 @@ export function CommittedMessageActions(props: Props) {
                 testID={`transcript-message-saved-prompt:${props.message.id}`} accessibilityRole="button"
                 accessibilityLabel={t('committedMessageActions.savedOpen')}
                 onPress={() => source.navigate?.(promptCollectionItemHref('doc', savedArtifactId))}
+                hitReach={{ left: actionGapPx / 2, right: actionGapPx / 2, top: neighbourGapPx / 2, bottom: neighbourGapPx / 2 }}
                 style={({ pressed, focused }) => [styles.saved, pressed ? styles.savedPressed : null,
                     happierFocusRingStyle({ visible: focused, color: theme.colors.border.focus })]}>
                 <Icon name="check" size={ICON_SIZE.xs} color={theme.colors.state.success.foreground} />
@@ -138,7 +142,7 @@ export function CommittedMessageActions(props: Props) {
                     ? theme.colors.state.success.foreground : theme.colors.text.secondary} />}
                 accessibilityLabel={action.title}
                 accessibilityHint={action.accessibilityHint}
-                tooltip={action.title} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                tooltip={action.title} interactiveTargetGapPx={actionGapPx} interactiveTargetVerticalGapPx={neighbourGapPx}
                 variant="plain" onPress={action.onPress}
                 onFocusChange={(focused) => focused ? props.onActionsFocus() : props.onActionsBlur()}
             /></View>;

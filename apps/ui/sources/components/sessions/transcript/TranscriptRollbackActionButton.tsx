@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { Modal } from '@/modal';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
@@ -39,7 +39,7 @@ export const TranscriptRollbackActionButton = React.memo((props: {
         }),
         [props.currentAgentCapabilities, sessionServerId],
     );
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const hitArea = useHappierHitArea({ restingStyle: () => props.style });
 
     const handlePress = React.useCallback(async () => {
         if (isRollingBack) return;
@@ -70,6 +70,8 @@ export const TranscriptRollbackActionButton = React.memo((props: {
             onPress={handlePress}
             onHoverIn={props.onHoverIn}
             onHoverOut={props.onHoverOut}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
             style={({ pressed }) => [
@@ -77,12 +79,11 @@ export const TranscriptRollbackActionButton = React.memo((props: {
                 {
                     alignItems: 'center',
                     justifyContent: 'center',
-                    minHeight: minimumInteractiveTargetSize,
-                    minWidth: minimumInteractiveTargetSize,
                 },
                 (pressed || isRollingBack) ? props.pressedStyle : null,
             ]}
         >
+            {hitArea.frame}
             {isRollingBack ? (
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             ) : (

@@ -167,8 +167,9 @@ describe('TranscriptRollbackActionButton', () => {
         const rollbackStyle = typeof rollbackAction?.props.style === 'function'
             ? rollbackAction.props.style({ pressed: false })
             : rollbackAction?.props.style;
-        expect(flattenStyle(rollbackStyle).minWidth).toBeGreaterThanOrEqual(44);
-        expect(flattenStyle(rollbackStyle).minHeight).toBeGreaterThanOrEqual(44);
+        // Drawn size is the caller's; the touch target is the shared hit area, never a floor on the box.
+        expect(flattenStyle(rollbackStyle).minWidth).toBeUndefined();
+        expect(flattenStyle(rollbackStyle).minHeight).toBeUndefined();
         expect(createDefaultActionExecutorSpy).toHaveBeenCalledWith(expect.objectContaining({
             resolveServerIdForSessionId: expect.any(Function),
         }));
@@ -201,32 +202,6 @@ describe('TranscriptRollbackActionButton', () => {
 
         expect(createDefaultActionExecutorSpy.mock.calls.at(-1)?.[0]?.resolveServerIdForSessionId?.('s1')).toBe('server-reactive');
         await screen.unmount();
-    });
-
-    it('uses a physical 48dp Android target without overlapping hit slop', async () => {
-        const { Platform } = await import('react-native');
-        const previousPlatform = Platform.OS;
-        (Platform as { OS: string }).OS = 'android';
-        try {
-            const { TranscriptRollbackActionButton } = await import('./TranscriptRollbackActionButton');
-            const screen = await renderScreen(
-                <TranscriptRollbackActionButton
-                    sessionId="session-1"
-                    testID="rollback-action"
-                />,
-            );
-
-            const rollbackAction = screen.findByTestId('rollback-action');
-            const rollbackStyle = typeof rollbackAction?.props.style === 'function'
-                ? rollbackAction.props.style({ pressed: false })
-                : rollbackAction?.props.style;
-            expect(flattenStyle(rollbackStyle).minWidth).toBeGreaterThanOrEqual(48);
-            expect(flattenStyle(rollbackStyle).minHeight).toBeGreaterThanOrEqual(48);
-            expect(rollbackAction?.props.hitSlop).toBeUndefined();
-            await screen.unmount();
-        } finally {
-            (Platform as { OS: string }).OS = previousPlatform;
-        }
     });
 
     it('alerts when the underlying rollback RPC result is not ok', async () => {

@@ -1,6 +1,7 @@
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -27,7 +28,6 @@ import {
     type ToolViewDetailLevelSetting,
 } from '@/components/tools/normalization/policy/resolveToolViewDetailDefaultsForChromeMode';
 import { isGenericSubAgentToolName } from '@happier-dev/protocol/tools/v2';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import type { PromptResponseOrigin } from './executionRunPromptResponseTarget';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -45,7 +45,7 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
 }) {
     const { theme } = useUnistyles();
     const transcriptSource = useSessionTranscriptSource();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const viewButtonHitArea = useHappierHitArea({ restingStyle: () => null });
 
     const toolViewDetailLevelDefault = useSetting('toolViewDetailLevelDefault');
     const toolViewDetailLevelDefaultLocalControl = useSetting('toolViewDetailLevelDefaultLocalControl');
@@ -146,17 +146,16 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                         <Pressable
                             testID="permission-prompt-view-tool"
                             onPress={onViewTool}
+                            hitSlop={viewButtonHitArea.hitSlop}
+                            onLayout={viewButtonHitArea.onLayout}
                             accessibilityRole="button"
                             accessibilityLabel={t('toolView.open')}
                             style={({ pressed }) => [
                                 styles.viewButton,
-                                {
-                                    minWidth: minimumInteractiveTargetSize,
-                                    minHeight: minimumInteractiveTargetSize,
-                                },
                                 pressed && styles.viewButtonPressed,
                             ]}
                         >
+                            {viewButtonHitArea.frame}
                             <Icon name="arrow-square-out" size={PROMPT_CARD_ICON_SIZE} color={theme.colors.text.secondary} />
                         </Pressable>
                     ) : null}

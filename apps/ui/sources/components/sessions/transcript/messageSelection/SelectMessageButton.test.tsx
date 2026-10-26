@@ -132,16 +132,15 @@ describe('SelectMessageButton', () => {
         expect(screen.findByType('ProbeRoot').props).toMatchObject({ mode: true, count: 1, selected: false });
     });
 
-    it('uses a physical native target without overlapping hit slop', async () => {
+    it('keeps its drawn size: the touch target is the hit area, not a floor on the box', async () => {
         const screen = await renderButton();
         const button = findPressableByTestId(screen, 'select-m1');
 
-        expect(resolvePressableStyle(button).minWidth).toBeGreaterThanOrEqual(44);
-        expect(resolvePressableStyle(button).minHeight).toBeGreaterThanOrEqual(44);
-        expect(button.props.hitSlop).toBeUndefined();
+        expect(resolvePressableStyle(button).minWidth).toBeUndefined();
+        expect(resolvePressableStyle(button).minHeight).toBeUndefined();
     });
 
-    it('preserves the physical target while enlarging the icon in selection mode', async () => {
+    it('enlarges the icon in selection mode without growing the box', async () => {
         const screen = await renderButton();
 
         expect(findPressableByTestId(screen, 'select-m1').props.hitSlop).toBeUndefined();
@@ -154,9 +153,15 @@ describe('SelectMessageButton', () => {
         const selectionToggle = findPressableByTestId(screen, 'select-m1');
         expect(selectionToggle.props.hitSlop).toBeUndefined();
         expect(screen.findByType('Icon').props.size).toBe(18);
-        expect(resolvePressableStyle(selectionToggle)).toMatchObject({
-            minHeight: 44,
-            minWidth: 44,
-        });
+        expect(resolvePressableStyle(selectionToggle).minHeight).toBeUndefined();
+        expect(resolvePressableStyle(selectionToggle).minWidth).toBeUndefined();
+    });
+
+    it('names whose message it selects when a thread repeats the action on every message', async () => {
+        const screen = await renderButton({ ownerLabel: 'Mei' });
+        const label = String(findPressableByTestId(screen, 'select-m1')?.props.accessibilityLabel);
+        expect(label).toContain('Mei');
+        const plain = await renderButton();
+        expect(String(findPressableByTestId(plain, 'select-m1')?.props.accessibilityLabel)).not.toContain('Mei');
     });
 });

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserTextMessage, AgentTextMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptForkCommon } from '../transcriptSessionCommon';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' | 'web' }));
 vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => true) }));
@@ -33,6 +34,9 @@ const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixture
 const { CommittedMessageActions } = await import('./CommittedMessageActions');
 const { createPluginMessageActionHost, PluginMessageActionHostProvider } = await import('./PluginMessageActions');
 const { resolveSelectableMessageText } = await import('../messageSelection/resolveSelectableMessageText');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { createPluginUiTranslationRuntime, PluginUiTranslationRuntimeProvider } = await import('@/sync/domains/plugins/ui/i18n');
+const { commitPreferredLanguage, getPreferredLanguage } = await import('@/text/preferredLanguage');
 let serverId = '';
 let activeFeatureSubscriptions = 0;
 let restoreFeatureSubscriptionObservation = () => {};
@@ -71,7 +75,7 @@ function MessageBody(props: Readonly<{ row: React.ReactNode }>) {
     return <View accessibilityLabel={identity} testID="committed-message-body">{props.row}</View>;
 }
 
-function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false, hoverProps?: RowActionHoverHost['hoverProps'], openDiscussionSource?: React.ComponentProps<typeof CommittedMessageActions>['openDiscussionSource'], committedMessageId = id) {
+function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false, hoverProps?: RowActionHoverHost['hoverProps'], openDiscussionSource?: React.ComponentProps<typeof CommittedMessageActions>['openDiscussionSource'], committedMessageId = id, showActions = true) {
     const message: UserTextMessage | AgentTextMessage = { kind, id, localId: id, text, createdAt: 1, seq: 5, transcriptBlockIndex: 0,
         ...(kind === 'agent-text' ? { isThinking: thinking } : {}),
         messageActionReference: { v: 1, sessionId: 's1', messageId: committedMessageId, observedRevision: 'r1' } };
@@ -84,7 +88,7 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
             rollbackAction={{ target: { type: 'before_user_message', userMessageSeq: 5 }, restoredDraftText: message.text }}
             onToggleMessagePin={noop} messagePins={pinned ? [{ version: 1, sessionId: 's1', seq: 5, transcriptBlockIndex: 0,
                 routeMessageId: `local:${id}`, role: kind === 'user-text' ? 'user' : 'assistant', pinnedAtMs: 1, label: null }] : []}
-            showActions showPinAction timestampText={null} invertTimestampAndActions={false}
+            showActions={showActions} showPinAction timestampText={null} invertTimestampAndActions={false}
             onActionsFocus={noop} onActionsBlur={noop} hoverProps={hoverProps} openDiscussionSource={openDiscussionSource}>
             {(row) => <MessageBody row={row} />}
         </CommittedMessageActions>
@@ -92,6 +96,49 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
 }
 
 describe('Committed row and native menu availability', () => {
+    it('defers hidden row Action copy until native hold opens the menu without replacing the message body', async () => {
+        const previousLanguage = getPreferredLanguage();
+        commitPreferredLanguage('fr');
+        const projection: PluginUiProjectionModel = { ...EMPTY_PLUGIN_UI_PROJECTION, translationsByPluginId: {
+            'acme.preview': { id: 'translations:acme.preview', pluginId: 'acme.preview', contributionKind: 'translations',
+                locales: ['en', 'fr', 'de'], resourceIdsByLocale: { en: 'copy-en', fr: 'copy-fr', de: 'copy-de' } },
+        } };
+        const reads: string[] = [];
+        const runtime = createPluginUiTranslationRuntime({ projection, readResourceBytes: async (_source, _pluginId, resourceId) => {
+            reads.push(resourceId);
+            return new TextEncoder().encode(JSON.stringify({ 'preview.title': resourceId === 'copy-fr' ? 'Aperçu' : 'Preview' }));
+        } });
+        const contribution: PluginProjectionEntry = {
+            pluginId: 'acme.preview', title: 'Preview', description: null, version: '1.0.0', enabled: true,
+            generation: 7, generationLabel: '7', status: null, provenance: null, diagnostics: [], resources: [], editableSettingsGroups: [],
+            actions: [{ id: 'preview', occurrenceId: null, title: 'Preview', description: null, icon: null,
+                localizedPresentation: { title: { key: 'preview.title', fallback: 'Preview' } },
+                scopes: ['message'], surfaces: ['ui'], placementBindings: ['rowAction'],
+                inputHints: null, priority: null, dangerLevel: 'safe', confirmation: null, available: true }],
+        };
+        const host = createPluginMessageActionHost({ sessionId: 's1', resolveCurrent: () => ({
+            pluginProjectionById: { 'acme.preview': contribution }, pluginUiProjection: projection,
+            host: { machineId: 'machine-1', serverId, sessionId: 's1', isCurrent: () => true },
+        }) });
+        const screen = await renderScreen(<PluginUiTranslationRuntimeProvider runtime={runtime}>
+            <PluginMessageActionHostProvider host={host}>
+                {element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }, false, 'm1', false,
+                    'Useful prompt', false, false, undefined, undefined, 'm1', false)}
+            </PluginMessageActionHostProvider>
+        </PluginUiTranslationRuntimeProvider>);
+        try {
+            const body = screen.findHostByTestId('committed-message-body');
+            expect(reads).toEqual([]);
+            const hold = screen.findAllByType('GestureDetector')[0].props.gesture as TestGestureChain;
+            await act(async () => { hold.__handlers.onStart(); });
+            expect(reads).toEqual(['copy-en', 'copy-fr']);
+            expect(screen.findAllByType(ContextMenu)[0]?.props.items).toEqual(expect.arrayContaining([
+                expect.objectContaining({ id: 'plugin:acme.preview/preview', title: 'Aperçu' }),
+            ]));
+            expect(screen.findHostByTestId('committed-message-body')).toBe(body);
+        } finally { await screen.unmount(); runtime.dispose(); commitPreferredLanguage(previousLanguage); }
+    });
+
     it.each([false, true])('tracks Save as decision from the layout-1 owner view without rerendering for unrelated Session updates (Bot: %s)', async (bot) => {
         const previousState = getStorage().getState();
         const ownerMetadata = { ...createSessionFixture().metadata!, ...(bot ? { bot: { kind: 'bot' as const } } : {}), work: { memoryEnabled: true } };

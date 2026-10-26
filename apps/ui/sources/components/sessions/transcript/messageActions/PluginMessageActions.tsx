@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type {
@@ -20,9 +20,10 @@ import {
 import {
     usePluginUiClientExecutableRegistrationRevision,
 } from '@/components/plugins/reactNative/clientExecutableContributions';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { useMessageActionHitArea } from './useMessageActionHitArea';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { createPluginLocalizedTextResolver, usePluginLocalizedTextResolver, type PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 
 /**
  * The transcript root owns the current projection and intent facts. A row adds
@@ -111,24 +112,22 @@ function PluginMessageActionButton(props: Readonly<{
     onPress: (action: PluginContributedActionDescriptor) => void;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const hitArea = useMessageActionHitArea(props.invertedActionsLayout);
     return (
         <Pressable
             testID={`plugin-message-action:${props.action.qualifiedActionId}`}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
             accessibilityRole="button"
             accessibilityLabel={props.action.title}
             onPress={() => props.onPress(props.action)}
             style={({ pressed }) => [
                 styles.button,
-                Platform.OS === 'web' ? styles.buttonWeb : null,
                 props.invertedActionsLayout ? styles.buttonInverted : null,
-                {
-                    minHeight: minimumInteractiveTargetSize,
-                    minWidth: minimumInteractiveTargetSize,
-                },
                 pressed ? styles.buttonPressed : null,
             ]}
         >
+            {hitArea.frame}
             <Icon
                 name={resolvePluginContributedActionIconName(props.action.icon)}
                 size={ICON_SIZE.xs}
@@ -146,12 +145,13 @@ function PluginMessageActionButton(props: Readonly<{
  */
 function PluginMessageActionOverflow(props: Readonly<{
     actions: readonly PluginContributedActionDescriptor[];
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
     invertedActionsLayout: boolean;
     onPress: (action: PluginContributedActionDescriptor) => void;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const [open, setOpen] = React.useState(false);
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const hitArea = useMessageActionHitArea(props.invertedActionsLayout);
     const items = React.useMemo((): readonly DropdownMenuItem[] => props.actions.map((action) => ({
         id: action.qualifiedActionId,
         testID: `plugin-message-action-menu:${action.qualifiedActionId}`,
@@ -166,16 +166,16 @@ function PluginMessageActionOverflow(props: Readonly<{
         ),
     })), [props.actions, theme.colors.text.secondary]);
     const handleSelect = React.useCallback((qualifiedActionId: string) => {
-        setOpen(false);
+        props.onOpenChange(false);
         const action = props.actions.find((candidate) => candidate.qualifiedActionId === qualifiedActionId);
         if (action) props.onPress(action);
-    }, [props.actions, props.onPress]);
+    }, [props.actions, props.onOpenChange, props.onPress]);
 
     return (
         <DropdownMenu
             testID="plugin-message-actions-overflow-menu"
-            open={open}
-            onOpenChange={setOpen}
+            open={props.open}
+            onOpenChange={props.onOpenChange}
             items={items}
             onSelect={handleSelect}
             placement="bottom"
@@ -191,16 +191,15 @@ function PluginMessageActionOverflow(props: Readonly<{
                     accessibilityLabel={t('common.moreActions')}
                     accessibilityHint={t('common.moreActionsHint')}
                     onPress={toggle}
+                    hitSlop={hitArea.hitSlop}
+                    onLayout={hitArea.onLayout}
                     style={({ pressed }) => [
                         styles.overflowButton,
                         props.invertedActionsLayout ? styles.overflowButtonInverted : null,
-                        {
-                            minHeight: minimumInteractiveTargetSize,
-                            minWidth: minimumInteractiveTargetSize,
-                        },
                         pressed ? styles.buttonPressed : null,
                     ]}
                 >
+                    {hitArea.frame}
                     <Icon name="dots-three" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
                 </Pressable>
             )}
@@ -241,23 +240,38 @@ function mergeOverflowMessageActions(params: Readonly<{
 export function usePluginMessageActions(props: Readonly<{
     enabled: boolean;
     messageActionReference?: MessageActionReferenceV1;
+    rowVisible?: boolean;
+    menuVisible?: boolean;
 }>) {
     usePluginUiClientExecutableRegistrationRevision();
     const host = React.useContext(PluginMessageActionHostContext);
+    const current = props.enabled && props.messageActionReference ? host?.resolveCurrent(props.messageActionReference) : null;
+    const localize = usePluginLocalizedTextResolver({ projection: current?.pluginUiProjection ?? null });
+    const localizeRef = React.useRef(localize);
+    localizeRef.current = localize;
+    const localizeCurrent = React.useCallback<PluginLocalizedTextResolver>((pluginId, value) => localizeRef.current(pluginId, value), []);
+    // Inventory keeps real labels and admission while hidden; only presented copy records Resource demand.
+    const metadataLocalize = createPluginLocalizedTextResolver({ projection: current?.pluginUiProjection });
+    const [overflowOpen, setOverflowOpen] = React.useState(false);
     const controller = React.useMemo(() => {
         if (!props.enabled || !host || !props.messageActionReference) return null;
         return createPluginContributedActionController({
-            resolveCurrent: () => host.resolveCurrent(props.messageActionReference!),
+            resolveCurrent: () => {
+                const snapshot = host.resolveCurrent(props.messageActionReference!);
+                return snapshot ? { ...snapshot, localize: localizeCurrent } : null;
+            },
         });
-    }, [props.enabled, host, props.messageActionReference]);
+    }, [props.enabled, host, props.messageActionReference, localizeCurrent]);
+    const rowPresentation = { localize: props.rowVisible !== false || props.menuVisible === true ? localize : metadataLocalize };
+    const menuPresentation = { localize: overflowOpen || props.menuVisible === true ? localize : metadataLocalize };
     const rowActions = orderMessageActions(
-        controller?.list({ placement: 'rowAction', scope: 'message' }) ?? [],
+        controller?.list({ placement: 'rowAction', scope: 'message' }, rowPresentation) ?? [],
     );
     const overflowActions = orderMessageActions(
-        controller?.list({ placement: 'contextMenu', scope: 'message' }) ?? [],
+        controller?.list({ placement: 'contextMenu', scope: 'message' }, menuPresentation) ?? [],
     );
     const semanticMenuActions = orderMessageActions(
-        controller?.list({ placement: 'message.menu', scope: 'message' }) ?? [],
+        controller?.list({ placement: 'message.menu', scope: 'message' }, menuPresentation) ?? [],
     );
     const mergedOverflowActions = mergeOverflowMessageActions({
         legacy: overflowActions,
@@ -273,7 +287,7 @@ export function usePluginMessageActions(props: Readonly<{
     }, [controller, host?.signal]);
 
     const menuActions = mergeOverflowMessageActions({ legacy: rowActions, semantic: mergedOverflowActions });
-    return { rowActions, mergedOverflowActions, menuActions, openAction };
+    return { rowActions, mergedOverflowActions, menuActions, openAction, overflowOpen, setOverflowOpen };
 }
 
 export function PluginMessageActions(props: Readonly<{
@@ -288,7 +302,7 @@ export function PluginMessageActionsView(props: Readonly<{
     invertedActionsLayout: boolean;
     actions: ReturnType<typeof usePluginMessageActions>;
 }>): React.ReactElement | null {
-    const { rowActions, mergedOverflowActions, openAction } = props.actions;
+    const { rowActions, mergedOverflowActions, openAction, overflowOpen, setOverflowOpen } = props.actions;
 
     if (rowActions.length === 0 && mergedOverflowActions.length === 0) return null;
     return (
@@ -304,6 +318,8 @@ export function PluginMessageActionsView(props: Readonly<{
             {mergedOverflowActions.length > 0 ? (
                 <PluginMessageActionOverflow
                     actions={mergedOverflowActions}
+                    open={overflowOpen}
+                    onOpenChange={setOverflowOpen}
                     invertedActionsLayout={props.invertedActionsLayout}
                     onPress={openAction}
                 />
@@ -324,12 +340,10 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s4,
         maxWidth: 180,
         paddingHorizontal: theme.space.s6,
+        paddingVertical: theme.space.s6,
         borderRadius: 6,
         marginRight: theme.space.s6,
         cursor: 'pointer',
-    },
-    buttonWeb: {
-        paddingVertical: theme.space.s6,
     },
     buttonInverted: {
         marginRight: theme.space.s2,
@@ -337,6 +351,7 @@ const styles = StyleSheet.create((theme) => ({
     overflowButton: {
         alignItems: 'center',
         justifyContent: 'center',
+        padding: theme.space.s6,
         borderRadius: 6,
         marginRight: theme.space.s6,
         cursor: 'pointer',

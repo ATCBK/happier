@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -152,27 +153,42 @@ describe('MessagePinButton', () => {
         expect(noCallbackScreen.findAllByType('Pressable')).toHaveLength(0);
     });
 
+    // A touch target is a hit area, never a drawn size: the button keeps its design box (measured by
+    // layout) and the shared hit-area owner reaches the platform target past it, sideways only half of the
+    // gap to the neighbouring action so adjacent targets never overlap.
     it.each([
         ['ios', 44],
         ['android', 48],
-    ] as const)('uses a physical target without hit slop on %s (%d-point minimum)', async (platform, minimumSize) => {
+    ] as const)('keeps its drawn size and reaches only the free room around it (%s, target %d) through hit slop', async (platform, target) => {
         platformState.os = platform;
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
         const { MessagePinButton } = await import('./MessagePinButton');
 
         const screen = await renderScreen(
-            <MessagePinButton
-                availability={available()}
-                onTogglePin={() => {}}
-                testID="message-pin"
-            />,
+            <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                <MessagePinButton
+                    availability={available()}
+                    onTogglePin={() => {}}
+                    testID="message-pin"
+                />
+            </HappierUiPlatformProvider>,
         );
 
+        const DRAWN = 26;
+        await act(async () => {
+            screen.findByTestId('message-pin')?.props.onLayout({ nativeEvent: { layout: { width: DRAWN, height: DRAWN } } });
+        });
         const button = screen.findByTestId('message-pin');
         const style = typeof button?.props.style === 'function'
             ? button.props.style({ pressed: false })
             : button?.props.style;
-        expect(flattenStyle(style).minWidth).toBeGreaterThanOrEqual(minimumSize);
-        expect(flattenStyle(style).minHeight).toBeGreaterThanOrEqual(minimumSize);
-        expect(button?.props.hitSlop).toBeUndefined();
+        expect(flattenStyle(style).minWidth).toBeUndefined();
+        expect(flattenStyle(style).minHeight).toBeUndefined();
+        const slop = button?.props.hitSlop as Record<'top' | 'bottom' | 'left' | 'right', number>;
+        // Sideways the neighbouring action takes half of the gap. Vertically the row's band is shorter than
+        // the buttons and the next card keeps its own inset, so only a few px are free: split with the card.
+        expect(slop.left + slop.right).toBeLessThanOrEqual(6);
+        expect(slop.top + slop.bottom).toBeLessThanOrEqual(3);
+        expect(slop.top).toBe(slop.bottom);
     });
 });

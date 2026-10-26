@@ -41,6 +41,8 @@ installDisconnectedServerSocketBoundary();
 const { DeclarativePluginSurface } = await import('./DeclarativePluginSurface');
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { renderScreen } from '@/dev/testkit';
+import { HappierStateLine } from '@happier-dev/plugin-ui/presentation';
+import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import {
     setServerProfileIdentityForUrl,
     setActiveServerId,
@@ -130,10 +132,10 @@ afterEach(() => {
 describe('DeclarativePluginSurface Account secrets', () => {
     it('keeps a configured secret redacted and rejects an explicit empty Save without deleting its binding', async () => {
         const secretTarget = { pluginId: 'acme.account-secret', localId: 'token' };
-        const seeded = applyAccountSettingsSavedSecretMutation({}, {
-            kind: 'replacePluginSecret', target: secretTarget, expectedSecretId: null, expectedSecretUpdatedAt: null,
-            secret: { id: 'existing-token', name: 'Account token', kind: 'other',
-                encryptedValue: { _isSecretValue: true, value: 'synthetic-redacted-token' }, createdAt: 1, updatedAt: 1 },
+        const seeded = applyAccountSettingsSavedSecretMutation({ secrets: [{ id: 'existing-token', name: 'Account token', kind: 'other',
+            encryptedValue: { _isSecretValue: true, value: 'synthetic-redacted-token' }, createdAt: 1, updatedAt: 1 }] }, {
+            kind: 'bindPluginSecret', target: secretTarget, expectedSecretId: null, expectedSecretUpdatedAt: null,
+            secretId: 'existing-token',
         }).settings;
         const homes = await serveAccountHomes({ homes: [{ key: 'secret', serverUrl: 'https://account-secret-surface',
             serverIdentityId: ACCOUNT_TARGET.serverIdentityId, accountId: 'account-secret-test',
@@ -379,6 +381,43 @@ describe('DeclarativePluginSurface action continuity', () => {
     });
 });
 
+describe('DeclarativePluginSurface action controls', () => {
+    // A touch target is a hit area, never a drawn size: the declarative action draws at the page
+    // control height on every pointer and the shared pressable reaches the finger's target past it.
+    it.each([
+        ['ios', 44],
+        ['android', 48],
+    ] as const)('draws an action at the control height and reaches the %s target (%d) by hit area', async (platform, target) => {
+        const { HAPPIER_PAGE_METRICS } = await import('@happier-dev/plugin-ui/presentation');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const action = { identity: { pluginId: 'acme.sizes', localId: 'save' },
+            qualifiedId: 'acme.sizes/save', occurrenceId: 'sizes-source' };
+        const sizesModel = PluginDeclarativeProjectedModelV1Schema.parse({
+            visible: true, requiredHostMethods: [],
+            identity: { pluginId: 'acme.sizes', localId: 'panel',
+                qualifiedId: 'acme.sizes/panel', occurrenceId: 'sizes-source' },
+            declarativeInventory: { actions: [{ ...action, enabled: true }], destinations: [], settings: [], uiQueries: [] },
+            root: { kind: 'action', path: 'root', order: 0, label: 'Save note', action, enabled: true },
+        });
+        const screen = await renderScreen(
+            <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+                <DeclarativePluginSurface pluginId="acme.sizes" model={sizesModel}
+                    interactionEnabled={true} daemonInteractionEnabled={true}
+                    dispatchAction={dispatchAction} actionAvailable={true} openSurface={openSurface}
+                    openSurfaceAvailable={false} accountLifetime={createAccountLifetime()} />
+            </HappierUiPlatformProvider>,
+        );
+        const button = screen.findByTestId('plugin-declarative-action:acme.sizes/save');
+        const drawn = button?.props.style({ focused: false, pressed: false, disabled: false });
+        expect(drawn.minHeight).toBe(HAPPIER_PAGE_METRICS.controlHeightPx);
+        expect(drawn.minWidth).toBeUndefined();
+        const drawnHeight = HAPPIER_PAGE_METRICS.controlHeightPx;
+        await act(async () => { button?.props.onLayout?.({ nativeEvent: { layout: { width: 176, height: drawnHeight } } }); });
+        const hitSlop = screen.findByTestId('plugin-declarative-action:acme.sizes/save')?.props.hitSlop;
+        expect(hitSlop.top + hitSlop.bottom + drawnHeight).toBe(target);
+    });
+});
+
 describe('DeclarativePluginSurface document source feedback', () => {
     const textModel = PluginDeclarativeProjectedModelV1Schema.parse({
         visible: true,
@@ -409,6 +448,38 @@ describe('DeclarativePluginSurface document source feedback', () => {
         const stale = await render('stale');
         expect(stale.getTextContent()).toContain('Last value 3');
         expect(stale.findByTestId('plugin-declarative-document-source-status:stale')).toBeTruthy();
+    });
+});
+
+describe('DeclarativePluginSurface states in a line container', () => {
+    const loadingModel = PluginDeclarativeProjectedModelV1Schema.parse({
+        visible: true,
+        requiredHostMethods: [],
+        identity: { pluginId: 'acme.counter', localId: 'count', qualifiedId: 'acme.counter/count', occurrenceId: 'counter-occurrence' },
+        declarativeInventory: { actions: [], destinations: [], settings: [], uiQueries: [] },
+        root: { kind: 'state', path: 'root', order: 0, state: 'loading', title: 'Loading conversations' },
+    });
+    const surface = () => (
+        <DeclarativePluginSurface
+            pluginId="acme.counter"
+            model={loadingModel}
+            interactionEnabled={true}
+            daemonInteractionEnabled={false}
+            dispatchAction={vi.fn()}
+            actionAvailable={false}
+            openSurface={vi.fn()}
+            openSurfaceAvailable={false}
+            accountLifetime={createAccountLifetime()}
+        />
+    );
+
+    it('draws a state node as one quiet line inside an inspector section, and as the centred column elsewhere', async () => {
+        const inSection = await renderScreen(<SurfaceStateSizeProvider size="line">{surface()}</SurfaceStateSizeProvider>);
+        expect(inSection.getTextContent()).toContain('Loading conversations');
+        expect(inSection.findAllByType(HappierStateLine)).toHaveLength(1);
+        const whole = await renderScreen(surface());
+        expect(whole.findAllByType(HappierStateLine)).toHaveLength(0);
+        expect(whole.findByTestId('plugin-declarative-state:root')).toBeTruthy();
     });
 });
 

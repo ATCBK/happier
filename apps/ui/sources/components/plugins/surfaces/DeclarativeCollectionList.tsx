@@ -9,7 +9,9 @@ import {
     HappierListItem,
     HappierPressable,
     HappierText,
+    HAPPIER_PAGE_METRICS,
 } from '@happier-dev/plugin-ui/presentation';
+import { DECLARATIVE_BUTTON_GEOMETRY } from '@/components/plugins/shared/declarativeNodes';
 import type { HappierUiTheme } from '@happier-dev/plugin-ui/environment';
 import { NormalizedPluginCollectionUiQueryDescriptorV1Schema, PluginCollectionUiQueryInputV1Schema, type NormalizedPluginCollectionUiQueryDescriptorV1, type PluginCollectionUiQueryInputV1 } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
 import { PluginDeclarativeCollectionListProjectionV1Schema, type PluginDeclarativeCollectionListProjectionV1 } from '@happier-dev/protocol/plugins/contributions/ui/v2';
@@ -277,8 +279,8 @@ const DeclarativeCollectionListRow = React.memo(function DeclarativeCollectionLi
                             disabled={input.disabled}
                             onPress={toggle}
                             style={(state) => ({
-                                minWidth: props.minimumTouchTarget,
-                                minHeight: props.minimumTouchTarget,
+                                minWidth: HAPPIER_PAGE_METRICS.controlHeightPx,
+                                minHeight: HAPPIER_PAGE_METRICS.controlHeightPx,
                                 justifyContent: 'center',
                                 alignItems: 'center',
                                 paddingHorizontal: props.presentationTheme.spacing.small,
@@ -337,7 +339,6 @@ function renderNotice(input: Readonly<{
     kind: 'error' | 'unavailable';
     path: string;
     presentationTheme: HappierUiTheme;
-    minimumTouchTarget: number;
     onRetry: () => void;
 }>): React.ReactElement {
     const isError = input.kind === 'error';
@@ -355,10 +356,7 @@ function renderNotice(input: Readonly<{
                     accessibilityLabel={t('common.retry')}
                     onPress={input.onRetry}
                     style={(state) => ({
-                        minWidth: input.minimumTouchTarget,
-                        minHeight: input.minimumTouchTarget,
-                        justifyContent: 'center',
-                        alignItems: 'center',
+                        ...DECLARATIVE_BUTTON_GEOMETRY,
                         paddingHorizontal: input.presentationTheme.spacing.medium,
                         borderRadius: input.presentationTheme.radii.control,
                         backgroundColor: input.presentationTheme.colors.accent,
@@ -591,10 +589,7 @@ export function DeclarativeCollectionList(props: Readonly<{
                         accessibilityLabel={t('common.more')}
                         onPress={loadMore}
                         style={(state) => ({
-                            minWidth: props.minimumTouchTarget,
-                            minHeight: props.minimumTouchTarget,
-                            justifyContent: 'center',
-                            alignItems: 'center',
+                            ...DECLARATIVE_BUTTON_GEOMETRY,
                             paddingHorizontal: props.presentationTheme.spacing.medium,
                             borderRadius: props.presentationTheme.radii.control,
                             backgroundColor: props.presentationTheme.colors.accent,
@@ -608,14 +603,12 @@ export function DeclarativeCollectionList(props: Readonly<{
                     kind: 'error',
                     path,
                     presentationTheme: props.presentationTheme,
-                    minimumTouchTarget: props.minimumTouchTarget,
                     onRetry: retryQuery,
                 }) : null}
                 {unavailable ? renderNotice({
                     kind: 'unavailable',
                     path,
                     presentationTheme: props.presentationTheme,
-                    minimumTouchTarget: props.minimumTouchTarget,
                     onRetry: retryQuery,
                 }) : null}
             </>
@@ -655,7 +648,6 @@ export function DeclarativeCollectionList(props: Readonly<{
             kind: 'unavailable',
             path,
             presentationTheme: props.presentationTheme,
-            minimumTouchTarget: props.minimumTouchTarget,
             onRetry: retryQuery,
         });
     }
@@ -664,7 +656,6 @@ export function DeclarativeCollectionList(props: Readonly<{
             kind: 'error',
             path,
             presentationTheme: props.presentationTheme,
-            minimumTouchTarget: props.minimumTouchTarget,
             onRetry: retryQuery,
         });
     }

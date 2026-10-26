@@ -1,7 +1,8 @@
 import * as React from 'react';
 import type { SurfaceStateAction } from '@/components/ui/surfaces/SurfaceStateCard';
+import { useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import {
@@ -19,6 +20,7 @@ import {
 import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 import { DragSource, DropTarget } from '@happier-dev/plugin-ui/components';
 import {
+    HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
     HappierUiEnvironmentProvider,
     HappierUiPaletteProvider,
     HappierUiTypographyProvider,
@@ -47,6 +49,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SchemaFieldRow } from '@/components/settings/schemaFields/SchemaFieldRow';
 import {
+    DECLARATIVE_BUTTON_GEOMETRY,
     createDeclarativeTextResolver,
     readDeclarativeRecord as record,
     renderDeclarativeNode,
@@ -54,7 +57,6 @@ import {
     type DeclarativeNodeRenderContext,
     type DeclarativeTextResolver,
 } from '@/components/plugins/shared/declarativeNodes';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useMountedPluginSettingsActionAdapter } from '@/components/settings/plugins/model/useMountedPluginSettingsActionAdapter';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -95,7 +97,7 @@ import {
 } from './pluginSurfaceDestinations';
 import { usePluginUiHostPalette, readPluginUiHostTypography, usePluginUiTheme } from './pluginUiThemeProjection';
 import { getPreferredLanguage, t } from '@/text';
-import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { usePluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type {
     PluginUiProjectionModel,
@@ -663,13 +665,10 @@ export function DeclarativePluginSurface(props: Readonly<{
         [props.environment],
     );
     const pluginLocale = getPreferredLanguage();
-    const localizePluginText = React.useMemo(
-        () => createPluginLocalizedTextResolver({
+    const localizePluginText = usePluginLocalizedTextResolver({
             projection: props.pluginUiProjection,
             locale: pluginLocale,
-        }),
-        [pluginLocale, props.pluginUiProjection],
-    );
+    });
     const model = record(props.model);
     const admittedModel = React.useMemo(() => admitDeclarativeStaticModel({
         model,
@@ -787,7 +786,12 @@ export function DeclarativePluginSurface(props: Readonly<{
     );
     const scopeSequenceRef = React.useRef(0);
     const pendingActionIdsRef = React.useRef(new Set<string>());
-    const minimumTouchTarget = resolveMinimumInteractiveTargetSize(Platform.OS);
+    // The smallest DRAWN row of a plugin surface: the WCAG pointer floor under every pointer, so a phone
+    // draws the rows a desktop draws. Buttons draw at the control height (DECLARATIVE_BUTTON_GEOMETRY) and
+    // fields draw their own chrome; a finger's 44 is the hit area the shared pressables reach for themselves.
+    const minimumTouchTarget = HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
+    // A line container (an Info section) draws a `state` node as one line among its rows.
+    const stateLine = useSurfaceStateCardSize() === 'line';
     const composerScopeKey = props.composerRef === undefined
         ? 'unavailable'
         : composerRefV1Key(props.composerRef);
@@ -1118,10 +1122,7 @@ export function DeclarativePluginSurface(props: Readonly<{
                     renderField={(secret) => {
                         const secretDisabled = secret.disabled || secret.saving;
                         const buttonStyle = (state: { disabled?: boolean; pressed?: boolean }) => ({
-                            minWidth: minimumTouchTarget,
-                            minHeight: minimumTouchTarget,
-                            justifyContent: 'center' as const,
-                            alignItems: 'center' as const,
+                            ...DECLARATIVE_BUTTON_GEOMETRY,
                             paddingHorizontal: presentationTheme.spacing.medium,
                             borderRadius: presentationTheme.radii.control,
                             backgroundColor: presentationTheme.colors.accent,
@@ -1136,7 +1137,6 @@ export function DeclarativePluginSurface(props: Readonly<{
                                     value={secret.value}
                                     disabled={secretDisabled}
                                     secure
-                                    minimumTouchTarget={minimumTouchTarget}
                                     theme={presentationTheme}
                                     onChangeText={secret.onChangeText}
                                 />
@@ -1205,7 +1205,6 @@ export function DeclarativePluginSurface(props: Readonly<{
                         label={label}
                         value={value === true}
                         disabled={disabled}
-                        minimumTouchTarget={minimumTouchTarget}
                         theme={presentationTheme}
                         onChange={(next) => {
                             void fieldModel?.commit({
@@ -1271,7 +1270,6 @@ export function DeclarativePluginSurface(props: Readonly<{
                         options={options}
                         value={parsedValue.success ? parsedValue.data : undefined}
                         disabled={disabled}
-                        minimumTouchTarget={minimumTouchTarget}
                         theme={presentationTheme}
                         isEqual={sameStrictJsonValue}
                         keyForOption={(_option, index) => `${nodePath}:${index}`}
@@ -1320,7 +1318,6 @@ export function DeclarativePluginSurface(props: Readonly<{
                     disabled={disabled}
                     keyboardType={control.kind === 'number' ? 'numeric' : 'default'}
                     secure={control.kind === 'secret'}
-                    minimumTouchTarget={minimumTouchTarget}
                     theme={presentationTheme}
                     onChangeText={(next) => {
                         if (binding?.secret === true) {
@@ -1339,10 +1336,7 @@ export function DeclarativePluginSurface(props: Readonly<{
                             disabled={disabled}
                             onPress={() => commitSetting({ kind: 'delete' })}
                             style={(state) => ({
-                                minWidth: minimumTouchTarget,
-                                minHeight: minimumTouchTarget,
-                                justifyContent: 'center',
-                                alignItems: 'center',
+                                ...DECLARATIVE_BUTTON_GEOMETRY,
                                 paddingHorizontal: presentationTheme.spacing.medium,
                                 borderRadius: presentationTheme.radii.control,
                                 backgroundColor: presentationTheme.colors.accent,
@@ -1377,10 +1371,7 @@ export function DeclarativePluginSurface(props: Readonly<{
                             }
                         }}
                         style={(state) => ({
-                            minWidth: minimumTouchTarget,
-                            minHeight: minimumTouchTarget,
-                            justifyContent: 'center',
-                            alignItems: 'center',
+                            ...DECLARATIVE_BUTTON_GEOMETRY,
                             paddingHorizontal: presentationTheme.spacing.medium,
                             borderRadius: presentationTheme.radii.control,
                             backgroundColor: presentationTheme.colors.accent,
@@ -1452,6 +1443,7 @@ export function DeclarativePluginSurface(props: Readonly<{
         contrast: props.contrast,
         minimumTouchTarget,
         useSharedSpinner: props.useSharedSpinner,
+        stateLine,
         resolveAction,
         renderField,
         renderFieldGroup: ({ key, title, description, children }) => (
@@ -1540,11 +1532,8 @@ export function DeclarativePluginSurface(props: Readonly<{
                             accessibilityLabel={documentSourceAction.label}
                             onPress={documentSourceAction.onPress}
                             style={(state) => ({
-                                minWidth: minimumTouchTarget,
-                                minHeight: minimumTouchTarget,
+                                ...DECLARATIVE_BUTTON_GEOMETRY,
                                 alignSelf: 'flex-start',
-                                justifyContent: 'center',
-                                alignItems: 'center',
                                 paddingHorizontal: presentationTheme.spacing.medium,
                                 borderRadius: presentationTheme.radii.control,
                                 backgroundColor: presentationTheme.colors.accent,

@@ -1,14 +1,14 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { PinIcon, PinSlashIcon } from '@/components/sessions/shell/sessionPinIcons';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
 import type { PersistedSessionMessagePinV1 } from "@happier-dev/session-core/pins";
 
 import { buildSessionMessagePinAtPressTime, type MessagePinAvailability } from './resolveMessagePinAvailability';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { useMessageActionHitArea } from './useMessageActionHitArea';
 
 export function MessagePinButton(props: Readonly<{
     availability: MessagePinAvailability;
@@ -19,10 +19,10 @@ export function MessagePinButton(props: Readonly<{
     onHoverOut?: () => void;
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
+    const hitArea = useMessageActionHitArea(props.invertedActionsLayout);
     if (props.availability.status !== 'available' || !props.onTogglePin) return null;
 
     const { pinTarget, pinned } = props.availability;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const iconColor = pinned ? theme.colors.state.active.foreground : theme.colors.text.secondary;
     const label = pinned
         ? t('session.transcriptNavigation.unpinMessageA11y')
@@ -38,23 +38,23 @@ export function MessagePinButton(props: Readonly<{
             onPress={handlePress}
             onHoverIn={props.onHoverIn}
             onHoverOut={props.onHoverOut}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
             accessibilityRole="button"
             accessibilityLabel={label}
             style={({ pressed }) => [
                 styles.button,
-                Platform.OS === 'web' ? styles.webActionButton : null,
                 props.invertedActionsLayout ? styles.webActionButtonInverted : null,
                 props.invertedActionsLayout ? styles.invertedSpacing : null,
                 {
                     alignItems: 'center',
                     justifyContent: 'center',
-                    minHeight: minimumInteractiveTargetSize,
-                    minWidth: minimumInteractiveTargetSize,
                 },
                 pinned ? styles.buttonPinned : null,
                 pressed ? styles.buttonPressed : null,
             ]}
         >
+            {hitArea.frame}
             {pinned ? (
                 <PinSlashIcon size={ICON_SIZE.xs} color={iconColor} />
             ) : (
@@ -66,14 +66,11 @@ export function MessagePinButton(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     button: {
-        padding: theme.space.s2,
+        padding: theme.space.s6,
         borderRadius: 6,
         opacity: 0.6,
         cursor: 'pointer',
         marginRight: theme.space.s6,
-    },
-    webActionButton: {
-        padding: theme.space.s6,
     },
     webActionButtonInverted: {
         paddingHorizontal: theme.space.s4,

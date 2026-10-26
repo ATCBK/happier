@@ -11,8 +11,12 @@ import type {
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { createPlainMachineRowFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 const network = await installSessionOpsNetworkBoundary();
+const { createPluginUiTranslationRuntime, PluginUiTranslationRuntimeProvider } = await import('@/sync/domains/plugins/ui/i18n');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { commitPreferredLanguage, getPreferredLanguage } = await import('@/text/preferredLanguage');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { fetchAndApplyMachines } = await import('@/sync/engine/machines/syncMachines');
 const { runtimeFetch } = await import('@/utils/system/runtimeFetch');
@@ -68,6 +72,7 @@ function action(input: Partial<PluginProjectionAction> & Readonly<{ id: string }
         surfaces: input.surfaces ?? ['ui'],
         placementBindings: input.placementBindings ?? ['rowAction'],
         inputHints: input.inputHints ?? null,
+        ...(input.localizedPresentation ? { localizedPresentation: input.localizedPresentation } : {}),
         priority: input.priority ?? null,
         dangerLevel: input.dangerLevel ?? 'safe',
         confirmation: input.confirmation ?? null,
@@ -94,6 +99,83 @@ function entry(actions: readonly PluginProjectionAction[]): PluginProjectionEntr
 }
 
 describe('PluginMessageActions', () => {
+    it('demands copy for a visible message Action through its scoped translation owner', async () => {
+        const projection: PluginUiProjectionModel = { ...EMPTY_PLUGIN_UI_PROJECTION, translationsByPluginId: {
+            'acme.preview': { id: 'translations:acme.preview', pluginId: 'acme.preview', contributionKind: 'translations',
+                locales: ['en'], resourceIdsByLocale: { en: 'copy-en' } },
+        } };
+        let reads = 0;
+        const runtime = createPluginUiTranslationRuntime({ projection, readResourceBytes: async () => {
+            reads++;
+            return new TextEncoder().encode('{"preview.title":"Localized preview"}');
+        } });
+        const declared = action({ id: 'open-preview', localizedPresentation: { title: { key: 'preview.title', fallback: 'Preview' } } });
+        const host = createPluginMessageActionHost({ sessionId: 'session-1', resolveCurrent: () => ({
+            pluginProjectionById: { 'acme.preview': entry([declared]) }, pluginUiProjection: projection,
+            resolveContributedAction: () => PluginProjectedActionV2Schema.parse({ id: 'open-preview', pluginId: 'acme.preview', occurrenceId: '7',
+                title: 'Preview', scopes: ['message'], surfaces: ['ui'], placementBindings: ['rowAction'], execution: { target: 'daemon' }, dangerLevel: 'safe', available: true }),
+            host: { machineId: 'machine-1', serverId, sessionId: 'session-1', isCurrent: () => true },
+        }) });
+        const screen = await renderScreen(<PluginUiTranslationRuntimeProvider runtime={runtime}>
+            <PluginMessageActionHostProvider host={host}>
+                <PluginMessageActions messageActionReference={messageReference} invertedActionsLayout={false} />
+            </PluginMessageActionHostProvider>
+        </PluginUiTranslationRuntimeProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('plugin-message-action:acme.preview/open-preview')?.props.accessibilityLabel).toBe('Localized preview'));
+            expect(reads).toBe(1);
+        } finally { await screen.unmount(); runtime.dispose(); }
+    });
+
+    it.each(['contextMenu', 'message.menu'] as const)('loads %s copy only when overflow opens and retains its trigger while copy arrives', async (placement) => {
+        const previousLanguage = getPreferredLanguage();
+        vi.useFakeTimers();
+        commitPreferredLanguage('fr');
+        const projection: PluginUiProjectionModel = { ...EMPTY_PLUGIN_UI_PROJECTION, translationsByPluginId: {
+            'acme.preview': { id: 'translations:acme.preview', pluginId: 'acme.preview', contributionKind: 'translations',
+                locales: ['en', 'fr', 'de'], resourceIdsByLocale: { en: 'copy-en', fr: 'copy-fr', de: 'copy-de' } },
+        } };
+        const reads: string[] = [];
+        const finish = new Map<string, (bytes: Uint8Array) => void>();
+        const runtime = createPluginUiTranslationRuntime({ projection, readResourceBytes: async (_projection, _pluginId, resourceId) => {
+            reads.push(resourceId);
+            return new Promise<Uint8Array>((resolve) => { finish.set(resourceId, resolve); });
+        } });
+        const declared = action({ id: 'menu-preview', placementBindings: [placement],
+            localizedPresentation: { title: { key: 'preview.title', fallback: 'Preview' } } });
+        const host = createPluginMessageActionHost({ sessionId: 'session-1', resolveCurrent: () => ({
+            pluginProjectionById: { 'acme.preview': entry([declared]) }, pluginUiProjection: projection,
+            resolveContributedAction: () => PluginProjectedActionV2Schema.parse({ id: declared.id, pluginId: 'acme.preview', occurrenceId: '7',
+                title: 'Preview', scopes: ['message'], surfaces: ['ui'], placementBindings: [placement], execution: { target: 'daemon' }, dangerLevel: 'safe', available: true }),
+            host: { machineId: 'machine-1', serverId, sessionId: 'session-1', isCurrent: () => true },
+        }) });
+        const screen = await renderScreen(<PluginUiTranslationRuntimeProvider runtime={runtime}>
+            <PluginMessageActionHostProvider host={host}>
+                <PluginMessageActions messageActionReference={messageReference} invertedActionsLayout={false} />
+            </PluginMessageActionHostProvider>
+        </PluginUiTranslationRuntimeProvider>);
+        try {
+            const trigger = screen.findByTestId('plugin-message-actions-overflow');
+            expect(trigger).toBeTruthy();
+            expect(reads).toEqual([]);
+            await screen.pressByTestIdAsync('plugin-message-actions-overflow');
+            await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+            expect(reads).toEqual(['copy-en', 'copy-fr']);
+            await act(async () => {
+                finish.get('copy-en')!(new TextEncoder().encode('{"preview.title":"English preview"}'));
+                finish.get('copy-fr')!(new TextEncoder().encode('{"preview.title":"Aperçu"}'));
+            });
+            expect(screen.getTextContent()).toContain('Aperçu');
+            expect(screen.findByTestId('plugin-message-actions-overflow')).toBe(trigger);
+            await screen.pressByTestIdAsync('plugin-message-actions-overflow');
+            await screen.pressByTestIdAsync('plugin-message-actions-overflow');
+            await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+            expect(screen.findByTestId('plugin-message-actions-overflow')?.props.accessibilityState?.expanded).toBe(true);
+            expect(reads).toEqual(['copy-en', 'copy-fr']);
+            expect(screen.getTextContent()).toContain('Aperçu');
+        } finally { await screen.unmount(); runtime.dispose(); commitPreferredLanguage(previousLanguage); vi.useRealTimers(); }
+    });
+
     beforeEach(async () => {
         network.resetRequests();
         const home = await network.addHome('https://message-actions.test', 'message-account');

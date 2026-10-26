@@ -1,5 +1,5 @@
 import React from 'react';
-import { I18nManager, Platform } from 'react-native';
+import { I18nManager } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
@@ -88,8 +88,9 @@ describe('PluginPermissionGrantSheet', () => {
 
         await pressTestInstanceAsync(screen.findByTestId('plugin-grant-dismiss'), 'plugin-grant-dismiss');
         expect(onDismiss).toHaveBeenCalledWith({ requestId: 'request-1' });
-        expect(screen.findByTestId('plugin-grant-grant')?.props.style.minHeight).toBe(44);
-        expect(screen.findByTestId('plugin-grant-dismiss')?.props.style.minHeight).toBe(44);
+        // The actions keep their drawn padding box; a finger's target is the shared hit area, not a floor.
+        expect(screen.findByTestId('plugin-grant-grant')?.props.style.minHeight).toBeUndefined();
+        expect(screen.findByTestId('plugin-grant-dismiss')?.props.style.minHeight).toBeUndefined();
     });
 
     it('renders caller-supplied disclosure facts inside the canonical accessible review summary', async () => {
@@ -360,44 +361,5 @@ describe('PluginPermissionGrantSheet', () => {
 
         expect(screen.getTextContent()).toContain('CodeRabbit');
         expect(screen.findByTestId('plugin-grant-invalid-timestamp-requested-at')).toBeNull();
-    });
-
-    it('keeps grant and dismiss actions at least 48dp tall on Android', async () => {
-        const mod = await loadSheet();
-        expect(mod).not.toBeNull();
-        if (!mod) return;
-
-        const previousPlatform = Platform.OS;
-        (Platform as { OS: string }).OS = 'android';
-        try {
-            const screen = await renderScreen(
-                <mod.PluginPermissionGrantSheet
-                    pendingRequest={{
-                        id: 'request-1',
-                        pluginId: 'review-coderabbit',
-                        pluginName: 'CodeRabbit',
-                        capability: 'reviews.comments.write.direct',
-                        targetScope: { kind: 'workspace', workspaceId: 'workspace-1' },
-                        status: 'pending',
-                        createdAt: 1,
-                        updatedAt: 1,
-                    }}
-                    labels={{
-                        title: 'Plugin permission request',
-                        body: ({ pluginName, pluginId }) => `${pluginName} (${pluginId}) requested a permission.`,
-                        grant: 'Grant permission',
-                        dismiss: 'Dismiss request',
-                    }}
-                    onGrant={() => {}}
-                    onDismiss={() => {}}
-                    testID="plugin-grant-android"
-                />,
-            );
-
-            expect(screen.findByTestId('plugin-grant-android-grant')?.props.style.minHeight).toBeGreaterThanOrEqual(48);
-            expect(screen.findByTestId('plugin-grant-android-dismiss')?.props.style.minHeight).toBeGreaterThanOrEqual(48);
-        } finally {
-            (Platform as { OS: string }).OS = previousPlatform;
-        }
     });
 });

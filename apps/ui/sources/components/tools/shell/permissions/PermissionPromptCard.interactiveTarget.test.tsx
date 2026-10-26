@@ -144,12 +144,11 @@ describe('PermissionPromptCard interactive targets', () => {
     });
 
     it.each([
-        // This harness has a precise pointer; the shared owner reserves touch floors for fingers.
-        { platform: 'web', minimumSize: 24 },
-        { platform: 'android', minimumSize: 48 },
+        { platform: 'web' },
+        { platform: 'android' },
     ] as const)(
-        'keeps the View Tool hit target at least $minimumSize on $platform without enlarging its icon',
-        async ({ platform, minimumSize }) => {
+        'draws the View Tool button at its padded icon size on $platform; the touch target is its hit area',
+        async ({ platform }) => {
             platformEnvironment.platform = platform;
             const { PermissionPromptCard } = await import('./PermissionPromptCard');
             const request = {
@@ -177,10 +176,8 @@ describe('PermissionPromptCard interactive targets', () => {
             if (!viewToolAction) {
                 throw new Error('Expected the View Tool action to be rendered');
             }
-            expect(flattenStyle(viewToolAction.props.style)).toMatchObject({
-                minWidth: minimumSize,
-                minHeight: minimumSize,
-            });
+            expect(flattenStyle(viewToolAction.props.style).minWidth).toBeUndefined();
+            expect(flattenStyle(viewToolAction.props.style).minHeight).toBeUndefined();
             expect(viewToolAction.findByType('Icon' as any).props.size).toBe(18);
         },
     );

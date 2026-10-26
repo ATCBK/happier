@@ -1,11 +1,10 @@
 import React from 'react';
-import { I18nManager, Platform, Pressable, View } from 'react-native';
+import { I18nManager, Pressable, View, type ViewStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierBrandMark } from '@happier-dev/plugin-ui/presentation';
+import { HappierBrandMark, useHappierHitArea } from '@happier-dev/plugin-ui/presentation';
 
 import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import type { PluginPermissionPendingGrantRequest } from '@/sync/domains/plugins/permissions/types';
 import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
@@ -95,6 +94,36 @@ function describeField(label: string | undefined, value: string): string {
     return label ? `${label}: ${value}` : value;
 }
 
+/**
+ * A grant-sheet action keeps its drawn padding box; under a finger the shared hit-area owner reaches
+ * the touch target past it, sideways only into half of the gap to the other action.
+ */
+function GrantSheetAction(props: Readonly<{
+    testID?: string;
+    disabled: boolean;
+    onPress: (() => void) | undefined;
+    style: ViewStyle;
+    hitReach: number;
+    children: React.ReactNode;
+}>) {
+    const hitArea = useHappierHitArea({ restingStyle: () => props.style, hitReach: props.hitReach });
+    return (
+        <Pressable
+            onPress={props.onPress}
+            testID={props.testID}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: props.disabled }}
+            disabled={props.disabled}
+            hitSlop={hitArea.hitSlop}
+            onLayout={hitArea.onLayout}
+            style={props.style}
+        >
+            {hitArea.frame}
+            {props.children}
+        </Pressable>
+    );
+}
+
 export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProps) {
     const { theme } = useUnistyles();
     const presentationTheme = usePluginUiTheme(theme);
@@ -104,7 +133,6 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
     const authority = describeAuthority(props.pendingRequest);
     const requestedAt = describeTimestamp(props.pendingRequest.createdAt);
     const disabled = props.disabled === true;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const reason = typeof props.pendingRequest.reason === 'string'
         ? props.pendingRequest.reason.trim()
         : '';
@@ -203,14 +231,12 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                 ))}
             </View>
             <View style={{ flexDirection: 'row', gap: theme.space.s8, flexWrap: 'wrap' }}>
-                <Pressable
+                <GrantSheetAction
                     onPress={disabled ? undefined : grant}
                     testID={props.testID ? `${props.testID}-grant` : undefined}
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled }}
                     disabled={disabled}
+                    hitReach={theme.space.s8 / 2}
                     style={{
-                        minHeight: minimumInteractiveTargetSize,
                         justifyContent: 'center',
                         paddingHorizontal: theme.space.s10,
                         paddingVertical: theme.space.s6,
@@ -221,15 +247,13 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                     <Text style={{ color: theme.colors.button.primary.tint }}>
                         {props.labels.grant}
                     </Text>
-                </Pressable>
-                <Pressable
+                </GrantSheetAction>
+                <GrantSheetAction
                     onPress={disabled ? undefined : dismiss}
                     testID={props.testID ? `${props.testID}-dismiss` : undefined}
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled }}
                     disabled={disabled}
+                    hitReach={theme.space.s8 / 2}
                     style={{
-                        minHeight: minimumInteractiveTargetSize,
                         justifyContent: 'center',
                         paddingHorizontal: theme.space.s10,
                         paddingVertical: theme.space.s6,
@@ -241,7 +265,7 @@ export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProp
                     <Text style={{ color: theme.colors.text.primary }}>
                         {props.labels.dismiss}
                     </Text>
-                </Pressable>
+                </GrantSheetAction>
             </View>
         </View>
     );

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
+import type { HappierHitReach } from '@happier-dev/plugin-ui/environment';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -147,6 +148,8 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
     expanded: boolean;
     onToggleExpanded: () => void;
     showToolCalls?: boolean;
+    /** How far the header's hit area may reach past its drawn box, where a neighbour contends for the room. */
+    hitReach?: HappierHitReach;
 }>) {
     const { theme } = useUnistyles();
     const terminalStatusLabel =
@@ -167,6 +170,7 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
             accessibilityRole="button"
             accessibilityLabel={`${t('session.toolCalls')}: ${props.count}`}
             expanded={props.expanded}
+            {...(props.hitReach === undefined ? {} : { hitReach: props.hitReach })}
             style={({ pressed }) => [
                 chromeStyles.header,
                 pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),

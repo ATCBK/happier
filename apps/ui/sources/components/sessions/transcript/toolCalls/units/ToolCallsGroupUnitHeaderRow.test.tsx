@@ -370,6 +370,25 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
         expect(screen.findByTestId('transcript-anchor-tool-group-m2')).not.toBeNull();
     });
 
+    // The header follows a message's action row, whose buttons overhang their band into the card's inset; the
+    // header's hit area must not reach up into them (it keeps its full reach below, where nothing contends).
+    it('keeps the header hit area off the message-action row above it', async () => {
+        const { act } = await import('react-test-renderer');
+        const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
+        const screen = await renderScreen(React.createElement(HappierUiPlatformProvider, { platform: { platform: 'ios', colorScheme: 'light' } },
+            React.createElement(ToolCallsGroupUnitHeaderRowWithSessionCommon, {
+                sessionId: 's1', groupId: 'toolCalls:t1:m1', metadata: null, interaction, expanded: false, setExpanded: vi.fn(),
+                ...createTranscriptSessionCommonPropsFixture(),
+                toolMessages: [createToolCallMessageFixture({ id: 'm1', createdAt: 1 })],
+            } as any)));
+        await act(async () => {
+            screen.findByTestId('transcript-tool-calls-header')?.props.onLayout({ nativeEvent: { layout: { width: 338, height: 28 } } });
+        });
+        const slop = screen.findByTestId('transcript-tool-calls-header')?.props.hitSlop as Record<'top' | 'bottom', number>;
+        expect(slop.top).toBeLessThanOrEqual(1.5);
+        expect(slop.bottom).toBe(8);
+    });
+
     it('renders nothing for an empty group', async () => {
         const screen = await renderHeaderRow({ toolMessages: [] });
         expect(screen.findByTestId('transcript-tool-calls-header')).toBeNull();

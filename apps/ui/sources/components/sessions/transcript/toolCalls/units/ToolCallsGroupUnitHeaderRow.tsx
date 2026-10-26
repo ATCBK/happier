@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
 import type { ToolCallMessage } from "@happier-dev/session-core/messages";
 
 import { TranscriptEnterWrapper } from '@/components/sessions/transcript/motion/TranscriptEnterWrapper';
 import { TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
+import { resolveMessageActionNeighbourGapPx } from '@/components/sessions/transcript/messageActions/messageActionNeighbourGap';
 import {
     type TranscriptSessionCommonProps,
     useTranscriptSessionCommon,
@@ -46,6 +48,7 @@ export const ToolCallsGroupUnitHeaderRow = React.memo(function ToolCallsGroupUni
 export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function ToolCallsGroupUnitHeaderRowWithSessionCommon(
     props: ToolCallsGroupUnitHeaderRowProps & TranscriptSessionCommonProps,
 ) {
+    const { theme } = useUnistyles();
     const variant = resolveToolCallsGroupChromeVariant(props.toolChromeCommon);
     const chromeMode = toolCallsGroupChromeModeForVariant(variant);
     const { setExpanded } = props;
@@ -80,6 +83,8 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
                         expanded={props.expanded}
                         onToggleExpanded={onToggleExpanded}
                         showToolCalls={props.toolChromeCommon.showToolCalls}
+                        // The row above is a message's action row, whose buttons overhang into this card: split the room.
+                        hitReach={{ top: resolveMessageActionNeighbourGapPx(theme) / 2 }}
                     />
                 </ToolCallsGroupUnitRowFrame>
             </TranscriptEnterWrapper>

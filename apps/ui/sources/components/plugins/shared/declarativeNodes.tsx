@@ -14,6 +14,7 @@ import { Text } from '@/components/ui/text/Text';
 import { resolvePluginUiIconName } from '@/components/plugins/surfaces/iconToken/resolvePluginUiIconToken';
 import { t } from '@/text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 export { readDeclarativeRecord, readDeclarativeText, createDeclarativeTextResolver, DECLARATIVE_TONE_TO_HAPPIER_TONE, DECLARATIVE_STATE_PRESENTATION, resolveDeclarativePresentationTone, resolveDeclarativeToneColor } from '@happier-dev/plugin-ui/declarative';
 export type { DeclarativeTextResolver, DeclarativeFindTextBlock, DeclarativeActionAffordance } from '@happier-dev/plugin-ui/declarative';
 type RecordValue = Readonly<Record<string, unknown>>;
@@ -70,6 +71,19 @@ export const DECLARATIVE_TONE_ACCESSIBILITY_LABELS: Readonly<Record<
     danger: () => t('common.error'),
 });
 
+/**
+ * The drawn geometry of a declarative button, at the page control height the shared plugin-ui
+ * `Button` draws (`HAPPIER_PAGE_METRICS.controlHeightPx`, 32). It is the same on every pointer: a
+ * finger's 44/48 is the hit area the shared pressable reaches past the drawn button, never a size
+ * declared here. Padding keeps a wrapped label breathing inside the box.
+ */
+export const DECLARATIVE_BUTTON_GEOMETRY = Object.freeze({
+    minHeight: HAPPIER_PAGE_METRICS.controlHeightPx,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 4,
+} as const);
+
 function resolveVariantColors(colors: ThemeColors, variant: unknown) {
     const resolver = typeof variant === 'string'
         ? DECLARATIVE_ACTION_VARIANT_COLORS[variant as PluginDeclarativeActionVariantV2]
@@ -94,10 +108,7 @@ function renderActionAffordance(
             busy={affordance.busy}
             onPress={affordance.onPress ?? (() => undefined)}
             style={(state) => ({
-                minWidth: context.minimumTouchTarget,
-                minHeight: context.minimumTouchTarget,
-                justifyContent: 'center',
-                alignItems: 'center',
+                ...DECLARATIVE_BUTTON_GEOMETRY,
                 paddingHorizontal: 12,
                 borderRadius: 10,
                 borderWidth: 1,

@@ -6,7 +6,7 @@ import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/a
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import React, { useRef, useState } from 'react';
-import { View, TouchableOpacity, Platform } from 'react-native';
+import { View, Platform } from 'react-native';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -25,7 +25,7 @@ import {
 import { parseParenIdentifier } from "@happier-dev/session-core/tools";
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { PermissionDecisionButton } from './PermissionDecisionButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
     clearPermissionAnswerUnconfirmed,
@@ -300,11 +300,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     // The catalog write targets the request's Home; a tray card may leave `serverId` to the transcript source.
     const catalogScopeResolution = useServerCredentialAccountScopeResolution(serverId ?? source.serverId ?? undefined);
     const catalogScope = catalogScopeResolution.kind === 'bound' ? catalogScopeResolution.scope : null;
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const minimumInteractiveTargetStyle = {
-        minWidth: minimumInteractiveTargetSize,
-        minHeight: minimumInteractiveTargetSize,
-    };
     const alignedButtonStyle = alignFirstButtonToStart ? styles.buttonAlignedToStart : null;
     // The Session transport below is reachable only when no Execution Run owns
     // the request: that origin renders its own two decisions and never reads
@@ -417,18 +412,18 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                 markTranscriptPromptAnswered(source, permission.id);
             }}
             renderDecision={(decision) => (
-                <TouchableOpacity
+                <PermissionDecisionButton
                     testID="permission-footer.always-allow"
                     accessibilityRole="button"
                     accessibilityState={{ busy: decision.busy }}
-                    style={[styles.button, minimumInteractiveTargetStyle, alignedButtonStyle]}
+                    style={[styles.button, alignedButtonStyle]}
                     onPress={decision.onPress}
                     activeOpacity={0.7}
                 >
                     <View style={styles.buttonContent}>
                         <Text style={styles.buttonText} numberOfLines={1} ellipsizeMode="tail">{decision.label}</Text>
                     </View>
-                </TouchableOpacity>
+                </PermissionDecisionButton>
             )}
         />
     ) : null;
@@ -892,7 +887,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
                 <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                     {decisions.map((decision) => (
-                        <TouchableOpacity
+                        <PermissionDecisionButton
                             key={decision.key}
                             testID={`permission-footer.${decision.key}`}
                             accessibilityRole="button"
@@ -900,7 +895,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 disabled: actionsDisabled,
                                 busy: loadingButton === decision.key || executionRunAnswerPending,
                             }}
-                            style={[styles.button, minimumInteractiveTargetStyle, alignedButtonStyle, isPending && decision.key === 'allow' && styles.buttonAllow]}
+                            style={[styles.button, alignedButtonStyle, isPending && decision.key === 'allow' && styles.buttonAllow]}
                             onPress={decision.onPress}
                             disabled={actionsDisabled}
                             activeOpacity={isPending ? 0.7 : 1}
@@ -920,7 +915,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                     </Text>
                                 </View>
                             )}
-                        </TouchableOpacity>
+                        </PermissionDecisionButton>
                     ))}
                 </View>
                 {actionFailureNode}
@@ -936,7 +931,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         return (
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
                 <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         testID="permission-footer.deny"
                         ref={primaryAnswerRef}
                         accessibilityRole="button"
@@ -947,7 +942,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonDeny,
                             isDeniedViaNo && styles.buttonSelected,
@@ -976,7 +970,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 </View>
                 {actionFailureNode}
             </View>
@@ -990,7 +984,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
             <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
                 <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
                     {/* Decision protocol: Yes button */}
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         testID="permission-footer.allow"
                         ref={primaryAnswerRef}
                         accessibilityRole="button"
@@ -1001,7 +995,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonAllow,
                             isCodexApproved && styles.buttonSelected,
@@ -1026,11 +1019,11 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
 
                     {/* Decision protocol: Yes, always allow this command button */}
                     {canApproveExecPolicy && (
-                        <TouchableOpacity
+                        <PermissionDecisionButton
                             testID="permission-footer.allow-execpolicy"
                             accessibilityRole="button"
                             accessibilityState={{
@@ -1040,7 +1033,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                             }}
                             style={[
                                 styles.button,
-                                minimumInteractiveTargetStyle,
                                 alignedButtonStyle,
                                 isPending && styles.buttonForSession,
                                 isCodexApprovedExecPolicy && styles.buttonSelected,
@@ -1065,14 +1057,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                     </Text>
                                 </View>
                             )}
-                        </TouchableOpacity>
+                        </PermissionDecisionButton>
                     )}
 
                     {alwaysAllowNode}
 
                     {/* Decision protocol: Yes, and don't ask for a session button */}
                     {!onceOnlyApproval && (
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         testID="permission-footer.allow-for-session"
                         accessibilityRole="button"
                         accessibilityState={{
@@ -1082,7 +1074,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonForSession,
                             isCodexApprovedForSession && styles.buttonSelected,
@@ -1107,10 +1098,10 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                     )}
 
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         testID="permission-footer.deny"
                         accessibilityRole="button"
                         accessibilityState={{
@@ -1120,7 +1111,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonDeny,
                             isDeniedViaNo && styles.buttonSelected,
@@ -1149,10 +1139,10 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
 
                     {/* Decision-protocol providers can customize stop handling through registry behavior. */}
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         testID="permission-footer.stop"
                         accessibilityRole="button"
                         accessibilityState={{
@@ -1162,7 +1152,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonDeny,
                             isCodexAborted && styles.buttonSelected,
@@ -1187,7 +1176,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 </View>
                 {actionFailureNode}
             </View>
@@ -1212,7 +1201,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     return (
         <View style={[styles.container, embedded ? styles.containerEmbedded : styles.containerStandalone]}>
             <View style={[styles.buttonContainer, answerUnconfirmed && styles.buttonContainerWithheld]}>
-                <TouchableOpacity
+                <PermissionDecisionButton
                     testID="permission-footer.allow"
                     ref={primaryAnswerRef}
                     accessibilityRole="button"
@@ -1223,7 +1212,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                     }}
                     style={[
                         styles.button,
-                        minimumInteractiveTargetStyle,
                         alignedButtonStyle,
                         isPending && styles.buttonAllow,
                         isApprovedViaAllow && styles.buttonSelected,
@@ -1248,11 +1236,11 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                             </Text>
                         </View>
                     )}
-                </TouchableOpacity>
+                </PermissionDecisionButton>
 
                 {/* Allow All Edits button - only show for edit/write tools */}
                 {!onceOnlyApproval && (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write' || toolName === 'NotebookEdit') && (
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         accessibilityRole="button"
                         accessibilityState={{
                             disabled: primaryActionsDisabled,
@@ -1261,7 +1249,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonAllowAll,
                             isApprovedViaAllEdits && styles.buttonSelected,
@@ -1286,12 +1273,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 )}
 
                 {/* Allow for session button - only show for non-edit, non-exit-plan tools */}
                 {!onceOnlyApproval && supportsSessionPermissionRule(toolName) && (
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         accessibilityRole="button"
                         accessibilityState={{
                             disabled: ruleActionsDisabled,
@@ -1300,7 +1287,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonForSession,
                             ((isShellTool ? isApprovedForSessionToolWide : isApprovedForSession) && styles.buttonSelected),
@@ -1325,14 +1311,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 )}
 
                 {alwaysAllowNode}
 
                 {/* Allow subcommand for session (shell tools only) */}
                 {toolName && toolName !== 'Edit' && toolName !== 'MultiEdit' && toolName !== 'Write' && toolName !== 'NotebookEdit' && toolName !== 'exit_plan_mode' && toolName !== 'ExitPlanMode' && showAllowForSessionSubcommand && (
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         accessibilityRole="button"
                         accessibilityState={{
                             disabled: ruleActionsDisabled,
@@ -1341,7 +1327,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonForSession,
                             (isApprovedForSessionSubcommand && !isApprovedForSessionCommandName) && styles.buttonSelected,
@@ -1371,12 +1356,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 )}
 
                 {/* Allow command name for session (shell tools only) */}
                 {toolName && toolName !== 'Edit' && toolName !== 'MultiEdit' && toolName !== 'Write' && toolName !== 'NotebookEdit' && toolName !== 'exit_plan_mode' && toolName !== 'ExitPlanMode' && showAllowForSessionCommandName && (
-                    <TouchableOpacity
+                    <PermissionDecisionButton
                         accessibilityRole="button"
                         accessibilityState={{
                             disabled: ruleActionsDisabled,
@@ -1385,7 +1370,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         }}
                         style={[
                             styles.button,
-                            minimumInteractiveTargetStyle,
                             alignedButtonStyle,
                             isPending && styles.buttonForSession,
                             isApprovedForSessionCommandName && styles.buttonSelected,
@@ -1410,10 +1394,10 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
+                    </PermissionDecisionButton>
                 )}
 
-                <TouchableOpacity
+                <PermissionDecisionButton
                     testID="permission-footer.deny"
                     accessibilityRole="button"
                     accessibilityState={{
@@ -1423,7 +1407,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                     }}
                     style={[
                         styles.button,
-                        minimumInteractiveTargetStyle,
                         alignedButtonStyle,
                         isPending && styles.buttonDeny,
                         isDeniedViaNo && styles.buttonSelected,
@@ -1452,9 +1435,9 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                             </Text>
                         </View>
                     )}
-                </TouchableOpacity>
+                </PermissionDecisionButton>
 
-                <TouchableOpacity
+                <PermissionDecisionButton
                     testID="permission-footer.stop"
                     accessibilityRole="button"
                     accessibilityState={{
@@ -1464,7 +1447,6 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                     }}
                     style={[
                         styles.button,
-                        minimumInteractiveTargetStyle,
                         alignedButtonStyle,
                         isPending && styles.buttonDeny,
                         isStopped && styles.buttonSelected,
@@ -1493,7 +1475,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                             </Text>
                         </View>
                     )}
-                </TouchableOpacity>
+                </PermissionDecisionButton>
             </View>
             {actionFailureNode}
         </View>
