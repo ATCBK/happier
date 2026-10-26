@@ -3,7 +3,8 @@ import { shallow } from 'zustand/shallow';
 import { usePreferredLanguage } from '@/text';
 
 import { isAutomationSessionCandidate, isAutomationSessionCandidateVisible } from '@/sync/domains/automations/isAutomationSessionCandidate';
-import { getStorage } from '@/sync/domains/state/storage';
+import { getStorage, useSetting } from '@/sync/domains/state/storage';
+import type { Settings } from '@/sync/domains/settings/settings';
 import type { WorkflowExistingSessionOption } from '@/sync/domains/workflows/workflowAuthoring';
 import { resolveDisplayMachineIdForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import type { StorageState } from '@/sync/store/types';
@@ -35,6 +36,7 @@ type WorkflowSessionOptionsState = WorkflowSessionOptions & Readonly<{
     retrySessionOptions: () => void;
 }>;
 type AcquisitionStatus = Readonly<{ acquisition: object | null; status: 'loading' | 'ready' | 'error' }>;
+type WorkflowSessionPolicy = Pick<Settings, 'backendEnabledByTargetKey'>;
 
 const NO_OPTIONS: readonly WorkflowExistingSessionOption[] = [];
 const NO_ROWS: readonly SessionListRenderableSession[] = [];
@@ -86,11 +88,11 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
         option: WorkflowExistingSessionOption | null;
     }>>();
     let projectionInputs: readonly unknown[] | null = null;
-    return (state: StorageState, language: ReturnType<typeof usePreferredLanguage>): WorkflowSessionOptions => {
+    return (state: StorageState, language: ReturnType<typeof usePreferredLanguage>, policy: WorkflowSessionPolicy): WorkflowSessionOptions => {
         // Subscribe the projection to its inputs, not to every root publication.
         // Target resolution also reads Machine and list-row facts through the
         // canonical resolver; those remain live even when Session records do not change.
-        const inputs = [state.sessions, state.settings, state.isDataReady, state.machines,
+        const inputs = [state.sessions, policy, state.isDataReady, state.machines,
             state.machineListByServerId, state.machineListStatusByServerId,
             state.sessionListRowsByServerId, state.getProjectForSession, language];
         if (projectionInputs !== null && shallow(inputs, projectionInputs)) return previous;
@@ -99,7 +101,7 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
         // target or name. Retain each immutable record's projection; canonical
         // list-row changes invalidate only that row, shared target/policy/locale
         // changes invalidate all. Membership still follows the current store.
-        const environment = [state.settings, state.isDataReady, state.machines,
+        const environment = [policy, state.isDataReady, state.machines,
             state.machineListByServerId, state.machineListStatusByServerId, state.getProjectForSession, language];
         if (environmentInputs === null || !shallow(environment, environmentInputs)) {
             optionsBySession = new WeakMap();
@@ -112,7 +114,7 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
             let cached = optionsBySession.get(session);
             if (!cached || cached.row !== row) {
                 let option: WorkflowExistingSessionOption | null = null;
-                if (isAutomationSessionCandidate(session, state.settings)) {
+                if (isAutomationSessionCandidate(session, policy)) {
                     const sessionMachineId = resolveDisplayMachineIdForSessionFromState({
                         state, serverId: session.serverId, sessionId: session.id, metadata: session.metadata,
                     });
@@ -171,6 +173,10 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
             }
             throwIfAborted(controller.signal);
             if (!binding.isCurrent()) return;
+            // Publish the acquisition's actual read admission, not merely its
+            // intent. Partial options must not start fresh reads while a retry
+            // is still waiting on the canonical reachability owner.
+            setInventory({ acquisition, status: 'loading' });
             await ensureSessionMetadataInventoryForServerAccountScope({ scope: binding.scope, accountLifetime: binding,
                 signal: controller.signal });
         })().then(() => {
@@ -181,22 +187,26 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
         return () => { controller.abort(); retirement.dispose(); };
     }, [acquisition, binding, enabled, retries]);
     const inventoryStatus = !binding ? 'ready' : inventory.acquisition === acquisition ? inventory.status : 'loading';
+    const inventoryReadStarted = inventory.acquisition === acquisition;
 
     const unopenedSelector = React.useMemo(() => enabled ? createUnopenedRowsSelector(serverId) : selectNoRows, [enabled, serverId]);
     const unopenedRows = getStorage()(unopenedSelector);
-    const settings = getStorage()(state => unopenedRows.length > 0 ? state.settings : null);
+    const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
+    // Automation's Agent policy reads only this Account preference. Unrelated
+    // preference edits do not invalidate hydrated options or restart snapshot admission.
+    const policy = React.useMemo<WorkflowSessionPolicy>(() => ({ backendEnabledByTargetKey }), [backendEnabledByTargetKey]);
     // Only the displayed option projection is local. Session inventory, paging,
     // read batching, crypto and currentness stay with the existing Session owners.
     const [unopened, setUnopened] = React.useState<Readonly<{
         binding: typeof binding;
         options: readonly WorkflowExistingSessionOption[];
     }> & AcquisitionStatus>({ binding: null, options: NO_OPTIONS, acquisition: null, status: 'ready' });
-    const snapshotAcquisition = React.useMemo(() => ({}), [acquisition, unopenedRows, settings]);
+    const snapshotAcquisition = React.useMemo(() => ({}), [acquisition, unopenedRows, policy]);
     React.useEffect(() => {
-        // Bootstrap may publish partial rows while the shared inventory is paging.
-        // Start the aggregate detail read only after that acquisition completes;
-        // subsequent material row changes still refresh through this same owner.
-        if (!enabled || !binding || inventoryStatus !== 'ready' || unopenedRows.length === 0) return;
+        // Offer admitted pages while the inventory continues. Ordinary bootstrap
+        // rows may still lack owner facts; only their missing-detail fallback
+        // waits for completion, so paging never restarts a fleet-sized read.
+        if (!enabled || !binding || !inventoryReadStarted || inventoryStatus === 'error' || unopenedRows.length === 0) return;
         const controller = new AbortController();
         const retirement = binding.onRetire(() => controller.abort());
         setUnopened(previous => ({ binding, options: previous.binding === binding ? previous.options : NO_OPTIONS,
@@ -216,7 +226,7 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
                 if (!isCurrent()) return;
                 const state = getStorage().getState();
                 const accountSettings = readAccountSettingsForScope({ scope: binding.scope,
-                    focusedScope: state.settingsScope, focusedSettings: settings ?? state.settings });
+                    focusedScope: state.settingsScope, focusedSettings: state.settings });
                 const optionsById = new Map<string, WorkflowExistingSessionOption>();
                 let failed = false;
                 const publishOption = (sessionId: string, option: WorkflowExistingSessionOption | undefined) => {
@@ -252,6 +262,8 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
                     if (option) optionsById.set(row.id, option);
                 }
                 if (missingIds.length > 0) {
+                    await currentness.ensureCurrent();
+                    if (!isCurrent()) return;
                     // The admitted cohort settles together, without N queued
                     // option-array copies. Missing rows keep their last answer
                     // until the exact owner settles each one progressively.
@@ -266,6 +278,10 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
                         return { binding, acquisition: snapshotAcquisition,
                             options: sameOptions(previous.options, options) ? previous.options : options, status: 'loading' };
                     });
+                    // Later inventory pages still hold the ciphertext needed to
+                    // admit these facts. Keep partial options usable and loading;
+                    // do not duplicate that work through Session detail reads.
+                    if (inventoryStatus !== 'ready') return;
                     await readSessionSnapshotsForAuthority({ authority, sessionIds: missingIds,
                         includeTurns: false, signal: controller.signal, isCurrent, accountCurrentnessSource: currentness,
                         onResult: (sessionId, result) => {
@@ -294,7 +310,7 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
             if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ ...previous, acquisition: snapshotAcquisition, status: 'error' }));
         });
         return () => { controller.abort(); retirement.dispose(); };
-    }, [snapshotAcquisition, binding, enabled, inventoryStatus, unopenedRows, settings]);
+    }, [snapshotAcquisition, binding, enabled, inventoryReadStarted, inventoryStatus, unopenedRows, policy]);
     const unopenedStatus = unopened.acquisition === snapshotAcquisition ? unopened.status : 'loading';
     // Every Session the canonical candidacy owner can continue, on any Machine
     // of this server: the drop target needs them to state *why* a Session on
@@ -302,8 +318,8 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     // Where Machine's.
     const language = usePreferredLanguage();
     const selector = React.useMemo(() => createOptionsSelector(serverId, machineId), [serverId, machineId]);
-    const selectHydrated = React.useCallback((state: StorageState) => enabled ? selector(state, language) : selectNoOptions(),
-        [enabled, language, selector]);
+    const selectHydrated = React.useCallback((state: StorageState) => enabled ? selector(state, language, policy) : selectNoOptions(),
+        [enabled, language, policy, selector]);
     const hydrated = getStorage()(selectHydrated);
     return React.useMemo<WorkflowSessionOptionsState>(() => {
         const ids = new Set(unopenedRows.map(row => row.id));

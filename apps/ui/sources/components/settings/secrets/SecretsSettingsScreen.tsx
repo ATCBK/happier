@@ -13,7 +13,8 @@ import { Modal } from '@/modal';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { useSettingsVersion } from '@/sync/store/hooks';
+import { useSettingsReady } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import {
@@ -36,14 +37,17 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
     const navigation = useNavigation();
     const catalog = useSavedSecretCatalog();
     const scope = useAccountSettingsScope();
-    const settingsVersion = useSettingsVersion();
+    const settingsReady = useSettingsReady();
     const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
     const currentScopeKey = React.useRef(scopeKey);
     currentScopeKey.current = scopeKey;
     // The secret whose recipients are being chosen. Nothing is written while it
     // is set: promotion is irreversible, so it carries the chosen grants and
     // happens once, on save.
-    const [sharingPersonal, setSharingPersonal] = React.useState<SavedSecret | null>(null);
+    const [sharingPersonal, setSharingPersonal] = React.useState<Readonly<{
+        secret: SavedSecret;
+        expectedSettingsVersion: number;
+    }> | null>(null);
     const [creating, setCreating] = React.useState(false);
     const [accessDirty, setAccessDirty] = React.useState(false);
     const [createDirty, setCreateDirty] = React.useState(false);
@@ -213,7 +217,9 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         if (!scope) return;
         // Deleting runs the owner reference census, which reads the owner's own
         // current Account Settings; without a known version it cannot run.
-        if (settingsVersion === null) return;
+        const settings = getStorage().getState();
+        if (!areServerAccountScopesEqual(settings.settingsScope, scope) || settings.settingsVersion === null) return;
+        const settingsVersion = settings.settingsVersion;
         if (sharedMutationPending || approval.approvalPending) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime || !areServerAccountScopesEqual(lifetime.scope, scope) || !lifetime.isCurrent()) return;
@@ -271,7 +277,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         } catch (cause) {
             handleFailure(cause);
         }
-    }, [alertDeleteRefusal, approval, catalog, scope, scopeKey, settingsVersion, sharedMutationPending]);
+    }, [alertDeleteRefusal, approval, catalog, scope, scopeKey, sharedMutationPending]);
 
     const removeShared = React.useCallback(async (entry: SavedSecretCatalogEntryV1) => {
         const parsed = parseSavedSecretCatalogReferenceV1(entry.ref);
@@ -293,13 +299,13 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
     // secret and managing a shared one's access are the same editor with a different target.
     const accessEditor = (() => {
         if (!catalog.sharedEnabled || !scope) return null;
-        if (settingsVersion !== null && sharingPersonal) {
+        if (settingsReady && sharingPersonal) {
             return {
-                key: sharingPersonal.id,
+                key: sharingPersonal.secret.id,
                 element: (
                     <SavedSecretAccessEditor
-                        key={`${scope.serverId}:${scope.accountId}:personal:${sharingPersonal.id}`}
-                        target={{ kind: 'personal', secret: sharingPersonal, expectedSettingsVersion: settingsVersion }}
+                        key={`${scope.serverId}:${scope.accountId}:personal:${sharingPersonal.secret.id}`}
+                        target={{ kind: 'personal', ...sharingPersonal }}
                         scope={scope}
                         onClose={clearEditors}
                         onDirtyChange={setAccessDirty}
@@ -375,8 +381,12 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
             onRenamePersonal={catalog.personalMutations.rename}
             onRotatePersonal={catalog.personalMutations.rotate}
             onDeletePersonal={catalog.personalMutations.delete}
-            onSharePersonal={catalog.sharedEnabled && scope && settingsVersion !== null
-                ? (secret) => selectEditor(() => setSharingPersonal(secret)) : undefined}
+            onSharePersonal={catalog.sharedEnabled && scope && settingsReady
+                ? (secret) => selectEditor(() => {
+                    const settings = getStorage().getState();
+                    if (!areServerAccountScopesEqual(settings.settingsScope, scope) || settings.settingsVersion === null) return;
+                    setSharingPersonal({ secret, expectedSettingsVersion: settings.settingsVersion });
+                }) : undefined}
             sharedMutationsDisabled={sharedMutationPending || approval.approvalPending}
             approvalId={catalog.sharedEnabled ? approvalId : null}
             onOpenApproval={catalog.sharedEnabled ? openApproval : undefined}

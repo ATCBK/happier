@@ -85,6 +85,13 @@ describe('Workflow existing Session options', () => {
             });
             expect(nameReads).toBe(0);
             expect(hook.getCurrent()).toBe(before);
+            await act(async () => {
+                for (let index = 0; index < 20; index += 1) storage.setState(state => ({
+                    settings: { ...state.settings, analyticsOptOut: !state.settings.analyticsOptOut },
+                }));
+            });
+            expect(nameReads).toBe(0);
+            expect(hook.getCurrent()).toBe(before);
             unchangedSessionNameReads = 0;
             await act(async () => {
                 for (let index = 0; index < 20; index += 1) storage.setState(state => ({
@@ -93,6 +100,8 @@ describe('Workflow existing Session options', () => {
                     } },
                 }));
             });
+            console.info('Workflow Session-arrival cost', { enabled, arrivals: 20, sessions: 1000,
+                nameReads, unchangedSessionNameReads });
             expect(unchangedSessionNameReads).toBe(0);
             expect(hook.getCurrent()).toBe(before);
         } finally {
@@ -100,6 +109,27 @@ describe('Workflow existing Session options', () => {
             storage.getState().applyLocalSettings({ uiFontScale: previous.localSettings.uiFontScale }, { persist: false });
             storage.setState(previous);
         }
+    });
+
+    it('refreshes hydrated candidacy when Account Agent enablement changes', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: 'policy-option', serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: 'resume-id',
+            claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo', name: 'Policy',
+        } });
+        storage.setState({ isDataReady: true, sessions: { [session.id]: session }, sessionListRowsByServerId: {} });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a' }));
+        try {
+            expect(hook.getCurrent().existingSessions).toHaveLength(1);
+            await act(async () => { storage.setState(state => ({ settings: { ...state.settings,
+                backendEnabledByTargetKey: { ...state.settings.backendEnabledByTargetKey,
+                    'agent:happier.agent.claude/claude': false },
+            } })); });
+            expect(hook.getCurrent().existingSessions).toEqual([]);
+            expect(hook.getCurrent().sessionDropCandidates).toEqual([]);
+            await act(async () => { storage.setState({ settings: previous.settings }); });
+            expect(hook.getCurrent().existingSessions).toHaveLength(1);
+        } finally { await hook.unmount(); storage.setState(previous); }
     });
 
     it('refreshes translated fallback names when the ready locale changes without Session facts changing', async () => {

@@ -18,7 +18,7 @@ import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/cat
 import { Switch } from '@/components/ui/forms/Switch';
 import { getBuiltInProfileDocumentation } from '@/sync/domains/profiles/profileUtils';
 import { EnvironmentVariablesList } from '@/components/profiles/environmentVariables/EnvironmentVariablesList';
-import { useSetting, useSettings, useAllMachines, useMachine, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting, useSettingsSelector, useAllMachines, useMachine, useSettingMutable } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
@@ -138,7 +138,11 @@ function LegacyProfileEditFormReady({
     const popoverBoundaryRef = React.useRef<any>(null);
     const enabledAgentIds = useEnabledAgentIds();
     const machines = useAllMachines();
-    const settings = useSettings();
+    const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
+    const opencodeBackendMode = useSettingsSelector((settings) => (
+        (settings as Record<string, unknown>).opencodeBackendMode
+    ));
+    const transcriptStorageSettings = React.useMemo(() => ({ opencodeBackendMode }), [opencodeBackendMode]);
     const externalSessionsEnabled = useFeatureEnabled('sessions.direct');
     const [favoriteMachines, setFavoriteMachines] = useSettingMutable('favoriteMachines');
     const routeMachine = machineId;
@@ -173,7 +177,6 @@ function LegacyProfileEditFormReady({
         enabled: Boolean(resolvedMachineId),
         staleMs: 60_000,
     });
-    const backendEnabledByTargetKey = settings.backendEnabledByTargetKey;
     const backendCatalogAvailable = acpCatalogSnapshot?.status === 'ready';
     const resolvedBackendEntries = React.useMemo(() => {
         return getResolvedBackendCatalogEntries({
@@ -311,9 +314,6 @@ function LegacyProfileEditFormReady({
 
         return out;
     });
-    const transcriptStorageSettings = React.useMemo(() => ({
-        opencodeBackendMode: (settings as Record<string, unknown>).opencodeBackendMode,
-    }), [settings]);
     const [defaultTranscriptStorageModesByTargetKey, setDefaultTranscriptStorageModesByTargetKey] = React.useState<Record<string, SessionTranscriptStorageMode | null>>(() => {
         const explicitByTargetKey = (profile.defaultPersistenceModeByTargetKey as Record<string, SessionTranscriptStorageMode | undefined>) ?? {};
         const out: Record<string, SessionTranscriptStorageMode | null> = {};

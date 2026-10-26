@@ -35,6 +35,19 @@ afterEach(async () => {
 });
 
 describe('useSavedSecretCatalog resource authority', () => {
+    it('keeps the retained replacement bridge idle across unrelated Settings revisions', async () => {
+        home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [] }) });
+        const { useSavedSecretsMutable } = await import('./useSavedSecretsMutable');
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useSavedSecretsMutable(); });
+        const before = renders;
+        const settings = home.persistedSettings;
+        for (let version = 2; version <= 21; version += 1) {
+            await act(async () => { home!.replaceSettings(settings, { version }); });
+        }
+        expect(renders - before).toBe(0);
+        expect(hook.getCurrent()[0]).toEqual([]);
+    });
     it('honors waived private-secret deletion without a caller confirmation', async () => {
         home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [],
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'secrets.delete': ['ui'] } }),
@@ -315,15 +328,28 @@ describe('useSavedSecretCatalog resource authority', () => {
         const corruptEntry = corrupt.entry;
         home.resources.push(corrupt);
         const scope = home.scope;
-        const hook = await renderHook(() => useSavedSecretCatalog({ scope }));
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useSavedSecretCatalog({ scope }); });
         await act(async () => hook.getCurrent().reload());
         await vi.waitFor(() => expect(hook.getCurrent().corruptEntries).toEqual([corruptEntry]));
         expect(hook.getCurrent().entries.map(row => row.ref)).toEqual([entry.ref]);
         expect(hook.getCurrent().usableSecrets.map(secret => secret.id)).toEqual([entry.ref]);
 
-        await act(async () => expect(await hook.getCurrent().deleteCorruptResource(corruptEntry)).toEqual({ ok: true }));
+        const repair = hook.getCurrent().deleteCorruptResource;
+        const baseline = renders;
+        const currentSettings = home.persistedSettings;
+        for (let version = 2; version <= 21; version += 1) {
+            await act(async () => { home!.replaceSettings(currentSettings, { version }); });
+        }
+        expect(renders - baseline).toBe(0);
+        const { storage } = await import('@/sync/domains/state/storage');
+        await act(async () => { storage.setState({ settingsScope: { ...scope, accountId: 'another-account' } }); });
+        expect(await repair(corruptEntry)).toEqual({ ok: false, reason: 'unavailable' });
+        expect(home.deletes).toEqual([]);
+        await act(async () => { storage.setState({ settingsScope: scope }); });
+        await act(async () => expect(await repair(corruptEntry)).toEqual({ ok: true }));
         expect(home.deletes).toEqual([expect.objectContaining({
-            resourceId: 'opaque-row-id', expectedRevision: -3,
+            resourceId: 'opaque-row-id', expectedRevision: -3, expectedSettingsVersion: 21,
             referenceCensus: expect.objectContaining({ notificationChannels: { revision: 'absent', resourceRefs: [] } }),
         })]);
         await vi.waitFor(() => expect(hook.getCurrent().corruptEntries).toEqual([]));

@@ -2,7 +2,9 @@ import React from 'react';
 
 import { Modal } from '@/modal';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
-import { useSetting, useSettingsVersion } from '@/sync/store/hooks';
+import { useSetting } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -22,15 +24,17 @@ export function useSavedSecretsMutable(): readonly [
     (next: SavedSecret[]) => Promise<void>,
 ] {
     const secrets = useSetting('secrets');
-    const settingsVersion = useSettingsVersion();
     const expectedSettingsScope = useAccountSettingsScope();
     const replace = React.useCallback(async (next: SavedSecret[]) => {
         try {
-            if (settingsVersion === null) throw new Error('Account settings version is unavailable');
+            const current = getStorage().getState();
+            if (!areServerAccountScopesEqual(current.settingsScope, expectedSettingsScope) || current.settingsVersion === null) {
+                throw new Error('Account settings version is unavailable');
+            }
             requireOneShotAccountSettingsMutationApplied(
                 await getSyncSingleton().mutateAccountSettingsOnce({
                     expectedSettingsScope,
-                    expectedSettingsVersion: settingsVersion,
+                    expectedSettingsVersion: current.settingsVersion,
                     mutate: (current) => ({
                         settings: applySavedSecretReplacementIntent({
                             current,
@@ -49,6 +53,6 @@ export function useSavedSecretsMutable(): readonly [
                     : t('errors.operationFailed'),
             );
         }
-    }, [expectedSettingsScope, secrets, settingsVersion]);
+    }, [expectedSettingsScope, secrets]);
     return [secrets, replace] as const;
 }

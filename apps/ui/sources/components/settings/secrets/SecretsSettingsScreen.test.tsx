@@ -138,7 +138,8 @@ async function mount(editAccess = true, initializeSync = false, beforeRender?: (
     }
     applySavedSecretCatalogPage({ scope, entries, observedAt: 1 });
     const { SecretsSettingsScreen } = await import('./SecretsSettingsScreen');
-    const screen = await renderScreen(<SecretsSettingsScreen />);
+    const commits = vi.fn<React.ProfilerOnRenderCallback>();
+    const screen = await renderScreen(<React.Profiler id="saved-secrets" onRender={commits}><SecretsSettingsScreen /></React.Profiler>);
     if (editAccess) {
         await screen.pressByTestIdAsync(`saved-secret:${entries[0]!.ref}:header`);
         await screen.pressByTestIdAsync(`saved-secret:${entries[0]!.ref}:manageAccess`);
@@ -146,7 +147,7 @@ async function mount(editAccess = true, initializeSync = false, beforeRender?: (
         await screen.pressByTestIdAsync('saved-secret-access-grant-account:recipient');
         await screen.pressByTestIdAsync('saved-secret-access-remove:account:recipient');
     }
-    return { screen, scope, entries };
+    return { screen, scope, entries, commits };
 }
 
 async function initializeRemovalSettings(scope: ServerAccountScope, waiveApproval: boolean, waiveWriterApprovals = false, requireDeletionApproval = false) {
@@ -189,6 +190,29 @@ async function initializeRemovalSettings(scope: ServerAccountScope, waiveApprova
 }
 
 describe('Saved Secrets editor continuity through the settings screen', () => {
+    it('ignores unrelated Settings revisions while readiness and an opened sharing baseline stay current', async () => {
+        const { screen, commits } = await mount(false);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { SecretsSettingsPage } = await import('./SecretsSettingsPage');
+        commits.mockClear();
+        for (let index = 0; index < 20; index += 1) {
+            await act(async () => storage.setState(state => ({
+                settings: { ...state.settings, showFlavorIcons: index % 2 === 0 }, settingsVersion: index + 2,
+            })));
+        }
+        expect(commits).not.toHaveBeenCalled();
+        await act(async () => storage.setState({ settingsVersion: null }));
+        expect(screen.findByType(SecretsSettingsPage).props.onSharePersonal).toBeUndefined();
+        await act(async () => storage.setState({ settingsVersion: 30 }));
+        const share = screen.findByType(SecretsSettingsPage).props.onSharePersonal;
+        expect(share).toBeTypeOf('function');
+        await act(async () => share({ id: 'legacy-personal', name: 'Personal key', kind: 'apiKey',
+            encryptedValue: { _isSecretValue: true, value: 'private' }, createdAt: 1, updatedAt: 1 }));
+        expect(screen.findByType(SecretsSettingsPage).props.accessEditor.element.props.target.expectedSettingsVersion).toBe(30);
+        await act(async () => storage.setState({ settingsVersion: 31 }));
+        expect(screen.findByType(SecretsSettingsPage).props.accessEditor.element.props.target.expectedSettingsVersion).toBe(30);
+    });
+
     it('honors waived shared-secret deletion without a caller confirmation', async () => {
         const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, true));
         const secret = entries[0]!;
@@ -198,6 +222,31 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         await screen.pressByTestIdAsync(`saved-secret:${secret.ref}:delete`);
         await vi.waitFor(() => expect(harness.requestsFor(path)).toHaveLength(1));
         expect(confirm).not.toHaveBeenCalled();
+    });
+    it('captures the current deletion version at the gesture and refuses a retired Account callback', async () => {
+        const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, true));
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { SecretsSettingsPage } = await import('./SecretsSettingsPage');
+        const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
+        const remove = screen.findByType(SecretsSettingsPage).props.onDeleteShared;
+        const version = storage.getState().settingsVersion;
+        expect(version).not.toBeNull();
+        await act(async () => {
+            expect(await getSyncSingleton().mutateAccountSettingsOnce({
+                expectedSettingsScope: scope, expectedSettingsVersion: version!,
+                mutate: raw => ({ settings: { ...raw, showFlavorIcons: raw.showFlavorIcons !== true }, value: undefined }),
+            })).toMatchObject({ status: 'applied' });
+        });
+        const currentVersion = storage.getState().settingsVersion;
+        expect(currentVersion).toBeGreaterThan(version!);
+        const path = '/v1/account/saved-secrets/resources/delete';
+        harness.answer(scope.serverId, path, { body: { resourceId: 'secret-a' } });
+        await act(async () => remove(entries[0]!));
+        await vi.waitFor(() => expect(harness.requestsFor(path)).toHaveLength(1));
+        expect(harness.requestsFor(path)[0]?.input).toMatchObject({ expectedSettingsVersion: currentVersion });
+        await act(async () => storage.setState({ settingsScope: { ...scope, accountId: 'another-account' } }));
+        await act(async () => remove(entries[1]!));
+        expect(harness.requestsFor(path)).toHaveLength(1);
     });
     it('honors explicit Account Ask for deletion, reviews the Inbox-executed failure, and asks again for the exact manual retry', async () => {
         const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, false, false, true));
