@@ -252,10 +252,14 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <h3 align="center">🎙️ Voice</h3>
 
-<p align="center">The voice assistant follows your running sessions, answers permission requests for you and sends the messages you dictate. Bring your own ElevenLabs key or run a local voice pipeline. <a href="https://docs.happier.dev/voice">Voice</a></p>
+<p align="center">The voice assistant follows your running sessions, answers permission requests for you and sends the messages you dictate. Use realtime ElevenLabs voice, or build a local pipeline from on-device speech, OpenAI-compatible endpoints, Google Gemini and Google Cloud, or Kokoro. <a href="https://docs.happier.dev/voice">Voice</a></p>
 
-<!-- TODO screenshot: .github/screenshots/voice.png -->
-<p align="center"><img src=".github/screenshots/voice.png" alt="TODO: voice assistant during a session" width="100%" /></p>
+<p align="center">
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/voice/elevenlabs-dark.svg"><img src=".github/screenshots/voice/elevenlabs-light.svg" height="32" alt="ElevenLabs"></picture>&nbsp;&nbsp;&nbsp;
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/voice/openai-dark.svg"><img src=".github/screenshots/voice/openai-light.svg" height="32" alt="OpenAI"></picture>&nbsp;&nbsp;&nbsp;
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/voice/googlegemini-dark.svg"><img src=".github/screenshots/voice/googlegemini-light.svg" height="32" alt="Google Gemini"></picture>&nbsp;&nbsp;&nbsp;
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/voice/googlecloud-dark.svg"><img src=".github/screenshots/voice/googlecloud-light.svg" height="32" alt="Google Cloud"></picture>
+</p>
 
 <br/>
 
