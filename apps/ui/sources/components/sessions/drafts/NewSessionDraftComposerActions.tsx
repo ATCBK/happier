@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Pressable, View, useWindowDimensions } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
+import { HAPPIER_PAGE_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -10,7 +11,10 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 
 const COMPACT_ACTIONS_MAX_WIDTH = 560;
 
-export const NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE = 44;
+/** The actions draw at the page control height; a finger reaches them through the hit area. */
+export const NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE = HAPPIER_PAGE_METRICS.controlHeightPx;
+/** Half the row's 4 px gap: neighbouring actions' hit areas meet, never overlap. */
+const ACTION_HIT_REACH = { left: 2, right: 2 } as const;
 
 export const NewSessionDraftComposerActions = React.memo(function NewSessionDraftComposerActions(props: Readonly<{
     deleteDisabled: boolean;
@@ -35,7 +39,8 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
 
     return (
         <View style={styles.root}>
-            <Pressable
+            <HappierPressable
+                hitReach={ACTION_HIT_REACH}
                 testID="new-session-draft-start-another"
                 accessibilityRole="button"
                 accessibilityLabel={t('sessionDrafts.startAnother')}
@@ -46,7 +51,7 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                 <Text variant="body" style={styles.secondaryLabel} numberOfLines={1}>
                     {t('sessionDrafts.startAnother')}
                 </Text>
-            </Pressable>
+            </HappierPressable>
             {compact ? (
                 <DropdownMenu
                     open={menuOpen}
@@ -61,7 +66,8 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                     maxWidthCap={220}
                     popoverPortalWebTarget="body"
                     trigger={({ toggle }) => (
-                        <Pressable
+                        <HappierPressable
+                hitReach={ACTION_HIT_REACH}
                             testID="new-session-draft-actions-menu"
                             accessibilityRole="button"
                             accessibilityLabel={t('common.moreActions')}
@@ -69,15 +75,15 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                             style={styles.iconAction}
                         >
                             <Icon name="dots-three" size={17} color={theme.colors.text.secondary} />
-                        </Pressable>
+                        </HappierPressable>
                     )}
                 />
             ) : (
-                <Pressable
+                <HappierPressable
+                hitReach={ACTION_HIT_REACH}
                     testID="new-session-draft-delete"
                     accessibilityRole="button"
                     accessibilityLabel={t('sessionDrafts.delete.action')}
-                    accessibilityState={{ disabled: props.deleteDisabled }}
                     disabled={props.deleteDisabled}
                     onPress={runDelete}
                     style={[styles.labeledAction, props.deleteDisabled && styles.disabled]}
@@ -86,7 +92,7 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                     <Text variant="body" style={styles.deleteLabel} numberOfLines={1}>
                         {t('sessionDrafts.delete.action')}
                     </Text>
-                </Pressable>
+                </HappierPressable>
             )}
         </View>
     );
@@ -103,15 +109,15 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 8,
         flexDirection: 'row',
         gap: theme.space.s4,
-        minHeight: NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE,
+        minHeight: NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE,
         paddingHorizontal: theme.space.s8,
     },
     iconAction: {
         alignItems: 'center',
         borderRadius: 8,
         justifyContent: 'center',
-        minHeight: NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE,
-        minWidth: NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE,
+        minHeight: NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE,
+        minWidth: NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE,
     },
     secondaryLabel: {
         color: theme.colors.text.secondary,

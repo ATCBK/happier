@@ -1,13 +1,10 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-
-const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
-const HORIZONTAL_TARGET_INSET = (MINIMUM_TARGET_SIZE - 24) / 2;
+import { AGENT_INPUT_EXPANSION_TOGGLE_HIT_REACH } from './agentInputChromeStyles';
 
 export function AgentInputExpansionToggle({
     expanded,
@@ -18,16 +15,11 @@ export function AgentInputExpansionToggle({
 }>) {
     const { theme } = useUnistyles();
     return (
-        <Pressable
+        <HappierPressable
             accessibilityLabel={expanded ? t('common.collapse') : t('common.expand')}
             accessibilityRole="button"
-            hitSlop={{
-                top: MINIMUM_TARGET_SIZE - 24,
-                right: HORIZONTAL_TARGET_INSET,
-                bottom: 0,
-                left: HORIZONTAL_TARGET_INSET,
-            }}
             testID="agent-input-expand-toggle"
+            hitReach={AGENT_INPUT_EXPANSION_TOGGLE_HIT_REACH}
             onPress={onToggle}
             style={({ pressed }) => [
                 styles.inputExpansionToggle,
@@ -39,7 +31,7 @@ export function AgentInputExpansionToggle({
                 size={16}
                 color={theme.colors.text.secondary}
             />
-        </Pressable>
+        </HappierPressable>
     );
 }
 

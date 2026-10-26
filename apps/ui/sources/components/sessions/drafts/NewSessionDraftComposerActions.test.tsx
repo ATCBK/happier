@@ -32,7 +32,7 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
 }));
 
 import {
-    NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE,
+    NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE,
     NewSessionDraftComposerActions,
 } from './NewSessionDraftComposerActions';
 
@@ -64,8 +64,8 @@ describe('NewSessionDraftComposerActions', () => {
         const startAnother = screen.findByTestId('new-session-draft-start-another');
         const deleteAction = screen.findByTestId('new-session-draft-delete');
         if (!startAnother || !deleteAction) throw new Error('Expected both wide draft actions');
-        expect(flattenStyle(startAnother.props.style).minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE);
-        expect(flattenStyle(deleteAction.props.style).minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE);
+        expect(flattenStyle(startAnother.props.style).minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE);
+        expect(flattenStyle(deleteAction.props.style).minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE);
         await pressTestInstanceAsync(startAnother);
         await pressTestInstanceAsync(deleteAction);
         expect(onStartAnother).toHaveBeenCalledOnce();
@@ -92,8 +92,8 @@ describe('NewSessionDraftComposerActions', () => {
         const menuTrigger = screen.findByTestId('new-session-draft-actions-menu');
         if (!menuTrigger) throw new Error('Expected compact draft actions menu');
         const triggerStyle = flattenStyle(menuTrigger.props.style);
-        expect(triggerStyle.minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE);
-        expect(triggerStyle.minWidth).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE);
+        expect(triggerStyle.minHeight).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE);
+        expect(triggerStyle.minWidth).toBe(NEW_SESSION_DRAFT_COMPOSER_ACTION_SIZE);
         await screen.unmount();
     });
 });

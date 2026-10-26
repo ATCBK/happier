@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
+import { AGENT_INPUT_FIELD_ACCESSORY_EDGES_PX } from './agentInputChromeStyles';
 
 const VISUAL_SIZE = 24;
 const FIELD_EDGE_INSET = 6;
@@ -13,15 +13,17 @@ export function resolveAgentInputFieldAccessoryGeometry(input: Readonly<{
     library: boolean;
     accessory: boolean;
     belowToggle: boolean;
-    platform?: string;
 }>) {
-    const targetSize = resolveMinimumInteractiveTargetSize(input.platform ?? Platform.OS);
+    // The accessories are drawn at their design square under every pointer; a finger reaches them
+    // through each button's hit area, never through a wider reservation in the field.
+    const targetSize = VISUAL_SIZE;
     const width = (Number(input.library) + Number(input.accessory)) * targetSize;
     return {
         targetSize,
         width,
-        top: input.belowToggle ? 30 : 2,
-        right: FIELD_EDGE_INSET - (targetSize - VISUAL_SIZE) / 2,
+        // Below the toggle (bottom edge at 30) the drawn accessories sit 9 px under it, 4 of padding included.
+        top: input.belowToggle ? 35 : 2,
+        right: FIELD_EDGE_INSET,
         paddingRight: width ? width + FIELD_EDGE_INSET : undefined,
     };
 }
@@ -32,6 +34,7 @@ export function AgentInputFieldAccessories(props: Readonly<{
     /** The library picker is open: its trigger's tooltip steps aside, as every popover trigger's does. */
     libraryOpen?: boolean;
     accessory?: React.ReactNode;
+    orderedIds?: readonly string[];
     belowToggle: boolean;
     /**
      * `field` (default): the field's top-right corner. `actionRow`: inline at the end of the composer's
@@ -47,32 +50,35 @@ export function AgentInputFieldAccessories(props: Readonly<{
     });
     if (!geometry.width) return null;
     const inRow = props.placement === 'actionRow';
+    const library = props.showLibrary ? (
+        <View key="promptLibrary" style={[styles.target, inRow ? styles.inRow : null, { width: geometry.targetSize, height: geometry.targetSize }]}>
+            <IconButton
+                testID="agent-input-prompt-library"
+                iconName="book-open"
+                accessibilityLabel={t('agentInput.promptPicker.open')}
+                tooltip={t('agentInput.promptPicker.open')}
+                tooltipHidden={props.libraryOpen === true}
+                variant="plain"
+                size={VISUAL_SIZE}
+                iconSize={16}
+                interactiveTargetEdgesPx={AGENT_INPUT_FIELD_ACCESSORY_EDGES_PX}
+                onPress={props.onOpenLibrary}
+            />
+        </View>
+    ) : null;
+    const accessory = props.accessory != null ? (
+        <View key="accessory" style={[styles.accessory, inRow ? styles.inRow : null, { width: geometry.targetSize, height: geometry.targetSize }]}>
+            {props.accessory}
+        </View>
+    ) : null;
+    const dictateIndex = props.orderedIds?.indexOf('dictate') ?? -1;
+    const libraryIndex = props.orderedIds?.indexOf('promptLibrary') ?? -1;
+    const accessoryFirst = dictateIndex >= 0 && (libraryIndex < 0 || dictateIndex < libraryIndex);
     return (
         <View testID="agent-input-field-accessories" style={inRow ? [styles.row, { height: geometry.targetSize }] : [styles.cluster, {
             width: geometry.width, height: geometry.targetSize, top: geometry.top, right: geometry.right,
         }]}>
-            {props.showLibrary ? (
-                <View style={[styles.target, inRow ? styles.inRow : null, { width: geometry.targetSize, height: geometry.targetSize }]}>
-                    <IconButton
-                        testID="agent-input-prompt-library"
-                        iconName="book-open"
-                        accessibilityLabel={t('agentInput.promptPicker.open')}
-                        tooltip={t('agentInput.promptPicker.open')}
-                        tooltipHidden={props.libraryOpen === true}
-                        variant="plain"
-                        size={VISUAL_SIZE}
-                        iconSize={16}
-                        minimumInteractiveTargetSize={geometry.targetSize}
-                        interactiveTargetGapPx={geometry.targetSize}
-                        onPress={props.onOpenLibrary}
-                    />
-                </View>
-            ) : null}
-            {props.accessory != null ? (
-                <View style={[styles.accessory, inRow ? styles.inRow : null, { width: geometry.targetSize, height: geometry.targetSize }]}>
-                    {props.accessory}
-                </View>
-            ) : null}
+            {accessoryFirst ? [accessory, library] : [library, accessory]}
         </View>
     );
 }

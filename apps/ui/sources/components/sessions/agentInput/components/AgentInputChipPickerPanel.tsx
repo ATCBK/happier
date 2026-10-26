@@ -1,5 +1,6 @@
 import React from "react";
-import { Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { ScrollView, useWindowDimensions, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 
 import { Item } from "@/components/ui/lists/Item";
@@ -147,17 +148,16 @@ export function AgentInputChipPickerPanel(
     <View style={styles.sheetHeaderRow}>
       <View style={styles.sheetHeaderSide}>
         {canPushToList && !sheetShowsList ? (
-          <Pressable
+          <HappierPressable
             testID="agent-input-chip-picker.sheet-back"
             accessibilityRole="button"
             accessibilityLabel={t("selectionList.backTo", { label: listTitle })}
-            hitSlop={8}
             onPress={() => setSheetView("list")}
             style={({ pressed }) => [styles.sheetBack, pressed ? styles.sheetBackPressed : null]}
           >
             <Icon name="caret-left" size={16} color={theme.colors.text.primary} />
             <Text numberOfLines={1} style={styles.sheetBackLabel}>{listTitle}</Text>
-          </Pressable>
+          </HappierPressable>
         ) : null}
       </View>
       <Text
@@ -384,7 +384,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.space.s2,
-    minHeight: 44,
     maxWidth: "100%",
   },
   sheetBackPressed: {

@@ -1,11 +1,10 @@
 import React from 'react';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
-import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { HAPPIER_PAGE_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
@@ -27,8 +26,10 @@ export type AgentInputChipPickerTopSelectorProps = Readonly<{
     onFocusOption: (optionId: string) => void;
 }>;
 
-// An option is a control-height chip, grown to the touch floor where the pointer is a finger.
-const PICKER_OPTION_TOUCH_TARGET_SIZE = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
+// An option is a control-height chip under every pointer; a finger reaches it through the hit area.
+const PICKER_OPTION_SIZE = HAPPIER_PAGE_METRICS.controlHeightPx;
+/** Half the strip's 8 px gap on each side: neighbouring options' hit areas meet, never overlap. */
+const PICKER_OPTION_HIT_REACH = { left: 4, right: 4 } as const;
 
 type WebHoverablePressableState = Readonly<{
     pressed: boolean;
@@ -70,14 +71,12 @@ export function AgentInputChipPickerTopSelector(props: AgentInputChipPickerTopSe
                     return (
                         <React.Fragment key={option.id}>
                         {startsGroup ? <View testID={`agent-input-chip-picker.top-selector-divider:${option.sectionId}`} style={styles.groupDivider} /> : null}
-                        <Pressable
+                        <HappierPressable
                             testID={`agent-input-chip-picker.top-selector-option:${option.id}`}
                             accessibilityRole="button"
                             accessibilityLabel={resolveAgentInputChipPickerOptionAccessibilityLabel(option, props.selectedOptionId === option.id)}
-                            accessibilityState={{
-                                selected: props.selectedOptionId === option.id,
-                                disabled,
-                            }}
+                            selected={props.selectedOptionId === option.id}
+                            hitReach={PICKER_OPTION_HIT_REACH}
                             disabled={disabled}
                             onPress={() => {
                                 if (disabled) return;
@@ -109,7 +108,7 @@ export function AgentInputChipPickerTopSelector(props: AgentInputChipPickerTopSe
                                 ) : null}
                             </View>
                             <Text style={styles.optionLabel}>{option.label}</Text>
-                        </Pressable>
+                        </HappierPressable>
                         </React.Fragment>
                     );
                 })}
@@ -125,7 +124,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     scrollContainer: {
         width: '100%',
-        minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE + 20,
+        minHeight: PICKER_OPTION_SIZE + 20,
         backgroundColor: theme.colors.background.canvas,
     },
     scrollContent: {
@@ -136,9 +135,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: theme.space.s10,
     },
     optionButton: {
-        height: PICKER_OPTION_TOUCH_TARGET_SIZE,
-        minWidth: PICKER_OPTION_TOUCH_TARGET_SIZE,
-        minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
+        height: PICKER_OPTION_SIZE,
+        minWidth: PICKER_OPTION_SIZE,
+        minHeight: PICKER_OPTION_SIZE,
         flexShrink: 0,
         flexDirection: 'row',
         gap: theme.space.s8,

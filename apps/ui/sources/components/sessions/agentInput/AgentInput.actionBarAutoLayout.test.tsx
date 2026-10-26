@@ -6,14 +6,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-import { storage } from '@/sync/domains/state/storageStore';
-import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
-import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { projectAgentInputAttachmentRowItems } from './agentInputContracts';
-import { findAllHostTestInstances, flattenTestStyle as flattenStyle } from '@/dev/testkit';
+import { findAllHostTestInstances } from '@/dev/testkit/render/renderScreen';
+import { flattenTestStyle as flattenStyle } from '@/dev/testkit/harness/popoverHarness';
+import { readHitArea } from '@/dev/testkit/harness/hitFrameReach';
 import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
-import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 
 vi.mock('expo-haptics', () => ({
     impactAsync: vi.fn(async () => {}),
@@ -78,6 +78,10 @@ async function renderAgentInput(element: React.ReactElement) {
 }
 
 installAgentInputCommonModuleMocks({ reactNative: createAgentInputReactNativeModule });
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
+const { activateStorageAccountScope } = await import('@/dev/testkit/mocks/storage');
 const originalLocks = Object.getOwnPropertyDescriptor(navigator, 'locks');
 beforeAll(() => {
     // jsdom has no Web Locks; this serial suite retains the real Home mutation owner.
@@ -94,6 +98,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ sessionId: 'session-1' })
 let restoreViewport: (() => void) | undefined;
 let activeAccountScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | undefined;
 afterEach(() => {
+    vi.unstubAllGlobals();
     restoreViewport?.();
     restoreViewport = undefined;
     activeAccountScope?.dispose();
@@ -109,6 +114,7 @@ describe('AgentInput (action bar auto layout)', () => {
         layoutMockState.platform = 'ios';
         layoutMockState.width = 700;
         layoutMockState.height = 800;
+        storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: {} }, { persist: false });
     });
 
     it('separates the real Send and Voice targets in the 430px narrow web stack', async () => {
@@ -116,6 +122,12 @@ describe('AgentInput (action bar auto layout)', () => {
         // owner first, rather than relabeling a stylesheet created for native.
         layoutMockState.platform = 'web';
         layoutMockState.width = 430;
+        // The shared hit-area owner reads the primary pointer once, on first use; a phone browser's finger
+        // is what gives Send its hit area.
+        vi.stubGlobal('matchMedia', (query: string) => ({
+            matches: query === '(pointer: coarse)' || query === '(hover: none)',
+            media: query,
+        }));
         storageSettings = { ...storageSettings, agentInputActionBarLayout: 'wrap' };
         const { AgentInput } = await import('./AgentInput');
         const { VoiceComposerPlanet } = await import('@/components/voice/composer/VoiceComposerPlanet');
@@ -134,14 +146,26 @@ describe('AgentInput (action bar auto layout)', () => {
         const shape = findNearestHostParent(circle);
         if (!shape) throw new Error('Expected the real submit shape');
         const geometry = flattenStyle(shape.props.style);
-        const hitSlop = submit.props.hitSlop as { top: number; bottom: number };
-        // The shape clips the native target: its padding must contain the reach,
-        // and its flow footprint must include that space rather than spending it
-        // again through a negative margin into the neighboring control.
-        const reservedTop = Number(geometry.paddingTop ?? 0) + Number(geometry.marginTop ?? 0);
-        const reservedBottom = Number(geometry.paddingBottom ?? 0) + Number(geometry.marginBottom ?? 0);
+        // A phone browser: the finger is the primary pointer, so Send carries a hit area. The web draws it
+        // as the shared owner's invisible `[data-happier-hit-area]` frame inside the pressable (react-native-web
+        // ignores `hitSlop`); read its reach from that output rather than from props.
+        // The owner sizes it from the drawn box, which the layout engine reports (a boundary; the declared
+        // style is a percentage of the circle): hand it the circle's real size.
+        const circleStyle = flattenStyle(circle?.props.style);
+        const drawn = { width: Number(circleStyle.width), height: Number(circleStyle.height) };
+        expect(drawn.width).toBeGreaterThan(0);
+        await act(async () => { submit.props.onLayout(createLayoutChangeEvent({ x: 0, y: 0, ...drawn })); });
+        const { insets: hitSlop } = readHitArea(submit, drawn);
+        expect(hitSlop.top + hitSlop.bottom).toBeGreaterThan(0);
+        // The shape clips while it resizes: its padding must contain the reach so the clip does not eat it,
+        // and its net flow footprint (padding less the margin that cancels it) must never go negative, so the
+        // reach is not spent again against the neighboring control.
+        const reservedTop = Number(geometry.paddingTop ?? 0);
+        const reservedBottom = Number(geometry.paddingBottom ?? 0);
         expect(reservedTop).toBeGreaterThanOrEqual(hitSlop.top);
         expect(reservedBottom).toBeGreaterThanOrEqual(hitSlop.bottom);
+        expect(reservedTop + Number(geometry.marginTop ?? 0)).toBeGreaterThanOrEqual(0);
+        expect(reservedBottom + Number(geometry.marginBottom ?? 0)).toBeGreaterThanOrEqual(0);
         let stack = findNearestHostParent(shape);
         // The submit focus-return wrapper has no layout; inspect the actual
         // shared Voice/Send cluster rather than assuming a fixed host depth.
@@ -156,8 +180,29 @@ describe('AgentInput (action bar auto layout)', () => {
         const gap = Number(stackGeometry.rowGap ?? stackGeometry.gap ?? 0);
         expect(gap).toBe(1);
         const voiceTopMargin = Number(voiceGeometry.marginTop ?? voiceGeometry.marginVertical ?? 0);
-        const targetSeparation = gap + voiceTopMargin + Math.min(0, reservedBottom - hitSlop.bottom);
+        // Send's reach below is spent against that gap unless its flow footprint already includes it.
+        const sendFlowBottom = reservedBottom + Number(geometry.marginBottom ?? 0);
+        const targetSeparation = gap + voiceTopMargin + Math.min(0, sendFlowBottom - hitSlop.bottom);
         expect(targetSeparation).toBeGreaterThanOrEqual(0);
+    });
+
+    it('places resume and prompt library from the same device preferences as the actual row', async () => {
+        storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: {
+            composer: { orderedIds: ['resume', 'path'], placements: { resume: 'hidden', promptLibrary: 'hidden' } },
+        } }, { persist: false });
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderAgentInput(<AgentInput value="" placeholder="Type" onChangeText={() => {}} onSend={() => {}}
+            onPathClick={() => {}} currentPath="/repo" onResumeClick={() => {}} resumeSessionId="prior-session"
+            autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+        expect(screen.findAllByTestId('agent-input-resume-chip')).toHaveLength(0);
+        expect(screen.findAllByTestId('agent-input-prompt-library')).toHaveLength(0);
+        await act(async () => {
+            storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: {
+                composer: { orderedIds: ['resume', 'path'], placements: { resume: 'pinned' } },
+            } }, { persist: false });
+        });
+        expect(findAllHostTestInstances(screen.tree.root, node => node.props.testID === 'agent-input-resume-chip')).toHaveLength(1);
+        expect(findAllHostTestInstances(screen.tree.root, node => node.props.testID === 'agent-input-prompt-library')).toHaveLength(1);
     });
 
     it('does not subscribe to passive keyboard height while rendering the native composer', async () => {
@@ -194,10 +239,10 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(subscribe.mock.calls.filter(([event]) => event === 'resize' || event === 'scroll')).toEqual([]);
     });
 
-    it.each(['ios', 'web'] as const)('keeps automatic phone Session controls on one scroll track on %s', async (platform) => {
+    it.each(['ios', 'web'] as const)('keeps explicit scroll Session controls on one track on %s', async (platform) => {
         layoutMockState.platform = platform;
         layoutMockState.width = 390;
-        storageSettings = { ...storageSettings, agentInputChipDensity: 'labels' };
+        storageSettings = { ...storageSettings, agentInputChipDensity: 'labels', agentInputActionBarLayout: 'scroll' };
         const { AgentInput } = await import('./AgentInput');
         const onComposerActionBarLayoutChange = vi.fn();
 
@@ -232,14 +277,13 @@ describe('AgentInput (action bar auto layout)', () => {
         ))).toHaveLength(1);
     });
 
-    it.each(['ios', 'web'] as const)('keeps the person\'s collapsed controls on one reachable scroll rail on %s', async (platform) => {
+    it.each(['ios', 'web'] as const)('reads predecessor collapsed as wrapping default chips on %s', async (platform) => {
         layoutMockState.platform = platform;
         layoutMockState.width = 390;
-        storageSettings = { ...storageSettings, agentInputActionBarLayout: 'collapsed' };
+        storageSettings = settingsParse({ ...storageSettings, agentInputActionBarLayout: 'collapsed' });
         const { AgentInput } = await import('./AgentInput');
         const input = <AgentInput
             value="" placeholder="Type" onChangeText={() => {}} onSend={() => {}}
-            barControlIds={['machine', 'engine', 'actionMenu']}
             onMachineClick={() => {}} machineName="Unnamed machine"
             onAgentClick={() => {}} agentType="claude" agentLabel="Claude" engineLabel="Sonnet 4.6"
             permissionMode="default" onPermissionModeChange={() => {}}
@@ -249,6 +293,7 @@ describe('AgentInput (action bar auto layout)', () => {
             extraActionChips={[{
                 key: 'collapsed-options',
                 controlId: 'capabilities',
+                placement: { id: 'capabilities', title: 'Options' },
                 render: () => <React.Fragment />,
                 collapsedAction: () => ({ id: 'collapsed-options', label: 'Options', icon: null, onPress: () => {} }),
             }]}
@@ -256,20 +301,18 @@ describe('AgentInput (action bar auto layout)', () => {
         />;
         const screen = await renderAgentInput(input);
 
-        // Collapsed is the intentionally compact presentation: the host-selected controls share
-        // one reachable rail, including the machine that otherwise lives on the location rail.
+        // Retained collapsed normalizes to physical auto; placement supplies the ordinary defaults.
         const tracks = findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'ScrollView' && node.props.horizontal === true
         ));
-        expect(tracks).toHaveLength(1);
-        const [setupRail] = tracks;
-        expect(findAllHostTestInstances(setupRail!, node => (
+        expect(tracks).toHaveLength(0);
+        expect(findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'Text' && node.props.children === 'Sonnet 4.6'
         ))).toHaveLength(1);
         expect(findAllHostTestInstances(screen.tree.root, node => (
             node.props.testID === 'agent-input-action-menu-button'
         ))).toHaveLength(1);
-        expect(findAllHostTestInstances(setupRail!, node => (
+        expect(findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'Text' && node.props.children === 'Unnamed machine'
         ))).toHaveLength(1);
         // Sending remains fixed beside the rails, not scrolled off with chips.
@@ -279,13 +322,13 @@ describe('AgentInput (action bar auto layout)', () => {
             ))).toHaveLength(0);
         }
 
-        // The person's setting alone picks the bar's presentation.
-        storageSettings = { ...storageSettings, agentInputActionBarLayout: 'wrap' };
+        // Explicit scroll changes physical flow without changing pinned membership.
+        storageSettings = { ...storageSettings, agentInputActionBarLayout: 'scroll' };
         await act(async () => { storage.setState({ settings: storageSettings }); });
         await screen.update(React.cloneElement(input, { value: 'Updated draft' }));
         expect(findAllHostTestInstances(screen.tree.root, node => (
             node.type === 'ScrollView' && node.props.horizontal === true
-        ))).toHaveLength(0);
+        ))).toHaveLength(2);
     });
 
     it('publishes the mounted action-bar layout when the resolved mode changes', async () => {
@@ -305,15 +348,14 @@ describe('AgentInput (action bar auto layout)', () => {
             autocompleteSuggestions: async () => [],
             onComposerActionBarLayoutChange,
         } satisfies React.ComponentProps<typeof AgentInput> & Readonly<{
-            onComposerActionBarLayoutChange: (layout: 'wrap' | 'scroll' | 'collapsed') => void;
+            onComposerActionBarLayoutChange: (layout: 'wrap' | 'scroll') => void;
         }>;
         let renderRevision = 0;
         const render = () => <AgentInput {...inputProps} value={`${renderRevision}`} />;
 
         const screen = await renderAgentInput(render());
 
-        // Rails scroll at every width; they never wrap (owner, 2026-10-11).
-        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('scroll');
+        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('wrap');
 
         storageSettings = { ...storageSettings, agentInputActionBarLayout: 'scroll' };
         await act(async () => { storage.setState({ settings: storageSettings }); });
@@ -321,15 +363,15 @@ describe('AgentInput (action bar auto layout)', () => {
         await screen.update(render());
         expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('scroll');
 
-        storageSettings = {
+        storageSettings = settingsParse({
             ...storageSettings,
             agentInputActionBarLayout: 'collapsed',
-        };
+        });
         await act(async () => { storage.setState({ settings: storageSettings }); });
         renderRevision += 1;
         await screen.update(render());
 
-        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('collapsed');
+        expect(onComposerActionBarLayoutChange).toHaveBeenLastCalledWith('wrap');
     });
 
     it('does not apply the host panel max height on web so the composer never re-constrains from undefined to measured on switch', async () => {
@@ -641,7 +683,9 @@ describe('AgentInput (action bar auto layout)', () => {
     });
 
     it('reserves existing-session input expansion toggle space before the toggle appears', async () => {
-        storageSettings = { ...storageSettings, composerPromptLibraryButtonEnabled: false };
+        storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: {
+            composer: { orderedIds: [], placements: { promptLibrary: 'hidden' } },
+        } }, { persist: false });
         layoutMockState.platform = 'ios';
         const { act } = await import('react-test-renderer');
         const { AgentInput } = await import('./AgentInput');
@@ -794,8 +838,9 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(screen.tree.root.findByProps({ testID: 'new-session-composer-input' }).props.maxHeight).toBe(614);
     });
 
-    it('composes a new session as two scrolling rails on a phone: setup chips, then where it runs', async () => {
+    it('composes explicit scroll as two phone rails: setup chips, then where it runs', async () => {
         layoutMockState.width = 390;
+        storageSettings = { ...storageSettings, agentInputActionBarLayout: 'scroll' };
         const { AgentInput } = await import('./AgentInput');
         const screen = await renderAgentInput(
             <AgentInput
@@ -838,10 +883,10 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(flattenStyle(shape.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0 });
         const cluster = findNearestHostParent(shape);
         expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '85%' });
-        // The rail is still mounted beside it, scrolling.
+        // P3 §3.4 keeps automatic layout wrapping, with the pinned controls reachable.
         const rail = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'ScrollView' && node.props.horizontal === true);
-        expect(rail.length).toBeGreaterThan(0);
-        expect(findAllHostTestInstances(rail[0]!, node => node.props.testID === 'agent-input-permission-chip').length).toBeGreaterThan(0);
+        expect(rail).toHaveLength(0);
+        expect(findAllHostTestInstances(screen.tree.root, node => node.props.testID === 'agent-input-permission-chip')).toHaveLength(1);
     });
 
     it('keeps the path chip label visible even when chip density is icons', async () => {

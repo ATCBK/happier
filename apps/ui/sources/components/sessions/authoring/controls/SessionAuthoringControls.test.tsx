@@ -413,6 +413,21 @@ describe('SessionAuthoringControls', () => {
     await screen.unmount();
   });
 
+  it('leaves out of a settings form a row this Agent or target can never offer, and keeps the ones that say what to do', async () => {
+    // A Windows-only field on a Linux target, or a field the Agent has no options for, is not a
+    // decision this step has; an "Unavailable" row for it is noise (Step options, DESIGN-ACCEPT-3).
+    const { screen } = await renderControls({
+      presentation: 'fields',
+      fields: ['windowsTerminalWindowName', 'windowsRemoteSessionConsole', 'capabilitySelection', 'profileId'],
+      facts: { targetIsWindows: false, profilesEnabled: false, profiles: [] },
+    });
+    expect(screen.findByTestId('session-authoring-control-windowsTerminalWindowName-row')).toBeNull();
+    expect(screen.findByTestId('session-authoring-control-windowsRemoteSessionConsole-row')).toBeNull();
+    expect(screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeTruthy();
+    expect(screen.findByTestId('session-authoring-control-profileId-unavailable')).toBeTruthy();
+    await screen.unmount();
+  });
+
   it('says why the Profile choice is unavailable and what to do about it', async () => {
     // A bare "Unavailable" left the reader guessing whether profiles were off or simply missing.
     const off = await renderControls({
@@ -435,6 +450,14 @@ describe('SessionAuthoringControls', () => {
       )?.props.children,
     ).toBe('newSession.profileUnavailableNoneYet');
     await none.screen.unmount();
+
+    const failed = await renderControls({
+      fields: ['profileId'],
+      facts: { profilesEnabled: true, profiles: [], profilesUnavailableReason: 'scope-retired' },
+    });
+    expect(failed.screen.findByTestId('session-authoring-control-profileId-unavailable')?.props.children)
+      .toBe('common.unavailable');
+    await failed.screen.unmount();
 
     // A profile read that has not answered yet is not "none yet": it reads as loading.
     const loading = await renderControls({
@@ -1189,6 +1212,18 @@ describe('SessionAuthoringControls', () => {
     ).toBe('unavailable');
   });
 
+  it('omits runtime options for a resolved external Agent that declares no runtime choice', async () => {
+    const target: AgentExecutionTargetV1 = {
+      kind: 'agent', identity: { pluginId: 'acme.reviewer', localId: 'reviewer' },
+    };
+    const { screen } = await renderControls({
+      presentation: 'fields', fields: ['runtimeDescriptorV1'], values: { agentTarget: target },
+      facts: { agentTargets: [{ id: 'external-reviewer', label: 'Reviewer', target, agentId: 'acme.reviewer/reviewer' }] },
+    });
+    expect(screen.findByTestId('session-authoring-control-runtimeDescriptorV1-row')).toBeNull();
+    await screen.unmount();
+  });
+
   it('authors the selected Agent runtime mode as a strict portable descriptor', async () => {
     const opencodeTarget = {
       kind: 'agent' as const,
@@ -1234,10 +1269,10 @@ describe('SessionAuthoringControls', () => {
    * native fixture they must honor the touch floor, not the smaller precise-
    * pointer floor of a desktop web environment.
    */
-  it('gives every press frame the canonical minimum interactive target size', async () => {
+  it('keeps the chip and the window-name input at their design height, never the touch target', async () => {
     const { resolveMinimumInteractiveTargetSize } =
       await import('@/components/ui/interactiveTargetSize');
-    const minimum = resolveMinimumInteractiveTargetSize('ios');
+    const target = resolveMinimumInteractiveTargetSize('ios');
     const { screen } = await renderControls({
       fields: ['permissionMode', 'windowsTerminalWindowName'],
       facts: { agentTargets: [directCapableClaude()], targetIsWindows: true },
@@ -1249,26 +1284,21 @@ describe('SessionAuthoringControls', () => {
     const chipStyle = (
       chip?.props.style as (state: { pressed: boolean }) => unknown[]
     )({ pressed: false });
-    expect(
-      chipStyle
-        .flat()
-        .some(
-          (entry) =>
-            (entry as { minHeight?: number } | null)?.minHeight === minimum,
-        ),
-    ).toBe(true);
+    const heights = chipStyle
+      .flat()
+      .map((entry) => (entry as { minHeight?: number } | null)?.minHeight)
+      .filter((height) => height !== undefined);
+    expect(heights).toEqual([]);
 
     const input = screen.findByTestId(
       'session-authoring-control-windowsTerminalWindowName-input',
     );
-    expect(
-      [input?.props.style]
-        .flat()
-        .some(
-          (entry) =>
-            (entry as { minHeight?: number } | null)?.minHeight === minimum,
-        ),
-    ).toBe(true);
+    const inputHeights = [input?.props.style]
+      .flat()
+      .map((entry) => (entry as { minHeight?: number } | null)?.minHeight)
+      .filter((height): height is number => height !== undefined);
+    expect(inputHeights.length).toBeGreaterThan(0);
+    expect(Math.max(...inputHeights)).toBeLessThan(target);
     await screen.unmount();
   });
 

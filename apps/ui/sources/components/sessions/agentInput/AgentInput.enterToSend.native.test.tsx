@@ -127,7 +127,6 @@ installAgentInputCommonModuleMocks({
 
 vi.mock('@/sync/store/hooks', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/store/hooks')>(),
-    useLocalSetting: () => 1,
     useSessionServerId: () => null,
 }));
 

@@ -22,6 +22,7 @@ import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionT
 import { Text } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
+import { AGENT_INPUT_CHIP_ROW_HIT_REACH } from './agentInputChipRowReach';
 import { useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { isHoverCapablePrimaryPointer } from '@/utils/platform/webMobileHeuristics';
 
@@ -205,6 +206,7 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
                 onKeyDown={handleKeyDown}
                 onFocusChange={handleChipFocusChange}
                 hitSlop={CHIP_HIT_SLOP}
+                hitReach={AGENT_INPUT_CHIP_ROW_HIT_REACH.lower}
                 style={({ pressed, focused }) => [
                     props.chipStyle(pressed),
                     props.layout === 'wrap' ? WRAP_STYLE : SHRINK_STYLE,

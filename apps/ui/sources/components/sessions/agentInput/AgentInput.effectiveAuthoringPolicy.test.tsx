@@ -85,7 +85,7 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/sync/store/hooks', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/store/hooks')>();
-    return { ...actual, useLocalSetting: () => 1, useSessionServerId: () => null };
+    return { ...actual, useSessionServerId: () => null };
 });
 
 type JsonNode =

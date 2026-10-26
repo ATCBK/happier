@@ -7,7 +7,6 @@ import { Typography } from "@/constants/Typography";
 import { Text } from "@/components/ui/text/Text";
 import { normalizeNodeForView } from "@/components/ui/rendering/normalizeNodeForView";
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { AgentInputChipPickerTopSelector } from "./AgentInputChipPickerTopSelector";
 import {
   AGENT_INPUT_CHIP_PICKER_OPTION_ROW_RADIUS,
@@ -24,8 +23,8 @@ import type {
 } from "./AgentInputChipPickerTypes";
 
 const RAIL_ACTION_SIZE = 20;
-// An option is a control-height chip, grown to the touch floor where the pointer is a finger.
-const PICKER_OPTION_TOUCH_TARGET_SIZE = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
+// An option row is control-height under every pointer; the row is a full-width target in a list.
+const PICKER_OPTION_ROW_MIN_HEIGHT = HAPPIER_PAGE_METRICS.controlHeightPx;
 
 type WebHoverablePressableState = Readonly<{
   pressed: boolean;
@@ -95,7 +94,7 @@ export function AgentInputChipPickerOptionSelector(
   const transientStyles = React.useMemo(() => ({
     ...createAgentInputChipPickerOptionTransientStyles(theme),
     optionRowCompact: {
-      minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
+      minHeight: PICKER_OPTION_ROW_MIN_HEIGHT,
       paddingVertical: theme.space.s6,
     },
   }), [theme]);
@@ -116,8 +115,11 @@ export function AgentInputChipPickerOptionSelector(
       testID="agent-input-chip-picker.option-rail"
       style={styles.railContainer}
     >
-      {props.sections.map((section) => (
-        <View key={section.id} style={styles.sectionBlock}>
+      {props.sections.map((section, index) => (
+        // A labelled group that follows another ("Not on devbox yet") starts after a hairline, like the stacked
+        // selector's divider (lab agent-setup E1p), so its heading reads as a new group, never the row above's caption.
+        <View key={section.id} style={[styles.sectionBlock, index > 0 && section.label ? styles.labelledGroup : null]}
+          testID={index > 0 && section.label ? `agent-input-chip-picker.rail-group:${section.id}` : undefined}>
           {section.label ? (
             <Text style={styles.sectionTitle}>{section.label}</Text>
           ) : null}
@@ -349,6 +351,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: theme.space.s4,
     marginBottom: theme.space.s10,
   },
+  labelledGroup: {
+    paddingTop: theme.space.s10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.default,
+  },
   // Sentence-case group label ("Favorites", "Agents"): the same anatomy as every picker group.
   sectionTitle: {
     paddingHorizontal: theme.space.s6,
@@ -359,7 +366,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   optionRow: {
-    minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
+    minHeight: PICKER_OPTION_ROW_MIN_HEIGHT,
     borderRadius: AGENT_INPUT_CHIP_PICKER_OPTION_ROW_RADIUS,
     borderWidth: 0,
     paddingHorizontal: theme.space.s8,

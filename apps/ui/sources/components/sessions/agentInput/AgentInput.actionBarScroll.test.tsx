@@ -155,6 +155,7 @@ async function seedSettings() {
     resetHomeBoundary = () => home.reset();
     const { getStorage } = await import('@/sync/domains/state/storageStore');
     const previousSettings = getStorage().getState().settings;
+    const previousLocalSettings = getStorage().getState().localSettings;
     getStorage().setState({ settings: {
         ...previousSettings,
         agentInputEnterToSend: true,
@@ -162,7 +163,7 @@ async function seedSettings() {
         agentInputChipDensity: 'labels',
         sessionPermissionModeApplyTiming: 'immediate',
     } });
-    restoreSettings = () => getStorage().setState({ settings: previousSettings });
+    restoreSettings = () => getStorage().setState({ settings: previousSettings, localSettings: previousLocalSettings });
 }
 
 afterEach(async () => {
@@ -188,6 +189,17 @@ async function renderScreen(element: React.ReactElement) {
     return screen;
 }
 
+// Load the real source graph after its native/network boundaries, outside the
+// behavioral test budget; cold transformation time is not a scrolling contract.
+await mockWebPlatform();
+mockCommonDeps();
+await seedSettings();
+const { AgentInput } = await import('./AgentInput');
+restoreSettings?.();
+restoreSettings = undefined;
+await resetHomeBoundary?.();
+resetHomeBoundary = undefined;
+
 describe('AgentInput (action bar scroll layout)', () => {
     it('keeps both chip rows horizontally scrollable on web', async () => {
         vi.clearAllMocks();
@@ -195,8 +207,6 @@ describe('AgentInput (action bar scroll layout)', () => {
         mockCommonDeps();
         await seedSettings();
         seedScrollMeasurements(false);
-
-        const { AgentInput } = await import('./AgentInput');
 
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<AgentInput
@@ -235,8 +245,6 @@ describe('AgentInput (action bar scroll layout)', () => {
         await seedSettings();
         seedScrollMeasurements(true);
 
-        const { AgentInput } = await import('./AgentInput');
-
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<AgentInput
                     value=""
@@ -266,15 +274,18 @@ describe('AgentInput (action bar scroll layout)', () => {
         act(() => tree!.unmount());
     });
 
-    it('keeps primary chips in the first scroll row and machine/path/resume in the second', async () => {
+    it('keeps primary chips in the first scroll row and pinned machine/path/resume in the second', async () => {
         vi.clearAllMocks();
         await mockWebPlatform();
         mockCommonDeps();
         await seedSettings();
         seedScrollMeasurements(true);
 
-        const { AgentInput } = await import('./AgentInput');
-
+        // P3 §3.4 defaults Resume to +; explicit placement opts it into this rail.
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        getStorage().getState().applyLocalSettings({ navigationSurfacePlacementsV1: {
+            composer: { orderedIds: [], placements: { resume: 'pinned' } },
+        } }, { persist: false });
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<AgentInput
                     value=""
@@ -334,8 +345,6 @@ describe('AgentInput (action bar scroll layout)', () => {
         await seedSettings();
         seedScrollMeasurements(true);
 
-        const { AgentInput } = await import('./AgentInput');
-
         let tree: renderer.ReactTestRenderer;
         tree = (await renderScreen(<AgentInput
                     value=""
@@ -354,6 +363,7 @@ describe('AgentInput (action bar scroll layout)', () => {
                     extraActionChips={[{
                         key: 'execution-run-delivery',
                         controlId: 'delivery',
+                        placement: { id: 'delivery:execution-run-delivery', title: 'Delivery', pending: true },
                         render: () => React.createElement('View', { testID: 'agent-input-delivery-chip' }),
                     }]}
                     autocompleteKinds={[]}
@@ -377,8 +387,8 @@ describe('AgentInput (action bar scroll layout)', () => {
         expect(primaryRowIds).toEqual([
             'agent-input-agent-chip',
             'agent-input-permission-chip',
-            'agent-input-abort',
             'agent-input-delivery-chip',
+            'agent-input-abort',
         ]);
         expect(secondaryRowIds).toEqual([
             'agent-input-machine-chip',

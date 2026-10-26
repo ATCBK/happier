@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_PAGE_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import type { WorkflowEngineSelectionV1, WorkflowSessionAuthoringSelection, WorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRoleV1 } from '@happier-dev/protocol';
@@ -16,7 +16,6 @@ import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Item } from '@/components/ui/lists/Item';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { SelectionListFilterChip } from '@/components/ui/selectionList';
 import { resolveRoleDisplayName } from '@/sync/domains/roles/roleCatalog';
 import { Typography } from '@/constants/Typography';
@@ -60,16 +59,12 @@ import { useSessionAuthoringEnginePicker } from './useSessionAuthoringEnginePick
  */
 
 /**
- * These chips and the window-name input are the real press frames, not icons
- * inside a larger row, so they take the canonical platform target as a minimum
- * height. `hitSlop` cannot stand in for it: react-native-web's `Pressable`
- * never reads it and the desktop app is the web bundle, so a slop-declared
- * target there is a target that does not exist. Growth is on the free vertical
- * axis, so a wrapping chip row still meets at its gap rather than overlapping.
- * Under a precise pointer they keep the chip row's dense height (the shared
- * touch-floor policy), the height of the other chips beside them.
+ * These chips and the window-name input keep the chip row's dense design height under every pointer.
+ * A finger reaches the chips through the shared pressable's hit area; a wrapping chip row meets at its
+ * gap rather than overlapping because the reach of each side is bounded by the free space.
  */
-const MINIMUM_TARGET_SIZE = resolveTouchTargetFloorPx(Platform.OS) ?? undefined;
+/** Half the chip row's 8 px gap on every side: wrapped chips' hit areas meet, never overlap. */
+const AUTHORING_CHIP_HIT_REACH = 4;
 
 const styles = StyleSheet.create((theme) => ({
     root: {
@@ -89,7 +84,6 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: Platform.select({ default: 16, android: 20 }),
         paddingHorizontal: theme.space.s10,
         paddingVertical: theme.space.s6,
-        minHeight: MINIMUM_TARGET_SIZE,
         justifyContent: 'center',
         gap: theme.space.s6,
         // Reserved, so the changed state and the focus ring never move a neighbour.
@@ -127,7 +121,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         paddingVertical: theme.space.s6,
         paddingHorizontal: theme.space.s10,
-        minHeight: MINIMUM_TARGET_SIZE,
+        minHeight: HAPPIER_PAGE_METRICS.controlHeightPx,
         minWidth: 160,
     },
 }));
@@ -232,6 +226,7 @@ function SessionAuthoringOptionChip(props: Readonly<{
                     disabled={props.disabled === true}
                     expanded={open}
                     hasPopup="menu"
+                    hitReach={AUTHORING_CHIP_HIT_REACH}
                     onPress={() => setOpen((current) => !current)}
                     style={(state) => props.presentation === 'fields'
                         // The field box inside draws the ring.
@@ -683,6 +678,11 @@ export function SessionAuthoringControls(props: SessionAuthoringControlsProps): 
                     />
                 );
                 if (presentation === 'chips') return rendered;
+                // A settings form holds only the decisions this step has: a field the Agent or the target can
+                // never offer (a Windows-only field on Linux, an Agent with no such options) is left out rather
+                // than listed as "Unavailable". Fields that wait on something or say what to do stay.
+                if (control.kind === 'unavailable'
+                    && (control.reason === 'not_supported_on_target' || control.reason === 'agent_has_no_options')) return null;
                 return (
                     <Item
                         key={field}
@@ -708,6 +708,7 @@ export function SessionAuthoringControls(props: SessionAuthoringControlsProps): 
  */
 function sessionAuthoringUnavailableText(field: SessionAuthoringFieldId, reason: SessionAuthoringFieldUnavailableReason): string {
     if (reason === 'loading') return t('common.loading');
+    if (reason === 'profile_catalog_unavailable') return t('common.unavailable');
     if (field === 'profileId') {
         return reason === 'feature_disabled'
             ? t('newSession.profileUnavailableTurnedOff')

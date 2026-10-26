@@ -1,8 +1,7 @@
 import * as React from 'react';
 import type { DictationButtonProps } from '@happier-dev/plugin-ui';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { AgentInputDictationButton } from '@/components/sessions/agentInput/components/AgentInputDictationButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -22,8 +21,7 @@ export function PluginDictationButton(props: Omit<DictationButtonProps, 'fallbac
         transcriptionSessionId: null,
         onTranscription: props.onTranscription,
     });
-    const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    return <View style={{ width: minimumTargetSize, height: minimumTargetSize }}>
+    return <View>
         <AgentInputDictationButton testID={props.testID} disabled={!featureEnabled || props.disabled}
             status={dictation.status} onFocus={() => { void dictation.onFocus(); }}
             onPress={() => { void dictation.onFocus(); void dictation.onPress(); }} />

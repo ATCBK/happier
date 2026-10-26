@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, pressTestInstanceAsync, renderScreen as renderTestScreen, type RenderScreenResult } from '@/dev/testkit';
 import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { hitAreaOverlap, readHitArea } from '@/dev/testkit/harness/hitFrameReach';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { composerRefV1Key } from '@happier-dev/protocol/plugins/ui/composerRef';
@@ -166,17 +167,18 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return {};
 }
 
-function readEffectiveTargetSize(node: ReactTestInstance): Readonly<{ width: number; height: number }> {
-    const style = flattenStyle(node.props.style);
-    const hitSlop = node.props.hitSlop;
-    const inset = (edge: 'top' | 'right' | 'bottom' | 'left'): number => (
-        typeof hitSlop === 'number' ? hitSlop : Number(hitSlop?.[edge] ?? 0)
-    );
-    return {
-        width: Math.max(Number(style.width ?? 0), Number(style.minWidth ?? 0)) + inset('left') + inset('right'),
-        height: Math.max(Number(style.height ?? 0), Number(style.minHeight ?? 0)) + inset('top') + inset('bottom'),
-    };
+/** The offset of a control's drawn box from its container's top: the wrappers' top padding between them. */
+function readDrawnTopWithin(node: ReactTestInstance, containerTestID: string): number {
+    let offset = 0;
+    for (let parent = node.parent; parent && parent.props?.testID !== containerTestID; parent = parent.parent) {
+        // Composite wrappers repeat their host's style; count the host views only.
+        if (typeof parent.type === 'string') offset += Number(flattenStyle(parent.props.style).paddingTop ?? 0);
+    }
+    return offset;
 }
+
+/** The WCAG 2.2 AA minimum target (24 CSS px) every composer control keeps, on every pointer. */
+const WCAG_MINIMUM_TARGET = 24;
 
 function findSlotContainer(screen: RenderScreenResult, ...testIDs: readonly string[]): ReactTestInstance {
     const candidates = screen.root.findAll((node) => (
@@ -429,12 +431,26 @@ describe('AgentInput voice accessory slots', () => {
         expect(library).not.toBeNull();
         const microphone = screen.findByTestId('agent-input-dictation');
         expect(microphone).not.toBeNull();
-        const cluster = screen.findByTestId('agent-input-field-accessories');
-        const target = readEffectiveTargetSize(library!);
-        expect(target.width).toBeGreaterThanOrEqual(44);
-        expect(Number(flattenStyle(cluster?.props.style).width)).toBeGreaterThanOrEqual(target.width * 2);
+        const cluster = screen.findByTestId('agent-input-field-accessories')!;
+        const clusterStyle = flattenStyle(cluster.props.style);
+        const libraryArea = readHitArea(library!);
+        const microphoneArea = readHitArea(microphone!);
+        // Both controls are drawn at their design square; a finger reaches them through the hit area.
+        expect(libraryArea.drawn).toEqual({ width: 24, height: 24 });
+        expect(microphoneArea.drawn).toEqual({ width: 24, height: 24 });
+        // The field corner reserves exactly the drawn squares plus its edge inset, never a 44 target each.
+        expect(Number(clusterStyle.width)).toBe(libraryArea.drawn.width + microphoneArea.drawn.width);
         const field = screen.root.findByType(MultiTextInput);
-        expect(field.props.paddingRight).toBeGreaterThanOrEqual(target.width * 2);
+        expect(field.props.paddingRight).toBe(Number(clusterStyle.width) + Number(clusterStyle.right));
+        // Each hit area clears the WCAG floor, and the two never overlap: they touch sideways, so
+        // neither reaches past its drawn edge there.
+        for (const area of [libraryArea, microphoneArea]) {
+            expect(area.width).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
+            expect(area.height).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
+        }
+        const [first, second] = readSlotOrder(cluster, 'agent-input-prompt-library', 'agent-input-dictation')
+            .map((id) => (id === 'agent-input-prompt-library' ? libraryArea : microphoneArea));
+        expect(hitAreaOverlap(first!, second!, { axis: 'horizontal' })).toBe(0);
         await screen.unmount();
 
         const quiet = await renderComposer({ submitDictation: false });
@@ -555,12 +571,13 @@ describe('AgentInput voice accessory slots', () => {
         });
 
         expect(screen.findByTestId('agent-input-expand-toggle')).toBeNull();
+        // One 24 square per accessory (library + the host's), in the corner inset the field reserves.
         expect(flattenStyle(screen.findByTestId('agent-input-field-accessories')!.props.style)).toMatchObject({
             position: 'absolute',
             top: 2,
-            right: -4,
-            width: 88,
-            height: 44,
+            right: 6,
+            width: 48,
+            height: 24,
         });
 
         const input = screen.root.findByType(MultiTextInput);
@@ -570,20 +587,22 @@ describe('AgentInput voice accessory slots', () => {
 
         const toggle = screen.findByTestId('agent-input-expand-toggle');
         expect(toggle).not.toBeNull();
-        expect(readEffectiveTargetSize(toggle!)).toEqual({ width: 44, height: 44 });
+        const toggleArea = readHitArea(toggle!);
+        expect(toggleArea.drawn).toEqual({ width: 24, height: 24 });
+        expect(toggleArea.width).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
         const fieldTargetStyle = flattenStyle(screen.findByTestId('agent-input-field-accessories')!.props.style);
-        expect(fieldTargetStyle).toMatchObject({
-            position: 'absolute',
-            top: 30,
-            right: -4,
-            width: 88,
-            height: 44,
-        });
+        expect(fieldTargetStyle).toMatchObject({ position: 'absolute', right: 6, width: 48, height: 24 });
+        expect(Number(fieldTargetStyle.top)).toBeGreaterThan(2);
+
+        // The toggle sits above the accessories and the two hit areas share the gap between their
+        // drawn squares without overlapping.
+        const library = screen.findByTestId('agent-input-prompt-library')!;
+        const libraryArea = readHitArea(library);
         const toggleStyle = flattenStyle(toggle!.props.style);
-        const toggleTargetBottom = Number(toggleStyle.top)
-            + Number(toggleStyle.height)
-            + Number(toggle!.props.hitSlop.bottom);
-        expect(toggleTargetBottom).toBe(fieldTargetStyle.top);
+        const toggleBottom = Number(toggleStyle.top) + toggleArea.drawn.height;
+        const libraryTop = Number(fieldTargetStyle.top) + readDrawnTopWithin(library, 'agent-input-field-accessories');
+        expect(libraryTop).toBeGreaterThan(toggleBottom);
+        expect(hitAreaOverlap(toggleArea, libraryArea, { axis: 'vertical', gap: libraryTop - toggleBottom })).toBe(0);
 
         await screen.unmount();
     });
@@ -820,7 +839,12 @@ describe('AgentInput mounts the Voice composer', () => {
         const mic = screen.findByTestId(DICTATION_TEST_ID);
         expect(mic).not.toBeNull();
         expect(mic!.props.accessibilityLabel).toBe(t('voiceAssistant.startDictation'));
-        expect(readEffectiveTargetSize(mic!)).toEqual({ width: 44, height: 44 });
+        // Dictation sits in the field corner at its 24 design circle; a finger reaches it through the
+        // hit area, which keeps the WCAG floor and never widens the drawn control.
+        const micArea = readHitArea(mic!);
+        expect(micArea.drawn).toEqual({ width: 24, height: 24 });
+        expect(micArea.width).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
+        expect(micArea.height).toBeGreaterThanOrEqual(WCAG_MINIMUM_TARGET);
         const { Icon } = await import('@/components/ui/icons/Icon');
         const icons = mic!.findAllByType(Icon);
         expect(icons).toHaveLength(1);

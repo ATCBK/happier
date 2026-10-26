@@ -8,6 +8,7 @@ import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeFor
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
+import { AGENT_INPUT_CHIP_ROW_HIT_REACH } from '@/components/sessions/agentInput/definitions/agentInputChipRowReach';
 import { AGENT_INPUT_CHIP_ICON_SIZE_PX, AGENT_INPUT_CHIP_ICON_STYLE } from '@/components/sessions/agentInput/definitions/agentInputChipIconMetrics';
 
 
@@ -62,6 +63,7 @@ export function ResumeChip(props: ResumeChipProps) {
             accessibilityLabel={label ?? props.labelTitle}
             onPress={props.onPress}
             hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+            hitReach={AGENT_INPUT_CHIP_ROW_HIT_REACH.lower}
             style={({ pressed, focused }) => [
                 props.pressableStyle(pressed),
                 focusRingStyle({ focused, color: theme.colors.border.focus }),

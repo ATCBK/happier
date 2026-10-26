@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 async function renderDictationButton(onPress: () => void): Promise<HTMLElement> {
-    // The full-size box is the touch floor: a finger is the primary pointer here, as on a phone browser.
+    // A finger is the primary pointer here, as on a phone browser.
     vi.stubGlobal('matchMedia', (query: string) => ({
         matches: query === '(pointer: coarse)' || query === '(hover: none)',
         media: query,
@@ -52,33 +52,31 @@ async function renderDictationButton(onPress: () => void): Promise<HTMLElement> 
 }
 
 /**
- * The desktop app IS the web bundle, and react-native-web 0.21 implements
- * `hitSlop` only in its legacy `Touchable` export — a `hitSlop` on a `Pressable`
- * is dropped, so the pointer target is exactly the element's own box. This reads
- * the rendered box out of the DOM rather than recomputing it from the props,
- * which is the only way the discarded `hitSlop` shows up at all.
+ * The desktop app IS the web bundle, and react-native-web 0.21 implements `hitSlop` only in its legacy
+ * `Touchable` export, so a finger's reach on the web is an invisible hit frame inside the button. This
+ * reads the drawn box and that frame out of the DOM rather than recomputing them from the props.
  */
 describe('AgentInputDictationButton web pointer geometry', () => {
-    it('presses through a full-size box, not the 24pt visual', async () => {
+    it('draws the 24pt circle and reaches the finger target through its hit frame, never a larger drawn box', async () => {
         const onPress = vi.fn();
         const element = await renderDictationButton(onPress);
 
+        // The press target is the drawn circle itself; the layout box stays at design.
         const box = getComputedStyle(element);
-        expect(box.width).toBe('44px');
-        expect(box.height).toBe('44px');
-
-        // The measured box is the press target itself, not a parent wrapper that
-        // merely reserves the space around a smaller pressable.
+        expect(box.width).toBe('24px');
+        expect(box.height).toBe('24px');
         expect(element.getAttribute('role')).toBe('button');
         act(() => {
             element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         });
         expect(onPress).toHaveBeenCalledTimes(1);
 
-        // The 24pt circle stays a non-interactive child of that box.
-        const visual = element.firstElementChild as HTMLElement | null;
-        expect(visual).not.toBeNull();
-        expect(getComputedStyle(visual!).width).toBe('24px');
-        expect(visual!.getAttribute('role')).toBeNull();
+        // The frame reaches the 44pt target past the circle: 5 above (the composer's declared edge,
+        // the rest belongs to the Look chip), 10 below, none sideways where the accessories touch.
+        const frame = element.querySelector<HTMLElement>(':scope > [data-happier-hit-area="true"]');
+        expect(frame).not.toBeNull();
+        const reach = getComputedStyle(frame!);
+        const offset = (side: 'top' | 'bottom' | 'left' | 'right') => Math.abs(Number.parseFloat(reach[side]));
+        expect([offset('top'), offset('bottom'), offset('left'), offset('right')]).toEqual([5, 10, 0, 0]);
     });
 });

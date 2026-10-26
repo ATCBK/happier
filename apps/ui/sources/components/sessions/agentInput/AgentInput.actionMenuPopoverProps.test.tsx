@@ -1,8 +1,9 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { NavigationPlacement } from '@/sync/domains/settings/mobileSurfacePinning';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,8 +57,12 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
 vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
 
+const inputFocus = vi.hoisted(() => vi.fn());
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
-    MultiTextInput: (props: Record<string, unknown>) => React.createElement('MultiTextInput', props, null),
+    MultiTextInput: React.forwardRef((props: Record<string, unknown>, ref) => {
+        React.useImperativeHandle(ref, () => ({ focus: inputFocus, blur: () => {}, setSelection: () => {} }));
+        return React.createElement('MultiTextInput', props, null);
+    }),
 }));
 
 vi.mock('@/components/ui/buttons/PrimaryCircleIconButton', () => ({
@@ -204,14 +209,26 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const initialStorageState = getStorage().getState();
+function setComposerPlacements(placements: Readonly<Record<string, NavigationPlacement>>) {
+    getStorage().setState((state) => ({
+        localSettings: {
+            ...state.localSettings,
+            navigationSurfacePlacementsV1: {
+                ...state.localSettings.navigationSurfacePlacementsV1,
+                composer: { orderedIds: [], placements },
+            },
+        },
+    }));
+}
 beforeEach(() => {
     getStorage().setState({ settings: {
         ...initialStorageState.settings,
         agentInputEnterToSend: true,
-        agentInputActionBarLayout: 'collapsed',
+        agentInputActionBarLayout: 'wrap',
         agentInputChipDensity: 'labels',
         sessionPermissionModeApplyTiming: 'immediate',
     } });
+    setComposerPlacements({});
 });
 afterEach(async () => {
     getStorage().setState(initialStorageState, true);
@@ -336,7 +353,7 @@ describe('AgentInput (action menu popover props)', () => {
         ).toBe(false);
     });
 
-    it("routes the migrated delivery factory through the SelectionList popover and per-option onSelect dispatches the mutation", async () => {
+    it("routes the pending delivery row through the SelectionList popover and per-option onSelect dispatches the mutation", async () => {
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedChipPickerPopover.last = null;
@@ -364,22 +381,17 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[deliveryChip]}
-                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
 
-        const settingsButton = screen.findByTestId('agent-input-action-menu-button');
-        expect(settingsButton).toBeTruthy();
-        if (!settingsButton) return;
-
-        await screen.pressByTestIdAsync('agent-input-action-menu-button');
-
-        const deliveryAction = getCapturedActionMenuActions().find(
-            (action: { id?: string }) => action.id === deliveryChip.key,
-        );
-        expect(deliveryAction).toBeTruthy();
-        act(() => deliveryAction?.onPress?.());
+        const deliveryPressable = screen.findByTestId('agent-input-delivery-chip');
+        expect(deliveryPressable).toBeTruthy();
+        let deliveryContainer = deliveryPressable?.parent ?? null;
+        while (deliveryContainer && String(deliveryContainer.type) !== 'View') {
+            deliveryContainer = deliveryContainer.parent;
+        }
+        await screen.pressByTestIdAsync('agent-input-delivery-chip');
 
         const selectionListProps = findSelectionListPopoverByOpen(true) as (Record<string, unknown> & {
             open?: boolean;
@@ -389,7 +401,7 @@ describe('AgentInput (action menu popover props)', () => {
         }) | undefined;
         expect(capturedChipPickerPopover.last).toBeNull();
         expect(selectionListProps).toBeTruthy();
-        expect(selectionListProps?.anchorRef).toBe(settingsButton.props.ref);
+        expect(selectionListProps?.anchorRef).toBe(deliveryContainer?.props.ref);
         expect(selectionListProps?.selectedOptionId).toBe('send_now');
 
         const section = selectionListProps?.rootStep?.sections?.[0];
@@ -435,7 +447,6 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[recipientChip]}
-                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
@@ -501,7 +512,6 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[storageChip]}
-                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
@@ -547,7 +557,7 @@ describe('AgentInput (action menu popover props)', () => {
         expect(onStorageChange).toHaveBeenCalledWith('direct');
     });
 
-    it('routes collapsed content actions through the shared content popover anchored to the action menu button', async () => {
+    it('routes overflow content actions through the shared content popover anchored to the action menu button', async () => {
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -562,10 +572,10 @@ describe('AgentInput (action menu popover props)', () => {
                     autocompleteSuggestions={async () => []}
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
-                    barControlIds={['engine', 'permission', 'actionMenu']}
                     extraActionChips={[{
                         key: 'new-session-mcp',
                         controlId: 'capabilities',
+                        placement: { id: 'capabilities', title: 'newSession.mcpChipLabel', defaultPlacement: 'overflow' },
                         collapsedContentPopover: {
                             title: 'newSession.mcpChipLabel',
                             boundaryRef: null,
@@ -615,6 +625,7 @@ describe('AgentInput (action menu popover props)', () => {
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
         const { AgentInput } = await import('./AgentInput');
+        setComposerPlacements({ capabilities: 'pinned' });
 
         const screen = await renderScreen(<AgentInput
                     value=""
@@ -628,6 +639,7 @@ describe('AgentInput (action menu popover props)', () => {
                     extraActionChips={[{
                         key: 'new-session-mcp',
                         controlId: 'capabilities',
+                        placement: { id: 'capabilities', title: 'newSession.mcpChipLabel', defaultPlacement: 'overflow' },
                         collapsedContentPopover: {
                             title: 'newSession.mcpChipLabel',
                             maxHeightCap: 520,
@@ -666,11 +678,91 @@ describe('AgentInput (action menu popover props)', () => {
         expect(screen.findByTestId('mcp-content')).toBeNull();
     });
 
-    it('routes collapsed machine actions through the shared content popover when a machine popover is configured', async () => {
+    it('opens a visible extra-chip content popover for the initiating chip intent a picture hands over', async () => {
+        captured.last = null;
+        const { AgentInput } = await import('./AgentInput');
+        setComposerPlacements({ capabilities: 'pinned' });
+        let requestControl: ((intent: { chipPopover: string }) => void) | null = null;
+
+        const screen = await renderScreen(<AgentInput
+                    value=""
+                    placeholder="Type"
+                    onChangeText={() => {}}
+                    onSend={() => {}}
+                    autocompleteKinds={[]}
+                    autocompleteSuggestions={async () => []}
+                    agentType={"codex" as any}
+                    onAgentClick={() => {}}
+                    onComposerControlRequestChange={(request) => { requestControl = request; }}
+                    extraActionChips={[{
+                        key: 'new-session-mcp',
+                        controlId: 'capabilities',
+                        placement: { id: 'capabilities', title: 'newSession.mcpChipLabel', defaultPlacement: 'overflow' },
+                        collapsedContentPopover: {
+                            title: 'newSession.mcpChipLabel',
+                            maxHeightCap: 520,
+                            maxWidthCap: 480,
+                            renderContent: () => React.createElement('View', { testID: 'mcp-content' }),
+                        },
+                        render: ({ chipAnchorRef }: any) => React.createElement('Pressable', { ref: chipAnchorRef, testID: 'visible-mcp-chip' }),
+                    }]}
+                    onMachineClick={() => {}}
+                    machineName="Builder"
+                />);
+
+        expect(screen.findByTestId('mcp-content')).toBeNull();
+        await act(async () => requestControl?.({ chipPopover: 'new-session-mcp' }));
+        expect(screen.findByTestId('mcp-content')).toBeTruthy();
+        expect((captured.last as CapturedPopoverProps | null)?.open).toBe(true);
+    });
+
+    it('closes a chip detail and returns input focus when its placement moves out of the row', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        setComposerPlacements({ capabilities: 'pinned' });
+        const screen = await renderScreen(<AgentInput
+            value="Draft stays here"
+            placeholder="Type"
+            onChangeText={() => {}}
+            onSend={() => {}}
+            autocompleteKinds={[]}
+            autocompleteSuggestions={async () => []}
+            extraActionChips={[{
+                key: 'placement-detail',
+                controlId: 'capabilities',
+                placement: { id: 'capabilities', title: 'Capabilities', defaultPlacement: 'overflow' },
+                collapsedContentPopover: {
+                    title: 'Capabilities',
+                    renderContent: () => React.createElement('View', { testID: 'placement-detail-content' }),
+                },
+                render: ({ toggleCollapsedPopover, chipAnchorRef }) => React.createElement('Pressable', {
+                    ref: chipAnchorRef,
+                    testID: 'placement-detail-chip',
+                    onPress: () => toggleCollapsedPopover?.('placement-detail'),
+                }),
+            }]}
+        />);
+
+        for (const placement of ['overflow', 'hidden'] as const) {
+            await act(async () => setComposerPlacements({ capabilities: 'pinned' }));
+            await screen.pressByTestIdAsync('placement-detail-chip');
+            expect(screen.findByTestId('placement-detail-content')).toBeTruthy();
+            inputFocus.mockClear();
+
+            await act(async () => setComposerPlacements({ capabilities: placement }));
+
+            expect(screen.findByTestId('placement-detail-chip')).toBeNull();
+            expect(screen.findByTestId('placement-detail-content')).toBeNull();
+            expect(inputFocus).toHaveBeenCalled();
+            expect(screen.findByType('MultiTextInput').props.value).toBe('Draft stays here');
+        }
+    });
+
+    it('routes an overflow machine through the shared content popover anchored to the action menu button', async () => {
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
         const { AgentInput } = await import('./AgentInput');
+        setComposerPlacements({ machine: 'overflow' });
 
         const screen = await renderScreen(<AgentInput
                     value=""
@@ -692,8 +784,8 @@ describe('AgentInput (action menu popover props)', () => {
         const machinePressable = screen.findByTestId('agent-input-machine-chip');
 
         expect(settingsButton).toBeTruthy();
-        expect(machinePressable).toBeTruthy();
-        if (!settingsButton || !machinePressable) {
+        expect(machinePressable).toBeNull();
+        if (!settingsButton) {
             return;
         }
 
@@ -715,16 +807,17 @@ describe('AgentInput (action menu popover props)', () => {
         }) | null;
 
         expect(contentPopoverProps?.open).toBe(true);
-        expect(contentPopoverProps?.anchorRef).toStrictEqual(machinePressable.props.ref);
+        expect(contentPopoverProps?.anchorRef).toStrictEqual(settingsButton.props.ref);
         expect(contentPopoverProps?.maxHeightCap).toBeGreaterThan(0);
         expect(contentPopoverProps?.maxWidthCap).toBeGreaterThan(0);
     });
 
-    it('routes collapsed resume actions through the shared content popover anchored to the action menu button', async () => {
+    it('routes an overflow resume through the shared content popover anchored to the action menu button', async () => {
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
         const { AgentInput } = await import('./AgentInput');
+        setComposerPlacements({ resume: 'overflow' });
 
         const screen = await renderScreen(<AgentInput
                     value=""
@@ -835,6 +928,7 @@ describe('AgentInput (action menu popover props)', () => {
         const checkoutChip = {
             key: 'new-session-checkout',
             controlId: 'checkout' as const,
+            placement: { id: 'checkout', title: 'Checkout' },
             collapsedOptionsPopover: {
                 presentation: 'list' as const,
                 title: 'Checkout',

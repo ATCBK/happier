@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderScreen, flushHookEffects } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
@@ -17,6 +16,7 @@ installAgentInputCommonModuleMocks({
     },
 });
 const runtime = installSessionPaneRuntimeTestHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
 let AgentInput: typeof import('./AgentInput')['AgentInput'];
 let Popover: typeof import('@/components/ui/popover')['Popover'];
 let FloatingOverlay: typeof import('@/components/ui/overlays/FloatingOverlay')['FloatingOverlay'];

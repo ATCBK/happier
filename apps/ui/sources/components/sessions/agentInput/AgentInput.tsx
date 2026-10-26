@@ -32,7 +32,7 @@ import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from '@/components/ui/forms/multiText
 import { composerReferencesFromStructuredMentions, composerStructuredMentionsFromReferences } from '@/components/sessions/composer/composerScopeAdapters';
 import type { ComposerEditorReference, ComposerEditorDecoration } from '@/components/ui/forms/composerEditor/composerEditorTypes';
 import { buildMentionRefV1, parseMentionRefV1, MENTION_KIND_V1, readMentionRefOpaqueForKindV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
-import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 import { planComposerReferenceInsertion, recordComposerReferencePublication, readRecentComposerReferenceInsertions, type ComposerReferenceInsertion } from '@/components/sessions/composer/composerReferenceInsertion';
@@ -134,7 +134,6 @@ import { PathAndResumeRow } from './layout/PathAndResumeRow';
 import { resolveAgentInputColumn } from './layout/agentInputColumn';
 import { resolveAgentInputFolderChipState, type AgentInputFolderChipState } from './definitions/AgentInputFolderChip';
 import {
-    getHasAnyAgentInputActions,
     shouldShowSecondaryControlRow,
     type AgentInputActionBarLayout,
 } from './layout/actionBarLogic';
@@ -150,12 +149,12 @@ import {
 } from '@/components/voice/attempt/useVoiceAttemptControl';
 import {
     clampNumber,
-    computeAgentInputDefaultMaxHeight,
     computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
     resolveAgentInputHostPanelMaxHeight,
     type AgentInputPanelMaxHeightMode,
 } from './inputMaxHeight';
+import { useAgentInputDefaultMaxHeight } from './useAgentInputDefaultMaxHeight';
 import { shouldRenderPermissionChip } from './permissionChipVisibility';
 import { type AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
 import { AgentInputEngineDetail } from './components/AgentInputEngineDetail';
@@ -170,6 +169,9 @@ import {
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { AgentInputAttachmentsRow } from './components/AgentInputAttachmentsRow';
 import { AgentInputReadOnlyText } from './components/AgentInputReadOnlyText';
+import { resolveComposerReferenceChipLabel } from './composerReferenceChipLabel';
+import { resolveAgentInputEngineOptionId } from './controls/resolveAgentInputEngineOptionId';
+import { openComposerPlacementCustomizer } from './components/openComposerPlacementCustomizer';
 import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
 import { AgentInputExpansionToggle } from './components/AgentInputExpansionToggle';
 import { AgentInputPermissionRequests } from './components/AgentInputPermissionRequests';
@@ -180,7 +182,6 @@ import { useAgentInputActionMenuControls } from './controls/useAgentInputActionM
 import { AGENT_INPUT_COMPACT_CONTROL_IDS } from './controls/agentInputControlRegistry';
 import { useAgentInputCoreControlHandlers } from './controls/useAgentInputCoreControlHandlers';
 import { useRenderedAgentInputControlRows } from './controls/useRenderedAgentInputControlRows';
-import type { AgentInputControlId } from './controls/agentInputControlTypes';
 import { useSessionAuthoringControls } from '@/components/sessions/authoring/controls/useSessionAuthoringControls';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
 import { buildAgentInputSelectionOverlayViewModel } from './selection/buildAgentInputSelectionOverlayViewModel';
@@ -194,7 +195,8 @@ import type {
     AcpConfigOptionValueId,
 } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
-import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import { isBuiltInOpenApprovalArtifactForSession,
+    type OpenApprovalAttentionArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import {
     selectComposerApprovalRequestsForSurface,
     useComposerApprovalRequests,
@@ -216,6 +218,7 @@ import {
     resolveAgentInputActionChipTextStyle,
     resolveAgentInputPanelLayoutStyle,
 } from './components/agentInputChromeStyles';
+import { AGENT_INPUT_CHIP_ROW_HIT_REACH, AgentInputChipRowReach } from './definitions/agentInputChipRowReach';
 import { AgentInputReadOnlyChipRow } from './components/AgentInputReadOnlyChipRow';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 import { resolvePermissionToolCallLocations } from '@/utils/sessions/permissions/resolvePermissionToolCallLocations';
@@ -248,6 +251,7 @@ import type {
     AgentInputAttachmentsRowItem,
     AgentInputComposerDecoration,
     AgentInputComposerInputLock,
+    AgentInputControlIntent,
     AgentInputExtraActionChip,
     AgentInputStatusBadge as AgentInputStatusBadgeDescriptor,
 } from './agentInputContracts';
@@ -294,6 +298,12 @@ import {
 import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
 import { AgentInputDocumentPanelContext, AgentInputPopoverClearanceContext, AgentInputPopoverColumnContext } from './selection/useAgentInputPopoverLayout';
 import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } from './components/AgentInputFieldAccessories';
+import { buildAgentInputPlacementDescriptors, resolveAgentInputPlacementContext } from './controls/buildAgentInputPlacementDescriptors';
+import type { AgentInputPlacementContext } from './controls/agentInputControlTypes';
+import { getAgentInputFieldAccessoryPlacement } from './controls/agentInputControlRegistry';
+import { getAgentInputResetStartPlacement } from './definitions/agentInputActionChipPlacements';
+import { resolveAgentInputControlLines, selectComposerPlacementPreferences } from './controls/resolveAgentInputControlLines';
+import { isPhoneHardware } from '@/utils/platform/isPhoneHardware';
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
 import { useAgentInputCommandMenu } from './commandMenu/useAgentInputCommandMenu';
@@ -406,6 +416,8 @@ interface AgentInputProps {
     onComposerFocusChange?: (focused: boolean) => void;
     /** Scope-local access to this mounted input's existing imperative focus method. */
     onComposerFocusRequestChange?: (request: (() => void) | null) => void;
+    /** Forwards a control press that activated this input from its document picture. */
+    onComposerControlRequestChange?: (request: ((intent: AgentInputControlIntent) => void) | null) => void;
     onPromptPickerOpenRequestChange?: (request: (() => boolean) | null) => void;
     onComposerInputFlushRequestChange?: (request: (() => void) | null) => void;
     /** Scope-local observer for this mounted input's resolved action-bar layout. */
@@ -496,6 +508,10 @@ interface AgentInputProps {
      * embed's "Change model" without Send). Default `full`.
      */
     inputPresentation?: 'full' | 'controlsOnly';
+    /** Embedded presentations narrow the host's device-local customization entry. */
+    allowPlacementCustomization?: boolean;
+    /** Explicit context for a host without a portable Composer identity (for example a workflow launch form). */
+    placementContext?: AgentInputPlacementContext;
     /**
      * `none` mounts no voice affordance or dictation, whatever the account enables (the embedded
      * presentation). `dictation` retains the microphone without mounting conversational Voice (a
@@ -546,12 +562,6 @@ interface AgentInputProps {
         transitionKey?: string;
     };
     /**
-     * The person's collapsed action-bar setting only: the controls this composer keeps on the
-     * bar, in bar order; every other control is reached from the actions menu. A host names
-     * WHAT it contains; it never picks how the bar is laid out (owner, 2026-10-11).
-     */
-    barControlIds?: readonly AgentInputControlId[];
-    /**
      * `compact`: an ask box on a page about one thing (the machine page's "Ask an agent", lab `ra`
      * A1). The composer contains only where it runs and which model answers, on one rail; every
      * other choice keeps the new session's default. Default `full`.
@@ -571,6 +581,8 @@ interface AgentInputProps {
      */
     instrumentQuota?: SessionInstrumentStripQuota | null;
     statusBadges?: ReadonlyArray<AgentInputStatusBadgeDescriptor>;
+    /** Admitted statusStrip regions from the shared Composer presentation owner. */
+    statusRegions?: React.ComponentProps<typeof SessionInstrumentStrip>['statusRegions'];
     statusTrailingActions?: React.ReactNode;
     /** Hosts with an editable permission chip may omit the repeated instrument-strip label. */
     showStatusPermissionMode?: boolean;
@@ -587,8 +599,13 @@ interface AgentInputProps {
     onFileViewerPress?: () => void;
     agentType?: string;
     agentLabel?: string | null;
-    /** A controlled authoring engine/Role label; live Sessions retain their own projection. */
+    /**
+     * A controlled authoring engine/Role label; live Sessions retain their own projection. With
+     * `engineControls="none"` it is a fixed chip naming who answers (a walkthrough's model), with no picker.
+     */
     engineLabel?: string;
+    /** The Agent a fixed `engineLabel` belongs to, for the chip's mark. */
+    engineAgentId?: string;
     /** Already-demanded picker facts; the closed chip shares the picker's label owner without discovery. */
     modelPickerPresentation?: Parameters<typeof buildSessionModelSelectedTriggerPresentation>[0];
     /** Current machine-qualified catalog identity for the running/preflight Agent. */
@@ -749,7 +766,7 @@ interface AgentInputProps {
     attachmentDropHint?: string;
     hasSendableAttachments?: boolean;
     permissionRequests?: ReadonlyArray<PendingPermissionRequest>;
-    approvalRequests?: ReadonlyArray<OpenApprovalArtifactForSession>;
+    approvalRequests?: ReadonlyArray<OpenApprovalAttentionArtifactForSession>;
     canApprovePermissions?: boolean;
     permissionDisabledReason?: TranscriptPermissionDisabledReason;
 }
@@ -757,7 +774,7 @@ interface AgentInputProps {
 type AgentInputPermissionRequestsProps = React.ComponentProps<typeof AgentInputPermissionRequests>;
 
 const EMPTY_PERMISSION_LOCATIONS_BY_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
-const NO_APPROVAL_REQUESTS: ReadonlyArray<OpenApprovalArtifactForSession> = [];
+const NO_APPROVAL_REQUESTS: ReadonlyArray<OpenApprovalAttentionArtifactForSession> = [];
 const EMPTY_APPROVAL_LOCATIONS_BY_ARTIFACT_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
 
 const AgentInputAttentionRequestsWithLocations = React.memo(function AgentInputAttentionRequestsWithLocations(
@@ -792,7 +809,7 @@ const AgentInputAttentionRequestsWithLocations = React.memo(function AgentInputA
     ]);
 
     const approvalLocationsByArtifactId = React.useMemo(() => {
-        const approvals = (props.approvalRequests ?? []).map((request) => ({
+        const approvals = (props.approvalRequests ?? []).filter(isBuiltInOpenApprovalArtifactForSession).map((request) => ({
             artifactId: request.artifact.id,
             approval: request.approval,
         }));
@@ -887,10 +904,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
             color: theme.colors.text.primary,
             textAlign: 'left',
         },
-        /** The same hairline card in a document, editable or read-only. */
-        documentPanel: resolveAgentInputPanelLayoutStyle(theme, true),
+        /** The same composer edge in a document, editable or read-only (C1: read-only is interaction, not an edge). */
+        documentPanel: resolveAgentInputPanelLayoutStyle(theme),
         readOnlyPanel: {
-            ...resolveAgentInputPanelLayoutStyle(theme, true),
+            ...resolveAgentInputPanelLayoutStyle(theme),
             width: '100%',
             alignSelf: 'stretch',
         },
@@ -1188,6 +1205,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...(Platform.OS === 'web' ? {} : { marginRight: theme.space.s6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
     },
     actionChip: AGENT_INPUT_ACTION_CHIP_STYLE,
+    /** A chip whose menu is open holds the ink selection fill. */
+    actionChipOpen: { backgroundColor: theme.colors.surface.selected },
     actionChipText: resolveAgentInputActionChipTextStyle(theme),
     actionChipCountText: {
         color: theme.colors.composer.chipTint,
@@ -1200,27 +1219,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     overlayOptionRowPressed: {
         backgroundColor: theme.colors.surface.pressed,
-    },
-    overlayRadioOuter: {
-        width: 16,
-        height: 16,
-        borderRadius: 8,
-        borderWidth: 2,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: theme.space.s12,
-    },
-    overlayRadioOuterSelected: {
-        borderColor: theme.colors.radio.active,
-    },
-    overlayRadioOuterUnselected: {
-        borderColor: theme.colors.radio.inactive,
-    },
-    overlayRadioInner: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: theme.colors.radio.dot,
     },
     overlayOptionLabel: {
         fontSize: 14,
@@ -1318,13 +1316,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         [],
     );
 
-    const defaultInputMaxHeight = React.useMemo(() => {
-        return computeAgentInputDefaultMaxHeight({
-            platform: Platform.OS,
-            screenHeight,
-            keyboardHeight: 0,
-        });
-    }, [screenHeight]);
+    const defaultInputMaxHeight = useAgentInputDefaultMaxHeight();
     // Existing-session web/Tauri composers are flex-bounded, so their late measured
     // maxPanelHeight must not re-constrain the panel during session switches. Hosts that
     // own an explicit composer budget (for example /new modals) opt into applying it on web.
@@ -1496,10 +1488,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const armedComposerTarget = resolveArmedComposerContinuation({
         armedContinuationTarget: props.armedContinuationTarget,
     });
-    const engineChipAgentId = armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId ?? agentId;
+    // Who answers is fixed (engine controls off, a named engine): the chip names it and opens nothing.
+    const fixedEngine = props.engineControls === 'none' && props.engineLabel !== undefined;
+    const fixedEngineAgentId = fixedEngine ? props.engineAgentId : undefined;
+    const engineChipAgentId = fixedEngineAgentId ?? armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId ?? agentId;
     // Explicit authoring selection may be public even when owner metadata is unavailable.
     // A runtime policy default supplies no identity evidence for an existing Session.
-    const engineChipMarkAgentId = armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId
+    const engineChipMarkAgentId = fixedEngineAgentId ?? armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId
         ?? (props.sessionId ? null : engineChipAgentId);
 
     /**
@@ -1539,6 +1534,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         composerOptionsInput: props.composerOptionsInput,
         sessionId: props.sessionId,
         sessionActive: props.sessionActive,
+        currentRunnerProcessIdentity: props.currentRunnerProcessIdentity,
         permissionMode: props.permissionMode ?? null,
         allowedPermissionModes: props.allowedPermissionModes ?? null,
         modelMode: props.modelMode ?? null,
@@ -1585,7 +1581,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const agentInputHistoryScope = useSetting('agentInputHistoryScope');
     const agentInputActionBarLayout = useSetting('agentInputActionBarLayout');
     const agentInputChipDensity = useSetting('agentInputChipDensity');
-    const composerPromptLibraryButtonEnabled = useSetting('composerPromptLibraryButtonEnabled');
+    const composerPlacementPreferences = useLocalSetting('navigationSurfacePlacementsV1', selectComposerPlacementPreferences);
 
     const historyScope = agentInputHistoryScope === 'global' ? 'global' : 'perSession';
     const messageHistory = useUserMessageHistory({
@@ -1602,6 +1598,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // A host's explicit focus request puts the caret where the composer's document has it: after a host
     // writes the text (the Discussion composer's `@`), the field opens at the end, not where it last was.
     const focusComposerInput = React.useCallback(() => {
+        if (!inputRef.current) {
+            actionMenuAnchorRef.current?.focus?.();
+            return;
+        }
         inputRef.current?.focus();
         inputRef.current?.setSelection(inputStateRef.current.selection);
     }, []);
@@ -1727,14 +1727,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         return 'auto';
     }, [agentInputChipDensity]);
 
-    const effectiveActionBarLayout = React.useMemo<'wrap' | 'scroll' | 'collapsed'>(() => {
-        if (agentInputActionBarLayout === 'wrap' || agentInputActionBarLayout === 'scroll' || agentInputActionBarLayout === 'collapsed') {
-            return agentInputActionBarLayout;
-        }
-        // auto: every composer's rails scroll sideways behind an edge fade and never wrap
-        // (0.2's rails; owner, 2026-10-11). Only the person's own setting changes this.
-        return 'scroll';
-    }, [agentInputActionBarLayout]);
+    const effectiveActionBarLayout = agentInputActionBarLayout === 'scroll' ? 'scroll' : 'wrap';
 
     React.useEffect(() => {
         props.onComposerActionBarLayoutChange?.(effectiveActionBarLayout);
@@ -1990,7 +1983,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     );
     // A document-authoring composer keeps its library and mic in the chip row's trailing slot (S-o).
     const accessoriesInActionRow = props.voiceAffordance === 'dictation';
-    const fieldAccessory = props.fieldAccessory
+    const availableFieldAccessory = props.fieldAccessory
         ?? (ownsFieldDictation
             ? <AgentInputDictationButton
                 disabled={!dictationEditable}
@@ -1999,26 +1992,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 onFocus={() => { void dictation.onFocus(); }}
             />
             : null);
-    const showPromptLibraryButton = promptLibraryAvailable && composerPromptLibraryButtonEnabled !== false
-        && dictationEditable && !controlsOnly;
-    const fieldAccessoryGeometry = resolveAgentInputFieldAccessoryGeometry({
-        library: showPromptLibraryButton && !accessoriesInActionRow,
-        accessory: fieldAccessory != null && !accessoriesInActionRow,
-        belowToggle: shouldShowInputExpansionToggle,
-    });
-    const actionRowAccessories = accessoriesInActionRow ? (
-        <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
-            accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
-    ) : null;
-    // A host's accessory replaces the Voice planet, but a document's own tools (library, mic) stay in the row
-    // after it: the Discussion composer's addressing line sits before its dictation mic.
-    const trailingAccessory = props.trailingAccessory != null && actionRowAccessories
-        ? <>{props.trailingAccessory}{actionRowAccessories}</>
-        : props.trailingAccessory ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet : actionRowAccessories);
-    const fieldInputPaddingRight = Math.max(
-        fieldAccessoryGeometry.paddingRight ?? 0,
-        shouldReserveInputExpansionToggleSpace ? INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT : 0,
-    ) || undefined;
 
     React.useEffect(() => {
         historyAppliedInputStateRef.current = null;
@@ -2869,18 +2842,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.engineControls,
     ]);
 
-    const effectiveAgentPickerSelectedOptionId = React.useMemo(() => {
-        if (typeof props.agentPickerSelectedOptionId === 'string' && props.agentPickerSelectedOptionId.length > 0) {
-            return props.agentPickerSelectedOptionId;
-        }
-        // With nothing chosen, the chip names the running Agent's model, so the popover opens on that
-        // Agent — not on whatever row a caller leads the rail with (the Roles rail).
-        const runningAgentOptionId = currentAgentPickerRow?.id ?? null;
-        if (runningAgentOptionId && agentPickerOptions.some((option) => option.id === runningAgentOptionId)) {
-            return runningAgentOptionId;
-        }
-        return agentPickerOptions[0]?.id ?? null;
-    }, [agentPickerOptions, currentAgentPickerRow?.id, props.agentPickerSelectedOptionId]);
+    const effectiveAgentPickerSelectedOptionId = React.useMemo(() => resolveAgentInputEngineOptionId({
+        options: agentPickerOptions,
+        selectedOptionId: props.agentPickerSelectedOptionId,
+        agentType: props.agentType,
+    }), [agentPickerOptions, props.agentPickerSelectedOptionId, props.agentType]);
 
     const hasAgentPickerOptions = agentPickerOptions.length > 0;
 
@@ -2915,6 +2881,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const disabled = sendActionDisabled;
         return [...(props.extraActionChips ?? []), {
             key, controlId: 'delivery',
+            placement: getAgentInputResetStartPlacement(),
             render: context => <Pressable ref={context.chipAnchorRef} testID="agent-input-reset-start"
                 accessibilityRole="button" accessibilityLabel={t('usage.board.plans.sendAtReset')}
                 accessibilityState={{ disabled }} disabled={disabled} style={({ pressed }) => context.chipStyle(pressed)}
@@ -3153,13 +3120,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             ? selectedOption.icon
             : undefined;
     }, [agentPickerOptions, armedComposerTarget, effectiveAgentPickerSelectedOptionId]);
-    const hasRecipient = React.useMemo(() => {
-        return extraActionChips.some((chip) => chip.controlId === 'recipient');
-    }, [extraActionChips]);
-    const hasDelivery = React.useMemo(() => {
-        return extraActionChips.some((chip) => chip.controlId === 'delivery');
-    }, [extraActionChips]);
-    const hasExtraActionChips = extraActionChips.length > 0;
     const attachmentRowItems = React.useMemo<readonly AgentInputAttachmentsRowItem[]>(() => (
         projectAgentInputAttachmentRowItems({ items: props.attachmentRowItems }).map((item) => {
             const remove = item.onRemove;
@@ -3182,10 +3142,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         return composerReferencesFromStructuredMentions({ text: props.value, mentions: structuredInputMentions }).map((reference): ComposerEditorReference<ComposerStructuredInputMention> => {
             const parsed = parseMentionRefV1(reference.ref);
             const binding = bindings.get(reference.start);
-            const tokenLabel = scanInlineReferenceTokensV1(reference.token).find((token) => (
-                token.start === 0 && token.end === reference.token.length
-            ))?.label;
-            const label = reference.label ?? tokenLabel ?? parsed?.opaque ?? t('common.unavailable');
+            const label = resolveComposerReferenceChipLabel(reference);
             if (parsed?.scheme !== INLINE_REFERENCE_ATTACHMENT_SCHEME_V1) {
                 const readableMarker = formatSessionInputMentionMarkerV1({ ...reference, label });
                 const sessionId = reference.kind === MENTION_KIND_V1.session
@@ -3298,26 +3255,95 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const hasResume = Boolean(props.onResumeClick || props.resumePopover);
     const hasFiles = Boolean(props.sessionId && props.onFileViewerPress);
     const canStopFromComposer = Boolean(props.onAbort && props.showAbortButton);
-    const hasStop = canStopFromComposer;
-    const hasAnyActions = getHasAnyAgentInputActions({
-        showPermissionChip,
-        hasProfile,
-        hasEnvVars,
-        hasAgent,
-        hasRecipient,
-        hasDelivery,
-        hasExtraActionChips,
-        hasMachine,
-        hasPath,
-        hasResume,
-        hasFiles,
-        hasStop,
-    });
 
-    // Collapsed folds secondary controls into the menu, not onto more lines.
-    // Retain access to the remaining chips through the existing overflow track.
-    const actionBarShouldScroll = effectiveActionBarLayout !== 'wrap';
-    const actionBarIsCollapsed = effectiveActionBarLayout === 'collapsed';
+    const phoneHardware = isPhoneHardware();
+    const promptLibraryControlAvailable = promptLibraryAvailable && dictationEditable && !controlsOnly;
+    const accessoryPlacements = React.useMemo(() => ({
+        promptLibrary: promptLibraryControlAvailable ? getAgentInputFieldAccessoryPlacement('promptLibrary') : null,
+        dictate: ownsFieldDictation ? getAgentInputFieldAccessoryPlacement('dictate', dictationActive) : null,
+    }), [promptLibraryControlAvailable, ownsFieldDictation, dictationActive]);
+    const placementDescriptors = React.useMemo(() => buildAgentInputPlacementDescriptors({
+        coreControls: [
+            ...(hasAgent || ((readOnly || fixedEngine) && Boolean(props.agentType || props.engineLabel)) ? [{ id: 'engine' as const }] : []),
+            ...(showPermissionChip ? [{ id: 'permission' as const }] : []),
+            ...(shouldRenderSessionModeChip ? [{ id: 'mode' as const }] : []),
+            ...(hasProfile ? [{ id: 'profile' as const }] : []),
+            ...(hasEnvVars ? [{ id: 'env' as const }] : []),
+            ...(hasMachine ? [{ id: 'machine' as const, pending: !isConversation && !props.machineName }] : []),
+            ...(hasPath ? [{ id: 'path' as const, pending: !isConversation && folderChipState.kind === 'resolving' }] : []),
+            ...(hasResume ? [{ id: 'resume' as const }] : []),
+            ...(hasFiles ? [{ id: 'files' as const }] : []),
+        ],
+        chips: extraActionChips,
+        accessories: [
+            ...(accessoryPlacements.promptLibrary ? [accessoryPlacements.promptLibrary] : []),
+            ...(accessoryPlacements.dictate ? [accessoryPlacements.dictate] : []),
+        ],
+        phone: phoneHardware,
+        newSession: !isConversation,
+        ...(compactControls ? { containedControlIds: AGENT_INPUT_COMPACT_CONTROL_IDS } : {}),
+    }), [hasAgent, showPermissionChip, shouldRenderSessionModeChip, hasProfile, hasEnvVars, hasMachine, hasPath, hasResume, hasFiles,
+        isConversation, props.machineName, folderChipState.kind, extraActionChips, accessoryPlacements, phoneHardware, compactControls,
+        readOnly, fixedEngine, props.agentType, props.engineLabel]);
+    const resolvedControls = React.useMemo(() => resolveAgentInputControlLines({
+        controls: placementDescriptors,
+        preferences: composerPlacementPreferences,
+        singleRow: isConversation || compactControls,
+    }), [placementDescriptors, composerPlacementPreferences, isConversation, compactControls]);
+    React.useEffect(() => {
+        if (!activeSelectionOverlay) return;
+        const id = activeSelectionOverlay.id === 'collapsedExtra'
+            ? extraActionChips.find(chip => chip.key === activeSelectionOverlay.chipKey)?.placement?.id
+            : activeSelectionOverlay.id === 'agent' ? 'engine'
+                : activeSelectionOverlay.id === 'sessionMode' ? 'mode'
+                    : activeSelectionOverlay.id === 'envVars' ? 'env' : activeSelectionOverlay.id;
+        const placement = id ? resolvedControls.effectivePlacements[id] : undefined;
+        const rowAnchorExists = id !== undefined && (
+            resolvedControls.primary.includes(id) || resolvedControls.secondary.includes(id)
+        );
+        if (placement && placement !== 'hidden' && (activeSelectionOverlay.anchor !== 'chip' || rowAnchorExists)) return;
+        closeSelectionOverlay(activeSelectionOverlay.id);
+        requestComposerFocus();
+    }, [activeSelectionOverlay, extraActionChips, resolvedControls, closeSelectionOverlay, requestComposerFocus]);
+    const showPromptLibraryButton = resolvedControls.accessories.includes('promptLibrary');
+    const fieldAccessory = !ownsFieldDictation || resolvedControls.accessories.includes('dictate') ? availableFieldAccessory : null;
+    const fieldAccessoryGeometry = resolveAgentInputFieldAccessoryGeometry({
+        library: showPromptLibraryButton && !accessoriesInActionRow,
+        accessory: fieldAccessory != null && !accessoriesInActionRow,
+        belowToggle: shouldShowInputExpansionToggle,
+    });
+    const actionRowAccessories = accessoriesInActionRow ? (
+        <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
+            accessory={fieldAccessory} orderedIds={resolvedControls.accessories} belowToggle={false} placement="actionRow" />
+    ) : null;
+    const trailingAccessory = props.trailingAccessory != null && actionRowAccessories
+        ? <>{props.trailingAccessory}{actionRowAccessories}</>
+        : props.trailingAccessory ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet : actionRowAccessories);
+    const fieldInputPaddingRight = Math.max(fieldAccessoryGeometry.paddingRight ?? 0,
+        shouldReserveInputExpansionToggleSpace ? INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT : 0) || undefined;
+    const accessoryMenuChips = React.useMemo<readonly AgentInputExtraActionChip[]>(() => {
+        const { promptLibrary, dictate } = accessoryPlacements;
+        return [
+        ...(promptLibrary ? [{ key: 'promptLibrary', controlId: 'shortcuts' as const,
+            placement: promptLibrary,
+            render: () => null,
+            collapsedAction: ({ dismiss, tint }: Parameters<NonNullable<AgentInputExtraActionChip['collapsedAction']>>[0]) => ({
+                id: 'promptLibrary', label: promptLibrary.title, icon: <Icon name={promptLibrary.icon} size={16} color={tint} />,
+                onPress: () => { dismiss(); openPromptPicker(); },
+            }),
+        }] : []),
+        ...(dictate ? [{ key: 'dictate', controlId: 'shortcuts' as const,
+            placement: dictate,
+            render: () => null,
+            collapsedAction: ({ dismiss, tint }: Parameters<NonNullable<AgentInputExtraActionChip['collapsedAction']>>[0]) => ({
+                id: 'dictate', label: dictate.title, icon: <Icon name={dictate.icon} size={16} color={tint} />,
+                onPress: () => { dismiss(); void handleDictationPress(); },
+            }),
+        }] : []),
+        ];
+    }, [accessoryPlacements, openPromptPicker, handleDictationPress]);
+    const menuActionChips = React.useMemo(() => [...extraActionChips, ...accessoryMenuChips], [extraActionChips, accessoryMenuChips]);
+    const actionBarShouldScroll = effectiveActionBarLayout === 'scroll';
     const actionChipTransientStyles = React.useMemo(() => ({
         iconOnly: AGENT_INPUT_ACTION_CHIP_ICON_ONLY_STYLE,
         pressed: AGENT_INPUT_ACTION_CHIP_PRESSED_STYLE,
@@ -3413,9 +3439,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Identity-stable handlers: these feed the action-menu and control-row memos, which an inline
     // arrow would invalidate on every keystroke render.
-    const handleStopFromComposer = React.useCallback(() => {
-        void handleAbortPress();
-    }, [handleAbortPress]);
+    const handleActionMenuPermissionClick = React.useCallback(() => {
+        if (props.onPermissionModeChange) openSelectionOverlay('permission', 'actionMenu');
+        else props.onPermissionClick?.();
+    }, [props.onPermissionModeChange, props.onPermissionClick, openSelectionOverlay]);
     const openCollapsedExtraChipOptionsPopover = React.useCallback((chipKey: string | null) => {
         if (!chipKey) {
             closeSelectionOverlay('collapsedExtra');
@@ -3429,12 +3456,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const blurComposerInput = React.useCallback(() => {
         inputRef.current?.blur();
     }, []);
+    // "Customize composer…" belongs to a composer the person can edit here: never read-only, controls-only,
+    // locked or disabled, and never where the embedding host narrowed placement away.
+    const canCustomizeComposer = props.allowPlacementCustomization !== false && !readOnly && !controlsOnly
+        && props.disabled !== true && !composerInputEditLocked;
+    const customizeDescriptors = resolvedControls.controls;
+    const placementContext = props.placementContext ?? resolveAgentInputPlacementContext(props.composerRef?.kind, isConversation);
+    const handleCustomizeComposer = React.useCallback(() => {
+        setShowActionMenu(false);
+        openComposerPlacementCustomizer({ descriptors: customizeDescriptors, context: placementContext });
+    }, [customizeDescriptors, placementContext]);
     const {
         handleActionMenuPress,
         actionMenuActions,
         hasActionMenuPopoverSections,
     } = useAgentInputActionMenuControls({
-        ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
+        resolvedControls,
+        canCustomizeComposer,
+        permissionLabel: permissionChipLabel,
+        onPermissionClick: showPermissionChip ? handleActionMenuPermissionClick : undefined,
         actionMenuAnchorRef,
         showActionMenu,
         setShowActionMenu,
@@ -3451,8 +3491,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         resumePopover: props.resumePopover,
         hasAgentPickerOptions,
         onAgentClick: props.onAgentClick,
-        actionBarIsCollapsed,
-        hasAnyActions,
         tint: theme.colors.composer.chipTint,
         agentId: engineChipAgentId,
         agentIdentityIcon: engineChipIdentityIcon,
@@ -3467,36 +3505,42 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onRemoveFolder: props.onRemoveFolder,
         resumeSessionId: props.resumeSessionId,
         sessionId: props.sessionId,
-        extraActionChips,
+        extraActionChips: menuActionChips,
         openCollapsedOptionsPopover: openCollapsedExtraChipOptionsPopover,
         sessionModeLabel: sessionModeChipControl?.label ?? null,
         sessionModeChipInteraction,
         onSessionModeChange: props.onAcpSessionModeChange,
-        shouldExposeSessionModeAction: actionBarIsCollapsed && shouldRenderSessionModeChip,
         onMachineClick: handleMachinePress,
         onPathClick: handlePathPress,
         onResumeClick: handleResumePress,
         onFileViewerPress: props.onFileViewerPress,
-        canStop: canStopFromComposer,
-        onStop: handleStopFromComposer,
         hasProfile,
         hasEnvVars,
-        hasAgent,
+        hasAgent: !readOnly && hasAgent,
     });
+    const requestComposerControl = useEventCallback((intent: AgentInputControlIntent) => {
+        switch (intent) {
+            case 'engine': handleAgentPress(); break;
+            case 'actionMenu': handleActionMenuPress(); break;
+            case 'promptLibrary': openPromptPicker(); break;
+            case 'dictate': void handleDictationPress(); break;
+            default: handleToggleExtraChipCollapsedPopover(intent.chipPopover); break;
+        }
+    });
+    React.useEffect(() => {
+        props.onComposerControlRequestChange?.(requestComposerControl);
+        return () => props.onComposerControlRequestChange?.(null);
+    }, [props.onComposerControlRequestChange, requestComposerControl]);
+
     const {
         controlNodes: renderedActionControlNodes,
         hasPermissionControl,
-        readOnlyEngineNodes,
-        extraChipNodes: renderedExtraChipNodes,
         secondaryLeadingControls: secondaryLeadingControlsForWrap,
         secondaryTrailingControls: secondaryTrailingControlsForWrap,
         extraChipAnchorRefsByKey,
     } = useRenderedAgentInputControlRows({
-        readOnly,
-        layout: effectiveActionBarLayout,
-        singleRow: isConversation || compactControls,
-        ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
-        ...(compactControls ? { containedControlIds: AGENT_INPUT_COMPACT_CONTROL_IDS } : {}),
+        resolvedControls,
+        readOnly: readOnly || fixedEngine,
         chips: extraActionChips,
         overlayAnchorRef,
         onToggleExtraChipCollapsedPopover: handleToggleExtraChipCollapsedPopover,
@@ -3516,7 +3560,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hasActionMenuPopoverSections,
         actionMenuAnchorRef,
         onActionMenuPress: handleActionMenuPress,
-        actionBarIsCollapsed,
+        actionMenuOpen: showActionMenu,
+        actionChipOpenStyle: styles.actionChipOpen,
         sessionModeChipControl,
         shouldRenderSessionModeChip,
         sessionModeChipAnchorRef,
@@ -3531,7 +3576,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         envVarsChipAnchorRef,
         envVarsCount: props.envVarsCount,
         onEnvVarsPress: handleEnvVarsPress,
-        hasAgentSelection: hasAgent || (readOnly && Boolean(props.agentType || props.engineLabel)),
+        hasAgentSelection: hasAgent || ((readOnly || fixedEngine) && Boolean(props.agentType || props.engineLabel)),
         agentChipAnchorRef,
         agentId: engineChipAgentId,
         agentIdentityIcon: engineChipIdentityIcon,
@@ -3565,8 +3610,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // beneath its setup rail at every width (0.2's rails).
     const showSecondaryControlsRow = !isConversation && !compactControls && shouldShowSecondaryControlRow(
         effectiveActionBarLayout,
-        secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0 || hasPath || hasResume,
+        secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0,
     );
+
+    // The setup chips sit above the machine · folder · resume chips: each row's hit areas take half the gap.
+    const upperChipRowReach = showSecondaryControlsRow ? AGENT_INPUT_CHIP_ROW_HIT_REACH.upper : undefined;
 
     const handlePermissionSelect = React.useCallback((mode: PermissionMode) => {
         hapticsLight();
@@ -3746,6 +3794,80 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         );
     };
 
+    const overlayLayer = (
+        <AgentInputOverlayLayer
+            overlayAnchorRef={overlayAnchorRef}
+            screenWidth={screenWidth}
+            showPermissionPopover={showPermissionPopover && Boolean(props.onPermissionModeChange)}
+            permissionChipAnchorRef={permissionChipAnchorRef}
+            onPermissionPopoverRequestClose={closePermissionPopover}
+            onPermissionSelect={handlePermissionSelect}
+            agentId={armedComposerTarget?.agentId ?? sessionAgentId}
+            permissionModeOptions={permissionModeOptions}
+            effectivePermissionMode={effectivePermissionPolicy.effectiveMode}
+            effectivePermissionLabel={effectivePermissionLabel}
+            effectivePermissionPolicy={effectivePermissionPolicy}
+            styles={styles}
+            showActionMenu={showActionMenu}
+            hasActionMenuPopoverSections={hasActionMenuPopoverSections}
+            actionMenuAnchorRef={actionMenuAnchorRef}
+            onActionMenuRequestClose={closeActionMenu}
+            onCustomizeComposer={canCustomizeComposer ? handleCustomizeComposer : undefined}
+            actionMenuActions={actionMenuActions}
+            maxWidthCap={layout.maxWidth}
+            showAgentPicker={showAgentPicker}
+            hasAgentPickerOptions={hasAgentPickerOptions}
+            agentPickerAnchor={agentPickerAnchor}
+            agentChipAnchorRef={agentChipAnchorRef}
+            agentPickerTitle={props.agentPickerTitle ?? ''}
+            agentPickerOptions={agentPickerOptions}
+            effectiveAgentPickerSelectedOptionId={effectiveAgentPickerSelectedOptionId}
+            onAgentPickerSelect={props.onAgentPickerSelect}
+            onAgentPickerRequestClose={closeAgentPicker}
+            agentPickerApplyLabel={props.agentPickerApplyLabel}
+            showSessionModePicker={showSessionModePicker}
+            shouldRenderSessionModeChip={shouldRenderSessionModeChip}
+            sessionModePickerAnchor={sessionModePickerAnchor}
+            sessionModeChipAnchorRef={sessionModeChipAnchorRef}
+            sessionModePickerOptions={sessionModePickerOptions}
+            sessionModeSelectedOptionId={sessionModeChipControl?.selectedId ?? null}
+            onSessionModeSelect={(selectedId) => {
+                props.onAcpSessionModeChange?.(selectedId);
+                closeSessionModePicker();
+            }}
+            onSessionModeRequestClose={closeSessionModePicker}
+            activeExtraCollapsedPopoverChip={activeExtraCollapsedPopoverChip}
+            activeExtraCollapsedPopoverAnchor={activeExtraCollapsedPopoverAnchor}
+            extraChipAnchorRefsByKey={extraChipAnchorRefsByKey}
+            onActiveExtraCollapsedPopoverChipClose={closeActiveExtraCollapsedPopoverChip}
+            showMachinePopover={showMachinePopover}
+            machinePopoverAnchor={machinePopoverAnchor}
+            machineChipAnchorRef={machineChipAnchorRef}
+            machinePopover={props.machinePopover}
+            onMachinePopoverRequestClose={closeMachinePopover}
+            showProfilePopover={showProfilePopover}
+            profilePopoverAnchor={profilePopoverAnchor}
+            profileChipAnchorRef={profileChipAnchorRef}
+            profilePopover={props.profilePopover}
+            onProfilePopoverRequestClose={closeProfilePopover}
+            showPathPopover={showPathPopover}
+            pathPopoverAnchor={pathPopoverAnchor}
+            pathChipAnchorRef={pathChipAnchorRef}
+            pathPopover={props.pathPopover}
+            onPathPopoverRequestClose={closePathPopover}
+            showResumePopover={showResumePopover}
+            resumePopoverAnchor={resumePopoverAnchor}
+            resumeChipAnchorRef={resumeChipAnchorRef}
+            resumePopover={props.resumePopover}
+            onResumePopoverRequestClose={closeResumePopover}
+            showEnvVarsPopover={showEnvVarsPopover}
+            envVarsPopoverAnchor={envVarsPopoverAnchor}
+            envVarsChipAnchorRef={envVarsChipAnchorRef}
+            envVarsPopover={props.envVarsPopover}
+            onEnvVarsPopoverRequestClose={closeEnvVarsPopover}
+        />
+    );
+
     if (readOnly) {
         // The document owner has already placed and admitted these exact ranges.
         // Reading never searches the live catalog or rebinds a frozen reference.
@@ -3754,8 +3876,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             mentions: structuredInputMentions,
         });
         return (
+            <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
+            <AgentInputPopoverClearanceContext.Provider value={documentPanel ? undefined : stageSpotlightRef}>
+            <AgentInputPopoverColumnContext.Provider value={overlayAnchorRef}>
+            <AgentInputDocumentPanelContext.Provider value={documentPanel}>
             <TextSelectabilityScope selectable>
-                <View testID="agent-input-composer" style={[styles.container, documentPanel ? styles.containerDocument : null, { paddingHorizontal: props.contentPaddingHorizontal ?? 0 }]}>
+                <View ref={overlayAnchorRef} testID="agent-input-composer" style={[styles.container, documentPanel ? styles.containerDocument : null, { paddingHorizontal: props.contentPaddingHorizontal ?? 0 }]}>
                     <GlassSurface testID="agent-input-material-surface" {...panelMaterialProps} style={[styles.unifiedPanel, props.panelStyle, styles.readOnlyPanel]}>
                         {composerPresentationFeedback}
                         <AgentInputAttachmentsRow items={attachmentRowItems} />
@@ -3767,12 +3893,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 <Text key={`${reference.start}:${reference.ref}`} selectable style={styles.readOnlyReferenceText}>{reference.label ?? reference.token}</Text>
                             ))}
                         </View>
-                        {readOnlyEngineNodes.length > 0 || renderedExtraChipNodes.length > 0 ? (
-                            <AgentInputReadOnlyChipRow testID="agent-input-read-only-chips" engine={readOnlyEngineNodes} chips={renderedExtraChipNodes} />
+                        {renderedActionControlNodes.length > 0 || secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0 ? (
+                            <AgentInputReadOnlyChipRow testID="agent-input-read-only-chips"
+                                engine={renderedActionControlNodes}
+                                chips={[...secondaryLeadingControlsForWrap, ...secondaryTrailingControlsForWrap]} />
                         ) : null}
                     </GlassSurface>
                 </View>
             </TextSelectabilityScope>
+            {overlayLayer}
+            </AgentInputDocumentPanelContext.Provider>
+            </AgentInputPopoverColumnContext.Provider>
+            </AgentInputPopoverClearanceContext.Provider>
+            </SessionModelSourceBrowseHandoffContext.Provider>
         );
     }
 
@@ -3800,76 +3933,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 styles.innerContainer,
                 ...(column.maxWidth === undefined ? [] : [{ maxWidth: column.maxWidth }]),
             ]} ref={overlayAnchorRef}>
-                <AgentInputOverlayLayer
-                    overlayAnchorRef={overlayAnchorRef}
-                    screenWidth={screenWidth}
-                    showPermissionPopover={showPermissionPopover && Boolean(props.onPermissionModeChange)}
-                    permissionChipAnchorRef={permissionChipAnchorRef}
-                    onPermissionPopoverRequestClose={closePermissionPopover}
-                    onPermissionSelect={handlePermissionSelect}
-                    agentId={armedComposerTarget?.agentId ?? sessionAgentId}
-                    permissionModeOptions={permissionModeOptions}
-                    effectivePermissionMode={effectivePermissionPolicy.effectiveMode}
-                    effectivePermissionLabel={effectivePermissionLabel}
-                    effectivePermissionPolicy={effectivePermissionPolicy}
-                    styles={styles}
-                    showActionMenu={showActionMenu}
-                    hasActionMenuPopoverSections={hasActionMenuPopoverSections}
-                    actionMenuAnchorRef={actionMenuAnchorRef}
-                    onActionMenuRequestClose={closeActionMenu}
-                    actionMenuActions={actionMenuActions}
-                    maxWidthCap={layout.maxWidth}
-                    showAgentPicker={showAgentPicker}
-                    hasAgentPickerOptions={hasAgentPickerOptions}
-                    agentPickerAnchor={agentPickerAnchor}
-                    agentChipAnchorRef={agentChipAnchorRef}
-                    agentPickerTitle={props.agentPickerTitle ?? ''}
-                    agentPickerOptions={agentPickerOptions}
-                    effectiveAgentPickerSelectedOptionId={effectiveAgentPickerSelectedOptionId}
-                    onAgentPickerSelect={props.onAgentPickerSelect}
-                    onAgentPickerRequestClose={closeAgentPicker}
-                    agentPickerApplyLabel={props.agentPickerApplyLabel}
-                    showSessionModePicker={showSessionModePicker}
-                    shouldRenderSessionModeChip={shouldRenderSessionModeChip}
-                    sessionModePickerAnchor={sessionModePickerAnchor}
-                    sessionModeChipAnchorRef={sessionModeChipAnchorRef}
-                    sessionModePickerOptions={sessionModePickerOptions}
-                    sessionModeSelectedOptionId={sessionModeChipControl?.selectedId ?? null}
-                    onSessionModeSelect={(selectedId) => {
-                        props.onAcpSessionModeChange?.(selectedId);
-                        closeSessionModePicker();
-                    }}
-                    onSessionModeRequestClose={closeSessionModePicker}
-                    activeExtraCollapsedPopoverChip={activeExtraCollapsedPopoverChip}
-                    activeExtraCollapsedPopoverAnchor={activeExtraCollapsedPopoverAnchor}
-                    extraChipAnchorRefsByKey={extraChipAnchorRefsByKey}
-                    onActiveExtraCollapsedPopoverChipClose={closeActiveExtraCollapsedPopoverChip}
-                    showMachinePopover={showMachinePopover}
-                    machinePopoverAnchor={machinePopoverAnchor}
-                    machineChipAnchorRef={machineChipAnchorRef}
-                    machinePopover={props.machinePopover}
-                    onMachinePopoverRequestClose={closeMachinePopover}
-                    showProfilePopover={showProfilePopover}
-                    profilePopoverAnchor={profilePopoverAnchor}
-                    profileChipAnchorRef={profileChipAnchorRef}
-                    profilePopover={props.profilePopover}
-                    onProfilePopoverRequestClose={closeProfilePopover}
-                    showPathPopover={showPathPopover}
-                    pathPopoverAnchor={pathPopoverAnchor}
-                    pathChipAnchorRef={pathChipAnchorRef}
-                    pathPopover={props.pathPopover}
-                    onPathPopoverRequestClose={closePathPopover}
-                    showResumePopover={showResumePopover}
-                    resumePopoverAnchor={resumePopoverAnchor}
-                    resumeChipAnchorRef={resumeChipAnchorRef}
-                    resumePopover={props.resumePopover}
-                    onResumePopoverRequestClose={closeResumePopover}
-                    showEnvVarsPopover={showEnvVarsPopover}
-                    envVarsPopoverAnchor={envVarsPopoverAnchor}
-                    envVarsChipAnchorRef={envVarsChipAnchorRef}
-                    envVarsPopover={props.envVarsPopover}
-                    onEnvVarsPopoverRequestClose={closeEnvVarsPopover}
-                />
+                {overlayLayer}
                 <AgentInputCommandMenu
                     open={commandMenuOpen && !promptPicker.isOpen}
                     anchor={commandMenuAnchor}
@@ -3889,7 +3953,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 />
                 {promptPicker.isOpen ? (
                     <AgentInputPromptPicker
-                        anchor={{ kind: 'view', ref: composerAnchorRef }}
+                        // The picker spans the composer card edge to edge (Prompts lab R1), as the compact menu does.
+                        anchor={{ kind: 'view', ref: composerCardRef }}
                         serverId={props.sessionAddress?.serverId ?? props.sessionTypingPresence?.serverId ?? getAppliedActiveServerSnapshot().serverId}
                         sessionId={props.sessionId ?? null}
                         canSend={submitEnabled && !sendActionDisabled}
@@ -3913,6 +3978,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     permission={props.showStatusPermissionMode === false || hasPermissionControl ? null : instrumentStripPermission}
                     quota={props.instrumentQuota ?? null}
                     statusBadges={props.statusBadges}
+                    statusRegions={props.statusRegions}
                     statusTrailingActions={props.statusTrailingActions}
                     activeStatusBadgeKey={props.activeStatusBadgeKey}
                     onActiveStatusBadgeKeyChange={props.onActiveStatusBadgeKeyChange}
@@ -4024,7 +4090,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         />
                                     ) : null}
                                     {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
-                                        accessory={fieldAccessory} belowToggle={shouldShowInputExpansionToggle} />}
+                                        accessory={fieldAccessory} orderedIds={resolvedControls.accessories} belowToggle={shouldShowInputExpansionToggle} />}
                                 </View>
                             </ScrollView>
                             )}
@@ -4054,11 +4120,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 fadeLeftStyle={styles.actionButtonsFadeLeft}
                                                 fadeRightStyle={styles.actionButtonsFadeRight}
                                             >
-                                                {renderedActionControlNodes as any}
+                                                <AgentInputChipRowReach reach={upperChipRowReach}>{renderedActionControlNodes as any}</AgentInputChipRowReach>
                                             </AgentInputScrollableChipRow>
                                         ) : (
                                             <View style={[styles.actionButtonsLeft, screenWidth < 420 ? styles.actionButtonsLeftNarrow : null]}>
-                                                {renderedActionControlNodes as any}
+                                                <AgentInputChipRowReach reach={upperChipRowReach}>{renderedActionControlNodes as any}</AgentInputChipRowReach>
                                             </View>
                                         )}
                                     </View>,
@@ -4073,63 +4139,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 fadeLeftStyle={styles.actionButtonsFadeLeft}
                                                 fadeRightStyle={styles.actionButtonsFadeRight}
                                             >
-                                                <PathAndResumeRow
+<PathAndResumeRow
                                                     styles={{
                                                         pathRow: styles.pathRow,
                                                         actionButtonsLeft: styles.actionButtonsLeftScrollInline,
-                                                        actionChip: styles.actionChip,
-                                                        actionChipIconOnly: actionChipTransientStyles.iconOnly,
-                                                        actionChipPressed: actionChipTransientStyles.pressed,
-                                                        actionChipText: styles.actionChipText,
                                                     }}
                                                     fillAvailableWidth={false}
                                                     leadingControls={secondaryLeadingControlsForWrap}
                                                     trailingControls={secondaryTrailingControlsForWrap}
-                                                    showChipLabels={showChipLabels}
-                                iconColor={theme.colors.composer.chipTint}
-                                                    folderChipState={folderChipState}
-                                                    pathChipAnchorRef={pathChipAnchorRef}
-                                                    onPathClick={handlePathPress}
-                                                    onRemoveFolder={props.onRemoveFolder}
-                                                    resumeSessionId={props.resumeSessionId}
-                                                    resumeChipAnchorRef={resumeChipAnchorRef}
-                                                    onResumeClick={handleResumePress}
-                                                    resumeLabelTitle={t('newSession.resume.chipOptional', {
-                                                        agent: resolvedAgentLabel,
-                                                    })}
-                                                    resumeLabelOptional={t('newSession.resume.chipOptional', {
-                                                        agent: resolvedAgentLabel,
-                                                    })}
                                                 />
                                             </AgentInputScrollableChipRow>
                                         ) : (
-                                            <PathAndResumeRow
+<PathAndResumeRow
                                                 key="row2"
                                                 styles={{
                                                     pathRow: styles.pathRow,
                                                     actionButtonsLeft: styles.actionButtonsLeft,
-                                                    actionChip: styles.actionChip,
-                                                    actionChipIconOnly: actionChipTransientStyles.iconOnly,
-                                                    actionChipPressed: actionChipTransientStyles.pressed,
-                                                    actionChipText: styles.actionChipText,
                                                 }}
                                                 leadingControls={secondaryLeadingControlsForWrap}
                                                 trailingControls={secondaryTrailingControlsForWrap}
-                                                showChipLabels={showChipLabels}
-                            iconColor={theme.colors.composer.chipTint}
-                                                folderChipState={folderChipState}
-                                                pathChipAnchorRef={pathChipAnchorRef}
-                                                onPathClick={handlePathPress}
-                                                onRemoveFolder={props.onRemoveFolder}
-                                                resumeSessionId={props.resumeSessionId}
-                                                resumeChipAnchorRef={resumeChipAnchorRef}
-                                                onResumeClick={handleResumePress}
-                                                resumeLabelTitle={t('newSession.resume.chipOptional', {
-                                                    agent: resolvedAgentLabel,
-                                                })}
-                                                resumeLabelOptional={t('newSession.resume.chipOptional', {
-                                                    agent: resolvedAgentLabel,
-                                                })}
                                             />
                                         )
                                     ) : null,
@@ -4158,7 +4186,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             isStopping={isAborting}
                                             hasSendableContent={submitEnabled && hasSendableContent}
                                             canStop={submitEnabled && canStopFromComposer}
-                                            hasDedicatedStopControl={Boolean(props.onAbort) && Boolean(props.showAbortButton) && !actionBarIsCollapsed}
+                                            hasDedicatedStopControl={Boolean(props.onAbort) && Boolean(props.showAbortButton)}
                                             dictationPressHandler={dictationPressHandler}
                                             dictationStatus={dictationStatus}
                                             armedContinuationTarget={props.armedContinuationTarget ?? null}
@@ -4240,7 +4268,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         />
                                     ) : null}
                                     {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
-                                        accessory={fieldAccessory} belowToggle={shouldShowInputExpansionToggle} />}
+                                        accessory={fieldAccessory} orderedIds={resolvedControls.accessories} belowToggle={shouldShowInputExpansionToggle} />}
                                 </View>
                             </View>
                             )}
@@ -4270,11 +4298,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     fadeLeftStyle={styles.actionButtonsFadeLeft}
                                                     fadeRightStyle={styles.actionButtonsFadeRight}
                                                 >
-                                                    {renderedActionControlNodes as any}
+                                                    <AgentInputChipRowReach reach={upperChipRowReach}>{renderedActionControlNodes as any}</AgentInputChipRowReach>
                                                 </AgentInputScrollableChipRow>
                                             ) : (
                                                 <View style={[styles.actionButtonsLeft, screenWidth < 420 ? styles.actionButtonsLeftNarrow : null]}>
-                                                    {renderedActionControlNodes as any}
+                                                    <AgentInputChipRowReach reach={upperChipRowReach}>{renderedActionControlNodes as any}</AgentInputChipRowReach>
                                                 </View>
                                             )}
                                         </View>,
@@ -4289,63 +4317,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     fadeLeftStyle={styles.actionButtonsFadeLeft}
                                                     fadeRightStyle={styles.actionButtonsFadeRight}
                                                 >
-                                                    <PathAndResumeRow
+<PathAndResumeRow
                                                         styles={{
                                                             pathRow: styles.pathRow,
                                                             actionButtonsLeft: styles.actionButtonsLeftScrollInline,
-                                                            actionChip: styles.actionChip,
-                                                            actionChipIconOnly: actionChipTransientStyles.iconOnly,
-                                                            actionChipPressed: actionChipTransientStyles.pressed,
-                                                            actionChipText: styles.actionChipText,
                                                         }}
                                                         fillAvailableWidth={false}
                                                         leadingControls={secondaryLeadingControlsForWrap}
                                                         trailingControls={secondaryTrailingControlsForWrap}
-                                                        showChipLabels={showChipLabels}
-                                                        iconColor={theme.colors.button.secondary.tint}
-                                                        folderChipState={folderChipState}
-                                                        pathChipAnchorRef={pathChipAnchorRef}
-                                                        onPathClick={handlePathPress}
-                                                        onRemoveFolder={props.onRemoveFolder}
-                                                        resumeSessionId={props.resumeSessionId}
-                                                        resumeChipAnchorRef={resumeChipAnchorRef}
-                                                        onResumeClick={handleResumePress}
-                                                        resumeLabelTitle={t('newSession.resume.chipOptional', {
-                                                            agent: resolvedAgentLabel,
-                                                        })}
-                                                        resumeLabelOptional={t('newSession.resume.chipOptional', {
-                                                            agent: resolvedAgentLabel,
-                                                        })}
                                                     />
                                                 </AgentInputScrollableChipRow>
                                             ) : (
-                                                <PathAndResumeRow
+<PathAndResumeRow
                                                     key="row2"
                                                     styles={{
                                                         pathRow: styles.pathRow,
                                                         actionButtonsLeft: styles.actionButtonsLeft,
-                                                        actionChip: styles.actionChip,
-                                                        actionChipIconOnly: actionChipTransientStyles.iconOnly,
-                                                        actionChipPressed: actionChipTransientStyles.pressed,
-                                                        actionChipText: styles.actionChipText,
                                                     }}
                                                     leadingControls={secondaryLeadingControlsForWrap}
                                                     trailingControls={secondaryTrailingControlsForWrap}
-                                                    showChipLabels={showChipLabels}
-                                                    iconColor={theme.colors.button.secondary.tint}
-                                                    folderChipState={folderChipState}
-                                                    pathChipAnchorRef={pathChipAnchorRef}
-                                                    onPathClick={handlePathPress}
-                                                    onRemoveFolder={props.onRemoveFolder}
-                                                    resumeSessionId={props.resumeSessionId}
-                                                    resumeChipAnchorRef={resumeChipAnchorRef}
-                                                    onResumeClick={handleResumePress}
-                                                    resumeLabelTitle={t('newSession.resume.chipOptional', {
-                                                        agent: resolvedAgentLabel,
-                                                    })}
-                                                    resumeLabelOptional={t('newSession.resume.chipOptional', {
-                                                        agent: resolvedAgentLabel,
-                                                    })}
                                                 />
                                             )
                                         ) : null,
@@ -4374,7 +4364,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 isStopping={isAborting}
                                                 hasSendableContent={submitEnabled && hasSendableContent}
                                                 canStop={submitEnabled && canStopFromComposer}
-                                                hasDedicatedStopControl={Boolean(props.onAbort) && Boolean(props.showAbortButton) && !actionBarIsCollapsed}
+                                                hasDedicatedStopControl={Boolean(props.onAbort) && Boolean(props.showAbortButton)}
                                                 dictationPressHandler={dictationPressHandler}
                                                 dictationStatus={dictationStatus}
                                                 armedContinuationTarget={props.armedContinuationTarget ?? null}

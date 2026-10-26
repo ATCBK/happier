@@ -23,13 +23,13 @@ import type { Theme } from '@/theme';
 import { readArmedRouteContinuationLabel, resolveArmedSubmitPresentation, type ArmedRouteContinuation } from './agentContinuationSubmitPresentation';
 
 /**
- * The submit control's touch target reaches above and below its box.
- *
- * The shape wrapper has to clip while it resizes, and a clip would eat that
- * reach, so the wrapper reserves exactly the same amount in flow. Negative
- * margins would spend that space again and let a stacked Voice target overlap it.
+ * How far the submit control's hit area may reach above and below it. Stacked, Send sits above Voice
+ * with a 1 to 2 px gap, so its reach below is 0 (Voice reaches that gap itself) and above it has the
+ * composer's free space. The shape wrapper has to clip while it resizes, and a clip would eat that
+ * reach, so the wrapper pads by exactly this amount and cancels it with equal negative margins: the
+ * clip box is as tall as the reach, the layout is as tall as the control.
  */
-const SUBMIT_HIT_SLOP = { top: 5, bottom: 10, left: 0, right: 0 } as const;
+const SUBMIT_HIT_REACH = { top: 6, bottom: 0, left: 0, right: 0 } as const;
 
 /** The armed button's own box gives way to its clip so the label truncates (RoundButton's pressable is flexShrink 0). */
 const ARMED_SUBMIT_SHRINKABLE_STYLE = { flexShrink: 1, minWidth: 0 } as const;
@@ -46,8 +46,10 @@ const stylesheet = StyleSheet.create(() => ({
         minWidth: 0,
         marginLeft: 8,
         marginRight: 8,
-        paddingTop: SUBMIT_HIT_SLOP.top,
-        paddingBottom: SUBMIT_HIT_SLOP.bottom,
+        paddingTop: SUBMIT_HIT_REACH.top,
+        paddingBottom: SUBMIT_HIT_REACH.bottom,
+        marginTop: -SUBMIT_HIT_REACH.top,
+        marginBottom: -SUBMIT_HIT_REACH.bottom,
     },
 }));
 
@@ -356,7 +358,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
                 disabled: Boolean(props.disabled),
                 ...(sendMenuEnabled ? { expanded: sendMenuOpen } : {}),
             }}
-            hitSlop={SUBMIT_HIT_SLOP}
+            hitReach={SUBMIT_HIT_REACH}
             onPress={submitPress}
                 onLongPress={sendMenuEnabled ? openSendMenu : undefined}
             overlay={sendMenuEnabled ? ({ hovered, focused }) => (

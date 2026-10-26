@@ -4,7 +4,6 @@ import {
     AccessibilityInfo,
     findNodeHandle,
     Platform,
-    Pressable,
     ScrollView,
     View,
     type LayoutChangeEvent,
@@ -14,13 +13,12 @@ import {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { hapticsLight } from '@/components/ui/theme/haptics';
-import { isTouchPrimaryPointer, resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { LazyMountOnScreen } from '@/components/ui/performance/LazyMountOnScreen';
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
-import { HappierImageCheckerboard } from '@happier-dev/plugin-ui/presentation';
+import { HappierImageCheckerboard, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { useImageBacking } from '@/components/ui/media/imageBacking';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { Typography } from '@/constants/Typography';
@@ -32,6 +30,7 @@ import type {
 } from '../agentInputContracts';
 import { readAgentInputImageNumbers } from '../agentInputContracts';
 import { ImageNumberBadge } from '@/components/ui/referenceChip/ImageNumberBadge';
+import { isHappierTouchPrimaryPointer } from '@happier-dev/plugin-ui/environment';
 
 /** A draft image the composer already holds as a direct URI (the draft owns and revokes it). */
 type ComposerAttachmentImagePreviewItem = Readonly<{ key: string; uri: string; title: string; mimeType?: string }>;
@@ -112,16 +111,20 @@ function resolveUploadProgressPercent(progress?: AgentInputAttachmentUploadProgr
     return Math.max(0, Math.min(100, percent));
 }
 
+/** A preview that only opens a popover has no press of its own. */
+const NO_PRESS = (): void => {};
 const ATTACHMENT_REMOVE_ICON_SIZE = 16;
 const ATTACHMENT_CORNER_REMOVE_SIZE = 20;
 const ATTACHMENT_CORNER_REMOVE_OVERHANG = 6;
 const ATTACHMENT_CORNER_REMOVE_ICON_SIZE = 11;
+/** A chip's remove icon sits between the label (6 px gap) and the chip's 10 px edge padding. */
+const ATTACHMENT_CHIP_REMOVE_HIT_REACH = { left: 3, right: 10 } as const;
 
 /**
- * A tray picture and its remove control. With a fine pointer the control is the lab's (TA) small ink
- * disc on the picture's corner, shown while the picture is hovered or the control has keyboard focus.
- * On touch it stays beside the picture, always shown, so the two press targets never overlap. Either
- * way the control's own frame is the platform's target size: no hit slop.
+ * A tray picture and its remove control: the lab's (TA) small ink disc on the picture's corner. With a
+ * fine pointer it shows while the picture is hovered or the control has keyboard focus; under a finger
+ * it is always shown (there is no hover). The disc is the whole drawn control: a finger reaches 44
+ * through the shared hit area, outward only, so it never overlaps the picture's own press target.
  */
 /** What sits behind a tray picture: the same paper or transparency board as the Media stage and image wells. */
 function TrayPictureBacking(props: Readonly<{ alphaCapable: boolean; checkerboardTestID: string }>) {
@@ -139,40 +142,24 @@ function resolveTrayPictureAlphaCapable(item: Extract<AgentInputAttachmentsRowIt
     return item.alphaCapable ?? resolveFileViewerKind({ path: item.label, mimeType: item.preview?.mimeType }).alphaCapable;
 }
 
+/**
+ * The disc already sits 14 px over the picture; its hit area reaches outward as far as the rail's
+ * overhang allows and only 2 px back over the picture, which is just enough for the 24 px floor.
+ */
+const ATTACHMENT_CORNER_REMOVE_HIT_REACH = { left: 2, bottom: 2 } as const;
+
 function TrayPictureTile(props: Readonly<{
     children: React.ReactNode;
     onRemove: (() => void) | undefined;
     removeTestID: string | undefined;
     removeAccessibilityLabel: string;
-    removeRef?: React.Ref<View>;
+    removeRef?: (target: unknown | null) => void;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const touch = isTouchPrimaryPointer();
+    const touch = isHappierTouchPrimaryPointer(Platform.OS);
     const [hovered, setHovered] = React.useState(false);
     const [focused, setFocused] = React.useState(false);
-    const target = resolveMinimumInteractiveTargetSize(Platform.OS);
-    if (touch) {
-        return (
-            <View style={[styles.attachmentImageTileBeside, { width: ATTACHMENT_IMAGE_PREVIEW_SIZE + target, height: Math.max(ATTACHMENT_IMAGE_PREVIEW_SIZE, target) }]}>
-                {props.children}
-                {props.onRemove ? (
-                    <Pressable
-                        ref={props.removeRef}
-                        testID={props.removeTestID}
-                        accessibilityLabel={props.removeAccessibilityLabel}
-                        accessibilityRole="button"
-                        onPress={props.onRemove}
-                        style={[styles.attachmentImageRemoveBeside, { minWidth: target, minHeight: target }]}
-                    >
-                        <Icon name="x-circle" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-                    </Pressable>
-                ) : null}
-            </View>
-        );
-    }
-    // The frame is centred on the disc, which overhangs the picture's corner.
-    const frameOffset = -(ATTACHMENT_CORNER_REMOVE_OVERHANG + (target - ATTACHMENT_CORNER_REMOVE_SIZE) / 2);
     return (
         <View
             style={styles.attachmentImageTileFrame}
@@ -181,23 +168,23 @@ function TrayPictureTile(props: Readonly<{
         >
             {props.children}
             {props.onRemove ? (
-                <Pressable
-                    ref={props.removeRef}
+                <HappierPressable
+                    controlRef={props.removeRef}
                     testID={props.removeTestID}
                     accessibilityLabel={props.removeAccessibilityLabel}
                     accessibilityRole="button"
                     onPress={props.onRemove}
-                    onFocus={() => setFocused(true)}
-                    onBlur={() => setFocused(false)}
+                    onFocusChange={setFocused}
+                    hitReach={ATTACHMENT_CORNER_REMOVE_HIT_REACH}
                     style={[
                         styles.attachmentImageRemoveFrame,
-                        { width: target, height: target, top: frameOffset, right: frameOffset, opacity: hovered || focused ? 1 : 0 },
+                        { opacity: touch || hovered || focused ? 1 : 0 },
                     ]}
                 >
                     <View style={styles.attachmentImageRemoveDisc}>
                         <Icon name="x" size={ATTACHMENT_CORNER_REMOVE_ICON_SIZE} color={styles.attachmentImageRemoveIcon.color} />
                     </View>
-                </Pressable>
+                </HappierPressable>
             ) : null}
         </View>
     );
@@ -237,7 +224,7 @@ function focusAttachmentTarget(target: unknown): boolean {
         return false;
     }
     try {
-        const node = findNodeHandle(target as React.ComponentRef<typeof Pressable>);
+        const node = findNodeHandle(target as Parameters<typeof findNodeHandle>[0]);
         if (typeof node === 'number') {
             AccessibilityInfo.setAccessibilityFocus(node);
         }
@@ -330,16 +317,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: ATTACHMENT_IMAGE_PREVIEW_SIZE,
         height: ATTACHMENT_IMAGE_PREVIEW_SIZE,
     },
-    attachmentImageTileBeside: {
-        alignItems: 'center',
-        flexDirection: 'row',
-    },
-    attachmentImageRemoveBeside: {
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     attachmentImageRemoveFrame: {
         position: 'absolute',
+        top: -ATTACHMENT_CORNER_REMOVE_OVERHANG,
+        right: -ATTACHMENT_CORNER_REMOVE_OVERHANG,
+        width: ATTACHMENT_CORNER_REMOVE_SIZE,
+        height: ATTACHMENT_CORNER_REMOVE_SIZE,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -509,17 +492,6 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
     });
     const attachmentFocusTargetsRef = React.useRef(new Map<string, unknown>());
     const pendingAttachmentFocusRef = React.useRef<PendingAttachmentFocus | null>(null);
-    const attachmentActionTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const attachmentActionFrameStyle = React.useMemo(() => ({
-        alignItems: 'center' as const,
-        justifyContent: 'center' as const,
-        minHeight: attachmentActionTargetSize,
-        minWidth: attachmentActionTargetSize,
-    }), [attachmentActionTargetSize]);
-    const attachmentImagePreviewStyle = React.useMemo(() => ({
-        minHeight: attachmentActionTargetSize,
-        minWidth: attachmentActionTargetSize,
-    }), [attachmentActionTargetSize]);
     const attachmentFocusRef = React.useCallback((
         key: string,
         anchorRef?: React.RefObject<any>,
@@ -755,32 +727,33 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     >
                         <View style={styles.surfaceHeader}>
                             {onPress ? (
-                                <Pressable
-                                    ref={attachmentFocusRef(item.key, anchorRef)}
+                                <HappierPressable
+                                    controlRef={attachmentFocusRef(item.key, anchorRef)}
                                     accessibilityHint={t('common.open')}
                                     accessibilityLabel={resolveAttachmentAccessibilityLabel(item)}
                                     accessibilityRole="button"
                                     onPress={onPress}
-                                    style={[styles.surfacePreviewButton, attachmentActionFrameStyle]}
+                                    style={styles.surfacePreviewButton}
                                     testID={item.testID ? `${item.testID}-preview` : undefined}
                                 >
                                     <Icon name="eye" size={16} color={theme.colors.text.secondary} />
                                     <Text numberOfLines={1} style={styles.surfaceLabel}>{item.label}</Text>
-                                </Pressable>
+                                </HappierPressable>
                             ) : (
                                 <Text numberOfLines={1} style={styles.surfaceLabel}>{item.label}</Text>
                             )}
                             {item.onRemove ? (
-                                <Pressable
-                                    ref={onPress ? undefined : attachmentFocusRef(item.key)}
+                                <HappierPressable
+                                    controlRef={onPress ? undefined : attachmentFocusRef(item.key)}
                                     accessibilityLabel={item.removeAccessibilityLabel ?? t('common.remove')}
                                     accessibilityRole="button"
                                     onPress={() => requestAttachmentRemoval(item, onRemove)}
-                                    style={[styles.surfaceRemoveButton, attachmentActionFrameStyle]}
+                                    hitReach={ATTACHMENT_CHIP_REMOVE_HIT_REACH}
+                                    style={styles.surfaceRemoveButton}
                                     testID={removeTestID}
                                 >
                                     <Icon name="x" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-                                </Pressable>
+                                </HappierPressable>
                             ) : null}
                         </View>
                         {renderAttachmentErrorFeedback(item)}
@@ -801,7 +774,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
         if (isBadgeAttachmentRowItem(item)) {
             const badge = item;
             const icon = badge.icon?.(theme.colors.text.secondary) ?? (
-                <Icon name="file" size={14} color={theme.colors.text.secondary} />
+                <Icon name={badge.attachmentType === 'folder' ? 'folder' : 'file'} size={14} color={theme.colors.text.secondary} />
             );
             const previewContent = (
                 <>
@@ -822,16 +795,16 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                 onRemove: (() => void) | undefined,
                 focusFallback: boolean,
             ) => badge.onRemove ? (
-                <Pressable
-                    ref={focusFallback ? attachmentFocusRef(badge.key) : undefined}
+                <HappierPressable
+                    controlRef={focusFallback ? attachmentFocusRef(badge.key) : undefined}
                     accessibilityLabel={badge.removeAccessibilityLabel ?? t('common.remove')}
                     accessibilityRole="button"
                     onPress={() => requestAttachmentRemoval(badge, onRemove)}
-                    style={attachmentActionFrameStyle}
+                    hitReach={ATTACHMENT_CHIP_REMOVE_HIT_REACH}
                     testID={badge.removeTestID ?? (badge.testID ? `${badge.testID}-remove` : undefined)}
                 >
                     <Icon name="x" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-                </Pressable>
+                </HappierPressable>
             ) : null;
 
             if (badge.onPress || badge.renderPreviewPopover) {
@@ -841,17 +814,17 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                         item={badge}
                     >
                         {({ anchorRef, onPress, onRemove }) => (
-                            <View style={[styles.attachmentChip, attachmentActionFrameStyle]} testID={badge.testID}>
-                                <Pressable
-                                    ref={attachmentFocusRef(badge.key, anchorRef)}
+                            <View style={styles.attachmentChip} testID={badge.testID}>
+                                <HappierPressable
+                                    controlRef={attachmentFocusRef(badge.key, anchorRef)}
                                     accessibilityLabel={resolveAttachmentAccessibilityLabel(badge)}
                                     accessibilityRole="button"
-                                    onPress={onPress}
-                                    style={[styles.attachmentChipPreviewButton, attachmentActionFrameStyle]}
+                                    onPress={onPress ?? NO_PRESS}
+                                    style={styles.attachmentChipPreviewButton}
                                     testID={badge.testID ? `${badge.testID}-preview` : undefined}
                                 >
                                     {previewContent}
-                                </Pressable>
+                                </HappierPressable>
                                 {renderRemoveButton(onRemove, false)}
                             </View>
                         )}
@@ -860,7 +833,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
             }
 
             return (
-                <View key={badge.key} style={[styles.attachmentChip, attachmentActionFrameStyle]} testID={badge.testID}>
+                <View key={badge.key} style={styles.attachmentChip} testID={badge.testID}>
                     {previewContent}
                     {renderRemoveButton(badge.onRemove, true)}
                 </View>
@@ -888,22 +861,22 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                             onRemove={att.onRemove ? () => requestAttachmentRemoval(att, onRemove) : undefined}
                         >
                             {onPress ? (
-                                <Pressable
-                                    ref={attachmentFocusRef(att.key, anchorRef)}
+                                <HappierPressable
+                                    controlRef={attachmentFocusRef(att.key, anchorRef)}
                                     accessibilityLabel={resolveAttachmentAccessibilityLabel(att)}
                                     accessibilityRole="button"
-                                    onPress={onPress}
-                                    style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
+                                    onPress={onPress ?? NO_PRESS}
+                                    style={styles.attachmentImageSurface}
                                     testID={`agent-input-attachment-media:${att.key}`}
                                 >
                                     {att.media === 'image' ? <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} /> : null}
                                     {att.renderedPreview}
-                                </Pressable>
+                                </HappierPressable>
                             ) : (
                                 <View
                                     accessibilityLabel={resolveAttachmentAccessibilityLabel(att)}
                                     accessibilityRole="image"
-                                    style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
+                                    style={styles.attachmentImageSurface}
                                     testID={`agent-input-attachment-media:${att.key}`}
                                 >
                                     {att.media === 'image' ? <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} /> : null}
@@ -943,12 +916,12 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                             removeAccessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
                             onRemove={att.onRemove ? () => requestAttachmentRemoval(att, onRemove) : undefined}
                         >
-                            <Pressable
-                                ref={attachmentFocusRef(att.key, anchorRef)}
+                            <HappierPressable
+                                controlRef={attachmentFocusRef(att.key, anchorRef)}
                                 accessibilityLabel={resolveAttachmentAccessibilityLabel(att)}
                                 accessibilityRole="button"
-                                onPress={onPress}
-                                style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
+                                onPress={onPress ?? NO_PRESS}
+                                style={styles.attachmentImageSurface}
                                 testID={`agent-input-attachment-image:${att.key}`}
                             >
                                 <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} />
@@ -958,7 +931,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     contentFit="cover"
                                 />
                                 {renderPictureState(att, attachmentError, percent)}
-                            </Pressable>
+                            </HappierPressable>
                         </TrayPictureTile>
                     )}
                 </AttachmentRowPreviewTrigger>
@@ -988,16 +961,16 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
             onRemove: (() => void) | undefined,
             focusFallback: boolean,
         ) => att.onRemove ? (
-            <Pressable
-                ref={focusFallback ? attachmentFocusRef(att.key) : undefined}
+            <HappierPressable
+                controlRef={focusFallback ? attachmentFocusRef(att.key) : undefined}
                 testID={att.removeTestID ?? `agent-input-attachment-remove:${att.key}`}
                 accessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
                 accessibilityRole="button"
                 onPress={() => requestAttachmentRemoval(att, onRemove)}
-                style={attachmentActionFrameStyle}
+                hitReach={ATTACHMENT_CHIP_REMOVE_HIT_REACH}
             >
                 <Icon name="x-circle" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-            </Pressable>
+            </HappierPressable>
         ) : null;
 
         if (att.onPress || att.renderPreviewPopover) {
@@ -1007,17 +980,17 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     item={att}
                 >
                     {({ anchorRef, onPress, onRemove }) => (
-                        <View style={[styles.attachmentChip, attachmentActionFrameStyle]} testID={att.testID}>
-                            <Pressable
-                                ref={attachmentFocusRef(att.key, anchorRef)}
+                        <View style={styles.attachmentChip} testID={att.testID}>
+                            <HappierPressable
+                                controlRef={attachmentFocusRef(att.key, anchorRef)}
                                 accessibilityLabel={resolveAttachmentAccessibilityLabel(att)}
                                 accessibilityRole="button"
-                                onPress={onPress}
-                                style={[styles.attachmentChipPreviewButton, attachmentActionFrameStyle]}
+                                onPress={onPress ?? NO_PRESS}
+                                style={styles.attachmentChipPreviewButton}
                                 testID={att.testID ? `${att.testID}-preview` : undefined}
                             >
                                 {fallbackContent}
-                            </Pressable>
+                            </HappierPressable>
                             {renderFallbackRemoveButton(onRemove, false)}
                         </View>
                     )}
@@ -1026,7 +999,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
         }
 
         return (
-            <View key={att.key} style={[styles.attachmentChip, attachmentActionFrameStyle]} testID={att.testID}>
+            <View key={att.key} style={styles.attachmentChip} testID={att.testID}>
                 {fallbackContent}
                 {renderFallbackRemoveButton(att.onRemove, true)}
             </View>

@@ -1,8 +1,7 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { VoiceMarkArt, type VoiceMarkEvent, type VoiceMarkPose } from '@/components/voice/presence/VoiceMark';
 import type { VoiceHeldInput } from '@/voice/runtime/controller/VoiceConversationController';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -14,7 +13,6 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
  */
 export const VOICE_COMPOSER_PLANET_SLOT = 32;
 const VOICE_COMPOSER_MARK_SIZE = 26;
-const VOICE_COMPOSER_PLANET_TARGET = resolveMinimumInteractiveTargetSize(Platform.OS);
 /** The trailing row's gap to Send; the press frame grows into half of it on each side. */
 const VOICE_COMPOSER_ROW_GAP = 8;
 
@@ -76,8 +74,9 @@ export const VoiceComposerPlanet = React.memo(function VoiceComposerPlanet(props
             tooltipPlacement="top"
             variant="plain"
             size={VOICE_COMPOSER_PLANET_SLOT}
-            minimumInteractiveTargetSize={VOICE_COMPOSER_PLANET_TARGET}
             interactiveTargetGapPx={VOICE_COMPOSER_ROW_GAP}
+            // Stacked above Send the two sit 2 px apart: each hit area reaches 1 px of it, never over the other.
+            interactiveTargetVerticalGapPx={2}
             disabled={props.disabled}
             onPress={() => { if (!secondaryGesture.current) props.onPress(); }}
             onPressIn={() => { secondaryGesture.current = false; moved.current = false; }}

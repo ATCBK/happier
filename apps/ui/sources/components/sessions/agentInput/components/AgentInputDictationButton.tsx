@@ -1,13 +1,13 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
+import { AGENT_INPUT_FIELD_ACCESSORY_EDGES_PX } from './agentInputChromeStyles';
 import type { VoiceDictationSnapshot } from '@/voice/dictation/VoiceDictationController';
 
-/** The drawn circle; the press frame around it is the slot's platform target. */
+/** The drawn circle; a finger reaches it through the button's hit area, not a larger slot. */
 const DICTATION_VISUAL_SIZE = 24;
 
 /**
@@ -17,10 +17,9 @@ const DICTATION_VISUAL_SIZE = 24;
  * monochrome line microphone that acts on the field — it appends editable words and never sends —
  * while Voice is the coloured dot microphone before Send that acts on the session.
  *
- * The composer owns the geometry: `AgentInput`'s `fieldAccessory` slot is the platform target box
- * (44pt, 48 on Android). The shared `IconButton` draws the 24pt circle at the top of that box and
- * grows a real press frame to the platform target around it — never web-inert `hitSlop`, because
- * the desktop app IS the web bundle.
+ * The composer owns the geometry: `AgentInput`'s `fieldAccessory` slot is the 24pt circle. The shared
+ * `IconButton` draws it at that size and reaches the platform target (44pt, 48 on Android) through
+ * its hit area — never web-inert `hitSlop`, because the desktop app IS the web bundle.
  */
 export function AgentInputDictationButton(props: Readonly<{
     testID?: string;
@@ -31,7 +30,6 @@ export function AgentInputDictationButton(props: Readonly<{
 }>) {
     const listening = props.status !== 'idle';
     const transcribing = props.status === 'transcribing';
-    const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const label = transcribing
         ? t('voiceAssistant.transcribing')
         : listening
@@ -39,7 +37,7 @@ export function AgentInputDictationButton(props: Readonly<{
             : t('voiceAssistant.startDictation');
 
     return (
-        <View style={[styles.target, { width: minimumTargetSize, height: minimumTargetSize }]}>
+        <View style={styles.target}>
             <IconButton
                 testID={props.testID ?? 'agent-input-dictation'}
                 iconName={listening ? 'microphone-slash' : 'microphone'}
@@ -51,8 +49,7 @@ export function AgentInputDictationButton(props: Readonly<{
                 selected={listening}
                 size={DICTATION_VISUAL_SIZE}
                 iconSize={16}
-                minimumInteractiveTargetSize={minimumTargetSize}
-                interactiveTargetGapPx={minimumTargetSize}
+                interactiveTargetEdgesPx={AGENT_INPUT_FIELD_ACCESSORY_EDGES_PX}
                 disabled={props.disabled === true || transcribing}
                 onPress={props.onPress}
                 onFocusChange={(focused) => { if (focused) props.onFocus?.(); }}
@@ -66,6 +63,8 @@ const styles = StyleSheet.create({
         position: 'absolute',
         top: 0,
         left: 0,
+        width: DICTATION_VISUAL_SIZE,
+        height: DICTATION_VISUAL_SIZE + 4,
         alignItems: 'center',
         // Keeps the 24pt circle where the slot drew it: top-aligned, 4pt below the field's edge.
         justifyContent: 'flex-start',

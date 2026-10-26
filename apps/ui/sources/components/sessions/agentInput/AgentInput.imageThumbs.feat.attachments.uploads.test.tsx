@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderScreen as renderPanelScreen } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { projectAgentInputAttachmentRowItems, type AgentInputAttachment } from './agentInputContracts';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
@@ -29,6 +28,7 @@ vi.mock('expo-image', () => ({
 }));
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 const runtime = installSessionPaneRuntimeTestHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
 beforeEach(() => {
     modalShowSpy.mockClear();
     storage.setState({ settings: { ...storage.getState().settings, agentInputEnterToSend: true,

@@ -52,6 +52,27 @@ describe("AgentInputChipPickerOptionSelector state semantics", () => {
         expect(flattened.minHeight).toBe(Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize('web')));
     });
 
+    it('starts a labelled rail group after a divider of its own, never directly under the row above', async () => {
+        const { AgentInputChipPickerOptionSelector } = await import('./AgentInputChipPickerOptionSelector');
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    { id: '__default__', options: [ARMED] },
+                    { id: 'notOnMachine', label: 'Not on devbox yet', options: [{ id: 'engine:claude', label: 'Claude', sectionId: 'notOnMachine', muted: true }] },
+                ]}
+                focusedOptionId={null}
+                selectedOptionId={ARMED.id}
+                onFocusOption={() => {}}
+                variant="rail"
+            />,
+        );
+
+        expect(screen.findByTestId('agent-input-chip-picker.rail-group:notOnMachine')).toBeTruthy();
+        // The first group has no heading to separate, so it draws no divider.
+        expect(screen.findByTestId('agent-input-chip-picker.rail-group:__default__')).toBeFalsy();
+    });
+
     it("publishes selection as state, and each row's own accessible name, in the rail", async () => {
         const { AgentInputChipPickerOptionSelector } = await import("./AgentInputChipPickerOptionSelector");
 

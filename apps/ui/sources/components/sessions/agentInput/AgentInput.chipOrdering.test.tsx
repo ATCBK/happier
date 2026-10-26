@@ -6,7 +6,6 @@ vi.mock('socket.io-client', async (importOriginal) =>
 import type { ReactTestRendererJSON } from 'react-test-renderer';
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 import { renderScreen as renderPanelScreen } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
@@ -17,6 +16,7 @@ installAgentInputCommonModuleMocks({
     },
 });
 const runtime = installSessionPaneRuntimeTestHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
 beforeEach(() => {
     storage.setState({ settings: { ...storage.getState().settings,
         agentInputEnterToSend: true, agentInputActionBarLayout: 'wrap', agentInputChipDensity: 'labels',
@@ -121,6 +121,7 @@ describe('AgentInput (chip ordering)', () => {
                         {
                             key: 'participants-recipient',
                             controlId: 'recipient',
+                            placement: { id: 'recipient:participants-recipient', title: 'Recipient', defaultPlacement: 'pinned' },
                             collapsedOptionsPopover: {
                                 title: 'session.participants.sendToTitle',
                                 options: [{ id: 'lead', label: 'Lead' }],
@@ -132,6 +133,7 @@ describe('AgentInput (chip ordering)', () => {
                         {
                             key: 'execution-run-delivery',
                             controlId: 'delivery',
+                            placement: { id: 'delivery:execution-run-delivery', title: 'Delivery', defaultPlacement: 'pinned' },
                             collapsedOptionsPopover: {
                                 title: 'runs.delivery.title',
                                 options: [{ id: 'interrupt', label: 'Interrupt' }],
@@ -156,7 +158,7 @@ describe('AgentInput (chip ordering)', () => {
     it('does not rebuild the control rows or action menu when only the composer text changes', async () => {
         const { AgentInput } = await import('./AgentInput');
         const renderRecipientChip = vi.fn(() => React.createElement('Pressable', { testID: 'agent-input-recipient-chip' }));
-        const buildRecipientMenuAction = vi.fn((): readonly ActionListItem[] => []);
+        const buildRecipientMenuAction = vi.fn((): readonly ActionListItem[] => [{ id: 'recipient-options', label: 'Recipients', onPress: () => {} }]);
         const stableProps = {
             placeholder: 'placeholder',
             onChangeText: () => {},
@@ -172,12 +174,17 @@ describe('AgentInput (chip ordering)', () => {
             extraActionChips: [{
                 key: 'participants-recipient',
                 controlId: 'recipient' as const,
+                placement: { id: 'recipient:participants-recipient', title: 'Recipient', defaultPlacement: 'pinned' as const },
                 render: renderRecipientChip,
+            }, {
+                key: 'recipient-options', controlId: 'shortcuts' as const,
+                placement: { id: 'shortcuts:recipient-options', title: 'Recipients', defaultPlacement: 'overflow' as const },
+                render: () => null,
                 collapsedAction: buildRecipientMenuAction,
             }],
         };
         const screen = await renderScreen(React.createElement(AgentInput, { ...stableProps, value: '' }));
-        expect(screen.findByTestId('agent-input-reset-start')).not.toBeNull();
+        await screen.pressByTestIdAsync('agent-input-action-menu-button');
         expect(renderRecipientChip).toHaveBeenCalled();
         expect(buildRecipientMenuAction).toHaveBeenCalled();
         renderRecipientChip.mockClear();

@@ -1,12 +1,12 @@
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     SELECTION_LIST_CARD_COLUMN_GAP_PX,
     SelectionList,
@@ -381,7 +381,6 @@ function OptionTrailingAccessory<TValue>(props: Readonly<{
                     // The frame buys it now, so the star can be corner art everywhere.
                     size={OPTION_CARD_GLYPH_BOX_PX}
                     iconSize={OPTION_CARD_GLYPH_SIZE_PX}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                     interactiveTargetGapPx={OPTION_INDICATOR_GAP_PX}
                     variant="plain"
                     onPress={() => props.favoriteOptions?.onToggle(props.option)}
@@ -720,7 +719,6 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                                 variant="plain"
                                 size={HEADER_GLYPH_BOX_PX}
                                 iconSize={HEADER_GLYPH_SIZE_PX}
-                                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                                 interactiveTargetGapPx={TITLE_ROW_ACTION_GAP_PX}
                                 // While the catalog loads the same glyph stays put, held still:
                                 // the user's loading-style spinner (a dot grid) read as a
@@ -950,13 +948,13 @@ const styles = StyleSheet.create((theme) => ({
     /** A model option's name ("Thinking", "Speed") above its segmented control: sentence case, medium. */
     selectedControlTitle: { ...Typography.variant('meta', 'medium'),   color: theme.colors.text.secondary },
     selectedControlDescription: { fontSize: 11, lineHeight: 14, color: theme.colors.text.tertiary },
-    customEntryRow: { borderRadius: 12, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s6, backgroundColor: theme.colors.surface.base, minHeight: 44 },
+    customEntryRow: { borderRadius: 12, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s6, backgroundColor: theme.colors.surface.base },
     customEntrySelected: { backgroundColor: theme.colors.surface.selected },
     customEntryHovered: { backgroundColor: theme.colors.surface.pressed },
     customEntryPressed: { opacity: motionTokens.press.opacitySubtle },
     customEntryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: theme.space.s12 },
     customEntryTextBlock: { flex: 1, minWidth: 0 },
     customEditor: { paddingTop: theme.space.s4 },
-    customEditorInput: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border.default, paddingHorizontal: theme.space.s10, paddingVertical: theme.space.s6, fontSize: 12, color: theme.colors.text.primary },
+    customEditorInput: { minHeight: HAPPIER_PAGE_METRICS.controlHeightPx, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border.default, paddingHorizontal: theme.space.s10, paddingVertical: theme.space.s6, fontSize: 12, color: theme.colors.text.primary },
     emptyText: { fontSize: 11, color: theme.colors.text.secondary, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s8 },
 }));
