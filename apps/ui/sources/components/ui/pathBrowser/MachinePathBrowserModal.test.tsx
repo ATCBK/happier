@@ -15,6 +15,7 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
@@ -241,6 +242,10 @@ const machineRequests = installSessionActionRpcBoundary(async (request, context)
         }
 });
 
+// Present-user folder creation is an external Account Action (one admitted filesystem owner): the
+// Home mints its authorization and the daemon executes the decoded input. Only that daemon reply is replaced.
+const folderActionRequests: Array<Readonly<{ machineId: string; input: unknown }>> = [];
+
 const defaultDirectoryEntries = listMachineFileBrowserDirectoryEntriesMock.getMockImplementation()!;
 const defaultRoots = listMachineFileBrowserRootsMock.getMockImplementation()!;
 const initialState = storage.getState();
@@ -270,8 +275,26 @@ async function addPathHome(options: Readonly<{ serverUrl: string; name: string; 
         metadata: { host: 'path-browser.test', platform: 'darwin', happyCliVersion: 'test',
             happyHomeDir: '/Users/leeroy/.happier', homeDir: '/Users/leeroy' },
     });
+    const folderAction = await createExternalActionAccountHttpBoundary({ serverUrl: options.serverUrl,
+        serverIdentityId: options.serverIdentityId, accountId: 'target-account', machineId: machine.id,
+        actionId: 'daemon.filesystem.createDirectory', tokenEpoch: 0,
+        execute: async (input, context) => {
+            const payload = FilesystemCreateDirectoryInputSchema.parse(input);
+            folderActionRequests.push({ machineId: context.target.machineId, input: payload });
+            return machineCreateDirectoryMock(context.target.machineId, payload.path,
+                { serverId: id, accountId: 'target-account', signal: context.signal ?? undefined });
+        },
+    });
     const row = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'target-account' }),
+        installationPublicKey: folderAction.machine.installationPublicKey,
         metadata: encodePlainMachineStoredContent(machine.metadata) };
+    for (const path of ['/v1/actions/daemon.filesystem.createDirectory/execution-authorization', '/v1/actions/daemon.filesystem.createDirectory']) {
+        homes.answer(id, path, { select: async (_body, request) => {
+            const response = await folderAction.handle(new URL(request.url), request.init);
+            if (!response) throw new Error('Unhandled folder Action request');
+            return { status: response.status, body: await response.json() };
+        } });
+    }
     homes.answer(id, '/v1/machines', { body: [row] });
     homes.answer(id, `/v1/machines/${machine.id}`, { body: { machine: row } });
     storage.getState().applyMachines([{ ...machine, access: row.access }], true, { sourceServerId: id, sourceAccountId: 'target-account' });
@@ -322,6 +345,7 @@ describe('MachinePathBrowserModal', () => {
         flatListScrollToIndexMock.mockClear();
         machineCreateDirectoryMock.mockClear();
         machineRequests.length = 0;
+        folderActionRequests.length = 0;
         machineWorkspaceFileListMock.mockReset().mockResolvedValue({ ok: true, paths: [], truncated: false });
         modalPromptMock.mockReset().mockResolvedValue(null);
         modalAlertMock.mockClear();
@@ -993,9 +1017,8 @@ describe('MachinePathBrowserModal', () => {
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         if (mode === 'allowed') {
-            await vi.waitFor(() => expect(machineRequests).toContainEqual(expect.objectContaining({
-                method: 'machine-1:daemon.filesystem.createDirectory',
-                params: { rootPath: '/Users', path: '/Users/new-folder' },
+            await vi.waitFor(() => expect(folderActionRequests).toContainEqual(expect.objectContaining({
+                machineId: 'machine-1', input: { rootPath: '/Users', path: '/Users/new-folder' },
             })));
             expect(machineCreateDirectoryMock).toHaveBeenCalledWith('machine-1', '/Users/new-folder', expect.anything());
             expect(modalAlertMock).not.toHaveBeenCalled();
@@ -1003,6 +1026,7 @@ describe('MachinePathBrowserModal', () => {
             await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalled());
             expect(machineCreateDirectoryMock).not.toHaveBeenCalled();
             expect(machineRequests.some(request => request.method.endsWith(`:${RPC_METHODS.CREATE_DIRECTORY}`))).toBe(false);
+            expect(folderActionRequests).toEqual([]);
             if (mode === 'ask') {
                 expect(homes.artifacts(scope.serverId).list()).toHaveLength(1);
             }

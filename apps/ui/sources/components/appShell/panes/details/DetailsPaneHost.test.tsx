@@ -11,12 +11,11 @@ installSessionDetailsPanelNonRnModuleMocks();
 // Collection-time SDK registration supplies stable functions to already-imported consumers.
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    const dimensions = () => ({ width: state.windowWidthPx, height: 800, scale: 1, fontScale: 1 });
+    // The testkit routes `Dimensions.get` (the presentation geometry authority) through this read.
     return createReactNativeWebMock({
-        Dimensions: { get: dimensions },
         useWindowDimensions: () => {
             state.hookReadWidths.push(state.windowWidthPx);
-            return dimensions();
+            return { width: state.windowWidthPx, height: 800, scale: 1, fontScale: 1 };
         },
     });
 });

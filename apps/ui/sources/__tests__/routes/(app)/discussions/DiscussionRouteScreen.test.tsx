@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
+import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
@@ -84,6 +84,12 @@ async function renderDiscussionRoute(kind: 'discussion' | 'new' = 'discussion', 
     </runtime.Wrapper>);
 }
 
+/** Message bodies render as Markdown, so their text sits below the content host. */
+function hostText(node: ReactTestInstance | string | null): string {
+    if (node === null) return '';
+    return typeof node === 'string' ? node : node.children.map(hostText).join('');
+}
+
 describe('DiscussionRouteScreen', () => {
     it('loads a standalone committed thread beside the desktop column with stable external snapshots', async () => {
         Object.assign(viewport, { width: 1440, height: 940 });
@@ -107,7 +113,7 @@ describe('DiscussionRouteScreen', () => {
             phase = 'waiting for loaded detail';
             await waitForHomeGovernance(() => expect(screen.findByTestId('session-discussion-details')).not.toBeNull());
             phase = 'waiting for committed message';
-            await waitForHomeGovernance(() => expect(screen.findHostByTestId('session-discussion-message-content-committed-root')?.children).toContain('Committed conversation content'));
+            await waitForHomeGovernance(() => expect(hostText(screen.findHostByTestId('session-discussion-message-content-committed-root'))).toContain('Committed conversation content'));
             expect(screen.findAllByTestId('session-discussion-details-state')).toHaveLength(0);
             const { readRegisteredDiscussionRepository } = await import('@/sync/ops/discussions/discussionRepositoryRegistry');
             const repository = readRegisteredDiscussionRepository(runtime.accountScope!, { serverId: runtime.accountScope!.serverId });

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createRootLayoutFeaturesResponse, renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
 import {
@@ -179,6 +179,12 @@ describe('FeaturesSettingsScreen gating', () => {
         localSettingsFixture.terminalRendererPreference = 'native';
 
         const { default: FeaturesSettingsScreen } = await import('@/app/(app)/settings/features');
+        // The renderer row exists only on native hosts. The per-case React Native port is installed
+        // after the testkit graph loaded the default web port, so present iOS on that loaded port.
+        const { Platform } = await import('react-native');
+        const os = Platform.OS;
+        Object.assign(Platform, { OS: 'ios' });
+        onTestFinished(() => { Object.assign(Platform, { OS: os }); });
 
         const screen = await renderSettingsView(React.createElement(FeaturesSettingsScreen));
         // The terminal lives in the bottom pane (terminal lab B1); there is no location to choose.

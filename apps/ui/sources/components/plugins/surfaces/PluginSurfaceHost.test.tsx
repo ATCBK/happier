@@ -3918,12 +3918,18 @@ describe('PluginSurfacePlacementHost', () => {
         )) });
         let inventoryRequests = 0;
         const inventoryClaims: unknown[] = [];
+        // The mounted Machine's presence is read through the canonical Machine row reads.
+        const inventoryMachine = { ...createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account-a' }),
+            installationId: 'inspector-installation' };
+        const readInventoryMachine = () => {
+            const active = pluginSurfaceConnectivity.machineOnlineById.get('machine_1') ?? pluginSurfaceConnectivity.machineOnline;
+            return { ...inventoryMachine, active, activeAt: active ? Date.now() : 0 };
+        };
         await pluginSurfaceAccountLifetime.setScope({ serverId: 'server-a', accountId: 'account-a' }, (path, init) => {
-            if (path === '/v1/machines') return Response.json([ExternalActionMachineBootstrapV1Schema.parse({
-                id: 'machine_1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
-                installationId: 'inspector-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-                access: { custodian: { accountId: 'account-a', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-            })]);
+            if (path === '/v1/machines') return Response.json([readInventoryMachine()]);
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => id === inventoryMachine.id ? readInventoryMachine() : null);
+            if (path === '/v1/machines/machine_1') return Response.json({ machine: readInventoryMachine() });
             if (path !== '/v1/actions/plugins.list') return undefined;
             const request = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
             inventoryClaims.push(request.pluginInvocation);
@@ -9719,7 +9725,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         };
         // The retained callee already exists. Only requester Availability goes
         // unobserved; no descriptor, Action, factory or custody changes on return.
-        if (retainedAccountRequester) await registerAccountRead();
+        if (retainedAccountRequester || explicitDevelopmentRequester) await registerAccountRead();
         clearPluginAccountAvailabilityProjection();
         let requesterMounted = false;
         function AccountRead() {
@@ -9773,7 +9779,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             // publishes that same custody on this mounted descriptor.
             if (!retainedAccountRequester) {
                 expect(attempts).toEqual([]);
-                await registerAccountRead();
+                if (!explicitDevelopmentRequester) await registerAccountRead();
             }
             if (explicitDevelopmentRequester) {
                 const { mergeInstalledPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
@@ -9783,10 +9789,10 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                 const selected = mergeInstalledPluginUiProjections([bundledAccountProjection], machineProjection, undefined,
                     new Map([[pluginId, executionOrigin]]));
                 if (!selected) throw new Error('Expected canonical explicit development projection');
-                // A selected development declaration owns its actual Machine
-                // caller; the separately registered Account Action is a callee.
-                expect(selected.settingsPagesById[pageId]?.hostAccountOrigin).toBeUndefined();
-                expect(selected.surfacePlacementsById[placementId]?.hostAccountOrigin).toBeUndefined();
+                // An admitted Account destination keeps its requester custody while the
+                // development declaration supplies the renderer bytes.
+                expect(selected.settingsPagesById[pageId]?.hostAccountOrigin).toMatchObject({ accountId: 'account-a' });
+                expect(selected.surfacePlacementsById[placementId]?.hostAccountOrigin).toMatchObject({ accountId: 'account-a' });
                 projection = selected;
             } else {
                 projection = accountProjection;

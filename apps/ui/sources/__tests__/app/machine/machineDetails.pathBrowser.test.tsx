@@ -46,6 +46,11 @@ const { AuthProvider } = await import('@/auth/context/AuthContext');
 
 describe('Machine detail navigation and terminal entry', () => {
     let serverId: string;
+    // The census and the exact by-id Machine read (read-batch) answer the same row.
+    const answerMachineRow = (row: ReturnType<typeof createPlainMachineRowFixture>) => {
+        home.answer(serverId, '/v1/machines', { body: [row] });
+        home.answer(serverId, '/v1/machines/machine-1', { body: { machine: row } });
+    };
     let disposeLoader: (() => void) | undefined;
     beforeEach(async () => {
         await standardCleanup();
@@ -63,7 +68,7 @@ describe('Machine detail navigation and terminal entry', () => {
             return { supported: false, reason: 'not-supported' };
         });
         serverId = await home.addHome({ name: 'Machine Home', serverUrl: 'https://machine-detail.test', accountId: 'account-a', currentAccount: true });
-        home.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })] });
+        answerMachineRow(createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }));
         await storage.getState().activateProfileScope({ serverId, accountId: 'account-a' });
         await storage.getState().activateSettingsScope({ serverId, accountId: 'account-a' });
         storage.getState().applySettings(settingsDefaults, (storage.getState().settingsVersion ?? 0) + 1);
@@ -132,7 +137,7 @@ describe('Machine detail navigation and terminal entry', () => {
         const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
         const access = { ...row.access!, role: isShared ? 'use' as const : 'manage' as const };
         const activeAt = active ? row.activeAt : Date.now() - DEFAULT_MACHINE_ONLINE_GRACE_MS - 1;
-        home.answer(serverId, '/v1/machines', { body: [{ ...row, active, activeAt, access }] });
+        answerMachineRow({ ...row, active, activeAt, access });
         // Replace fixture membership before publishing an offline observation; the store correctly retains newer heartbeats.
         storage.getState().applyMachines([], true);
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt, isShared, active, access })], true);
@@ -143,7 +148,7 @@ describe('Machine detail navigation and terminal entry', () => {
     it('offers no header terminal while the machine\'s home folder is unknown on this device', async () => {
         const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
         const metadata = { ...createMachineFixture().metadata!, homeDir: '' };
-        home.answer(serverId, '/v1/machines', { body: [{ ...row, metadata: encodePlainMachineStoredContent(metadata) }] });
+        answerMachineRow({ ...row, metadata: encodePlainMachineStoredContent(metadata) });
         storage.getState().applyMachines([], true);
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false, metadata })], true);
         const screen = await render(<MachinePageScreen />);
@@ -153,7 +158,7 @@ describe('Machine detail navigation and terminal entry', () => {
     it('waits in the sheet without asking the daemon until the home folder is known, then opens there', async () => {
         const metadata = { ...createMachineFixture().metadata!, homeDir: '' };
         const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
-        home.answer(serverId, '/v1/machines', { body: [{ ...row, metadata: encodePlainMachineStoredContent(metadata) }] });
+        answerMachineRow({ ...row, metadata: encodePlainMachineStoredContent(metadata) });
         storage.getState().applyMachines([], true);
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false, metadata })], true);
         const screen = await render(<MachinePageScreen />);

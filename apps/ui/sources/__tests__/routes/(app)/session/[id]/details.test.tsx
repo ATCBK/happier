@@ -94,6 +94,8 @@ async function renderScreen(seed?: () => void | Promise<void>) {
     // actual SDK viewport port, not the internal device/cockpit decision.
     const native = await import('react-native');
     vi.spyOn(native, 'useWindowDimensions').mockImplementation(() => viewport);
+    // Presentation geometry reads the Dimensions authority (usePresentationWindowDimensions).
+    vi.spyOn(native.Dimensions, 'get').mockImplementation(() => viewport);
     storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: mobileWorkspaceExperience });
     // The actual pane probe must mount before its public actions can seed retained state.
     // Mount the route only after those actions have settled, so it sees the same state as a real return.

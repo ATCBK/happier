@@ -244,12 +244,14 @@ describe('hosted-web surface context over the real bridge and public client (§3
         // A session arm with no session id is a malformed host payload. The
         // client must refuse it rather than hand the author an identity-less
         // target — which is exactly what the retired optional `session?` bag
-        // allowed.
+        // allowed. The client reads its surface from the canonical context
+        // read, so that read is where the malformed target is refused.
         const inexact = {
             ...createHostSurface({ themeProfileIndex: 0, locale: 'en' }),
             target: { kind: 'session' },
         } as unknown as SurfaceContext;
-        await expect(connectClient({ surface: inexact })).rejects.toMatchObject({
+        const { client } = await connectClient({ surface: inexact });
+        await expect(client.context()).rejects.toMatchObject({
             code: 'invalid_payload',
         });
     });

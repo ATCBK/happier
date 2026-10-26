@@ -72,6 +72,12 @@ vi.mock('@/components/onboarding/ui/WizardModalShell', () => ({
     WizardModalShell: (props: any) => React.createElement('WizardModalShell', props, props.children),
 }));
 
+// The scanner's connection warning reads the app's auth owner; load it after the module mocks above.
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+function renderScanRoute(element: React.ReactElement) {
+    return renderScreen(<InjectedAuthProvider credentials={null}>{element}</InjectedAuthProvider>);
+}
+
 describe('/scan/terminal', () => {
     beforeEach(() => {
         routerBackSpy.mockClear();
@@ -86,7 +92,7 @@ describe('/scan/terminal', () => {
     it('renders the terminal scan wizard shell and terminal-specific scanner copy', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
 
         const wizard = screen.findByType('WizardModalShell' as never);
         expect(wizard.props.testID).toBe('scan-terminal-wizard');
@@ -105,7 +111,7 @@ describe('/scan/terminal', () => {
     it('processes scanned terminal URLs', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         expect(typeof lastScannerProps?.onScan).toBe('function');
 
@@ -120,7 +126,7 @@ describe('/scan/terminal', () => {
     it('rejects scanned account URLs from the terminal scanner', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         expect(typeof lastScannerProps?.onScan).toBe('function');
 
@@ -136,7 +142,7 @@ describe('/scan/terminal', () => {
     it('keeps the terminal manual-entry copy on the canonical full-screen form', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
 
         expect(screen.findAllByTestId('pairing-link-entry-form')).toHaveLength(0);
 
@@ -160,7 +166,7 @@ describe('/scan/terminal', () => {
     it('submits a pasted terminal link through the shared scan processor', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-terminal-enter-url');
 
         await act(async () => {
@@ -182,7 +188,7 @@ describe('/scan/terminal', () => {
     it('rejects a pasted account URL from the terminal form with an inline alert and a retained draft', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-terminal-enter-url');
 
         await act(async () => {
@@ -203,7 +209,7 @@ describe('/scan/terminal', () => {
     it('returns to the camera from the pairing link form without leaving the route', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-terminal-enter-url');
         await screen.pressByTestIdAsync('restore-pairing-link-back');
 
@@ -216,7 +222,7 @@ describe('/scan/terminal', () => {
     it('uses safe fallback navigation after a successful terminal approval when there is no back stack', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/terminal');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         expect(typeof lastTerminalConnectOptions?.onSuccess).toBe('function');
 

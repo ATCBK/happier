@@ -34,7 +34,9 @@ function buildLauncherState() {
         updatedAt: 3_000,
         targets: [{
             id: 'preview:project-browser-feed',
-            source: 'registered_preview',
+            // A Service row is running only from observed liveness: the daemon's scan saw this listener.
+            source: 'inventory_entry',
+            sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'project-browser-feed' },
             machineId: 'machine-1',
             title: 'Project browser feed',
             subtitle: 'localhost:3000',

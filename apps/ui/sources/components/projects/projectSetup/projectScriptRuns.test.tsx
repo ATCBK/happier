@@ -14,7 +14,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -201,6 +201,8 @@ describe('Scripts canonical operation subscriptions', () => {
                 const path = new URL(String(url)).pathname;
                 const inspection = await inspectActionResponse(path, init);
                 if (inspection) return inspection;
+                const machineRead = createPlainMachineReadHttpResponseFixture(path, init, 'account');
+                if (machineRead) return machineRead;
                 if (path === '/v1/machines') return Response.json([...new Set(['source-machine', targetMachineId])]
                     .map(id => createPlainMachineRowFixture({ id, accountId: 'account' })));
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -350,6 +352,9 @@ describe('Scripts canonical operation subscriptions', () => {
                 const path = new URL(String(url)).pathname;
                 const inspection = await inspectActionResponse(path, init);
                 if (inspection) return inspection;
+                const machineReadBearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
+                const machineRead = machineReadBearer ? createPlainMachineReadHttpResponseFixture(path, init, parseToken(machineReadBearer)) : null;
+                if (machineRead) return machineRead;
                 if (path === '/v1/machines') {
                     const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
                     if (!bearer) throw new Error('Machine census must carry its captured Account');

@@ -8,7 +8,7 @@ import {
 } from '@happier-dev/protocol';
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -213,6 +213,9 @@ describe('Artifact surface pending approvals', () => {
                 return response ?? undefined;
             }
             if (request.path === '/v1/machines') return Response.json([machine]);
+            if (request.path === '/v1/machines/read-batch' && request.method === 'POST') {
+                return createMachineReadBatchResponseFixture(request.body, id => id === machine.id ? machine : null);
+            }
             if (request.path === '/v1/machines/source-machine') return Response.json({ machine });
             if (request.path !== '/v1/actions/approval.request.decide') return undefined;
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createPlainSessionByIdResponseFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
@@ -201,10 +201,14 @@ describe('CommitScreen', () => {
         diffResponse.mockRejectedValueOnce(new Error('network down'));
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
-        // The SCM RPC boundary reports an unrecognized read failure as an unavailable backend; the
-        // raw transport message is neither the headline nor part of the card.
+        // The SCM read classifier answers an unrecognized read failure with its safe copy; the raw
+        // transport message is neither the headline, part of the card, nor its diagnostic marker.
         expect(screen.findByTestId('scm-commit-details-error')).toBeTruthy();
-        expect(screen.findByTestId(`scm-commit-details-error-diagnostic-${RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE}`)).toBeTruthy();
+        const diagnostics = screen.findAll((node) => typeof node.props?.testID === 'string'
+            && node.props.testID.startsWith('scm-commit-details-error-diagnostic-'))
+            .map((node) => node.props.testID as string);
+        expect(diagnostics).not.toHaveLength(0);
+        expect(diagnostics.some((testID) => testID.includes('network down'))).toBe(false);
         expect(screen.getTextContent()).not.toContain('network down');
     });
 

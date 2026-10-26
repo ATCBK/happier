@@ -61,6 +61,12 @@ installScanRouteCommonModuleMocks({
     },
 });
 
+// The scanner's connection warning reads the app's auth owner; load it after the module mocks above.
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+function renderScanRoute(element: React.ReactElement) {
+    return renderScreen(<InjectedAuthProvider credentials={null}>{element}</InjectedAuthProvider>);
+}
+
 describe('/scan/account', () => {
     beforeEach(() => {
         routerBackSpy.mockClear();
@@ -76,7 +82,7 @@ describe('/scan/account', () => {
     it('renders the account scan wizard shell and account-specific scanner copy', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
 
         const wizard = screen.findByType('WizardModalShell' as never);
         expect(wizard.props.testID).toBe('scan-account-wizard');
@@ -99,7 +105,7 @@ describe('/scan/account', () => {
         });
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         await act(async () => {
             await lastScannerProps.onScan('happier:///account?abc123');
@@ -120,7 +126,7 @@ describe('/scan/account', () => {
             'happier-dev:///pair?v=1&pairId=pid123&secret=sec_abc&server=https%3A%2F%2Fstack.example.test%2Fpath%3Fx%3D1';
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
         await act(async () => {
             await lastScannerProps.onScan(releasedV1Link);
         });
@@ -162,7 +168,7 @@ describe('/scan/account', () => {
         });
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
         await act(async () => {
             await lastScannerProps.onScan(inviteLink);
         });
@@ -176,7 +182,7 @@ describe('/scan/account', () => {
     it('rejects scanned terminal URLs from the account scanner', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         expect(typeof lastScannerProps?.onScan).toBe('function');
 
@@ -192,7 +198,7 @@ describe('/scan/account', () => {
     it('opens the canonical full-screen pairing link form instead of a modal prompt', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
 
         expect(screen.findAllByTestId('pairing-link-entry-form')).toHaveLength(0);
 
@@ -217,7 +223,7 @@ describe('/scan/account', () => {
     it('submits a pasted account link through the shared scan processor', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-account-enter-url');
 
         await act(async () => {
@@ -243,7 +249,7 @@ describe('/scan/account', () => {
         // Dismissing the account-link guidance leaves the draft for correction.
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-account-enter-url');
 
         await act(async () => {
@@ -284,7 +290,7 @@ describe('/scan/account', () => {
         });
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-account-enter-url');
 
         await act(async () => {
@@ -304,7 +310,7 @@ describe('/scan/account', () => {
     it('returns to the camera from the pairing link form without leaving the route', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderScanRoute(<Screen />);
         await screen.pressByTestIdAsync('scan-account-enter-url');
         await screen.pressByTestIdAsync('restore-pairing-link-back');
 
@@ -317,7 +323,7 @@ describe('/scan/account', () => {
     it('uses safe fallback navigation when cancelling without history', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         await act(async () => {
             await lastScannerProps.onCancel();
@@ -330,7 +336,7 @@ describe('/scan/account', () => {
     it('uses safe fallback navigation after a successful scan when there is no back stack', async () => {
         const { default: Screen } = await import('@/app/(app)/scan/account');
 
-        await renderScreen(<Screen />);
+        await renderScanRoute(<Screen />);
 
         expect(typeof lastTerminalConnectOptions?.onSuccess).toBe('function');
 
