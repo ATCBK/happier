@@ -238,7 +238,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <br/>
 
-<h3 align="center">⌨️ Keep your terminal</h3>
+<h3 align="center">⌨️ Love the terminal? Keep using it!</h3>
 
 <p align="center">Run Claude Code, Codex or OpenCode in their own terminal UIs. Happier mirrors those sessions to every device, so you can follow along, send messages and approve from anywhere. <a href="https://docs.happier.dev/sessions/claude-unified-terminal">Claude unified terminal</a></p>
 
