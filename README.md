@@ -237,7 +237,7 @@ Either way, the session shows up everywhere at once: keep typing in the terminal
 
 <p align="center">Browse, search and edit the files in a session's folder from any device. Open a terminal on the connected machine when you need a quick command. <a href="https://docs.happier.dev/code/files-and-editor">Files and editor</a> · <a href="https://docs.happier.dev/extras/embedded-terminal">Embedded terminal</a></p>
 
-<p align="center"><img src=".github/screenshots/files-terminal.png" width="640" alt="File editor open on a project file with the project file list" /></p>
+<p align="center"><img src=".github/screenshots/files-terminal.png" width="560" alt="File editor open on a project file next to the project file list" /></p>
 
 <br/>
 
