@@ -139,6 +139,8 @@ import { applyAutomationSocketUpdate } from '@/sync/engine/automations/automatio
 import { normalizeRelationshipUpdatedUpdateBody } from '@/sync/engine/social/relationshipUpdate';
 import { notifySessionPublicLinkInvalidated } from '@/sync/domains/social/sessionPublicLinkInvalidation';
 import { parseEphemeralUpdate, parseUpdateContainer } from './socketParse';
+import { publishSessionMessageReplyInvalidation } from '@/sync/runtime/sessionMessageReplyInvalidation';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ExternalSessionTranscriptUpdatedEphemeralUpdate } from './socketParse';
 import { FeedBodySchema } from '@/sync/domains/social/feedTypes';
 export { parseEphemeralUpdate, parseUpdateContainer } from './socketParse';
@@ -2623,6 +2625,13 @@ export function handleEphemeralSocketUpdate(params: {
     const updateData = parseEphemeralUpdate(update);
     if (!updateData) return Promise.resolve();
     if (!shouldContinue()) return Promise.resolve();
+
+    if (updateData.type === 'session-message-reply-pending-v1') {
+        const scope = getActiveServerAccountScope();
+        if (scope && (!sourceServerId || areServerProfileIdentifiersEquivalent(scope.serverId, sourceServerId)))
+            publishSessionMessageReplyInvalidation(scope, updateData);
+        return Promise.resolve();
+    }
 
     // Personal facts arrive only from a committed mutation. Hydration and
     // reconnect snapshots cannot synthesize them or change Follow/read state.
