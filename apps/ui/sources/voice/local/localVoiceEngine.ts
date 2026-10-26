@@ -593,6 +593,7 @@ function isEndpointDrivenCaptureProvider(provider: LocalVoiceCaptureProvider): p
 }
 
 async function maybeRearmHandsFreeCapture(
+  origin: LocalVoiceCaptureAdmission,
   followUp: Readonly<{
     kind: 'none';
   } | {
@@ -602,6 +603,12 @@ async function maybeRearmHandsFreeCapture(
   }>,
 ): Promise<boolean> {
   if (followUp.kind !== 'rearm_capture') {
+    return false;
+  }
+  // The requesting turn can outlive its capture admission: End (or Account
+  // retirement) aborts and releases it while that turn settles. Only the
+  // admission which produced the utterance may reopen capture.
+  if (!isCaptureAdmissionCurrent(origin) || origin.captureAbortController.signal.aborted) {
     return false;
   }
 
@@ -1020,7 +1027,7 @@ async function stopSttAndSend(
     if (voiceConversationRuntimeMachine.getSnapshot().error) {
       return;
     }
-    if (await maybeRearmHandsFreeCapture(endpointDecision.followUp)) {
+    if (await maybeRearmHandsFreeCapture(admission, endpointDecision.followUp)) {
       return;
     }
     transitionVoiceRuntimeToIdle({ controlSessionId: sessionId });
@@ -1042,7 +1049,7 @@ async function stopSttAndSend(
     }),
   );
 
-  if (await maybeRearmHandsFreeCapture(endpointDecision.followUp)) {
+  if (await maybeRearmHandsFreeCapture(admission, endpointDecision.followUp)) {
     return;
   }
 }
