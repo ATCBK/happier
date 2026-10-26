@@ -78,7 +78,7 @@ export function useSessionReadiness(input: Readonly<{
             // same status owner so a changed grant cannot leave View-only copy
             // beside a composer that already accepts input.
             void read(false);
-        }, { serverIds: [accountLifetime.scope.serverId] });
+        });
         void read(false);
         return () => { unsubscribe(); request.current?.abort(); };
     }, [accountLifetime.scope.serverId, enabled, read, sessionId]);
