@@ -4,7 +4,7 @@ import type { ActionSpecProjectionMetadata, PreNormalizedActionSpec } from '../a
 
 type ArtifactFolderActionSpec = ActionSpecProjectionMetadata & {
   id: ArtifactFolderActionIdV1;
-  approval: { result: 'required' };
+  approval: { result: 'required' | 'none' };
   requiredAuthority: 'account_automation';
   inputSchema: (typeof ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1)[ArtifactFolderActionIdV1];
   outputSchema: (typeof ARTIFACT_FOLDER_ACTION_OUTPUT_SCHEMAS_V1)[ArtifactFolderActionIdV1];
@@ -22,7 +22,7 @@ const ARTIFACT_FOLDER_ACTION_COPY = {
 } as const satisfies Record<ArtifactFolderActionIdV1, readonly [title: string, summary: string]>;
 
 export const ARTIFACT_FOLDER_ACTION_SPECS_V1: ArtifactFolderActionSpec[] = ARTIFACT_FOLDER_ACTION_IDS_V1.map(id => ({
-  id, approval: { result: 'required' }, title: ARTIFACT_FOLDER_ACTION_COPY[id][0],
+  id, approval: { result: id === 'artifact.folders.list' || id === 'artifact.folders.read' ? 'none' : 'required' }, title: ARTIFACT_FOLDER_ACTION_COPY[id][0],
   description: 'Organize Artifacts in your personal folder tree without changing document contents or sharing.',
   safety: 'safe', sideEffectClass: id === 'artifact.folders.list' || id === 'artifact.folders.read' ? 'read' : 'write',
   requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],

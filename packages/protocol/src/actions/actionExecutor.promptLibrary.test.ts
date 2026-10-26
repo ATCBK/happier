@@ -641,6 +641,9 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(artifacts.get('created-2')?.body).toContain('Retained too');
   });
   it('reads the complete personal folder tree including empty folders through the admitted Action owner', async () => {
+    for (const id of ['artifact.folders.list', 'artifact.folders.read'] as const) {
+      expect(getActionSpec(id).approval.result).toBe('none');
+    }
     let unavailable = false;
     let current = true;
     const record: PromptLibraryRecordV1 = { key: 'folders', value: { v: 1, folders: [
