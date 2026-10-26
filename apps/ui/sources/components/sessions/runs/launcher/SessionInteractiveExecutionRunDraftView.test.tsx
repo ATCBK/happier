@@ -1465,7 +1465,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         // The person can write the question before making that choice.
         expect(composer().canSendMessages).toBe(true);
         expect(input().props.editable).not.toBe(false);
-        expect(input().props.placeholder).toBe(t('session.inputPlaceholder'));
+        expect(input().props.placeholder).toBe(t('agentStart.placeholders.review'));
         await type('Inspect this');
         expect(sendButton().props.disabled).toBe(true);
         const snapshot = readComposerPresentationSnapshot(screen.root.findByType(Reflect.get(AgentInput, 'type')).props.composerRef);

@@ -7,6 +7,9 @@ export const en = {
     descriptions: {
         conversation: ({ machine }: { machine: string }) => `Ask anything without interrupting this session. It runs on ${machine} beside it; nothing goes back unless you send it.`,
     },
+    placeholders: {
+        review: 'What should they focus on?',
+    },
     chips: {
         engineTitle: 'Who answers',
         addReviewer: 'Add reviewer',

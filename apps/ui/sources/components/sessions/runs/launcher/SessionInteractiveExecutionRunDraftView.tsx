@@ -181,6 +181,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'flex-end',
         paddingHorizontal: theme.space.s16,
     },
+    // Alone on a page there is no transcript above to anchor to: the start sits in the middle.
+    rootCentered: {
+        justifyContent: 'center',
+    },
     lead: {
         gap: theme.space.s6,
         paddingHorizontal: theme.space.s8,
@@ -239,6 +243,11 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
      * can still change it from the start's Role chip or engine popover.
      */
     roleId?: string | null;
+    /**
+     * Where the start sits in its space. The Details pane keeps it on the composer's edge, below the
+     * conversation it belongs to; as a page of its own, with nothing above it, it is centered.
+     */
+    placement?: 'bottom' | 'center';
 }>) => {
     const intent = props.intent ?? null;
     const optionsIntent: ExecutionRunIntent = intent ?? 'delegate';
@@ -1129,7 +1138,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         : null;
 
     return (
-        <View style={styles.root}>
+        <View style={[styles.root, props.placement === 'center' ? styles.rootCentered : null]}>
             {/* What this start is, right above the composer where the answer will appear (lab S1/S3).
                 An Ask Agent draft leads with the lead and the selected context instead (collab lab R1). */}
             {props.launchOrigin && selectionContext ? (
@@ -1190,6 +1199,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 workspace={props.workspace}
                 serverId={serverId}
                 canSendMessages={canSendMessages}
+                placeholder={intent === 'review' ? t('agentStart.placeholders.review') : undefined}
                 disabled={!editable}
                 isSendDisabled={unavailable || !editable}
                 recipient={null}

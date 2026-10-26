@@ -99,11 +99,21 @@ html:not([data-happier-input-modality="keyboard"]) :focus {
     margin: 0;
 }
 
+/* The placeholder stays inside the paragraph, so it ends where the field's reserved accessory padding begins. */
+[data-composer-editor] [data-empty="true"] {
+    position: relative;
+}
+
 [data-composer-editor] [data-empty="true"]::before {
     content: attr(data-placeholder);
     color: var(--happier-placeholder-color);
     pointer-events: none;
     position: absolute;
+    left: 0;
+    right: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 [data-composer-decoration="code"] {

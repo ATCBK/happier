@@ -56,6 +56,7 @@ function InteractiveExecutionRunDraftRoute(props: Readonly<{
             serverId={props.serverId}
             intent={props.intent}
             roleId={props.roleId}
+            placement="center"
             initialText={navigationIntent?.initialText}
             launchOrigin={navigationIntent?.source}
             onRunStarted={props.onRunStarted}
