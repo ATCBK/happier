@@ -143,6 +143,11 @@ for the related search Actions.
 
 Use **Folders** when you want lightweight organization without duplicating prompts.
 
+In 0.3 development, Prompt Library filters the same personal folder tree as
+[Artifacts](/organize/artifacts#organize-with-folders). **Move to folder** and
+dragging change the prompt's placement in both views, without changing its text
+or sharing.
+
 Recommended patterns:
 
 - one folder per team or workstream
@@ -289,6 +294,26 @@ revision is stale, the write refuses instead of silently applying the change to
 a newer Session. The CLI retains its queued intent and reviewed revision for
 explicit review after a conflict. This is not a claim that the deferred visual
 Work editor already provides draft recovery.
+
+### Memory pages and topics in 0.3 development
+
+Open a Memory document from [Artifacts](/organize/artifacts), or choose
+**Show all** from its context section, to read its key facts and topic list.
+Choose a topic to open its facts on demand. Topics and the archive stay inside
+the same document and use its existing access permissions.
+
+Select a fact to read its detail beside the list on a wide screen or on its own
+page on a phone. Decisions include their reason and source; ordinary facts can
+also link to a source Session. Opening a source still requires access to it.
+The archive contains forgotten, superseded and expired facts; those facts remain
+searchable but do not enter the always-loaded prompt index. Viewing memory does
+not change which entries a Session uses.
+
+The development Memory search surface searches remembered facts across topics
+and the archive alongside past Sessions. A fact result opens its document at
+the matching topic and fact; a Session result opens the conversation at the
+match. See [memory search](/organize/local-memory-search#search-memory-documents-in-development)
+for Machine selection and coverage limits.
 
 ### Saving memory and decisions in 0.3 development
 
