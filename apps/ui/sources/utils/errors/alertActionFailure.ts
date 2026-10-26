@@ -1,5 +1,6 @@
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 /** Deliberate disclosure of a typed Action failure, never its private transport details. */
 export function alertActionFailure(failure: Readonly<{
@@ -14,8 +15,13 @@ export function alertActionFailure(failure: Readonly<{
     const details = failure.context
         ? JSON.stringify({ code: failure.code, ...failure.context }, null, 2)
         : failure.code;
-    Modal.alert(t('common.error'), failure.reason, [
-        { text: t('approvals.technicalDetails'), onPress: () => Modal.alert(t('approvals.technicalDetails'), details) },
-        { text: t('common.ok'), style: 'cancel' },
-    ]);
+    const uncertain = failure.code === RPC_ERROR_CODES.OUTCOME_UNKNOWN;
+    Modal.alert(
+        t(uncertain ? 'toolView.pending.unknownTitle' : 'common.error'),
+        uncertain ? t('toolView.pending.unknownDescription') : failure.reason,
+        [
+            { text: t('approvals.technicalDetails'), onPress: () => Modal.alert(t('approvals.technicalDetails'), details) },
+            { text: t('common.ok'), style: 'cancel' },
+        ],
+    );
 }

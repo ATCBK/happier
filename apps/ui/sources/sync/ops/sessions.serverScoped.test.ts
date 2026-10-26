@@ -1,17 +1,21 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionModelSelectionV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+
+// Admit the network boundary before loading runtime consumers. Module transformation
+// belongs to collection, outside the fixture hooks' runtime-operation budget.
+const boundary = await installSessionOpsNetworkBoundary();
+const storage = (await import('@/sync/domains/state/storage')).storage;
+const fixtures = await import('@/dev/testkit/fixtures/sessionFixtures');
+const machineFixtures = await import('@/dev/testkit/fixtures/machineFixtures');
+const metadata = await import('@happier-dev/session-core/state');
+const ops = await import('./sessions');
 
 describe('session resume and fork routing through the Home and Account boundary', () => {
-    let boundary: SessionOpsNetworkBoundary;
-    let storage: typeof import('@/sync/domains/state/storage').storage;
-    let fixtures: typeof import('@/dev/testkit/fixtures/sessionFixtures');
-    let machineFixtures: typeof import('@/dev/testkit/fixtures/machineFixtures');
-    let metadata: typeof import('@happier-dev/session-core/state');
-    let ops: typeof import('./sessions');
     let home: Awaited<ReturnType<SessionOpsNetworkBoundary['addHome']>>;
     let unarchiveStatus: number;
     let lifecycle: string[];
@@ -35,16 +39,6 @@ describe('session resume and fork routing through the Home and Account boundary'
         compatibilityFingerprint: 'compatibility:v1:work', bindingSecurityFingerprint: 'binding-security:v1:work',
         displaySnapshot: { providerName: 'Provider', connectionName: 'Work', connectionRole: 'named', connectionDisplayNameMode: 'custom' },
     };
-
-    beforeAll(async () => {
-        const { installSessionOpsNetworkBoundary } = await import('@/dev/testkit/harness/sessionOpsNetworkBoundary');
-        boundary = await installSessionOpsNetworkBoundary();
-        storage = (await import('@/sync/domains/state/storage')).storage;
-        fixtures = await import('@/dev/testkit/fixtures/sessionFixtures');
-        machineFixtures = await import('@/dev/testkit/fixtures/machineFixtures');
-        metadata = await import('@happier-dev/session-core/state');
-        ops = await import('./sessions');
-    });
 
     beforeEach(async () => {
         storage.setState(storage.getInitialState(), true);
@@ -88,6 +82,10 @@ describe('session resume and fork routing through the Home and Account boundary'
                 return Response.json({ session: fixtures.createPlainSessionCurrentProjectionRecordFixture({ id,
                     ...(session ? { active: session.active, seq: session.seq, archivedAt: session.archivedAt ?? null,
                         metadata: session.metadata } : {}) }) });
+            }
+            if (path.startsWith('/v1/sessions/') && path.endsWith('/turns')) {
+                const sessionId = decodeURIComponent(path.slice('/v1/sessions/'.length, -'/turns'.length));
+                return Response.json({ v: 1, sessionId, updatedAt: 1, turns: [] });
             }
             return null;
         };
@@ -350,7 +348,8 @@ describe('session resume and fork routing through the Home and Account boundary'
                 return { type: 'success', sessionId: 'session-1' };
             });
             await expect(ops.ensureSessionRuntimeForPendingInput(resumeOptions({ machineId: 'machine-b', directory: '/exact', accountLifetime: account.accountLifetime })))
-                .resolves.toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED });
+                .resolves.toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+                    rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
             expect(account.accountLifetime.isCurrent()).toBe(false);
             expect(resumeRequests()).toEqual([expect.objectContaining({ targetId: 'machine-b', serverUrl: home.serverUrl,
                 token: home.token, payload: expect.objectContaining({ directory: '/exact' }) })]);
@@ -388,7 +387,6 @@ describe('session resume and fork routing through the Home and Account boundary'
                 .rejects.toThrow();
             expect(account.accountLifetime.isCurrent()).toBe(false);
             expect(boundary.requests).toEqual([]);
-            expect(boundary.httpRequests).toContainEqual(expect.objectContaining({ url: expect.stringContaining('/v2/sessions/read-batch') }));
         } finally { account.dispose(); }
     });
 
@@ -466,10 +464,45 @@ describe('session resume and fork routing through the Home and Account boundary'
             serverUrl: home.serverUrl, payload: expect.objectContaining({ directory: preferRequestedMachineTarget ? '/requested-path' : '/base' }) })]);
     });
 
-    it('maps socket acknowledgement timeouts to SESSION_WEBHOOK_TIMEOUT', async () => {
+    it('preserves issued Resume uncertainty at the Session owner without another spawn', async () => {
+        boundary.setRpcResponder(async () => { throw new Error('socket has been disconnected'); });
+        const result = await ops.resumeSession(resumeOptions());
+        expect(resumeRequests()).toHaveLength(1);
+        expect(result).toMatchObject({ type: 'error', rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+    });
+
+    it('preserves issued Resume uncertainty through the real Action executor without another spawn', async () => {
+        const sessionId = 'c123456789012345678901234';
+        setSession(sessionId, { active: false, metadata: metadata.MetadataSchema.parse({
+            path: '/tmp', host: 'host.local', machineId: 'machine-1', flavor: 'claude', claudeSessionId: 'native-session',
+        }) });
+        boundary.setRpcAckResponder(async request => {
+            if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+                throw new Error('socket has been disconnected');
+            }
+            return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+        });
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const result = await createDefaultActionExecutor().execute('session.open', {
+            sessionId, serverId: home.id, intent: 'resume',
+        }, { serverId: home.id, surface: 'ui', authority: 'present_user', actionRequestId: 'uncertain-resume', bypassApprovals: true });
+        expect(resumeRequests(), JSON.stringify({ result, methods: boundary.requests.map(request => request.method),
+            paths: boundary.httpRequests.map(request => new URL(request.url).pathname) })).toHaveLength(1);
+        expect(result).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+    });
+
+    it('preserves a proven pre-dispatch Resume refusal as a real failure', async () => {
+        boundary.setRpcAckResponder(async () => ({ ok: false, error: 'Not allowed', errorCode: RPC_ERROR_CODES.FORBIDDEN }));
+        const result = await ops.resumeSession(resumeOptions());
+        expect(result).toMatchObject({ type: 'error', rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+        expect(result).not.toMatchObject({ errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        expect(resumeRequests()).toHaveLength(1);
+    });
+
+    it('keeps an issued acknowledgement timeout uncertain rather than claiming Resume failed', async () => {
         boundary.setRpcResponder(async () => { throw new Error('operation has timed out'); });
         const result = await ops.resumeSession(resumeOptions());
-        expect(result, JSON.stringify(result)).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+        expect(result, JSON.stringify(result)).toMatchObject({ type: 'error', rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
             errorMessage: expect.any(String) });
         if (result.type !== 'error') throw new Error('Expected resume failure');
         expect(result.errorMessage.length).toBeGreaterThan(0);

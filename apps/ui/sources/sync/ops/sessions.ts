@@ -69,6 +69,7 @@ import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/
 import { normalizeSpawnSessionResult } from './_shared';
 import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { readRpcFailureCode } from './actions/rpcFailureCode';
 import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
@@ -560,7 +561,8 @@ async function runResumeSession(
                     `The daemon may be stopped, still starting, or not connected to the server.`,
             };
         }
-        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error)) {
+        const rpcErrorCode = readRpcFailureCode(error);
+        if (rpcErrorCode !== RPC_ERROR_CODES.OUTCOME_UNKNOWN && (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error))) {
             return {
                 type: 'error',
                 errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
@@ -571,7 +573,7 @@ async function runResumeSession(
             type: 'error',
             errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
             errorMessage: error instanceof Error ? error.message : 'Failed to resume session',
-            ...(readSessionRpcErrorCode(error) ? { rpcErrorCode: readSessionRpcErrorCode(error) } : {}),
+            ...(rpcErrorCode ? { rpcErrorCode } : {}),
         };
     }
 }

@@ -8,6 +8,7 @@ import { SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol
 import { inspectSessionContinuationOnMachine } from '@/sync/ops/sessionContinuationInspection';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { readRpcFailureCode } from './rpcFailureCode';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { StoredContentPublicSharesListResponseV1Schema } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { createWidgetInputActionDepsV1 } from './widgetInputActionDeps';
@@ -47,7 +48,6 @@ import type { SettingsDeclarationOperationInputV1 } from '@happier-dev/protocol/
 import { recoverHistoricalAutomationTemplates } from '@/sync/ops/account/recoverHistoricalAutomationTemplates';
 import { startAgentSignInRpc, checkAgentSignInRpc } from '@/agents/machineAgents/signIn/api';
 import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
-import { readRpcErrorCode, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, listApprovalArtifactsV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -484,10 +484,7 @@ function projectSessionInteractionRpcResult(result: unknown): unknown {
 }
 
 function projectSessionInteractionRpcFailure(error: unknown) {
-  // The transport's issuance evidence survives Action serialization. A lost
-  // answer stays uncertain even when cancellation also carries a typed code.
-  const errorCode = readRpcRequestDisposition(error) === 'outcomeUnknown'
-    ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : readRpcErrorCode(error);
+  const errorCode = readRpcFailureCode(error);
   if (!errorCode) throw error;
   return { ok: false, errorCode, errorMessage: error instanceof Error ? error.message : errorCode };
 }
@@ -2093,7 +2090,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           }) : {}),
         });
         accountContext.assertCurrent();
-        if (resumed.type === 'error') return { ok: false, errorCode: resumed.errorCode, error: resumed.errorMessage };
+        if (resumed.type === 'error') return { ok: false, errorCode: resumed.rpcErrorCode ?? resumed.errorCode, error: resumed.errorMessage };
         if (intent === 'resume') return { ok: true, status: 'opened', sessionId, serverId, address: { serverId, sessionId } };
       }
       if ((tabId || destination) && workspace) {
