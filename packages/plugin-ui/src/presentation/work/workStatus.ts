@@ -34,6 +34,13 @@ export type HappierWorkStatusPresentation = Readonly<{
   glyph?: PluginUiIconTokenV1;
 }>;
 
+/** Caller-owned group membership and C1 subject count; unavailable coverage is never zero. */
+export type CollectionGroupRollup = Readonly<{
+  status: HappierWorkStatusPresentation | null;
+  needsYouCount: number | null;
+  coverage: 'complete' | 'partial' | 'unavailable';
+}>;
+
 /** The buckets in reading order: the columns of a by-status board and the groups of every status list. */
 export const HAPPIER_WORK_STATUS_BUCKETS: readonly HappierWorkStatusBucket[] = Object.freeze([
   'needs_you',

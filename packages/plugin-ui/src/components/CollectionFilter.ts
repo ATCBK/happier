@@ -1,8 +1,11 @@
 /** Public collection semantics delegate to the single Protocol evaluator and registry. */
 export {
     conditionModelFromFilter, applyCollectionConditionEdit,
+    compileCollectionConditionValueCountOptions, collectionConditionValueCountsFromFacts,
+    collectionConditionOptionValues, isCollectionConditionOptionPicked, collectionConditionValueLabels,
     type CollectionCondition, type CollectionConditionBindings, type CollectionConditionEdit,
     type CollectionConditionField, type CollectionConditionModel, type CollectionConditionRow, type CollectionConditionValueOption,
+    type CollectionConditionValueCountRequest, type CollectionConditionValueCounts,
 } from '../presentation/collection/conditionModel.js';
 export {
     createEntityFilterConditionCodecV1,

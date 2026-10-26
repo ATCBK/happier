@@ -8,7 +8,7 @@ import type { HappierUiTheme } from '../../environment/types.js';
 import { HappierText } from '../text/Text.js';
 import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
 import { HAPPIER_PAGE_METRICS, HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
-export { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
+export { HAPPIER_PUBLIC_PROFILE_HERO_METRICS, resolveHappierPublicProfilePlanetBand } from '../layout/pageMetrics.js';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame, resolveHappierWidgetFrameInsetPx } from '../layout/WidgetFrame.js';
 import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
 import type { PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
@@ -49,6 +49,19 @@ export type HappierPublicProfileLabels = Readonly<{
 }>;
 
 export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;
+
+/**
+ * The visitor page's brand bar (lab `.pp-top`): "Happier · <service>" and "What is Happier?". Only an
+ * anonymous visitor's host passes it; the owner reads the page inside the app, under its own header.
+ */
+export type HappierPublicProfileBrand = Readonly<{
+  /** "Happier". */
+  name: string;
+  /** The service the page is published on ("Happier Cloud"); a phone bar leaves it out. */
+  service?: string;
+  /** "What is Happier?" and where it leads; a phone bar leaves it out. */
+  about?: Readonly<{ label: string; href: string }>;
+}>;
 
 export type PublicProfileProjection = Readonly<{
   models: PublicUsageChartModels | null;

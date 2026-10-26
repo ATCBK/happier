@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { createContext, useContext, type ReactElement } from 'react';
 import { View } from 'react-native';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
@@ -21,7 +21,13 @@ export type IconProps = Readonly<{
   testID?: string;
 }>;
 
-export function Icon({ name, size = 'medium', tone = 'neutral', accessibilityLabel, testID }: IconProps): ReactElement {
+/**
+ * The ink of the control a glyph leads (a filled primary's on-accent foreground). A glyph with no tone of its
+ * own takes it, so an icon beside a label is never a different colour from the label; an explicit tone wins.
+ */
+export const PluginUiLeadingGlyphInkContext = createContext<string | null>(null);
+
+export function Icon({ name, size = 'medium', tone, accessibilityLabel, testID }: IconProps): ReactElement {
   return <PluginUiIconGlyph name={name} size={resolveHappierIconSize(size)} tone={tone} accessibilityLabel={accessibilityLabel} testID={testID} />;
 }
 
@@ -29,10 +35,11 @@ export function Icon({ name, size = 'medium', tone = 'neutral', accessibilityLab
  * Package-private adapter for geometry stepped by a shared presentation owner. `color` is for a glyph
  * that stands in a control's own ink (a filled primary's on-accent foreground) rather than a tone.
  */
-export function PluginUiIconGlyph({ name, size: pixels, tone = 'neutral', color: inkColor, accessibilityLabel, testID }: Omit<IconProps, 'size'> & Readonly<{ size: number; color?: string }>): ReactElement {
+export function PluginUiIconGlyph({ name, size: pixels, tone, color: inkColor, accessibilityLabel, testID }: Omit<IconProps, 'size'> & Readonly<{ size: number; color?: string }>): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
   const theme = usePluginTheme();
-  const color = inkColor ?? theme.colors[HAPPIER_TONE_COLOR_TOKEN[tone]];
+  const controlInk = useContext(PluginUiLeadingGlyphInkContext);
+  const color = inkColor ?? (tone === undefined ? controlInk : null) ?? theme.colors[HAPPIER_TONE_COLOR_TOKEN[tone ?? 'neutral']];
   if (host) {
     return <>{host.renderIcon({ name, size: pixels, color, ...(accessibilityLabel ? { accessibilityLabel } : {}), ...(testID ? { testID } : {}) })}</>;
   }

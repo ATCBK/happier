@@ -18,7 +18,7 @@ import { HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeEmphasis 
  */
 export function resolveHappierTypeRoleStyle(
   role: HappierTypeRole,
-  _theme: HappierUiTheme,
+  _theme: HappierUiTheme | null,
   typography: HappierUiTypography | null,
   emphasis?: HappierTypeEmphasis,
 ): HappierPortableStyle {

@@ -10,10 +10,23 @@ export type CollectionConditionValueOption = Readonly<{
     values?: readonly JsonValue[];
     label?: string;
     disabled?: boolean;
+    /** Frequency in the list's already-held ordinary corpus; absent when local facts are unavailable. */
+    count?: number;
+}>;
+/** A presented value list's demand. Labels, checked state and counts do not change that demand. */
+export type CollectionConditionValueCountRequest = Readonly<{
+    fieldId: string;
+    options: readonly Pick<CollectionConditionValueOption, 'value' | 'values'>[];
+}>;
+/** Owned by the retained list projection, never fetched or persisted by the editor. */
+export type CollectionConditionValueCounts = Readonly<{
+    fieldId: string;
+    options: readonly Readonly<{ value: JsonValue; count?: number }>[];
 }>;
 export type CollectionConditionBindings = Readonly<{
     evaluator?: EntityFilterEvaluatorV1;
     fields?: Readonly<Record<string, Readonly<{ label?: string; valueOptions?: readonly CollectionConditionValueOption[] }>>>;
+    valueCounts?: CollectionConditionValueCounts;
 }>;
 export type CollectionConditionField = Readonly<{
     id: string;
@@ -49,6 +62,96 @@ export type CollectionConditionEdit =
 const rowId = (fieldId: string, operator: CollectionConditionRow['operator']) => JSON.stringify([fieldId, operator]);
 
 /** Pure editor projection. Labels/options bind semantic ids; they never decide field support. */
+const sameJsonValue = (a: JsonValue, b: JsonValue) => JSON.stringify(a) === JSON.stringify(b);
+const includesJsonValue = (values: readonly JsonValue[], value: JsonValue) =>
+    values.some(candidate => sameJsonValue(candidate, value));
+
+/** The filter values a choice stands for: a grouped choice (a Status group) is its whole vector. */
+export function collectionConditionOptionValues(option: CollectionConditionValueOption): readonly JsonValue[] {
+    return option.values ?? [option.value];
+}
+
+/** A choice is picked when every value it stands for is in the condition. */
+export function isCollectionConditionOptionPicked(values: readonly JsonValue[], option: CollectionConditionValueOption): boolean {
+    return collectionConditionOptionValues(option).every(value => includesJsonValue(values, value));
+}
+
+/** Isolated option predicates, compiled once per demand through the registry's selection owner. */
+export function compileCollectionConditionValueCountOptions<Filter, Facts>(
+    registry: EntityFilterRegistryV1<Filter, Facts>, filter: Filter, request: CollectionConditionValueCountRequest,
+    options: Pick<CollectionConditionBindings, 'evaluator'> = {},
+): readonly ReturnType<EntityFilterRegistryV1<Filter, Facts>[number]['compile']>[] {
+    const field = registry.find(candidate => candidate.id === request.fieldId);
+    const evaluator = options.evaluator ?? 'list';
+    return request.options.map(option => {
+        if (!field?.conditions?.operators.includes('is') || !field.evaluators.includes(evaluator)) return undefined;
+        try {
+            // An occurrence does not depend on the current opposite-side selection of this field.
+            const cleared = field.clearSelection?.(filter) ?? field.conditions.operators.reduce(
+                (current, operator) => field.conditions!.remove(current, operator), filter);
+            const group = field.conditions.valueGroups?.find(candidate => sameJsonValue(candidate.value, option.value));
+            const selected = field.conditions.replace(cleared, { operator: 'is', values: group?.values ?? option.values ?? [option.value] });
+            // Registry compile returns no predicate for an unrestricted/default selection.
+            return field.compile(selected, evaluator) ?? (() => 'match' as const);
+        } catch {
+            // An opaque/future value is not an evaluable local choice.
+            return undefined;
+        }
+    });
+}
+
+/**
+ * Lazy frequencies over a host's held, distinct, pre-local-filter subjects. No loader or subscription;
+ * the retained Session projection uses the same compiled options with incremental contributions.
+ */
+export function collectionConditionValueCountsFromFacts<Filter, Facts>(
+    registry: EntityFilterRegistryV1<Filter, Facts>, filter: Filter,
+    request: CollectionConditionValueCountRequest | null | undefined,
+    readHeldFacts: () => Iterable<Facts>, previous?: CollectionConditionValueCounts,
+): CollectionConditionValueCounts | undefined {
+    if (!request) return undefined;
+    const matchers = compileCollectionConditionValueCountOptions(registry, filter, request);
+    const totals = matchers.map(() => ({ count: 0, unavailable: false }));
+    if (matchers.some(Boolean)) for (const facts of readHeldFacts()) {
+        matchers.forEach((match, index) => {
+            const verdict = match?.(facts);
+            if (verdict === 'match') totals[index]!.count += 1;
+            else if (verdict === 'unavailable') totals[index]!.unavailable = true;
+        });
+    }
+    let unchanged = previous?.fieldId === request.fieldId && previous.options.length === request.options.length;
+    const valueOptions = request.options.map((option, index) => {
+        const count = matchers[index] && !totals[index]!.unavailable ? totals[index]!.count : undefined;
+        const old = previous?.fieldId === request.fieldId ? previous.options[index] : undefined;
+        if (old && sameJsonValue(old.value, option.value) && old.count === count) return old;
+        unchanged = false;
+        return { value: option.value, ...(count === undefined ? {} : { count }) };
+    });
+    return unchanged ? previous : { fieldId: request.fieldId, options: valueOptions };
+}
+
+/**
+ * A condition's values as words: each fully picked group reads as its one label, then each value left over
+ * (a retained single state) reads as its option's label, the caller's format, or itself.
+ */
+export function collectionConditionValueLabels(
+    field: CollectionConditionField,
+    values: readonly JsonValue[],
+    formatValue?: (field: CollectionConditionField, value: JsonValue) => string,
+): string[] {
+    const single = (value: JsonValue) => field.valueOptions.find(option => !option.values && sameJsonValue(option.value, value))?.label
+        ?? formatValue?.(field, value) ?? (typeof value === 'string' ? value : JSON.stringify(value));
+    const covered: JsonValue[] = [];
+    const words: string[] = [];
+    for (const option of field.valueOptions) {
+        if (!option.values || !isCollectionConditionOptionPicked(values, option)) continue;
+        covered.push(...option.values);
+        words.push(option.label ?? single(option.value));
+    }
+    for (const value of values) if (!includesJsonValue(covered, value)) words.push(single(value));
+    return words;
+}
+
 export function conditionModelFromFilter<Filter, Facts>(
     registry: EntityFilterRegistryV1<Filter, Facts>, filter: Filter, bindings: CollectionConditionBindings = {},
 ): CollectionConditionModel {
@@ -59,14 +162,19 @@ export function conditionModelFromFilter<Filter, Facts>(
         const groups = descriptor.conditions?.valueGroups ?? [];
         const valueOptions = presentation?.valueOptions ?? (groups.length
             ? groups : descriptor.conditions?.valueOptions.map(value => ({ value })) ?? []);
+        const canonicalOptions = groups.length ? valueOptions.map(option => {
+            const group = groups.find(candidate => sameJsonValue(candidate.value, option.value));
+            // Presentation may label/disable a group, but its selection vector remains registry-owned.
+            return group ? { ...option, values: group.values } : option;
+        }) : valueOptions;
+        const counts = bindings.valueCounts?.fieldId === descriptor.id ? bindings.valueCounts.options : undefined;
         const field: CollectionConditionField = {
             id: descriptor.id, label: presentation?.label ?? descriptor.id, kind: descriptor.kind,
             operators: descriptor.conditions?.operators ?? [],
-            valueOptions: groups.length ? valueOptions.map(option => {
-                const group = groups.find(candidate => JSON.stringify(candidate.value) === JSON.stringify(option.value));
-                // Presentation may label/disable a group, but its selection vector remains registry-owned.
-                return group ? { ...option, values: group.values } : option;
-            }) : valueOptions,
+            valueOptions: counts ? canonicalOptions.map(option => {
+                const count = counts.find(candidate => sameJsonValue(candidate.value, option.value))?.count;
+                return count === undefined ? option : { ...option, count };
+            }) : canonicalOptions,
         };
         const available = Boolean(descriptor.conditions && descriptor.evaluators.includes(bindings.evaluator ?? 'list'));
         if (available) availableFields.push(field);
