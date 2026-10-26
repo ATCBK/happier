@@ -188,7 +188,8 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
   useFeatureEnabled: useFeatureEnabledSpy,
 }));
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
   getDeviceType: () => 'tablet',
   useDeviceType: () => 'tablet',
   useHeaderHeight: () => 0,

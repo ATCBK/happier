@@ -55,7 +55,8 @@ vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
     useDeviceType: () => 'phone',
 }));
 

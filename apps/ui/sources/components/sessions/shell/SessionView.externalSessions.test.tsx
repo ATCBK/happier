@@ -482,7 +482,8 @@ vi.mock('@/hooks/server/connectedServices/useProviderAccountUsageSnapshots', asy
   },
   };
 });
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
   getDeviceType: () => 'tablet',
   useDeviceType: () => 'tablet',
   useHeaderHeight: () => 0,

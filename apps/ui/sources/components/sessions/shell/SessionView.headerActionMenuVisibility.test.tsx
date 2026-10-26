@@ -390,7 +390,8 @@ vi.mock('@/agents/catalog/agentUniverse', async (importOriginal) => ({
 vi.mock('@/utils/platform/navigateWithBlurOnWeb', () => ({
   navigateWithBlurOnWeb: navigateWithBlurOnWebSpy,
 }));
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
   useDeviceType: () => responsiveState.deviceType,
   useHeaderHeight: () => 0,
   useIsLandscape: () => responsiveState.isLandscape,

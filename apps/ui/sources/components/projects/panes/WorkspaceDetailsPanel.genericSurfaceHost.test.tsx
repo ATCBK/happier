@@ -51,10 +51,6 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     }),
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => 'desktop',
-}));
-
 vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', () => ({
     useScopedPluginUiProjection: () => ({
         pluginUiProjection: null,

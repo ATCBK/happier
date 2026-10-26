@@ -147,7 +147,8 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
   },
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
   getDeviceType: () => 'phone',
   useDeviceType: () => 'phone',
   useHeaderHeight: () => 0,

@@ -33,7 +33,8 @@ vi.mock('@/components/ui/panels/MultiPaneHostWithBottom', () => ({
     },
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
     useDeviceType: () => React.useSyncExternalStore((listener) => {
         state.deviceListeners.add(listener);
         return () => { state.deviceListeners.delete(listener); };

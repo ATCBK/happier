@@ -117,7 +117,8 @@ vi.mock('@/hooks/server/useSessionExecutionRunsSupported', () => ({
 vi.mock('@/hooks/session/files/useWarmRepositoryDirectoryCacheOnSessionOpen', () => ({
     useWarmRepositoryDirectoryCacheOnSessionOpen: () => {},
 }));
-vi.mock('@/utils/platform/responsive', () => ({
+vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/responsive')>(),
     getDeviceType: () => 'tablet',
     useDeviceType: () => 'tablet',
     useHeaderHeight: () => 0,

@@ -554,13 +554,6 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
   useFeatureEnabled: (featureId: string) => featureEnabledState[featureId as keyof typeof featureEnabledState] ?? false,
 }));
-vi.mock('@/utils/platform/responsive', () => ({
-  getDeviceType: () => 'tablet',
-  useDeviceType: () => 'tablet',
-  useHeaderHeight: () => 0,
-  useIsLandscape: () => false,
-  useIsTablet: () => true,
-}));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
 }));
