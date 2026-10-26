@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { t } from '@/text';
 import type { PromptDocUpdateApproval } from './promptDocApprovalModel';
+import { PROMPT_DOC_WRITE_RESULT_KEY } from './promptDocWriteResultCopy';
 export { readPromptDocUpdateApproval, type PromptDocUpdateApproval } from './promptDocApprovalModel';
 
 type CurrentDocument =
@@ -78,7 +79,12 @@ export const PromptDocApprovalDiff = React.memo(function PromptDocApprovalDiff(
   }, [artifactId, props.serverId]);
   const testID = props.testID ?? 'prompt-doc-approval-diff';
   const reviewed = props.request.expectedRevision;
+  // A decided edit reads as its outcome. Only a still-pending review can be stale against a newer body:
+  // an executed write's own newer revision is the result, not a conflict.
+  const outcome = props.request.outcome?.status ?? 'pending';
+  const settled = outcome !== 'pending';
   const changedSinceReview =
+    !settled &&
     current.status === 'ready' &&
     reviewed !== null &&
     (reviewed.headerVersion !== current.revision.headerVersion ||
@@ -107,7 +113,17 @@ export const PromptDocApprovalDiff = React.memo(function PromptDocApprovalDiff(
           newText={props.request.markdown}
         />
       )}
-      <Text style={styles.quiet}>{t('sessionInstructions.nextBoundary')}</Text>
+      {settled ? (
+        <Text
+          testID={`${testID}.outcome.${outcome}`}
+          style={outcome === 'conflict' || outcome === 'failed' ? styles.conflict : styles.quiet}
+        >
+          {t(PROMPT_DOC_WRITE_RESULT_KEY[outcome])}
+        </Text>
+      ) : null}
+      {!settled || outcome === 'updated' ? (
+        <Text style={styles.quiet}>{t('sessionInstructions.nextBoundary')}</Text>
+      ) : null}
     </View>
   );
 });

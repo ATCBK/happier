@@ -30,18 +30,95 @@ const { createAppShellAction } = await import('@/sync/ops/actions/appShellAction
 afterEach(() => { standardCleanup(); actionOperationStore.reset(); });
 
 describe('the Session Work operation source', () => {
+    it('observes actual Agent approval settlements in the Instructions read model and refreshes successive accepted revisions', async () => {
+        const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const { withUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+        const { createPromptDocInLibrary } = await import('@happier-dev/protocol/prompts/library/promptLibraryActionOperations');
+        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
+        const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+        const f = await createPlainArtifactHomeFixture('https://instructions-settlement.test', {
+            handleRequest: async (path, init) => sessionHttp.handle(`https://instructions-settlement.test${path}`, init),
+        });
+        const initial = storage.getState();
+        const sessionId = 'instructions-author';
+        try {
+            await withUiPromptLibraryArtifactStore(async (store, account) => {
+                const created = await createPromptDocInLibrary({ store, request: { title: 'Instructions', markdown: 'Previous' } });
+                const metadata = { ...createSessionFixture().metadata!, work: { promptStack: [{ id: 'session.instructions',
+                    ref: { kind: 'doc', artifactId: created.artifactId }, enabled: true, placement: 'system_append' }] } };
+                storage.setState({ isDataReady: true, sessions: { ...storage.getState().sessions,
+                    [sessionId]: createSessionFixture({ id: sessionId, serverId: f.home.id, metadata }) } });
+                sessionHttp.replaceSession(sessionId);
+                const hook = await renderHook(() => useSessionInstructionsDetail({ sessionId, serverId: f.home.id,
+                    ownerMetadata: metadata, access: 'readable' }));
+                const propose = async (requestId: string, markdown: string) => {
+                    let result: Awaited<ReturnType<typeof executeDefaultActionInCapturedAccount>> | undefined;
+                    await act(async () => { result = await executeDefaultActionInCapturedAccount(account, 'prompt_doc.update',
+                        { artifactId: created.artifactId, title: 'Instructions', markdown }, { surface: 'agent',
+                            serverId: f.home.id, runtimeAccountId: account.accountId, defaultSessionId: sessionId, actionRequestId: requestId }); });
+                    expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+                    if (!result?.ok || !result.result || typeof result.result !== 'object' || !('artifactId' in result.result)
+                        || typeof result.result.artifactId !== 'string') throw new Error('Expected actual approval receipt');
+                    return result.result.artifactId;
+                };
+                const decide = async (artifactId: string, decision: 'approve' | 'reject') => {
+                    await act(async () => {
+                        expect(await executeDefaultActionInCapturedAccount(account, 'approval.request.decide', { artifactId, decision },
+                            { surface: 'ui', authority: 'present_user', serverId: f.home.id, runtimeAccountId: account.accountId }))
+                            .toMatchObject({ ok: true });
+                    });
+                };
+                try {
+                    await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', document: { markdown: 'Previous' } }));
+                    const denied = await propose('denied-instructions', 'Denied change');
+                    await decide(denied, 'reject');
+                    await vi.waitFor(() => expect(hook.getCurrent().writeFacts).toMatchObject({ agentWriteResult: { status: 'denied' } }));
+                    expect(hook.getCurrent().document?.markdown).toBe('Previous');
+                    for (const markdown of ['First accepted', 'Second accepted']) {
+                        const id = await propose(markdown, markdown);
+                        await decide(id, 'approve');
+                        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', document: { markdown },
+                            writeFacts: { provenance: { changedBy: { kind: 'agent', sessionId },
+                                approvedBy: { kind: 'person', accountId: account.accountId } }, agentWriteResult: { status: 'updated' } } }));
+                    }
+                } finally { await hook.unmount(); }
+            }, { serverId: f.home.id });
+        } finally { storage.setState(initial, true); await f.dispose(); }
+    });
+    it('says what a report waiting for permission wants, from the request when it is held and from its kind otherwise', async () => {
+        const { createSessionViewerFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+        const now = Date.now();
+        const waiting = createSessionFixture({ id: 'perm', active: true, activeAt: now,
+            viewer: createSessionViewerFixture({ attention: { needsAttention: true, reasons: ['permission_required'], primary: 'permission_required', presentation: 'full' } }),
+            agentState: { requests: { r1: { kind: 'permission', tool: 'Bash', arguments: { command: 'yarn test' }, createdAt: now, turnId: 't1' } } } });
+        expect(toWorkReportSessionSource(waiting, now).activity).toBe('sessionWork.row.needsApproval');
+        const row = buildSessionListRenderableFromSession(waiting, undefined, []);
+        expect(toWorkReportSessionSource({ record: row, serverId: waiting.serverId }, now).activity).toBe('sessionWork.row.asksPermission');
+        expect(toWorkReportSessionSource({ record: row, baseSession: waiting, serverId: waiting.serverId }, now).activity)
+            .toBe('sessionWork.row.needsApproval');
+    });
     it('uses the shared Agent and machine identity for Work map reports', () => {
         const session = createSessionFixture({ metadata: { ...createSessionFixture().metadata!,
             flavor: 'claude', host: 'MacBook Pro' } });
         expect(toWorkReportSessionSource(session, Date.now()).facts.join(' · ')).toContain('MacBook Pro');
     });
-    it('names a report whose encrypted content is still undecided like the sidebar does, then by its own title once it settles', () => {
+    it('names a report whose encrypted content is still undecided like the sidebar does, then preserves its held list name and Agent', async () => {
         // A cold archived row: listed, but nothing has decided its content or title yet.
         const undecided = { ...createSessionFixture({ id: 'child', metadata: null }), encryptionMode: 'e2ee' as const, encryptedContentAvailability: null };
         expect(toWorkReportSessionSource(undecided, Date.now()).title).toBe(readLockedSessionName());
         const settled = { ...createSessionFixture({ id: 'child', metadata: { ...createSessionFixture().metadata!, summaryText: 'Fix flaky retries' } }),
             encryptionMode: 'e2ee' as const, encryptedContentAvailability: 'ready' as const };
         expect(toWorkReportSessionSource(settled, Date.now()).title).toBe('Fix flaky retries');
+        const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+        const { selectSessionReportSubtree } = await import('./reportSubtree');
+        const declared = createSessionFixture({ id: 'child', manager: { sessionId: 'lead' }, metadataLayoutVersion: 1,
+            metadata: { path: '', host: '', v: 1, agentPresentation: { agentId: 'acme.reviewer' } },
+            ownerMetadataView: { name: 'Review release', host: 'work', path: '/repo' } });
+        const row = buildSessionListRenderableFromSession(declared);
+        const reports = selectSessionReportSubtree({}, 'lead', 'home', { home: { child: row } });
+        expect(toWorkReportSessionSource(reports[0]!, Date.now())).toMatchObject({ title: 'Review release', agentId: 'acme.reviewer' });
     });
     it('refreshes a report identity on machine rename without reprojecting unrelated settings', async () => {
         const connection = await restoreServerAccountForTest({
@@ -265,7 +342,7 @@ describe('the Session Work source owner: own trigger runs (ORC R-09, INT §6 I4)
             reportSessions: [],
             agentEntries: [],
             workflowHeadlineRuns: [],
-            managedRuns: runs.map((run) => ({ run, title: run.id, word: 'Running', needsAttention: false })),
+            managedRuns: runs.map((run) => ({ run, title: run.id, word: 'Running' })),
             ownTriggerRunIds,
             describeAgentStatus: () => 'Working',
             describeProgress: ({ completed, total }) => `${completed} of ${total}`,

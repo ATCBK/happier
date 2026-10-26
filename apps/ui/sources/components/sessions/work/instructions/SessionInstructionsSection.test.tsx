@@ -11,10 +11,12 @@ import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/v
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { Modal } from '@/modal';
 import type { SessionInstructionsSource } from '../useSessionInstructionsSource';
 
@@ -30,7 +32,7 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key: string) => key });
+  return createTextModuleMock();
 });
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -110,12 +112,13 @@ async function render(state: SessionInstructionsSource, serverId = 'home-a') {
 describe('Work › Instructions', () => {
   it.each(['approve', 'reject'] as const)('continues Work Instructions Create after its document approval (%s)', async decision => {
     const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const sessionRequest = createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init));
     const fixture = await createPlainArtifactHomeFixture(`https://work-instructions-${decision}.test`, {
       handleRequest: async (path, init) => {
         if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
           actionsSettingsV1: { v: 1, actions: { 'prompt_doc.create': { approvalRequiredSurfaces: ['ui'] } } },
         } } });
-        return sessionHttp.handle(`https://work-instructions-${decision}.test${path}`, init);
+        return sessionRequest(`https://work-instructions-${decision}.test${path}`, init);
       },
     });
     try {
@@ -136,9 +139,15 @@ describe('Work › Instructions', () => {
       expect(rowsOfKind('prompt_doc.v2')).toHaveLength(0);
       expect(sessionHttp.writes).toEqual([]);
       expect(navigation.push).not.toHaveBeenCalled();
-      expect(await decideApprovalAsInbox(fixture.home.id, rowsOfKind('approval_request.v1')[0]!.id, decision))
-        .toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'executed' : 'rejected' } });
+      const approvalId = rowsOfKind('approval_request.v1')[0]!.id;
+      // The mounted writer retains this invocation: Inbox records consent and
+      // wakes it, while the original caller owns execution and attachment.
+      expect(await decideApprovalAsInbox(fixture.home.id, approvalId, decision))
+        .toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'approved' : 'rejected' } });
       if (decision === 'approve') {
+        await vi.waitFor(() => expect(ApprovalRequestV2Schema.parse(JSON.parse(
+          fixture.boundary.readPlainBody(approvalId)!,
+        ))).toMatchObject({ status: 'executed', execution: { ok: true } }));
         await vi.waitFor(() => expect(navigation.push, JSON.stringify({ outcomes: actionOutcomes.results,
           writes: sessionHttp.writes,
           refusal: ['conflict', 'refused', 'failed'].filter(reason => screen.findByTestId(`session-work-instructions.${reason}`))
@@ -279,10 +288,35 @@ describe('Work › Instructions', () => {
     expect(shared.findByTestId('session-work-instructions.edit')).toBeNull();
   });
 
+  it('as a Setup row, opens on the instructions to read and stays a closed Add row when there are none', async () => {
+    const { WorkSectionPlacementProvider, WorkSectionSetupDisclosureProvider } = await import('../WorkSection');
+    const { useSessionSetupDisclosure } = await import('../useSessionSetupDisclosure');
+    const session = createSessionFixture({ id: 'bot', serverId: 'home-a' });
+    function InSetup(props: Readonly<{ state: SessionInstructionsSource }>) {
+      const disclosure = useSessionSetupDisclosure();
+      return (
+        <WorkSectionPlacementProvider value="setup">
+          <WorkSectionSetupDisclosureProvider value={disclosure}>
+            <SessionInstructionsBody session={session} serverId="home-a" source={props.state} />
+          </WorkSectionSetupDisclosureProvider>
+        </WorkSectionPlacementProvider>
+      );
+    }
+    const none = await renderScreen(<InSetup state={source({ status: 'none' })} />);
+    expect(none.findByTestId('session-work-instructions.create')).toBeNull();
+    expect(none.findByTestId('session-work-instructions:row')).toBeTruthy();
+    standardCleanup();
+    const attached = await renderScreen(
+      <InSetup state={source({ status: 'ready', ref, document: documentOf('Keep diffs small.') })} />,
+    );
+    expect(attached.findByTestId('session-work-instructions.detach')).toBeTruthy();
+  });
+
   it('releases a failed Detach and keeps the canonical attachment and document', async () => {
     const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const sessionRequest = createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init));
     const fixture = await createPlainArtifactHomeFixture('https://work-instructions-detach.test', {
-      handleRequest: async (path, init) => sessionHttp.handle(`https://work-instructions-detach.test${path}`, init),
+      handleRequest: async (path, init) => sessionRequest(`https://work-instructions-detach.test${path}`, init),
     });
     try {
       await loadSyncSingletonForTests();
@@ -319,5 +353,111 @@ describe('Work › Instructions', () => {
       ),
     ).toBe('owner_private');
     expect(resolveSessionInstructionsAccess(null)).toBe('unavailable');
+  });
+});
+
+describe('Work › Instructions provenance and Agent write result', () => {
+  const viewer = { serverId: 'home-a', accountId: 'acct-viewer' };
+  const readyWith = (writeFacts?: SessionInstructionsSource['writeFacts']) =>
+    source({ status: 'ready', ref, document: documentOf('You look after releases.'), writeFacts });
+  const provenanceText = async (writeFacts?: SessionInstructionsSource['writeFacts']) => {
+    const screen = await render(readyWith(writeFacts));
+    return screen.getTextContent();
+  };
+  const nameViewer = (name: string | null) => storage.setState({
+    profileScope: viewer,
+    profile: { ...storage.getState().profile, name, username: null } as never,
+  });
+
+  it('names the people who changed and approved the current revision, and nothing it cannot resolve', async () => {
+    nameViewer('Mara Voss');
+    const text = await provenanceText({
+      provenance: {
+        changedBy: { kind: 'person', accountId: viewer.accountId },
+        approvedBy: { kind: 'person', accountId: viewer.accountId },
+      },
+      agentWriteResult: null,
+    });
+    expect(text).toContain('sessionInstructions.changedBy(name=Mara Voss)');
+    expect(text).toContain('sessionInstructions.approvedBy(name=Mara Voss)');
+  });
+
+  it('names the Voice agent acting for the approving person only when the receipt records Voice', async () => {
+    nameViewer('Mara Voss');
+    const text = await provenanceText({ provenance: {
+      approvedBy: { kind: 'person', accountId: viewer.accountId, decidedVia: 'voice' },
+    }, agentWriteResult: null });
+    expect(text).toContain('sessionInstructions.approvedByVoice(name=Mara Voss)');
+    expect(text).not.toContain('sessionInstructions.approvedBy(name=');
+  });
+
+  it('omits an actor whose display name is unknown rather than guessing or showing an id', async () => {
+    nameViewer('Mara Voss');
+    const text = await provenanceText({
+      provenance: {
+        changedBy: { kind: 'person', accountId: 'acct-stranger' },
+        approvedBy: { kind: 'person', accountId: viewer.accountId },
+      },
+      agentWriteResult: null,
+    });
+    expect(text).not.toContain('sessionInstructions.changedBy');
+    expect(text).not.toContain('acct-stranger');
+    expect(text).toContain('sessionInstructions.approvedBy(name=Mara Voss)');
+    nameViewer(null);
+    expect(await provenanceText({
+      provenance: { changedBy: { kind: 'person', accountId: viewer.accountId } },
+      agentWriteResult: null,
+    })).not.toContain('sessionInstructions.changedBy');
+  });
+
+  it('names an Agent author by its own Session in this Home, and omits one it cannot read', async () => {
+    storage.setState({
+      sessions: {
+        ...storage.getState().sessions,
+        'writer-1': createSessionFixture({
+          id: 'writer-1', serverId: 'home-a',
+          metadata: { path: '/w', host: 'h', summary: { text: 'Release captain', updatedAt: 1 } },
+        }),
+      },
+    });
+    expect(await provenanceText({
+      provenance: { changedBy: { kind: 'agent', accountId: viewer.accountId, sessionId: 'writer-1' } },
+      agentWriteResult: null,
+    })).toContain('sessionInstructions.changedBy(name=Release captain)');
+    const unknown = await provenanceText({
+      provenance: { changedBy: { kind: 'agent', accountId: viewer.accountId, sessionId: 'gone' } },
+      agentWriteResult: null,
+    });
+    expect(unknown).not.toContain('sessionInstructions.changedBy');
+    expect(await provenanceText({
+      provenance: { changedBy: { kind: 'agent', accountId: viewer.accountId } },
+      agentWriteResult: null,
+    })).not.toContain('sessionInstructions.changedBy');
+  });
+
+  it('renders no provenance line without write facts', async () => {
+    nameViewer('Mara Voss');
+    const screen = await render(readyWith(undefined));
+    expect(screen.findByTestId('session-work-instructions.provenance')).toBeNull();
+  });
+
+  it.each([
+    ['pending', 'sessionInstructions.savePending'],
+    ['updated', 'sessionInstructions.updated'],
+    ['denied', 'sessionInstructions.saveDenied'],
+    ['canceled', 'sessionInstructions.saveDenied'],
+    ['conflict', 'sessionInstructions.saveConflict'],
+    ['failed', 'sessionInstructions.setFailed'],
+  ] as const)('reports an Agent write that is %s in the Instructions section', async (status, key) => {
+    const screen = await render(readyWith({ provenance: {}, agentWriteResult: { status } }));
+    expect(screen.findByTestId(`session-work-instructions.agentWrite.${status}`)).toBeTruthy();
+    expect(screen.getTextContent()).toContain(key);
+    expect(screen.findByTestId('session-work-instructions.body')).toBeTruthy();
+  });
+
+  it('shows no Agent write line when no proposal was observed', async () => {
+    const screen = await render(readyWith({ provenance: {}, agentWriteResult: null }));
+    expect(screen.findByTestId('session-work-instructions.agentWrite.pending')).toBeNull();
+    expect(screen.getTextContent()).not.toContain('sessionInstructions.updated');
   });
 });

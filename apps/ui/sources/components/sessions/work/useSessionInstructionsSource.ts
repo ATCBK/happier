@@ -4,6 +4,9 @@ import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/conte
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { readPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
+import { useTranscriptApprovalArtifactsForSession } from '@/sync/store/hooks';
+import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { readPromptDocInstructionWriteFacts, type PromptDocInstructionWriteFacts } from '@/components/approvals/promptDocApprovalModel';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
   useServerCredentialAccountScopeBindings,
@@ -45,6 +48,8 @@ export type SessionInstructionsSource = DisplayState &
   Readonly<{
     ref: PromptDocArtifactRefV1 | null;
     retry: () => Promise<void>;
+    /** Accepted revision attribution and the latest observed Agent edit; unknown evidence is omitted. */
+    writeFacts?: PromptDocInstructionWriteFacts;
   }>;
 
 const StoredStackSchema = createStoredReadSchema(SessionPromptStackV1Schema);
@@ -324,7 +329,7 @@ export function useSessionInstructionsDetail(
     [operationServerId],
   );
   const bindings = useServerCredentialAccountScopeBindings(homes);
-  return useSessionInstructionsSource({
+  const source = useSessionInstructionsSource({
     sessionId: params.sessionId,
     serverId: params.serverId,
     operationBinding: operationServerId
@@ -334,7 +339,26 @@ export function useSessionInstructionsDetail(
     enabled: true,
     access: params.access,
   });
+  const documentHome = source.ref ? resolveServerProfileScopeIdForIdentifier(source.ref.serverId ?? params.serverId) : null;
+  const target = React.useMemo(() => source.ref && params.access === 'readable' && operationServerId && documentHome === operationServerId
+    ? { serverId: operationServerId, sessionId: params.sessionId } : null,
+  [documentHome, operationServerId, params.access, params.sessionId, source.ref]);
+  const approvals = useTranscriptApprovalArtifactsForSession(target, INSTRUCTION_WRITE_PRESENTATIONS, INSTRUCTION_WRITE_ACTIONS);
+  const requests = React.useMemo(() => approvals.map(entry => entry.approval), [approvals]);
+  const writeFacts = React.useMemo(() => source.document && params.access === 'readable'
+    ? readPromptDocInstructionWriteFacts(source.document, requests) : undefined,
+  [params.access, requests, source.document]);
+  // The approval settlement, not clicking Approve, makes the current body worth re-reading.
+  const acceptedBodyVersion = writeFacts?.acceptedRevision?.bodyVersion;
+  const displayedBodyVersion = source.document?.revision.bodyVersion;
+  React.useEffect(() => {
+    if (acceptedBodyVersion !== undefined && displayedBodyVersion !== undefined && acceptedBodyVersion > displayedBodyVersion) void source.retry();
+  }, [acceptedBodyVersion, displayedBodyVersion, source.retry]);
+  return React.useMemo(() => ({ ...source, ...(writeFacts ? { writeFacts } : {}) }), [source, writeFacts]);
 }
+
+const INSTRUCTION_WRITE_PRESENTATIONS = [(request: ApprovalRequest) => request.actionId === 'prompt_doc.update'];
+const INSTRUCTION_WRITE_ACTIONS = ['prompt_doc.update'];
 
 export type SessionInstructionsPolicyTarget = 'agent' | 'mcp' | 'cli' | 'voice';
 export type SessionInstructionsPolicy = Readonly<{

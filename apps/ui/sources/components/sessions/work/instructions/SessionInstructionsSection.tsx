@@ -12,6 +12,7 @@ import { type LayoutChangeEvent, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { PROMPT_DOC_WRITE_RESULT_KEY, promptDocWriteNeedsAttention } from '@/components/approvals/promptDocWriteResultCopy';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { ActionSettingsTargetModeControl } from '@/components/settings/actions/ActionSettingsTargetModeControl';
@@ -20,10 +21,10 @@ import { useSettingActionWriter } from '@/components/settings/catalog/useSetting
 import { normalizeActionsSettings } from '@/components/settings/actions/normalizeActionsSettings';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
 import { WorkSection, WorkSectionBlock, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
-import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { usePageRowDensityOverride, usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
 import { PromptStackDocumentMenu } from '@/components/settings/prompts/stacks/PromptStackDocumentMenu';
 import { Item } from '@/components/ui/lists/Item';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -46,6 +47,7 @@ import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
+import { InstructionsProvenanceLine } from './InstructionsProvenance';
 import {
   resolveSessionInstructionsPolicy,
   useSessionInstructionsDetail,
@@ -239,6 +241,10 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   const repairable =
     status === 'not_found' || status === 'wrong_kind' || status === 'malformed';
   const showEdit = ref !== null && document !== null;
+  // The Agent's last proposal for this document: waiting or not landed speaks at the top with the other
+  // freshness lines; a settled one reads quietly with the provenance beneath the document.
+  const agentWrite = source.writeFacts?.agentWriteResult?.status ?? null;
+  const agentWriteAttention = agentWrite !== null && promptDocWriteNeedsAttention(agentWrite);
   return (
     <WorkSection
       testID="session-work-instructions"
@@ -248,19 +254,9 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
       icon="book-open"
       summary={document?.title ?? (status === 'none' ? t('common.add') : undefined)}
       nativeID="instructions"
+      // Nothing to read yet: a closed "Add" row; it opens on Create · Attach existing.
+      setupDefaultExpanded={status === 'none' ? false : undefined}
       loading={status === 'loading' || status === 'inactive'}
-      action={
-        showEdit ? (
-          <IconButton
-            testID="session-work-instructions.edit"
-            iconName="pencil-simple"
-            variant="plain"
-            accessibilityLabel={t('sessionInstructions.edit')}
-            tooltip={t('sessionInstructions.edit')}
-            onPress={edit}
-          />
-        ) : null
-      }
     >
       {saveState === 'pending' ? (
         <SurfaceFreshnessLine
@@ -273,6 +269,13 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           testID={`session-work-instructions.${refusal}`}
           tone="warning"
           reason={t(REFUSAL_COPY[refusal])}
+        />
+      ) : agentWrite !== null && agentWriteAttention ? (
+        <SurfaceFreshnessLine
+          testID={`session-work-instructions.agentWrite.${agentWrite}`}
+          busy={agentWrite === 'pending'}
+          tone={agentWrite === 'pending' ? 'neutral' : 'warning'}
+          reason={t(PROMPT_DOC_WRITE_RESULT_KEY[agentWrite])}
         />
       ) : status === 'refreshing' ? (
         <SurfaceFreshnessLine
@@ -298,11 +301,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
       {document ? (
         <>
           {document.markdown.trim().length > 0 ? (
-            <ClampedInstructions
-              markdown={document.markdown}
-              title={document.title}
-              stale={source.stale}
-            />
+            <ClampedInstructions markdown={document.markdown} />
           ) : (
             <WorkSectionEmptyLine
               testID="session-work-instructions.empty"
@@ -310,18 +309,49 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
               onPress={edit}
             />
           )}
-          {showEdit ? (
-            <View style={styles.actions}>
-              <RoundButton
-                testID="session-work-instructions.detach"
-                size="small"
-                display="secondary"
-                title={t('sessionInstructions.detach')}
-                onPress={detach}
-                disabled={saveState === 'pending'}
-              />
-            </View>
-          ) : null}
+          {/* The footer: where it lives with its two quiet operations (lab csinfo I2), then what happened to it. */}
+          <View style={styles.footer}>
+            <WorkSectionBlock style={styles.sourceLine}>
+              <Text
+                style={[styles.meta, styles.sourceText, source.stale ? styles.metaStale : null]}
+                numberOfLines={1}
+              >
+                {t('sessionInstructions.source', { title: document.title })}
+              </Text>
+              {showEdit ? (
+                <>
+                  <TextLinkButton
+                    testID="session-work-instructions.edit"
+                    label={t('sessionInstructions.edit')}
+                    size="meta"
+                    onPress={edit}
+                  />
+                  <TextLinkButton
+                    testID="session-work-instructions.detach"
+                    label={t('sessionInstructions.detach')}
+                    size="meta"
+                    onPress={detach}
+                    disabled={saveState === 'pending'}
+                  />
+                </>
+              ) : null}
+            </WorkSectionBlock>
+            {source.writeFacts ? (
+              <WorkSectionBlock style={styles.provenance}>
+                {agentWrite !== null && !agentWriteAttention ? (
+                  <Text testID={`session-work-instructions.agentWrite.${agentWrite}`} style={[styles.meta, styles.result]}>
+                    {t(PROMPT_DOC_WRITE_RESULT_KEY[agentWrite])}
+                  </Text>
+                ) : null}
+                <InstructionsProvenanceLine
+                  testID="session-work-instructions.provenance"
+                  provenance={source.writeFacts.provenance}
+                  serverId={serverId}
+                  style={styles.meta}
+                />
+              </WorkSectionBlock>
+            ) : null}
+          </View>
         </>
       ) : status === 'none' ? (
         <WorkSectionBlock style={styles.invite}>
@@ -425,10 +455,15 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
  * when that height exceeds the clamp. The quiet line beneath names where it lives.
  */
 function ClampedInstructions(
-  props: Readonly<{ markdown: string; title: string; stale: boolean }>,
+  props: Readonly<{ markdown: string }>,
 ) {
   const styles = stylesheet;
-  const lineHeight = happierPageTextMetrics('pageDescription').lineHeight;
+  // In an inspector (Session Info) the preview reads at the rows' own step; a Work page keeps its reading step.
+  const inspector = usePageRowDensityOverride() === 'inspector';
+  const rowMetrics = usePageRowMetrics();
+  const textMetrics = inspector ? rowMetrics.title : happierPageTextMetrics('pageDescription');
+  const lineHeight = textMetrics.lineHeight;
+  const textStyle = React.useMemo(() => [styles.body, textMetrics], [styles.body, textMetrics]);
   const clampHeight = lineHeight * COLLAPSED_LINES;
   const [expanded, setExpanded] = React.useState(false);
   const [fullHeight, setFullHeight] = React.useState(0);
@@ -439,13 +474,13 @@ function ClampedInstructions(
   );
   const overflows = !expanded && fullHeight > clampHeight + 1;
   return (
-    <View style={styles.inset}>
+    <WorkSectionBlock style={styles.preview}>
       <View style={expanded ? null : [styles.clip, { maxHeight: clampHeight }]}>
         <View onLayout={onLayout}>
           <MarkdownView
             testID="session-work-instructions.body"
             markdown={props.markdown}
-            textStyle={styles.body}
+            textStyle={textStyle}
           />
         </View>
       </View>
@@ -464,13 +499,7 @@ function ClampedInstructions(
           onPress={() => setExpanded(false)}
         />
       ) : null}
-      <Text
-        style={[styles.meta, props.stale ? styles.metaStale : null]}
-        numberOfLines={2}
-      >
-        {t('sessionInstructions.source', { title: props.title })}
-      </Text>
-    </View>
+    </WorkSectionBlock>
   );
 }
 
@@ -627,10 +656,32 @@ export function AttachExistingMenu(
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-  // Text is not an `Item`, so it takes the Work rows' text edge itself.
-  inset: {
-    paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
+  // Text is not an `Item`: the block puts it on the rows' text edge.
+  preview: {
     gap: theme.space.s6,
+  },
+  // Under the document: the source line with its operations, then (a step apart) what happened to it, and a
+  // step of air before the next row so the three never read as one stack of equal lines.
+  footer: {
+    gap: theme.space.s8,
+    paddingTop: theme.space.s6,
+    paddingBottom: theme.space.s8,
+  },
+  sourceLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+  },
+  // What happened to it: the result and its provenance are one tight pair, apart from the source line.
+  provenance: {
+    gap: theme.space.s2,
+  },
+  result: {
+    color: theme.colors.text.secondary,
+  },
+  sourceText: {
+    flex: 1,
+    minWidth: 0,
   },
   clip: {
     overflow: 'hidden',

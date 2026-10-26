@@ -146,11 +146,36 @@ const VoiceGlanceBody = React.memo(function VoiceGlanceBody(props: Readonly<{
                     <Text style={styles.quietLinkLabel}>{t('voicePresence.showConversation')}</Text>
                 </Pressable>
             ) : null}
+            {voice.preparedInstructionsFor ? (
+                <VoiceSpeaksFrom address={voice.preparedInstructionsFor} sheet={sheet} testID={`${props.testID}-speaks-from`} />
+            ) : null}
             {voice.statusCell === 'needs_you' && voice.pendingRequestSessionAddress ? (
                 <VoiceNeedsYouPrompts address={voice.pendingRequestSessionAddress} testID={`${props.testID}-needs-you`} />
             ) : null}
             {model.delegatedWork ? <VoiceGlanceHandoff model={model} testID={`${props.testID}-handoff`} /> : null}
             <VoiceGlanceControls model={model} sheet={sheet} narrowByDefault={props.presentation === 'companion'} testID={props.testID} />
+        </View>
+    );
+});
+
+/**
+ * Whose instructions this call speaks from (lab `b-voice A`): the receipt of an attempt whose
+ * Instructions were actually prepared, named through the same Session-name owner as the target. A
+ * receipt whose Session this device cannot name leaves no footer rather than a guess.
+ */
+const VoiceSpeaksFrom = React.memo(function VoiceSpeaksFrom(props: Readonly<{
+    address: NonNullable<VoiceSurfaceViewModel['attemptControl']['preparedInstructionsFor']>;
+    sheet: boolean;
+    testID: string;
+}>) {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const name = useVoiceTargetName(props.address);
+    if (!name) return null;
+    return (
+        <View testID={props.testID} style={[styles.speaksFrom, props.sheet ? styles.speaksFromSheet : null]}>
+            <Icon name="file-text" size={13} color={theme.colors.text.secondary} />
+            <Text style={styles.speaksFromLabel} numberOfLines={2}>{t('sessionVoice.speaksFrom', { name })}</Text>
         </View>
     );
 });
@@ -248,7 +273,7 @@ const VoiceGlanceHandoff = React.memo(function VoiceGlanceHandoff(props: Readonl
     // now in the shared session word (lab A: mark · title · cell · "Working"). Without a known session
     // the agent's own status line names the work instead.
     const session = useSession(work.sessionId);
-    const sessionStatus = useSessionStatus(session ?? null, { subscribeToSession: false, workingTextMode: 'static' });
+    const sessionStatus = useSessionStatus(session ?? null, { subscribeToSession: false });
     const agentId = session ? readSessionPresentationAgentId(session) : null;
     const title = session ? getSessionName(session) : work.statusText;
     const status = sessionStatus?.statusText ?? (work.thinking || !work.statusText ? t('voiceSurface.delegatedWorking') : null);
@@ -412,6 +437,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     turnSheet: { fontSize: 15, lineHeight: 21 },
     partial: { color: theme.colors.text.secondary },
     who: { color: theme.colors.text.tertiary },
+    speaksFrom: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, paddingLeft: theme.space.s10 },
+    speaksFromSheet: { paddingLeft: theme.space.s16 },
+    speaksFromLabel: { flexShrink: 1, ...Typography.variant('meta'), color: theme.colors.text.secondary },
     quietLink: { alignSelf: 'flex-start' },
     quietLinkLabel: {  ...Typography.variant('meta'), color: theme.colors.text.secondary },
     handoff: {

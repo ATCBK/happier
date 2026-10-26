@@ -1,4 +1,8 @@
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { artifactSavedByFromActionContextV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { writeSessionApprovalReviewerOverrideV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { recordReviewCommentReads } from '@/sync/domains/reviews/comments/reviewRunComments';
+import type { ReviewCommentListResponseV1, ReviewCommentGetResponseV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { SessionArchiveActionInputV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 import { isSessionArchiveOperationCurrent, resolveSessionArchiveAddress, type SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
@@ -7,6 +11,7 @@ import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approv
 import { SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { inspectSessionContinuationOnMachine } from '@/sync/ops/sessionContinuationInspection';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { readRpcFailureCode } from './rpcFailureCode';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -25,6 +30,7 @@ import { createUiPetChooseAction } from './petChooseAction';
 import { setClientEncryptionRequirement } from '@/sync/ops/settings/setClientEncryptionRequirement';
 import { readSessionTranscriptForAction } from '@/sync/api/session/sessionTranscriptActions';
 import { readUiMemoryInheritedContext, readUiMemoryScopeContext } from './readUiMemoryInheritedContext';
+import { admitProjectWorkspaceCensusForSubject } from '@/sync/domains/workspaces/projectWorkspaceCensusAdmission';
 import { createWidgetRefreshActionDepsV1 } from './widgetRefreshActionDeps';
 import { createWidgetDefinitionActionDepsV1 } from './widgetDefinitionActionDeps';
 import { executeComposerIngressAction } from './composerIngressActionRuntime';
@@ -47,10 +53,10 @@ import type { SettingOperationResult } from '@/components/settings/catalog/setti
 import type { SettingsDeclarationOperationInputV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { recoverHistoricalAutomationTemplates } from '@/sync/ops/account/recoverHistoricalAutomationTemplates';
 import { startAgentSignInRpc, checkAgentSignInRpc } from '@/agents/machineAgents/signIn/api';
-import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
+import { buildSessionPermissionRespondRpcParamsV1, buildSessionUserActionAnswerMap } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, listApprovalArtifactsV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { StoredApprovalRequestSchema, readApprovalRequesterDecisionV1, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
@@ -63,6 +69,7 @@ import {
   type SessionUsageLimitRecoveryOperationResult,
 } from '@/sync/ops/sessionUsageLimitRecovery';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { readMachineActionRpcResult } from '@happier-dev/protocol/actions/executor/actionFailureEnvelope';
 import { createTargetActionApprovalDecision } from '@happier-dev/protocol/actions/targetActionApprovalDecision';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { ActionSessionAddress } from '@happier-dev/protocol/actions/executor/types';
@@ -82,8 +89,8 @@ import { executeActionOperationActionV1 } from '@happier-dev/protocol/actions/ex
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/actionOperations';
 import { PROJECT_SOURCE_ACTION_SPECS_V1 } from '@happier-dev/protocol/actions/specs/projectSources';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1, isProjectActionIdV1 } from '@happier-dev/protocol/actions/projectActionFamily';
-import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewActionInputV2Schema, projectSessionSpawnNewActionInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { SessionSpawnNewActionResultV1Schema, readSessionSpawnNewActionResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createUiSessionCapabilityActionDeps } from './sessionCapabilityActionDeps';
 import { setSessionCapabilityV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
 import { setSessionConnectedServiceAuthBinding } from '@/sync/ops/connectedServices/sessionAuthSwitch';
@@ -134,7 +141,7 @@ import { PluginWebhookActionHttpPathsV1, type PluginWebhookPresentUserActionIdV1
 import { projectPluginFailureText } from '@happier-dev/protocol/plugins/failureProjection';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema, type SessionModelTransitionRequestV1, type SessionModelTransitionResultV1 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
-import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema, ActionExecuteResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { PendingResetStartWaitingReasonV1Schema } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
@@ -158,7 +165,7 @@ import { machineLanguageIntelligenceQuery, machineLanguageIntelligenceRestart } 
 import { DaemonWorkspaceFileReplacePreviewResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { classifyWorkspaceFileRpcError } from '@/sync/ops/machineWorkspaceFileRpcError';
 import { randomUUID } from '@/platform/randomUUID';
-import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
+import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction, listCurrentUiContextContributedActionDefinitions } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
 import { buildMachineAgentInventoryDescriptors } from '@/agents/machineAgents/machineAgentCatalog';
 import {
@@ -257,7 +264,7 @@ import { executeApiTokenAction, type ApiTokenActionTransport } from './apiTokenA
 import { createMachinePoolActionClient, MachinePoolActionError } from '@/sync/api/machines/machinePoolActions';
 import { createMachinePresetActionClient, MachinePresetActionError } from '@/sync/api/machines/managedMachinePresets';
 import { createManagedMachineActionClient, ManagedMachineActionError } from '@/sync/api/machines/managedMachineActions';
-import { executeManagedMachineNativeAction, withManagedMachineNativeReadLifetime } from '@/sync/api/machines/managedMachineOrigination';
+import { executeManagedMachineNativeAction } from '@/sync/api/machines/managedMachineOrigination';
 import { subscribeActionOperationByRequestId } from '@/sync/domains/actionOperations/subscribeActionOperationByRequestId';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { createUiManagedMachineReferenceReader } from './managedMachineReferenceDeps';
@@ -360,9 +367,11 @@ import {
 import { listRecentPathsForVoiceTool } from '@/voice/tools/actionImpl/pathsListRecent';
 import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { listProjectsForActions } from './listProjects';
+import { createUiProjectPagesList } from './projectPagesAction';
 import { createProjectSourceActionDeps } from '@/sync/api/projects/projectSourceActions';
 import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 import { setProjectVisibilityV1 } from '@happier-dev/protocol/projects/projectVisibilityV1';
+import { updateProjectOrganizationV1 } from '@happier-dev/protocol/projects/projectOrganizationV1';
 import {
   listPromptInvocationsForActions,
   resolvePromptInvocationForActions,
@@ -389,7 +398,7 @@ import { readSessionFollowRuleInputs, type SessionFollowReadInputs } from '@/syn
 import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
 import { sessionReadStateAction } from '@/sync/api/session/sessionReadStateAction';
-import { executeSessionAttentionSetAction } from '@/sync/ops/sessionOrganization/setSessionAttentionStanding';
+import { executeSessionAttentionSetAction, setSessionAttentionStanding } from '@/sync/ops/sessionOrganization/setSessionAttentionStanding';
 import { createSessionManagerAction } from '@/sync/api/session/sessionManagerAction';
 import { createSessionBoardActionAdapter, prepareSessionBoardItemForUi } from '@/sync/api/session/sessionBoardActions';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -479,6 +488,20 @@ export function projectRetiredSessionBoardActionFailure(input: Readonly<{
 
   type OpenSessionOptions = Readonly<{ serverId?: string | null; query?: Readonly<Record<string, string>> }>;
 
+function projectSessionModelTransitionFailure(transition: Extract<SessionModelTransitionResultV1, { ok: false }>) {
+  return {
+    ok: false as const,
+    errorCode: transition.status,
+    error: transition.status,
+    details: {
+      status: transition.status,
+      activeSelection: transition.activeSelection,
+      requestedSelection: transition.requestedSelection,
+      ...(transition.reason ? { reason: transition.reason } : {}),
+    },
+  };
+}
+
 function projectSessionInteractionRpcResult(result: unknown): unknown {
   return result === undefined || result === null ? { ok: true } : result;
 }
@@ -558,7 +581,7 @@ export async function replayApprovalRequestAtExactDaemon(input: Readonly<{
   }>;
   signal?: AbortSignal;
 }>): Promise<unknown> {
-  return await machineRpcWithServerScope({
+  return readMachineActionRpcResult(await machineRpcWithServerScope({
     serverId: input.executionTarget.serverId,
     machineId: input.executionTarget.machineId,
     method: RPC_METHODS.APPROVAL_REQUEST_DECIDE,
@@ -575,7 +598,7 @@ export async function replayApprovalRequestAtExactDaemon(input: Readonly<{
         : {}),
     },
     ...(input.signal === undefined ? {} : { signal: input.signal }),
-  });
+  }));
 }
 
 /**
@@ -595,14 +618,14 @@ export async function replayApprovedApprovalRequestAtExactDaemon(input: Readonly
   }>;
   signal?: AbortSignal;
 }>): Promise<ActionExecuteResult> {
-  return await machineRpcWithServerScope<ActionExecuteResult, Readonly<{ artifactId: string }>>({
+  return readMachineActionRpcResult(await machineRpcWithServerScope<ActionExecuteResult, Readonly<{ artifactId: string }>>({
     serverId: input.executionTarget.serverId,
     machineId: input.executionTarget.machineId,
     method: RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
     operationTimeoutMs: null,
     payload: { artifactId: input.artifactId },
     ...(input.signal === undefined ? {} : { signal: input.signal }),
-  });
+  }));
 }
 
 async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
@@ -832,7 +855,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   // Their wait still belongs to the captured Action invocation and Account.
   const actionMachineRpc: typeof machineRpcWithServerScope = <R, A>(params: Parameters<typeof machineRpcWithServerScope<R, A>>[0]) =>
     withAccountLifetime(params.signal ?? accountContext?.invocationSignal,
-      signal => machineRpcWithServerScope<R, A>({ ...params, signal }));
+      async signal => readMachineActionRpcResult(await machineRpcWithServerScope<R, A>({ ...params, signal })));
   const actionSessionRpc: typeof sessionRpcWithServerScope = <R, A>(params: Parameters<typeof sessionRpcWithServerScope<R, A>>[0]) =>
     withAccountLifetime(params.signal ?? accountContext?.invocationSignal,
       signal => sessionRpcWithServerScope<R, A>({ ...params, signal }));
@@ -923,6 +946,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       if (catalog.status !== 'ready') return null;
       const projection = await loadDaemonMergedProjectionInputs({
         machineId: args.machineId, serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+        sections: ['agentsById'],
         signal: args.signal ?? accountContext.invocationSignal,
       });
       accountContext.assertCurrent();
@@ -980,8 +1004,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   }) : null;
 
   const connectedServiceAction = accountContext ? createUiConnectedServiceAction(accountContext) : undefined;
-  const updateApprovalArtifact = async ({ artifactId, request }: Readonly<{
-    artifactId: string; request: ApprovalRequest | TargetActionApprovalRequestV1;
+  const updateApprovalArtifact = async ({ artifactId, request, context }: Readonly<{
+    artifactId: string; request: ApprovalRequest | TargetActionApprovalRequestV1; context?: ActionExecutorContext;
   }>) => {
     // Only the known Home-open ACK and a decided terminal outcome may outlive their
     // invoking presentation/intent; target decisions keep their captured Account lifetime.
@@ -993,8 +1017,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         artifactId, request,
         read: async id => await (artifactAccount ? artifactAccount.fetchArtifact(id, { fresh: true }) : sync.fetchArtifactWithBody(id, { fresh: true })),
         write: async (basis, header, body) => {
+          context?.assertDecisionAuthorityCurrent?.();
           if (artifactAccount) {
-            await artifactAccount.updateArtifact(artifactId, header, body, basis);
+            await artifactAccount.updateArtifact(artifactId, header, body, basis, context?.assertDecisionAuthorityCurrent);
             return;
           }
           // Focused Sync borrows this validated read as its expected CAS basis.
@@ -1021,7 +1046,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   let deps: ActionExecutorDeps = {
     buildApprovalPreview: async ({ actionId, input, context, defaultPreview }) => {
       if (actionId !== 'session.spawn_new' || !accountContext || !machineAccessAction) return defaultPreview;
-      const parsed = SessionSpawnNewInputV2Schema.safeParse(input);
+      const parsed = SessionSpawnNewActionInputV2Schema.safeParse(input);
       if (!parsed.success || !areServerProfileIdentifiersEquivalent(parsed.data.executionTarget.serverId, accountContext.serverId)) return defaultPreview;
       const machineId = parsed.data.executionTarget.machineId;
       const access = await machineAccessAction({ actionId: 'machines.access.grants.list',
@@ -1039,7 +1064,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         import('@/providers/session/resolveSessionRoutePresentation'),
       ]);
       const projection = await loadDaemonMergedProjectionInputs({ machineId, serverId: accountContext.serverId,
-        accountLifetime: accountContext.accountLifetime, signal: context.signal });
+        accountLifetime: accountContext.accountLifetime, signal: context.signal,
+        sections: ['agentsById', 'familiesById.connectedAccounts'] });
       accountContext.assertCurrent();
       const agent = getResolvedBackendCatalogEntries({ ...projection, enabledAgentIds: AGENT_IDS })
         .find(entry => entry.backendTargetKey === buildBackendTargetKeyV2(parsed.data.agentTarget))?.agentCatalogEntry;
@@ -1128,6 +1154,11 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           scope: accountContext.accountLifetime.scope, activeRequest: accountContext.request,
         }, authority => readSessionSnapshotForAuthority({ authority, sessionId: ref.sessionId, isCurrent: accountContext.accountLifetime.isCurrent }));
         accountContext.assertCurrent(); throwIfAborted(context.signal);
+        if (!session || !admitProjectWorkspaceCensusForSubject({
+          subject: { kind: 'session', ownerAccountId: session.ownerAccountId, access: session.access, accessLevel: session.accessLevel },
+          rowServerId: ref.serverId, censusServerId: accountContext.serverId,
+          viewerAccountId: accountContext.accountLifetime.scope.accountId,
+        }).admitted) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
         const metadata = readSessionOwnerMetadataView(session);
         if (!metadata) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
         return { metadata, revision: session.metadataVersion };
@@ -1685,7 +1716,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         recoveryDetails,
       });
     },
-    listContributedActionDefinitions: opts?.listContributedActionDefinitions,
+    listContributedActionDefinitions: opts?.listContributedActionDefinitions ?? listCurrentUiContextContributedActionDefinitions,
     readContributedActionSchemas: opts?.readContributedActionSchemas,
     isActionEnabled: (actionId: ActionId, ctx) =>
       {
@@ -1814,7 +1845,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     uiCurrentContextAction: (request) => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
     accountHomeContinuationAction: (request) => executeCurrentUiContextAction(request),
     sessionAuthoringOpen: args => openSessionAuthoringDraft(args, accountContext ?? undefined),
-    invokeContributedAction: (request) => executeCurrentUiContextContributedAction(request, { execute: executor.execute, context: request.context }),
+    invokeContributedAction: (request) => executeCurrentUiContextContributedAction(request, {
+      execute: Object.assign(executor.execute, { prepare: executor.prepare }), context: request.context,
+    }, accountContext?.accountLifetime),
     uiFindAction: executeFindAction,
     uiPromptPickerOpen: executePromptPickerOpenAction,
     nextPendingSession: (context) => invokeNextPendingRequest({
@@ -1988,7 +2021,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, resumeInactiveWithInitialGoal, serverId, signal }) =>
       await withAccountLifetime(signal, lifetime => sessionGoalSet(sessionId, {
         ...(objective !== undefined ? { objective } : {}),
-        ...(status === 'active' || status === 'paused' || status === 'complete' ? { status } : {}),
+        ...(status !== undefined ? { status } : {}),
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         ...(resumeInactiveWithInitialGoal !== undefined ? { resumeInactiveWithInitialGoal } : {}),
       }, { serverId, signal: lifetime })),
@@ -2223,7 +2256,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return result ?? { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     }),
 
-    sessionStop: async ({ sessionId, serverId, signal, context }) => {
+    sessionStop: async ({ sessionId, stopIntent, serverId, signal, context }) => {
       // Report Stop and Archive form one UI invocation. Keep the same admission
       // across both effects; its invocation finally also covers Stop/approval failure.
       const operation = opts?.archiveInvocation?.includeReportStops ? claimSessionArchive(sessionId, serverId) : null;
@@ -2231,7 +2264,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return { ok: false, errorCode: 'archive_pending', error: 'archive_pending' };
       }
       try {
-        const result = await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal, actionContext: context,
+        const result = await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, stopIntent, signal, actionContext: context,
           ...(accountContext ? { scope: accountContext.accountLifetime.scope,
             isCurrent: accountContext.accountLifetime.isCurrent } : {}) }));
         if (!result.success && operation) finishOwnedSessionArchive(operation);
@@ -2638,14 +2671,14 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             machineId: input.executionTarget.machineId,
             // Requester HTTP and direct Machine RPC consume the same spawn owner's budget.
             timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv(),
-            input: placementOrigin && supportsOrigin ? { ...exactInput, placementOrigin } : exactInput,
+            input: projectSessionSpawnNewActionInputV2(placementOrigin && supportsOrigin ? { ...exactInput, placementOrigin } : exactInput),
             actionCaller: _actionCaller, authority: context?.authority, ...(signal ? { signal } : {}) });
           accountContext.assertResultCurrent(getActionSpec('session.spawn_new').sideEffectClass);
           if (!execution.ok && execution.errorCode === 'outcome_uncertain') {
             return { type: 'pending' as const, retryWithSameCreationKey: true as const, outcome: 'unknown' as const };
           }
           if (!execution.ok) throw Object.assign(new Error(execution.error), { code: execution.errorCode });
-          return SessionSpawnNewResultV1Schema.parse(execution.result);
+          return readSessionSpawnNewActionResultV1(SessionSpawnNewActionResultV1Schema.parse(execution.result));
         }
       }
       accountContext?.assertCurrent();
@@ -2697,10 +2730,11 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     } : undefined,
 
     approvalRequestApprovedReplay: async ({ artifactId, request, decision, context, requestId, signal }) => {
-      if (decision) {
-        const subject = 'requesterConfirmation' in request ? request.requesterConfirmation : undefined;
+      const requesterDecision = readApprovalRequesterDecisionV1(request, decision);
+      if (requesterDecision) {
+        const { subject, decision } = requesterDecision;
         const route = resolveApprovalReplayRoute(request);
-        if (!subject || !accountContext || context.surface !== 'ui' || context.authority !== 'present_user'
+        if (!accountContext || (context.surface !== 'ui' && context.surface !== 'voice') || context.authority !== 'present_user'
           || context.externalActionCredential || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
           || context.actionCaller && context.actionCaller.kind !== 'host'
           || subject.requesterAccountId !== accountContext.accountId) {
@@ -2710,16 +2744,18 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
         accountContext.assertCurrent();
-        const result = await actionSessionRpc<unknown, { artifactId: string; sessionId: string; decision: 'approve' | 'reject' | 'cancel' }>({
+        const result = await actionSessionRpc<unknown, { artifactId: string; sessionId: string; decision: 'approve' | 'reject' | 'cancel'; decisionSource?: 'voice' }>({
           serverId: accountContext.serverId, sessionId: subject.personaSessionRef.sessionId,
           method: RPC_METHODS.APPROVAL_REQUEST_DECIDE,
-          payload: { artifactId, sessionId: subject.personaSessionRef.sessionId, decision }, timeoutMs: null,
+          // Private authenticated transport metadata, not caller-authored Action input.
+          payload: { artifactId, sessionId: subject.personaSessionRef.sessionId, decision,
+            ...(context.surface === 'voice' ? { decisionSource: 'voice' as const } : {}) }, timeoutMs: null,
+          ...(context?.assertDecisionAuthorityCurrent ? { onIssued: context.assertDecisionAuthorityCurrent } : {}),
           ...(signal ? { signal } : {}),
         });
         accountContext.assertResultCurrent(getActionSpec('approval.request.decide').sideEffectClass);
-        if (result && typeof result === 'object' && 'ok' in result && result.ok === true && 'result' in result) {
-          return { ok: true, result: result.result };
-        }
+        const settled = getActionSpec('approval.request.decide').outputSchema?.safeParse(result);
+        if (settled?.success) return { ok: true, result: settled.data };
         const failure = ActionExecuteFailureSchema.safeParse(result);
         return failure.success ? failure.data : { ok: false, errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' };
       }
@@ -2729,14 +2765,14 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       // durable/signed/remote replay keeps the exact-daemon route below.
       if (isMountedPluginBlockingApprovalEligibleForLiveClient(request)
         && approvalCoordinator.getLiveWaiterCount(artifactId) > 0
-        && accountContext && context.surface === 'ui' && context.authority === 'present_user'
+        && accountContext && (context.surface === 'ui' || context.surface === 'voice') && context.authority === 'present_user'
         && !context.externalActionCredential && !context.externalActionExecutionAuthorization
         && !context.rpcSessionAuthorization && (!context.actionCaller || context.actionCaller.kind === 'host')) return null;
       if (!requiresExactDaemonApprovalReplay(request)) {
         // Returning null resumes the single Protocol replay owner, including its
         // Artifact CAS and live-only result projection, on this captured app.
         if (request.v === 2 && request.executionOriginV1.externalActionExecutionAuthorization
-          && (!accountContext || context.surface !== 'ui' || context.authority !== 'present_user'
+          && (!accountContext || (context.surface !== 'ui' && context.surface !== 'voice') || context.authority !== 'present_user'
             || context.externalActionCredential || context.externalActionExecutionAuthorization
             || context.rpcSessionAuthorization || context.actionCaller && context.actionCaller.kind !== 'host')) {
           return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
@@ -2766,18 +2802,26 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       if (accountContext && request.v === 2 && !context.externalActionCredential
         && !context.externalActionExecutionAuthorization && !context.rpcSessionAuthorization
         && (!context.actionCaller || context.actionCaller.kind === 'host')) {
-        if (!requestId || context.surface !== 'ui' || context.authority !== 'present_user'
+        if (!requestId || (context.surface !== 'ui' && context.surface !== 'voice') || context.authority !== 'present_user'
           || !isApprovalExecutionOriginCurrentForAccountContext({ origin: request.executionOriginV1,
             accountServerId: accountContext.serverId, accountId: accountContext.accountId })) {
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
         const execution = await executeOriginalAccountMachineAction({ account: accountContext,
           actionId: 'approval.request.decide', requestId, machineId,
-          input: { artifactId, decision: 'approve',
+        input: { artifactId, decision: decision ?? 'approve',
             serverIdentityId: replayRoute.serverIdentityId, originServerId: replayRoute.originServerId },
           ...(signal ? { signal } : {}) });
         accountContext.assertResultCurrent(getActionSpec('approval.request.decide').sideEffectClass);
         if (execution) return execution;
+      }
+      if (decision === 'approve') {
+        const replay = ActionExecuteResultSchema.safeParse(await replayApprovalRequestAtExactDaemon({
+          artifactId, decision, executionTarget: { ...replayRoute, machineId },
+          ...(signal === undefined ? {} : { signal }),
+        }));
+        return replay.success ? replay.data
+          : { ok: false, errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' };
       }
       return await replayApprovedApprovalRequestAtExactDaemon({
         artifactId,
@@ -2807,6 +2851,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       const rows = await createUiProjectAccountRowsClient(accountContext).read(context?.signal);
       return listProjectsForActions(args, rows);
     },
+    projectsPagesList: createUiProjectPagesList(accountContext),
     projectWorkspaceRefs: async (args, context) => {
       if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       if (!canUsePrivateProjectAccountAction(accountContext, context)) return { ok: false, errorCode: 'project_account_access_denied', error: 'project_account_access_denied' };
@@ -2818,6 +2863,15 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       // The same visible, ordered checkouts the Projects list shows.
       return { workspaceRefs: projectProjectListV1({ serverId: accountContext.serverId, workspaceRefs: rows.workspaceRefs,
         organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier }).items.map(item => item.ref) };
+    },
+    projectsOrganizationUpdate: async (input, context) => {
+      if (!accountContext || !canUsePrivateProjectAccountAction(accountContext, context)) return { ok: false, errorCode: 'project_organization_access_denied' };
+      return updateProjectOrganizationV1({
+        accountScope: () => {
+          try { accountContext.assertCurrent(); return { serverId: accountContext.serverId, accountId: accountContext.accountId }; }
+          catch { return null; }
+        }, mutateOrganization: createUiProjectAccountRowsClient(accountContext).mutateOrganization,
+      }, input, context);
     },
     projectsVisibilitySet: async (input, context) => {
       if (!accountContext || !canUsePrivateProjectAccountAction(accountContext, context)) return { ok: false, errorCode: 'project_visibility_access_denied' };
@@ -2919,7 +2973,18 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     },
     reviewCommentAction: async ({ actionId, input, signal }) => {
       try {
-        return await executeReviewCommentAction(actionId, input, signal ? { signal } : undefined);
+        const result = await executeReviewCommentAction(actionId, input, signal ? { signal } : undefined);
+        if (accountContext) {
+          accountContext.assertCurrent();
+          // The HTTP transport has already opened and validated these exact response schemas.
+          // Keep loaded review projections current without a second read or a disposition write.
+          if (actionId === 'reviews.comments.list') {
+            recordReviewCommentReads((result as ReviewCommentListResponseV1).items, accountContext.accountLifetime.scope);
+          } else if (actionId === 'reviews.comments.get') {
+            recordReviewCommentReads([(result as ReviewCommentGetResponseV1).comment], accountContext.accountLifetime.scope);
+          }
+        }
+        return result;
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'review_comment_encryption_mode_mismatch') {
           return { ok: false, errorCode: error.code, error: error.code };
@@ -2966,7 +3031,13 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       ? { discussionAction: opts?.discussionAction ?? capturedFamilyPorts!.discussionAction }
       : {}),
     ...(opts?.homeDomainAction ?? capturedFamilyPorts?.homeDomainAction
-      ? { homeDomainAction: opts?.homeDomainAction ?? capturedFamilyPorts!.homeDomainAction }
+      ? { homeDomainAction: (args: Parameters<NonNullable<ActionExecutorDeps['homeDomainAction']>>[0]) => {
+        // Section intents need the opened Account organization owner even when a mounted
+        // surface supplies the ordinary Home HTTP transport for the other families.
+        const owner = isSessionOrganizationResourceAction(args.actionId)
+          ? capturedFamilyPorts?.homeDomainAction : undefined;
+        return (owner ?? opts?.homeDomainAction ?? capturedFamilyPorts!.homeDomainAction)(args);
+      } }
       : {}),
     ...(accountContext && (opts?.homeDomainAction ?? capturedFamilyPorts?.homeDomainAction)
       ? { personalSavedSecretActionExecute: createUiPersonalSavedSecretActionExecute(accountContext,
@@ -3145,13 +3216,14 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return result;
     },
     workflowEventsList: async (args, context) => {
-      const catalog = await machineContributionRegistryProjectionDescribe(args.machineId, {
-        serverId: args.serverId, signal: context.signal, accountLifetime: accountContext?.accountLifetime,
+      const catalog = await loadDaemonMergedProjectionCacheEntry({ machineId: args.machineId,
+        serverId: args.serverId, signal: context.signal, accountLifetime: accountContext?.accountLifetime, reuseFreshReady: false,
+        sections: ['automationEligibleEvents'],
       });
-      if (!catalog.supported || catalog.automationEligibleEvents === undefined) {
+      if (catalog?.kind !== 'ready' || catalog.inputs.automationEligibleEvents === undefined) {
         return { ok: false, errorCode: 'workflow_event_catalog_unavailable', error: 'workflow_event_catalog_unavailable' };
       }
-      return { machineId: args.machineId, events: projectAutomationEligibleEventsCatalogV1(catalog.automationEligibleEvents) };
+      return { machineId: args.machineId, events: projectAutomationEligibleEventsCatalogV1(catalog.inputs.automationEligibleEvents) };
     },
     machinesAgentsList: async (args, context) => {
       const catalog = args.draftDefinitions ? { definitions: args.draftDefinitions }
@@ -3438,12 +3510,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return projectServerScopedSessionSendMessageResult(delivery);
     }),
 
-    sessionAttentionSet: async ({ sessionId, request, serverId }) => (
-        await executeSessionAttentionSetAction({ sessionId, request, serverId: serverId ?? null })
-    ),
+    sessionAttentionSet: async ({ sessionId, request, serverId }) => accountContext
+      ? await setSessionAttentionStanding({ ...createSessionOrganizationMutationScopeForAccount(accountContext), sessionId, ...request })
+      : await executeSessionAttentionSetAction({ sessionId, request, serverId: serverId ?? null }),
 
     sessionApprovalReviewerSet: async ({ sessionId, enabled, serverId }) => {
-      await sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({ ...metadata, approvalReviewerEnabled: enabled }), {
+      await sync.patchSessionMetadataWithRetry(sessionId, (metadata) => writeSessionApprovalReviewerOverrideV1(metadata, enabled), {
         serverId: serverId ?? null,
         ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
       });
@@ -3477,7 +3549,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       }
       const result = await writeUiSessionStateField({
         sessionId: sid, fieldId,
-        value: fieldId === 'display.title' ? { title: String(value), updatedAt, staleBehavior: 'bump-if-value-changed' } : value,
+        value: fieldId === 'display.title' ? { title: String(value), updatedAt } : value,
         metadataReason: `ui-${actionId}`,
         ...(opts?.sessionStateMetadataPreprocess ? { metadataPreprocess: opts.sessionStateMetadataPreprocess } : {}),
         updateSessionMetadataWithRetry: async (targetSessionId, updater) => {
@@ -3504,7 +3576,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         : fieldId === 'intent.context' ? { updated: true } : { showToolCalls: value }), version: result.version };
     },
 
-    sessionPermissionRespond: async ({ sessionId, requestId, turnId, decision, serverId, mode, reason, answers, allowedTools, updatedPermissions, execPolicyAmendment, signal }) => {
+    sessionPermissionRespond: async ({ sessionId, requestId, turnId, decision, serverId, mode, reason, answers, allowedTools, updatedPermissions, execPolicyAmendment, signal, context }) => {
       const reqId = String(requestId ?? '').trim();
       if (!reqId) {
         return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
@@ -3519,7 +3591,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         ...(execPolicyAmendment === undefined ? {} : { execPolicyAmendment }),
       });
       try {
-        await withAccountLifetime(signal, ownedSignal => sessionRespondToPermission(sessionId, request, { serverId: serverId ?? undefined, signal: ownedSignal }));
+        await withAccountLifetime(signal, ownedSignal => sessionRespondToPermission(sessionId, request, {
+          serverId: serverId ?? undefined, signal: ownedSignal,
+          ...(context?.assertDecisionAuthorityCurrent ? { onIssued: context.assertDecisionAuthorityCurrent } : {}),
+        }));
       } catch (error) {
         return projectSessionInteractionRpcFailure(error);
       }
@@ -3569,18 +3644,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         throw error;
       }
     },
-    sessionUserActionAnswer: async ({ sessionId, requestId, answers, disposition, decision, reason, updatedPermissions, serverId, signal }) => {
+    sessionUserActionAnswer: async ({ sessionId, requestId, answers, disposition, decision, reason, updatedPermissions, serverId, signal, context }) => {
       const reqId = String(requestId ?? '').trim();
       if (!reqId) {
         return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
       }
-      const normalizedAnswers = Object.create(null) as Record<string, readonly string[]>;
-      for (const entry of Array.isArray(answers) ? answers : []) {
-        const question = String(entry?.question ?? '');
-        if (question.trim().length > 0 && entry.values.length > 0) {
-          normalizedAnswers[question] = [...entry.values];
-        }
-      }
+      const normalizedAnswers = buildSessionUserActionAnswerMap(answers);
       if (disposition !== 'pass_up' && !decision && Object.keys(normalizedAnswers).length === 0) {
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters', sessionId };
       }
@@ -3595,7 +3664,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           ...(Object.keys(normalizedAnswers).length > 0 ? { answers: normalizedAnswers } : {}),
           ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
           ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
-        }, { serverId: serverId ?? undefined, signal: ownedSignal })));
+        }, { serverId: serverId ?? undefined, signal: ownedSignal,
+          ...(context?.assertDecisionAuthorityCurrent ? { onIssued: context.assertDecisionAuthorityCurrent } : {}),
+        })));
       } catch (error) {
         return projectSessionInteractionRpcFailure(error);
       }
@@ -3652,10 +3723,11 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     sessionConnectedServicesAuthSet: setSessionConnectedServiceAuthBinding,
     sessionModelUnarm: async ({ sessionId, serverId, context }) => {
       accountContext?.assertCurrent();
-      return SessionModelTransitionResultV1Schema.parse(await actionSessionRpc({
+      const transition = SessionModelTransitionResultV1Schema.parse(await actionSessionRpc({
         sessionId, serverId, method: SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION,
         payload: { v: 1, unarm: true }, signal: context.signal,
       }));
+      return transition.ok ? transition : projectSessionModelTransitionFailure(transition);
     },
     ...(accountContext ? { modelFavoriteSet: (input, context) => accountContext.mutateRawSettings(
       raw => setModelFavoriteV1(raw, input), { signal: context.signal, observeOutcome: true }),
@@ -3815,17 +3887,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           });
         }
         if (!transition.ok) {
-          return {
-            ok: false,
-            errorCode: transition.status,
-            error: transition.status,
-            details: {
-              status: transition.status,
-              activeSelection: transition.activeSelection,
-              requestedSelection: transition.requestedSelection,
-              ...(transition.reason ? { reason: transition.reason } : {}),
-            },
-          };
+          return projectSessionModelTransitionFailure(transition);
         }
         return {
           ...transition,
@@ -4213,7 +4275,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         if (parsed && parsed.family !== 'execution_run_host_action') return parsed.request;
       }
 
-      const full = await (accountContext ? accountContext.fetchArtifact(artifactId) : sync.fetchArtifactWithBody(artifactId));
+      // Consent must acquire its own current body, rather than wait on or
+      // borrow an ordinary read acquired before this decision was made.
+      const full = await (accountContext ? accountContext.fetchArtifact(artifactId, { fresh: true }) : sync.fetchArtifactWithBody(artifactId, { fresh: true }));
       if (full) {
         if (!accountContext) storage.getState().updateArtifact(full);
         const body = full.body;
@@ -4285,7 +4349,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     promptDocCreate: async ({ signal, ...request }) => withPromptLibraryStore((store) => createPromptDocInLibrary({ store, request: resolvePromptDocCreateActionInputV1(request), signal }), signal),
     promptDocFavoriteSet: async ({ signal, ...request }) => withPromptLibraryStore((store) => setPromptDocFavorite({ store, request, signal }), signal),
     promptsLibraryList: async ({ signal, ...request }) => withPromptLibraryStore((store) => listPromptLibrary({ store, request, signal }), signal),
-    promptDocUpdate: async ({ signal, ...request }) => withPromptLibraryStore((store) => updatePromptDocInLibrary({ store, request, signal }), signal),
+    promptDocUpdate: async ({ signal, ...request }, context) => withPromptLibraryStore((store) => updatePromptDocInLibrary({ store, request, signal,
+      savedBy: artifactSavedByFromActionContextV1(context) }), signal),
 
     skillsRead: async ({ signal, ...request }, context) => {
       if (!request.sessionId && 'skillId' in request && accountContext && isPluginSkillIdV1(request.skillId)) {
@@ -4395,7 +4460,13 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       && !context.externalActionCredential && !context.externalActionExecutionAuthorization && !context.rpcSessionAuthorization
       && !context.signal?.aborted && storage.getState().settingsScope === null && isSettingsOwnerCurrent()
       && isBuiltInLocalSettingMutation(actionId, input);
-    const credentialAuthority = resolveInvocationAuthority({ credential, surface, localUiInteraction });
+    const voiceCanApproveRequests = surface === 'voice' && credential === 'account'
+      && (!context?.actionCaller || context.actionCaller.kind === 'host')
+      && !context?.externalActionCredential && !context?.externalActionExecutionAuthorization
+      && !context?.rpcSessionAuthorization
+      && readAccountSettingsSnapshot().voice.canApproveRequests === true;
+    const credentialAuthority = resolveInvocationAuthority({ credential, surface, localUiInteraction,
+      actionId, voiceCanApproveRequests });
     // Ordinary callers can narrow the installed credential's authority, never
     // promote it. Authenticated daemon continuations retain their admitted stamp.
     const authority = opts?.admittedClientActionId
@@ -4413,6 +4484,14 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       actionsSettings: resolveActionsSettingsSnapshot(),
       surface,
       authority,
+      // This closure belongs to the captured Account, not the invoking model.
+      // Re-read after suspension; never retract an already-issued effect receipt.
+      assertDecisionAuthorityCurrent: voiceCanApproveRequests && authority === 'present_user'
+        ? () => {
+          if (readAccountSettingsSnapshot().voice.canApproveRequests !== true) {
+            throw new HappyError('present_user_required', false, { code: 'present_user_required' });
+          }
+        } : undefined,
       ...(actionCaller ? { actionCaller } : {}),
       ...(accountContext ? { managedMachineCreationEnabled: accountContext.settings.managedMachineCreationEnabled } : {}),
       ...(opts?.admittedClientActionId ? { bypassApprovals: actionId === opts.admittedClientActionId } : {}),
@@ -4584,7 +4663,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext,
       ...(requestId ? { requestId } : {}), signal: ownedSignal }));
     account.assertResultCurrent(spec.sideEffectClass);
     if (spec.sideEffectClass === 'read') throwIfAborted(signal);
-    return result;
+    return readMachineActionRpcResult(result);
   };
   return {
     skillMachineActionExecute: async ({ actionId, input, context }) => {
@@ -4633,7 +4712,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext,
         const result = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
           machineId, method, payload, preferScoped: true, signal: ownedSignal }));
         account.assertCurrent();
-        return result;
+        return readMachineActionRpcResult(result);
       };
       if (actionId !== 'machines.vitals.summaries.list') {
         const target = actionId === 'machines.vitals.get'
@@ -4662,7 +4741,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext,
         machineId: input.machineId, method: RPC_METHODS.MACHINES_WORK_SUMMARY_GET, payload: { ...input, serverId: account.serverId }, preferScoped: true,
         signal: ownedSignal }));
       account.assertCurrent();
-      return result;
+      return readMachineActionRpcResult(result);
     },
     machineAccessAction: async (args) => {
       account.assertCurrent();
@@ -4807,8 +4886,7 @@ export async function executeDefaultActionInCapturedAccount(
       finishSessionArchiveInvocation(archiveInvocation);
     }
   };
-  const native = resolveNativeManagedAction(actionId);
-  return native ? withManagedMachineNativeReadLifetime(native, context?.signal, execute) : execute(context?.signal);
+  return execute(context?.signal);
 }
 
 /** Read-only drag admission borrows the complete Action dependency composition and exact Account lifetime. */
@@ -4834,7 +4912,7 @@ export function resolveDefaultActionInvocationServerId(actionId: ActionId, input
     if (context?.serverId) return context.serverId;
     if (isProjectActionIdV1(actionId) && actionId !== 'projects.trust.list' && actionId !== 'projects.trust.revoke') {
       const qualified = PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(input);
-      if (qualified.success) return qualified.data.workspace.serverId;
+      if (qualified.success) return 'workspace' in qualified.data ? qualified.data.workspace.serverId : qualified.data.serverId;
     }
     if (isSessionStateFieldActionId(actionId)) {
       const qualified = getActionSpec(actionId).inputSchema.safeParse(input);
@@ -4842,7 +4920,7 @@ export function resolveDefaultActionInvocationServerId(actionId: ActionId, input
       if (target && typeof target === 'object' && 'serverId' in target && typeof target.serverId === 'string') return target.serverId;
     }
     if (actionId === 'session.spawn_new') {
-      const qualified = SessionSpawnNewInputV2Schema.safeParse(input);
+      const qualified = SessionSpawnNewActionInputV2Schema.safeParse(input);
       if (qualified.success) return qualified.data.executionTarget.serverId;
     }
     if (actionId === 'machines.work.summary.get') {
@@ -4961,7 +5039,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
     if (getCurrentAuth()?.credentialAuthorityKind !== 'api_token') return null;
     const scoped = (await import('@/sync/sync')).sync.getEmbedSessionRequestContext();
     if (!scoped || !scoped.isCurrent()) throw new Error('action_account_scope_changed');
-    return { request: scoped.request, target: { kind: 'session', sessionId: scoped.sessionId } };
+    return { request: scoped.request, target: { kind: 'session', sessionId: scoped.sessionId }, onActionAcknowledged: scoped.onActionAcknowledged };
   };
   const apiTokenComposerSubmissionFailure = (actionId: ActionId) =>
     actionId === 'session.message.send' && opts?.sessionMessageComposerSubmission
@@ -5016,7 +5094,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
             requestId: actionRequestId!, serverId, accountId: account.accountId,
             execute: () => executor.executeNativeManagedAction(native, input, capturedContext) });
         }, actionId);
-        return await (native ? withManagedMachineNativeReadLifetime(native, actionContext.signal, execute) : execute(actionContext.signal));
+        return await execute(actionContext.signal);
       } catch (error) {
         const failure = accountScopeFailure(error);
         if (failure) return failure;

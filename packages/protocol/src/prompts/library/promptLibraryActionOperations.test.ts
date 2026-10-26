@@ -38,6 +38,36 @@ function emptyOrganizationPort(): ArtifactFolderActionPortV1 {
 
 describe('prompt library action operations', () => {
   it.each([
+    { label: 'expired topic fact', topic: 'Storage', expiresAtMs: 5, destination: undefined, expectedTopic: 'Storage' },
+    { label: 'expired index fact', topic: undefined, expiresAtMs: 5, destination: undefined, expectedTopic: undefined },
+    { label: 'active topic fact', topic: 'Storage', expiresAtMs: 50, destination: undefined, expectedTopic: 'Storage' },
+    { label: 'explicit topic move', topic: 'Storage', expiresAtMs: 5, destination: 'Deploy', expectedTopic: 'Deploy' },
+  ])('preserves placement on update unless explicitly changed ($label)', async ({ topic, expiresAtMs, destination, expectedTopic }) => {
+    const original = { id: 'old', text: 'Use PostgreSQL for storage', createdAtMs: 1, expiresAtMs, sourceSessionRef: null };
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1,
+        index: topic === undefined ? [original] : [],
+        topics: topic === undefined ? [] : [{ title: topic, summary: 'Storage choices', facts: [original] }] }) };
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      stored = { ...stored, body: input.body, revision: { headerVersion: 1, bodyVersion: 2 } };
+    } };
+    const before = await readMemoryDocInLibrary({ store, artifactId: stored.id, topic: 'archive', nowMs: () => 10 });
+    expect('topic' in before ? before.topic.facts : []).toEqual(expiresAtMs <= 10 ? [{ ...original, archivedByMutation: false }] : []);
+    expect(await updateMemoryFactInLibrary({ store, nowMs: () => 10, randomId: () => 'renewed', sourceSessionRef: null,
+      request: { ref: { kind: 'doc', serverId: 'home', artifactId: stored.id }, expectedRevision: stored.revision,
+        factId: original.id, text: original.text, expiresAtMs: 100,
+        ...(destination === undefined ? {} : { topic: destination }) } })).toMatchObject({ ok: true, factId: 'renewed' });
+    const body = MemoryDocBodyV1Schema.parse(JSON.parse(stored.body!));
+    const replacement = { ...original, id: 'renewed', createdAtMs: 10, expiresAtMs: 100, supersedes: original.id };
+    expect(body.index).toEqual(expectedTopic === undefined ? [replacement] : []);
+    expect(body.topics.find(entry => entry.title === 'archive')?.facts).toEqual([original]);
+    if (expectedTopic !== undefined) {
+      expect(body.topics.find(entry => entry.title === expectedTopic)?.facts).toEqual([replacement]);
+      const active = await readMemoryDocInLibrary({ store, artifactId: stored.id, topic: expectedTopic, nowMs: () => 10 });
+      expect('topic' in active ? active.topic.facts : []).toEqual([replacement]);
+    }
+  });
+  it.each([
     ['single meaningful token', 'Store billing reports monthly', 'Water garden plants monthly'],
     ['repeated shared token', 'Store billing reports monthly monthly', 'Water garden plants monthly monthly'],
     ['stop-words', 'The backups are on the server', 'The flowers are on the balcony'],
@@ -148,15 +178,16 @@ describe('prompt library action operations', () => {
     await rememberMemoryFactInLibrary({ ...author, request: { ...request,
       duplicateChoice: { kind: 'update', factId: 'old', expectedRevision: stored.revision } } });
     expect(writes).toBe(1);
-    expect(JSON.parse(stored.body!)).toMatchObject({ index: [{ id: 'new', supersedes: 'old', expiresAtMs: 500 }],
-      topics: [{ title: 'Storage', facts: [] }, { title: 'archive', facts: [{ id: 'archived' }, { id: 'old' }] }] });
+    expect(JSON.parse(stored.body!)).toMatchObject({ index: [],
+      topics: [{ title: 'Storage', facts: [{ id: 'new', supersedes: 'old', expiresAtMs: 500 }] },
+        { title: 'archive', facts: [{ id: 'archived' }, { id: 'old' }] }] });
     await expect(rememberMemoryFactInLibrary({ ...author, request: { ...request, expectedRevision: stored.revision,
       duplicateChoice: { kind: 'keep_both', expectedRevision: request.expectedRevision } } }))
       .rejects.toMatchObject({ code: 'version_mismatch' });
     const result = await rememberMemoryFactInLibrary({ ...author, randomId: () => 'both', request: { ...request,
       expectedRevision: stored.revision, duplicateChoice: { kind: 'keep_both', expectedRevision: stored.revision } } });
     expect(result).toMatchObject({ ok: true, factId: 'both' });
-    expect(JSON.parse(stored.body!).index.map((fact: { id: string }) => fact.id)).toEqual(['new', 'both']);
+    expect(JSON.parse(stored.body!).index.map((fact: { id: string }) => fact.id)).toEqual(['both']);
   });
   it('keeps prior decision provenance in history, clears human approval on changed wording and ignores expired/history duplicates', async () => {
     const decision = { reason: 'Reviewed the alternatives', sourceMessageRef: { kind: 'session',
@@ -256,6 +287,19 @@ describe('prompt library action operations', () => {
         expectedRevision: reviewedRevision } })).rejects.toMatchObject({ code: 'version_mismatch' });
       expect(stored).toBe(newer);
     }
+  });
+
+  it('projects only the accepted actor, not private workspace provenance, into document reads', async () => {
+    const savedBy = { kind: 'agent', accountId: 'owner', sessionId: 'author' } as const;
+    const result = await readPromptDocInLibrary({ artifactId: 'doc', store: { read: async () => ({
+      id: 'doc', revision: { headerVersion: 1, bodyVersion: 2 },
+      header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' },
+      body: JSON.stringify({ v: 1, markdown: 'Accepted', createdAtMs: 1, updatedAtMs: 2 }),
+      provenance: { savedBy, source: { sessionId: 'author', machineId: 'machine', path: '/private/project', sha: 'a'.repeat(64) }, restoredFromBodyVersion: 1 },
+    }) } });
+    expect(result).toMatchObject({ ok: true, provenance: { savedBy } });
+    if (!result.ok) throw new Error('Expected readable document');
+    expect(result.provenance).toEqual({ savedBy });
   });
 
   it('normalizes stored known fields without promoting extensions into canonical document writes', async () => {
@@ -501,7 +545,8 @@ describe('prompt library action operations', () => {
         ] }) };
     const store: PromptLibraryArtifactStore = { read: async () => stored, update: async () => { throw new Error('Reads cannot mutate'); } };
     expect(await readMemoryDocInLibrary({ store, artifactId: 'memory', topic: 'archive', nowMs: () => 5 })).toMatchObject({
-      topic: { title: 'archive', facts: [{ id: 'forgotten' }, { id: 'expired-key' }, { id: 'expired-topic' }] },
+      topic: { title: 'archive', facts: [{ id: 'forgotten', archivedByMutation: true },
+        { id: 'expired-key', archivedByMutation: false }, { id: 'expired-topic', archivedByMutation: false }] },
     });
     expect(await readMemoryDocInLibrary({ store, artifactId: 'memory', nowMs: () => 5 })).toMatchObject({ body: {
       index: [fact('active')], topics: [{ title: 'Build', summary: 'Build details' }, { title: 'archive', summary: 'Earlier facts' }],

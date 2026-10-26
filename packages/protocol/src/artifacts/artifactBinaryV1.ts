@@ -55,11 +55,16 @@ export const ArtifactBodyEnvelopeV1StoredSchema = createStoredReadSchema(Artifac
 
 /** Host-admitted caller context, never caller-authored document metadata, supplies new attribution. */
 export function artifactSavedByFromActionContextV1(caller?: ActionExecutorContext): ArtifactSavedByV1 | undefined {
-  if (!caller?.runtimeAccountId) return undefined;
-  const sessionId = caller.actionCaller?.kind === 'session' ? caller.actionCaller.sessionId : caller.defaultSessionId;
-  return ArtifactSavedByV1Schema.parse(caller.surface === 'agent' || caller.actionCaller?.kind === 'session'
-    ? { kind: 'agent', accountId: caller.runtimeAccountId, ...(sessionId ? { sessionId } : {}) }
-    : { kind: 'person', accountId: caller.runtimeAccountId });
+  if (!caller) return undefined;
+  // Approved replay runs on the deciding surface, but the admitted proposal remains its author.
+  const origin = caller.approvedActionReplay?.origin;
+  const accountId = origin?.accountId ?? caller.runtimeAccountId;
+  if (!accountId) return undefined;
+  const author = origin?.caller ?? caller.actionCaller;
+  const sessionId = author?.kind === 'session' ? author.sessionId : origin?.sessionId ?? caller.defaultSessionId;
+  return ArtifactSavedByV1Schema.parse((origin?.surface ?? caller.surface) === 'agent' || author?.kind === 'session'
+    ? { kind: 'agent', accountId, ...(sessionId ? { sessionId } : {}) }
+    : { kind: 'person', accountId });
 }
 
 /** Mode is explicit before any binary opening or disclosure. Payloads use standard base64. */

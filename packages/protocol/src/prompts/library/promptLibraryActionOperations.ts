@@ -30,7 +30,7 @@ import { SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillActionFailureResultV1Schema, Skill
 import { ActionExecuteFailureSchema } from '../../actions/actionExecutionResult.js';
 import { MemoryDocArtifactHeaderV1Schema, MemoryDocArtifactHeaderV1StoredSchema, MemoryDocBodyV1Schema, MemoryDocBodyV1StoredSchema,
   MEMORY_ARCHIVE_TOPIC_TITLE_V1, MEMORY_ARCHIVE_TOPIC_SUMMARY_V1, projectMemoryDocIndexV1, readMemoryDocTopicV1,
-  type MemoryDocBodyV1, type MemoryDocIndexV1, type MemoryFactV1, type MemoryTopicV1 } from './memoryDocV1.js';
+  type MemoryDocBodyV1, type MemoryDocIndexV1, type MemoryFactV1, type MemoryTopicReadV1 } from './memoryDocV1.js';
 import type { PromptDocArtifactRefV1 } from './promptArtifactRefsV1.js';
 import type { MemoryUpdateInputV1, MemoryDuplicateChoiceV1, MemorySemanticMutationResultV1 } from './memoryActionsV1.js';
 import { findMemoryFactCandidatesV1, reviewMemoryFactWriteV1 } from './memoryFactCandidatesV1.js';
@@ -39,12 +39,15 @@ import type { ReadOnlySkillV1 } from './skills/firstPartySkillsV1.js';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
 import type { CoordinationMessageRefV1 } from '../../discussions/messageRefs.js';
 import type { ArtifactCoarseKindV1 } from '../../artifacts/artifactKindV1.js';
+import type { ArtifactRevisionProvenanceV1, ArtifactSavedByV1 } from '../../artifacts/artifactBinaryV1.js';
 
 export type PromptLibraryStoredArtifact = Readonly<{
   id: string;
   revision: Readonly<{ headerVersion: number; bodyVersion: number }>;
   header: Readonly<Record<string, unknown>> | null;
   body: string | null;
+  /** Opened private metadata, already bound by Artifact custody to this body revision. */
+  provenance?: ArtifactRevisionProvenanceV1;
   /** Observed access on the qualified Artifact read, never inferred from headers. */
   owned?: boolean;
   access?: ArtifactCallerAccessV1;
@@ -67,6 +70,7 @@ export type PromptLibraryArtifactStore = Readonly<{
     expectedRevision: PromptLibraryStoredArtifact['revision'];
     header: Readonly<Record<string, unknown>>;
     body: string;
+    savedBy?: ArtifactSavedByV1;
     /** Server-authorized source admission for a semantic decision write, including opaque E2EE bodies. */
     memoryDecisionSource?: CoordinationMessageRefV1;
     signal?: AbortSignal;
@@ -155,7 +159,7 @@ type MemoryDocVersionFieldsV1 = Readonly<{
 }>;
 export type MemoryDocVersionV1 = MemoryDocVersionFieldsV1 & Readonly<{ body: MemoryDocBodyV1 }>;
 export type MemoryDocReadResultV1 = MemoryDocVersionFieldsV1 & (
-  Readonly<{ body: MemoryDocIndexV1 }> | Readonly<{ topic: MemoryTopicV1 }>
+  Readonly<{ body: MemoryDocIndexV1 }> | Readonly<{ topic: MemoryTopicReadV1 }>
 );
 
 export class MemoryDocFailureV1 extends Error {
@@ -355,7 +359,10 @@ export async function updateMemoryFactInLibrary(params: MemoryMutationParams & M
     ...(params.decision ? { decision: params.decision } : target.decision && choice?.kind !== 'replace'
       ? { decision: { ...target.decision, approvedBy: text === target.text ? target.decision.approvedBy : params.approvedBy ?? null } } : {}),
     ...(expiresAtMs == null ? {} : { expiresAtMs }) };
-  const destination = updatingCandidate ? candidate?.topic : params.request.topic;
+  // Expired facts are only projected into archive; their stored section remains the placement owner.
+  const originalTopic = read.body.topics.find(topic => topic.title !== MEMORY_ARCHIVE_TOPIC_TITLE_V1
+    && topic.facts.some(fact => fact.id === target.id))?.title;
+  const destination = updatingCandidate ? candidate?.topic : params.request.topic ?? originalTopic;
   // Each archived fact retains its own history; Update B does not make A replace B.
   const archived = selected.id === previous.id ? [previous] : updatingCandidate ? [selected, previous] : [previous, selected];
   let replaced = false;
@@ -594,6 +601,7 @@ export async function listPromptLibrary(params: Readonly<{
 
 export async function updatePromptDocInLibrary(params: Readonly<{
   store: PromptLibraryArtifactStore;
+  savedBy?: ArtifactSavedByV1;
   request: Readonly<{
     artifactId: string;
     title: string;
@@ -640,6 +648,7 @@ export async function updatePromptDocInLibrary(params: Readonly<{
     expectedRevision: artifact.revision,
     header: nextHeader,
     body: JSON.stringify(PromptDocBodyV1Schema.parse(nextBody)),
+    ...(params.savedBy ? { savedBy: params.savedBy } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
   });
   await persistPromptArtifactOrganizationV1({ store: params.store, artifactId: params.request.artifactId, request: params.request,
@@ -653,7 +662,7 @@ export async function readPromptDocInLibrary(params: Readonly<{
   store: Pick<PromptLibraryArtifactStore, 'read'>;
   artifactId: string;
   signal?: AbortSignal;
-}>): Promise<Readonly<{ ok: true; artifactId: string; title: string; markdown: string; revision: PromptLibraryStoredArtifact['revision'] }>
+}>): Promise<Readonly<{ ok: true; artifactId: string; title: string; markdown: string; revision: PromptLibraryStoredArtifact['revision']; provenance?: Pick<ArtifactRevisionProvenanceV1, 'savedBy'> }>
   | Readonly<{ ok: false; errorCode: 'prompt_doc_not_found' | 'prompt_doc_wrong_kind' | 'prompt_doc_invalid_body'; error: string }>> {
   throwIfAborted(params.signal);
   const artifact = await params.store.read(params.artifactId, params.signal ? { signal: params.signal } : undefined);
@@ -670,7 +679,8 @@ export async function readPromptDocInLibrary(params: Readonly<{
   if (!header.success || !body) {
     return { ok: false, errorCode: 'prompt_doc_invalid_body', error: 'prompt_doc_invalid_body' };
   }
-  return { ok: true, artifactId: params.artifactId, title: header.data.title, markdown: body.markdown, revision: artifact.revision };
+  return { ok: true, artifactId: params.artifactId, title: header.data.title, markdown: body.markdown, revision: artifact.revision,
+    ...(artifact.provenance ? { provenance: { savedBy: artifact.provenance.savedBy } } : {}) };
 }
 
 export async function updatePromptBundleInLibrary(params: Readonly<{
