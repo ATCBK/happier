@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { SessionSpawnNewResultV1Schema } from './sessionSpawnNewResultV1.js';
+import {
+  projectSessionSpawnNewActionResultV1,
+  readSessionSpawnNewActionResultV1,
+  SessionSpawnNewActionResultV1Schema,
+  SessionSpawnNewResultV1Schema,
+} from './sessionSpawnNewResultV1.js';
 import { createProviderErrorV1 } from '../../providers/errors.js';
 
 describe('Session creation fork files', () => {
+  it('projects the public Action section vocabulary and restores the internal placement', () => {
+    const internal = SessionSpawnNewResultV1Schema.parse({
+      type: 'success', disposition: 'created', sessionId: 'session-1',
+      executionTarget: { serverId: 'server-1', machineId: 'machine-2' },
+      organizationPlacement: { folderId: 'section-3', tagIds: ['tag-4'] },
+      initialInput: { status: 'notRequested' },
+    });
+    const action = projectSessionSpawnNewActionResultV1(internal);
+    expect(action).toMatchObject({ organizationPlacement: { sectionId: 'section-3', tagIds: ['tag-4'] } });
+    expect(action.organizationPlacement).not.toHaveProperty('folderId');
+    expect(SessionSpawnNewActionResultV1Schema.parse(action)).toEqual(action);
+    expect(readSessionSpawnNewActionResultV1(action)).toEqual(internal);
+  });
+
   it('returns strict persisted attested birth facts with committed Session creation', () => {
     const result = {
       type: 'success', disposition: 'rejoined', sessionId: 'session-1',

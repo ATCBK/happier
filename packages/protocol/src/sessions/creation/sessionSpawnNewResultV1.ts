@@ -25,10 +25,7 @@ import {
  * Creation-time Account organization intent. Existing Session organization
  * edits are a separate domain and must not be inferred from this snapshot.
  */
-export const SessionOrganizationPlacementV1Schema = lazyZodSchema(() => z.strictObject({
-  folderId: z.nullable(SessionCreationOpaqueIdV1Schema),
-  tagIds: z.array(SessionCreationOpaqueIdV1Schema).check(z.maxLength(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION)),
-}).check(z.superRefine((value, context) => {
+const uniquePlacementTagIds = z.superRefine<{ tagIds: string[] }>((value, context) => {
   const seen = new Set<string>();
   for (const [index, tagId] of value.tagIds.entries()) {
     if (seen.has(tagId)) {
@@ -40,8 +37,18 @@ export const SessionOrganizationPlacementV1Schema = lazyZodSchema(() => z.strict
     }
     seen.add(tagId);
   }
-})));
+});
+export const SessionOrganizationPlacementV1Schema = lazyZodSchema(() => z.strictObject({
+  folderId: z.nullable(SessionCreationOpaqueIdV1Schema),
+  tagIds: z.array(SessionCreationOpaqueIdV1Schema).check(z.maxLength(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION)),
+}).check(uniquePlacementTagIds));
 export type SessionOrganizationPlacementV1 = z.infer<typeof SessionOrganizationPlacementV1Schema>;
+
+/** Public Action vocabulary; birth, correspondence and daemon DTOs retain folderId. */
+export const SessionSectionPlacementV1Schema = lazyZodSchema(() => z.strictObject({
+  sectionId: SessionOrganizationPlacementV1Schema.shape.folderId,
+  tagIds: SessionOrganizationPlacementV1Schema.shape.tagIds,
+}).check(uniquePlacementTagIds));
 
 export const SessionSpawnNewInitialInputDispositionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('notRequested') }),
@@ -203,3 +210,25 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
   }),
 ]));
 export type SessionSpawnNewResultV1 = z.infer<typeof SessionSpawnNewResultV1Schema>;
+
+export const SessionSpawnNewActionResultV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...SessionSpawnNewResultV1Schema._zod.def.options[0].shape, organizationPlacement: SessionSectionPlacementV1Schema }),
+  SessionSpawnNewResultV1Schema._zod.def.options[1],
+  SessionSpawnNewResultV1Schema._zod.def.options[2],
+  SessionSpawnNewResultV1Schema._zod.def.options[3],
+]));
+export type SessionSpawnNewActionResultV1 = z.infer<typeof SessionSpawnNewActionResultV1Schema>;
+
+export function projectSessionSpawnNewActionResultV1(result: SessionSpawnNewResultV1): SessionSpawnNewActionResultV1 {
+  if (result.type !== 'success') return result;
+  return { ...result, organizationPlacement: {
+    sectionId: result.organizationPlacement.folderId, tagIds: result.organizationPlacement.tagIds,
+  } };
+}
+
+export function readSessionSpawnNewActionResultV1(result: SessionSpawnNewActionResultV1): SessionSpawnNewResultV1 {
+  if (result.type !== 'success') return result;
+  return { ...result, organizationPlacement: {
+    folderId: result.organizationPlacement.sectionId, tagIds: result.organizationPlacement.tagIds,
+  } };
+}
