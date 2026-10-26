@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useRequireFriendsEnabled } from '@/hooks/friends/useRequireFriendsEnabled';
 import { Text } from '@/components/ui/text/Text';
+import { FriendsHeaderAddButton } from '@/components/navigation/shell/FriendsHeaderAddButton';
 
 const styles = StyleSheet.create((theme) => ({
   container: {
@@ -22,6 +23,7 @@ const styles = StyleSheet.create((theme) => ({
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
   },
   headerTitle: {
@@ -48,6 +50,7 @@ export default function FriendsPage() {
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <View style={[styles.headerContent, { height: headerHeight }]}>
           <Text style={styles.headerTitle}>{t('tabs.friends')}</Text>
+          <FriendsHeaderAddButton testID="friends-page-add-friend" />
         </View>
       </View>
       <FriendsView />

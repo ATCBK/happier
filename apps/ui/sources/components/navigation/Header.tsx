@@ -116,10 +116,12 @@ export const Header = React.memo((props: HeaderProps) => {
 interface ExtendedNavigationOptions extends Partial<NativeStackHeaderProps['options']> {
     headerSubtitle?: string;
     headerSubtitleStyle?: any;
+    /** Route-owned escape hatch for nested stacks whose root back target is deterministic. */
+    headerBackAction?: () => void;
 }
 
 // Default back button component
-const DefaultBackButton: React.FC<{ tintColor: string; onPress: () => void }> = ({ tintColor, onPress }) => {
+export const HeaderBackButton: React.FC<{ tintColor: string; onPress: () => void }> = ({ tintColor, onPress }) => {
     return (
         <Pressable
             onPress={onPress}
@@ -180,9 +182,15 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
     } else if (back && options.headerBackVisible !== false) {
         // Show default back button if can go back and not explicitly hidden
         headerLeftContent = () => (
-            <DefaultBackButton
+            <HeaderBackButton
                 tintColor={headerTintColor}
-                onPress={() => navigation.goBack()}
+                onPress={() => {
+                    if (extendedOptions.headerBackAction) {
+                        extendedOptions.headerBackAction();
+                        return;
+                    }
+                    navigation.goBack();
+                }}
             />
         );
     }

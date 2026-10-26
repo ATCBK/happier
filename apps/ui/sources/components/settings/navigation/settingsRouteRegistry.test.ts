@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getSettingsStackScreenDefinitions } from './settingsRouteRegistry';
+import { getSettingsStackScreenDefinitions, withSettingsRootBackAction } from './settingsRouteRegistry';
 
 describe('settingsRouteRegistry', () => {
     it('gives the prompts navigator ownership of its screen headers', () => {
@@ -33,5 +33,18 @@ describe('settingsRouteRegistry', () => {
             headerBackTitle: 'common.back',
             headerShown: true,
         });
+    });
+
+    it('adds a deterministic back action only to the top-level settings screen', () => {
+        const settings = getSettingsStackScreenDefinitions((key) => key);
+        const backAction = () => {};
+        const withBackAction = withSettingsRootBackAction(settings, backAction, 'settings');
+
+        expect(withBackAction.find((entry) => entry.name === 'index')?.options.headerBackAction).toBe(backAction);
+        expect(withBackAction.find((entry) => entry.name === 'account')?.options.headerBackAction).toBeUndefined();
+
+        const prompts = getSettingsStackScreenDefinitions((key) => key, 'prompts');
+        const promptsWithBackAction = withSettingsRootBackAction(prompts, backAction, 'prompts');
+        expect(promptsWithBackAction.find((entry) => entry.name === 'index')?.options.headerBackAction).toBeUndefined();
     });
 });

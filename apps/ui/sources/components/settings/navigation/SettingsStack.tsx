@@ -1,12 +1,16 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 import { composeAppStackScreenLayout } from '@/components/navigation/appStackScreenLayout';
 import { NavigatorSafeAreaBleed } from '@/components/navigation/safeArea/HorizontalSafeArea';
-import { getSettingsStackScreenDefinitions, type SettingsStackScope } from './settingsRouteRegistry';
+import {
+    getSettingsStackScreenDefinitions,
+    withSettingsRootBackAction,
+    type SettingsStackScope,
+} from './settingsRouteRegistry';
 import { t } from '@/text';
 import { isRunningOnMac } from '@/utils/platform/platform';
 
@@ -15,13 +19,25 @@ export function SettingsStack({ scope = 'settings', screenLayout }: Readonly<{
     screenLayout?: React.ComponentProps<typeof Stack>['screenLayout'];
 }>) {
     const { theme } = useUnistyles();
-    const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
+    const router = useRouter();
+    const shouldUseCustomHeader = Platform.OS === 'android'
+        || Platform.OS === 'windows'
+        || isRunningOnMac()
+        || Platform.OS === 'web';
     const screenOptions = React.useMemo(() => createAppStackScreenOptions({
         headerBackTitle: t('common.back'),
         shouldUseCustomHeader,
         theme,
     }), [shouldUseCustomHeader, theme]);
-    const screenDefinitions = React.useMemo(() => getSettingsStackScreenDefinitions(t, scope), [scope]);
+    const settingsRootBackAction = React.useCallback(() => {
+        router.replace('/');
+    }, [router]);
+    const screenDefinitions = React.useMemo(() => {
+        const definitions = getSettingsStackScreenDefinitions(t, scope);
+        return shouldUseCustomHeader
+            ? withSettingsRootBackAction(definitions, settingsRootBackAction, scope)
+            : definitions;
+    }, [scope, settingsRootBackAction, shouldUseCustomHeader]);
     const appScreenLayout = React.useMemo(() => composeAppStackScreenLayout(screenLayout), [screenLayout]);
 
     return (

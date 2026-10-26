@@ -48,6 +48,10 @@ vi.mock('@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion', (
     }),
 }));
 
+vi.mock('@/components/navigation/safeArea/HorizontalSafeArea', () => ({
+    useHorizontalSafeAreaContentPadding: () => ({ paddingLeft: 0, paddingRight: 0 }),
+}));
+
 describe('createHeader', () => {
     beforeEach(() => {
         responsiveState.isTablet = false;
@@ -115,5 +119,35 @@ describe('createHeader', () => {
         expect(screen.findByTestId('desktop-route-header-content-wrapper')).not.toBeNull();
         expect(screen.findByTestId('desktop-route-header-content')).not.toBeNull();
         expect(screen.findByTestId('desktop-route-header-center')).not.toBeNull();
+    });
+
+    it('uses a route-owned back action when the stack needs deterministic root navigation', async () => {
+        const navigation = {
+            goBack: vi.fn(),
+            getState: () => ({ index: 0 }),
+        };
+        const backAction = vi.fn();
+        const header = createHeader({
+            options: {
+                headerShown: true,
+                headerTitle: 'Settings',
+                headerTintColor: '#111111',
+                headerTitleStyle: {},
+                headerShadowVisible: false,
+                headerTransparent: false,
+                headerStyle: {},
+                headerBackAction: backAction,
+            } as any,
+            route: { key: 'settings-index', name: 'settings/index' },
+            navigation,
+            back: { title: 'Home' },
+        } as unknown as NativeStackHeaderProps);
+
+        const screen = await renderScreen(header as React.ReactElement);
+        const backButton = screen.findAllByType('Pressable')[0];
+        backButton?.props.onPress();
+
+        expect(backAction).toHaveBeenCalledOnce();
+        expect(navigation.goBack).not.toHaveBeenCalled();
     });
 });

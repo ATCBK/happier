@@ -31,11 +31,9 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { isUsingCustomServer } from '@/sync/domains/server/serverConfig';
-import { trackFriendsSearch } from '@/track';
 import { ConnectionStatusControl } from '@/components/navigation/ConnectionStatusControl';
 import { ActionOperationActivityButton } from '@/components/inbox/actionOperations/ActionOperationActivityButton';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
-import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
@@ -48,6 +46,7 @@ import {
     shouldForceFreshNewSessionEntryFromPressEvent,
     useResolveNewSessionOrdinaryEntryRoute,
 } from '@/components/sessions/new/navigation/newSessionOrdinaryEntryRoute';
+import { FriendsHeaderAddButton } from './FriendsHeaderAddButton';
 
 
 interface MainViewProps {
@@ -211,8 +210,6 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
     const resolveNewSessionOrdinaryEntryRoute = useResolveNewSessionOrdinaryEntryRoute();
     const { theme } = useUnistyles();
     const isCustomServer = isUsingCustomServer();
-    const friendsIdentityReadiness = useFriendsIdentityReadiness();
-    const friendsIdentityReady = friendsIdentityReadiness.isReady;
     const automationsSupport = useAutomationsSupport();
     const showAutomations = automationsSupport?.enabled !== false;
     const handleNewSession = React.useCallback((event?: unknown) => {
@@ -251,18 +248,7 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
         return (
             <View style={styles.headerButtonsRow}>
                 <ActionOperationActivityButton testID="main-header-action-operations" />
-                <Pressable
-                    onPress={() => {
-                        trackFriendsSearch();
-                        router.push('/friends/search');
-                    }}
-                    hitSlop={15}
-                    style={[styles.headerButton, { opacity: friendsIdentityReady ? 1 : 0.5 }]}
-                    disabled={!friendsIdentityReady}
-                    accessibilityState={{ disabled: !friendsIdentityReady }}
-                >
-                    <Icon name="user-plus" size={24} color={theme.colors.chrome.header.foreground} />
-                </Pressable>
+                <FriendsHeaderAddButton />
             </View>
         );
     }

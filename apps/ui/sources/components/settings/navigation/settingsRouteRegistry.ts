@@ -6,9 +6,14 @@ type Translate = (key: TranslationKeyNoParams) => string;
 
 export type SettingsStackScope = 'settings' | 'prompts';
 
+/** Extra options consumed by Happier's custom stack header. */
+export type SettingsStackNavigationOptions = NativeStackNavigationOptions & Readonly<{
+    headerBackAction?: () => void;
+}>;
+
 export type SettingsStackScreenDefinition = Readonly<{
     name: string;
-    options: NativeStackNavigationOptions;
+    options: SettingsStackNavigationOptions;
 }>;
 
 type SettingsRouteChromeDefinition = Readonly<{
@@ -127,4 +132,22 @@ export function getSettingsStackScreenDefinitions(
             options,
         };
     });
+}
+
+export function withSettingsRootBackAction(
+    definitions: readonly SettingsStackScreenDefinition[],
+    onBack: () => void,
+    scope: SettingsStackScope,
+): readonly SettingsStackScreenDefinition[] {
+    if (scope !== 'settings') return definitions;
+
+    return definitions.map((definition) => definition.name === 'index'
+        ? {
+            ...definition,
+            options: {
+                ...definition.options,
+                headerBackAction: onBack,
+            },
+        }
+        : definition);
 }
