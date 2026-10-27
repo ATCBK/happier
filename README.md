@@ -54,6 +54,33 @@
 <p>Any agent that speaks ACP can be added from the settings.</p>
 </div>
 
+## 当前开发状态（2026-10-27）
+
+本分支 `fix/android-settings-friends` 基于最新 `dev` 版本，当前重点是移动端设置导航与好友功能体验。
+
+### 已完成
+
+- **移动端设置导航修复**：统一设置路由注册与返回行为。
+- **好友页导航整理**：抽离好友页头部操作，统一标题、返回和新增好友入口。
+- **新增好友操作**：补充移动端新增好友入口及交互状态。
+- **自动化回归覆盖**：新增设置路由、导航头部和好友操作测试。
+
+### 开发中
+
+- **好友关系完整闭环**：继续完善好友请求、接受/拒绝、移除好友及状态同步。
+- **跨端设置一致性**：持续检查 Android、iOS、桌面端和 Web 的设置导航与返回手势。
+- **实时状态同步**：推进好友在线状态、会话状态和通知提示的实时更新。
+- **端到端验证**：补充真实设备上的 Android/iOS 回归测试。
+
+### 本版本涉及的代码区域
+
+- `apps/ui/sources/app/(app)/friends/`
+- `apps/ui/sources/components/navigation/`
+- `apps/ui/sources/settings/navigation/`
+- 对应的 `*.test.ts` / `*.spec.tsx` 回归测试
+
+> **已完成**表示已经包含在当前提交中；**开发中**表示方向已确定但仍可能继续调整。
+
 
 ## Get started
 
